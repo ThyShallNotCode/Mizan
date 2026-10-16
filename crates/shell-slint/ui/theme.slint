@@ -1,0 +1,1486 @@
+// OMR Correction design system: tokens and small reusable components.
+//
+// Source of truth for the values below: docs/design/DESIGN.md (palette with
+// checked contrast ratios, typography, spacing, component and screen specs).
+//
+// Usage from the shell:
+//
+//     import { Theme, Card, PrimaryButton } from "theme.slint";
+//     export component AppWindow inherits Window {
+//         default-font-family: Theme.font-sans;
+//         background: Theme.canvas;
+//         ...
+//     }
+//
+// Rust switches themes with `ui.global::<Theme>().set_dark(true)`.
+// Mark-overlay colours (`mark-*`, `paper`) are theme-invariant on purpose: they
+// sit on the scanned paper, which is light in both themes.
+
+import "assets/fonts/IBMPlexSans-Regular.ttf";
+import "assets/fonts/IBMPlexSans-Medium.ttf";
+import "assets/fonts/IBMPlexSans-SemiBold.ttf";
+import "assets/fonts/IBMPlexSansArabic-Regular.ttf";
+import "assets/fonts/IBMPlexSansArabic-SemiBold.ttf";
+import "assets/fonts/IBMPlexMono-Regular.ttf";
+import "assets/fonts/IBMPlexMono-Medium.ttf";
+
+// ---------------------------------------------------------------- enums
+
+// Semantic colour role for pills, chips, bars and values.
+export enum Tone { neutral, primary, accent, success, warning, error, info }
+
+// Appendix A severities. Each has its own shape (circle, triangle, diamond,
+// octagon) so colour is never the only cue (WCAG 1.4.1).
+export enum Severity { info, warn, error, blocker }
+
+// Reviewer-facing bubble states drawn over the scan (DESIGN.md "Mark overlays").
+export enum MarkState { selected, ambiguous, unreadable, blank }
+
+export enum ButtonKind { primary, secondary, ghost, danger }
+
+// ---------------------------------------------------------------- tokens
+
+export global Theme {
+    // Theme switches, set by the shell.
+    in-out property <bool> dark: false;
+    // When true, every token duration is 0 ms (OS "reduce motion").
+    in-out property <bool> reduce-motion: false;
+
+    // ---- typography
+    out property <string> font-sans: "IBM Plex Sans";
+    // Use for any Arabic string (names, notes, Arabic grade letters). Plex Sans
+    // Arabic also carries Latin glyphs, so mixed strings shape correctly.
+    out property <string> font-arabic: "IBM Plex Sans Arabic";
+    // Codes, IDs, hashes, keycaps and aligned numeric columns.
+    out property <string> font-mono: "IBM Plex Mono";
+
+    out property <length> text-2xs: 11px;  // keycaps, nav labels, micro captions
+    out property <length> text-xs: 12px;   // table meta, chip text, captions
+    out property <length> text-sm: 13px;   // body default, table cells
+    out property <length> text-md: 14px;   // controls, list titles
+    out property <length> text-lg: 16px;   // card titles, section headers
+    out property <length> text-xl: 20px;   // page titles
+    out property <length> text-2xl: 24px;  // stat values
+    out property <length> text-3xl: 32px;  // hero numbers (gauge value)
+    out property <length> text-display: 40px; // suggested answer letter
+
+    out property <int> weight-regular: 400;
+    out property <int> weight-medium: 500;
+    out property <int> weight-semibold: 600;
+
+    // ---- spacing (4 px grid)
+    out property <length> space-2xs: 2px;
+    out property <length> space-xs: 4px;
+    out property <length> space-sm: 8px;
+    out property <length> space-md: 12px;
+    out property <length> space-lg: 16px;
+    out property <length> space-xl: 24px;
+    out property <length> space-2xl: 32px;
+    out property <length> space-3xl: 48px;
+
+    // ---- radii
+    out property <length> radius-xs: 3px;  // keycaps, tiny tags
+    out property <length> radius-sm: 4px;  // chips (square), bars
+    out property <length> radius-md: 6px;  // buttons, inputs
+    out property <length> radius-lg: 8px;  // cards, tiles
+    out property <length> radius-xl: 12px; // drawers, dialogs
+    out property <length> radius-full: 999px;
+
+    // ---- sizes
+    out property <length> nav-rail-width: 72px;
+    out property <length> top-bar-height: 56px;
+    out property <length> status-bar-height: 28px;
+    out property <length> list-pane-width: 300px;
+    out property <length> decision-pane-width: 340px;
+    out property <length> drawer-width: 360px;
+    out property <length> control-height: 32px;
+    out property <length> control-height-lg: 40px;
+    out property <length> row-height: 36px;
+    out property <length> row-height-compact: 28px;
+    out property <length> target-min: 24px; // WCAG 2.5.8
+    out property <length> icon-sm: 16px;
+    out property <length> icon-md: 20px;
+    out property <length> icon-lg: 24px;
+    out property <length> focus-width: 2px;
+    out property <length> focus-offset: 2px;
+
+    // ---- motion
+    out property <duration> duration-fast: self.reduce-motion ? 0ms : 120ms;  // hover, press
+    out property <duration> duration-base: self.reduce-motion ? 0ms : 180ms;  // selection, toggles
+    out property <duration> duration-slow: self.reduce-motion ? 0ms : 260ms;  // drawers, progress
+
+    // ---- elevation (drop shadows)
+    out property <length> shadow-1-blur: 8px;
+    out property <length> shadow-1-offset: 2px;
+    out property <color> shadow-1-color: self.dark ? #00000066 : #1C243014;
+    out property <length> shadow-2-blur: 24px;
+    out property <length> shadow-2-offset: 8px;
+    out property <color> shadow-2-color: self.dark ? #0000008C : #1C24301F;
+
+    // ---- surfaces
+    out property <color> canvas: self.dark ? #0F1716 : #F5F0E6;          // app background (warm sand / deep ink-teal)
+    out property <color> surface: self.dark ? #16211F : #FFFDF8;         // cards, panes
+    out property <color> surface-raised: self.dark ? #1D2A28 : #FFFFFF;  // popovers, keycaps, inputs
+    out property <color> surface-sunken: self.dark ? #121B1A : #F0EADF;  // table headers, list panes, wells
+    out property <color> surface-hover: self.dark ? #22312E : #F3EDE2;
+    out property <color> surface-pressed: self.dark ? #2A3B38 : #E9E1D2;
+    out property <color> scan-backdrop: self.dark ? #0B1211 : #E8E2D5;   // behind the scanned crop
+    out property <color> scrim: self.dark ? #000000A6 : #1C243066;
+
+    // ---- lines
+    out property <color> border: self.dark ? #2A3936 : #E3DACB;          // decorative hairlines (not a control boundary)
+    out property <color> border-strong: self.dark ? #6B7C78 : #8C8270;   // control boundaries, >= 3:1
+    out property <color> track: self.dark ? #2A3936 : #E8E1D3;           // progress / bar tracks
+
+    // ---- text
+    out property <color> ink: self.dark ? #ECE6DA : #1C2430;
+    out property <color> ink-2: self.dark ? #B7BFBB : #55606E;
+    out property <color> ink-3: self.dark ? #8F9C98 : #5D6672;           // placeholders, captions (still >= 4.5:1)
+    out property <color> ink-disabled: self.dark ? #5E6B68 : #A39B8B;    // disabled only (exempt from 1.4.3)
+    out property <color> ink-inverse: self.dark ? #0F1716 : #FFFDF8;
+
+    // ---- brand
+    out property <color> primary: self.dark ? #5CC2B1 : #0E5E57;         // deep teal
+    out property <color> primary-hover: self.dark ? #7AD0C1 : #0B4A45;
+    out property <color> primary-pressed: self.dark ? #46A999 : #083A36;
+    out property <color> on-primary: self.dark ? #06231F : #FFFFFF;
+    out property <color> primary-soft: self.dark ? #173A35 : #DCEBE6;    // selected rows, active tabs
+    out property <color> accent: self.dark ? #D9AE55 : #B0832A;          // gold: marks only, used sparingly
+    out property <color> accent-ink: self.dark ? #E2BD6E : #7A5815;      // gold as text
+    out property <color> accent-soft: self.dark ? #3A2F17 : #F6EBD3;
+    out property <color> focus: self.dark ? #E2BD6E : #8A6414;           // focus ring (gold), >= 3:1 on surfaces
+
+    // ---- navigation rail
+    out property <color> nav-bg: self.dark ? #08201E : #0B3B37;
+    out property <color> nav-fg: #FFFFFF;
+    out property <color> nav-fg-2: self.dark ? #9FB8B3 : #A8C3BE;
+    out property <color> nav-active-bg: #FFFFFF17;
+    out property <color> nav-hover-bg: #FFFFFF0D;
+    out property <color> nav-focus: #E2BD6E;                            // focus ring on nav-bg (Theme.focus fails there in light)
+    out property <float> pattern-opacity: self.dark ? 0.05 : 0.07;       // girih tile over nav-bg
+
+    // ---- status (text-safe on surface and on their soft fills)
+    out property <color> success: self.dark ? #6BCB8F : #2A7148;
+    out property <color> success-soft: self.dark ? #18352A : #E2EFE5;
+    out property <color> warning: self.dark ? #E7A846 : #9A5B00;
+    out property <color> warning-soft: self.dark ? #3A2C12 : #FAEBD3;
+    out property <color> error: self.dark ? #F08A7E : #B3261E;
+    out property <color> error-hover: self.dark ? #F4A398 : #962019;
+    out property <color> error-soft: self.dark ? #3E1F1C : #F7E0DC;
+    out property <color> on-error: self.dark ? #2A0B08 : #FFFFFF;
+    out property <color> info: self.dark ? #9DB4DA : #3D5A80;
+    out property <color> info-soft: self.dark ? #1E2A3D : #E2E8F0;
+    out property <color> blocker: self.dark ? #FFB4A8 : #7F1D17;
+
+    // ---- data visualisation (validated: adjacent CVD dE >= 10 both modes; all-pairs cap = 2 series)
+    out property <color> series-1: self.dark ? #16A384 : #08856A; // teal
+    out property <color> series-2: self.dark ? #BD871C : #B7810F; // ochre
+    out property <color> series-3: self.dark ? #B25E98 : #A25089; // plum
+    out property <color> series-4: self.dark ? #6F9436 : #648828; // olive
+    out property <color> series-5: self.dark ? #7275CC : #5658AB; // indigo
+    out property <color> series-6: self.dark ? #CA6A4C : #C06143; // terracotta
+    out property <color> chart-grid: self.dark ? #24312F : #ECE5D8;
+    out property <color> chart-axis: self.dark ? #3A4A47 : #C9BFAE;
+    out property <color> chart-target: self.dark ? #ECE6DA : #1C2430;   // target line = ink, dashed by convention
+
+    // ---- mark overlays on the scan (theme-invariant, validated on paper #F4F1EA and scan grey #E9E9E9)
+    out property <color> paper: #F4F1EA;
+    out property <color> paper-print: #8E8A82;    // printed bubble outline and letter in demos
+    out property <color> pencil: #2E3134;
+    out property <color> mark-selected: #007F68;   // solid ring + check badge
+    out property <color> mark-ambiguous: #B06C00;  // dashed ring + "?" badge
+    out property <color> mark-unreadable: #9E1B32; // hatched square + "!" badge
+    out property <color> mark-blank: #6E6A62;      // dotted ring + "-" badge
+    out property <color> mark-halo: #FFFFFF;       // 1 px halo under every overlay stroke
+
+    // ---- helpers
+    public pure function tone-fg(tone: Tone) -> color {
+        return tone == Tone.primary ? self.primary
+            : tone == Tone.accent ? self.accent-ink
+            : tone == Tone.success ? self.success
+            : tone == Tone.warning ? self.warning
+            : tone == Tone.error ? self.error
+            : tone == Tone.info ? self.info
+            : self.ink-2;
+    }
+
+    public pure function tone-soft(tone: Tone) -> color {
+        return tone == Tone.primary ? self.primary-soft
+            : tone == Tone.accent ? self.accent-soft
+            : tone == Tone.success ? self.success-soft
+            : tone == Tone.warning ? self.warning-soft
+            : tone == Tone.error ? self.error-soft
+            : tone == Tone.info ? self.info-soft
+            : self.surface-sunken;
+    }
+
+    public pure function severity-color(severity: Severity) -> color {
+        return severity == Severity.blocker ? self.blocker
+            : severity == Severity.error ? self.error
+            : severity == Severity.warn ? self.warning
+            : self.info;
+    }
+
+    public pure function mark-color(mark: MarkState) -> color {
+        return mark == MarkState.selected ? self.mark-selected
+            : mark == MarkState.ambiguous ? self.mark-ambiguous
+            : mark == MarkState.unreadable ? self.mark-unreadable
+            : self.mark-blank;
+    }
+
+    // Categorical series colour by 1-based slot; slots are assigned in order, never cycled.
+    public pure function series(slot: int) -> color {
+        return slot == 1 ? self.series-1
+            : slot == 2 ? self.series-2
+            : slot == 3 ? self.series-3
+            : slot == 4 ? self.series-4
+            : slot == 5 ? self.series-5
+            : slot == 6 ? self.series-6
+            : self.ink-3;
+    }
+}
+
+// ---------------------------------------------------------------- primitives
+
+// Focus indicator drawn outside its parent (WCAG 2.4.7 / 2.4.11). Instantiate it
+// as the last child without a size: it fills the parent and draws the ring
+// `focus-offset` outside the parent's edge.
+export component FocusRing inherits Rectangle {
+    in property <bool> active;
+    in property <length> corner: Theme.radius-md;
+    in property <color> ring-color: Theme.focus;
+    background: transparent;
+    Rectangle {
+        x: -(Theme.focus-width + Theme.focus-offset);
+        y: -(Theme.focus-width + Theme.focus-offset);
+        width: parent.width + 2 * (Theme.focus-width + Theme.focus-offset);
+        height: parent.height + 2 * (Theme.focus-width + Theme.focus-offset);
+        border-radius: root.corner + Theme.focus-width + Theme.focus-offset;
+        border-width: Theme.focus-width;
+        border-color: root.ring-color;
+        background: transparent;
+        visible: root.active;
+    }
+}
+
+// Shape-coded severity glyph: info = ring, warn = triangle, error = diamond,
+// blocker = octagon.
+export component SeverityGlyph inherits Rectangle {
+    in property <Severity> severity: Severity.info;
+    in property <length> size: 12px;
+    width: self.size;
+    height: self.size;
+    accessible-role: AccessibleRole.image;
+    accessible-label: root.severity == Severity.blocker ? "Blocker"
+        : root.severity == Severity.error ? "Error"
+        : root.severity == Severity.warn ? "Warning" : "Info";
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        commands: root.severity == Severity.blocker ? "M 11.17 8.14 L 8.14 11.17 L 3.86 11.17 L 0.83 8.14 L 0.83 3.86 L 3.86 0.83 L 8.14 0.83 L 11.17 3.86 Z"
+            : root.severity == Severity.error ? "M 6 0.6 L 11.4 6 L 6 11.4 L 0.6 6 Z"
+            : root.severity == Severity.warn ? "M 6 1 L 11.4 10.6 L 0.6 10.6 Z"
+            : "M 1.6 6 A 4.4 4.4 0 1 1 10.4 6 A 4.4 4.4 0 1 1 1.6 6 Z";
+        fill: root.severity == Severity.info ? transparent : Theme.severity-color(root.severity);
+        stroke: Theme.severity-color(root.severity);
+        stroke-width: 1.5px;
+    }
+}
+
+// Keyboard hint, e.g. "Enter", "Ctrl+M". `inverse` for use on primary fills.
+export component Keycap inherits Rectangle {
+    in property <string> text;
+    in property <bool> inverse;
+    width: max(18px, cap-label.preferred-width + 10px);
+    height: 18px;
+    border-radius: Theme.radius-xs;
+    background: self.inverse ? transparent : Theme.surface-raised;
+    border-width: 1px;
+    border-color: self.inverse ? Theme.on-primary : Theme.border-strong;
+    drop-shadow-offset-y: 1px;
+    drop-shadow-blur: 0px;
+    drop-shadow-color: self.inverse ? transparent : Theme.border;
+    accessible-role: AccessibleRole.none;
+    HorizontalLayout {
+        padding-left: 5px;
+        padding-right: 5px;
+        cap-label := Text {
+            text: root.text;
+            font-family: Theme.font-mono;
+            font-size: Theme.text-2xs;
+            font-weight: Theme.weight-medium;
+            color: root.inverse ? Theme.on-primary : Theme.ink-2;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+// ---------------------------------------------------------------- buttons
+
+export component Button inherits Rectangle {
+    in property <string> text;
+    in property <string> key-hint;
+    in property <image> icon;
+    in property <ButtonKind> kind: ButtonKind.secondary;
+    in property <bool> enabled: true;
+    in property <bool> large;
+    out property <bool> has-focus: fs.has-focus;
+    callback clicked();
+
+    property <bool> filled: self.kind == ButtonKind.primary || self.kind == ButtonKind.danger;
+    property <color> fg: !self.enabled ? Theme.ink-disabled
+        : self.kind == ButtonKind.primary ? Theme.on-primary
+        : self.kind == ButtonKind.danger ? Theme.on-error
+        : self.kind == ButtonKind.ghost ? Theme.ink-2
+        : Theme.ink;
+
+    min-height: self.large ? Theme.control-height-lg : Theme.control-height;
+    max-height: self.min-height;
+    min-width: Theme.target-min;
+    border-radius: Theme.radius-md;
+    background: !self.enabled ? Theme.surface-sunken
+        : self.kind == ButtonKind.primary ? (ta.pressed ? Theme.primary-pressed : ta.has-hover ? Theme.primary-hover : Theme.primary)
+        : self.kind == ButtonKind.danger ? (ta.has-hover ? Theme.error-hover : Theme.error)
+        : self.kind == ButtonKind.ghost ? (ta.pressed ? Theme.surface-pressed : ta.has-hover ? Theme.surface-hover : transparent)
+        : (ta.pressed ? Theme.surface-pressed : ta.has-hover ? Theme.surface-hover : Theme.surface);
+    border-width: self.kind == ButtonKind.secondary ? 1px : 0px;
+    border-color: Theme.border-strong;
+    animate background { duration: Theme.duration-fast; }
+
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.text;
+    accessible-description: root.key-hint;
+    accessible-action-default => {
+        if (root.enabled) {
+            root.clicked();
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            fs.focus();
+            root.clicked();
+        }
+    }
+
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: root.large ? Theme.space-lg : Theme.space-md;
+        padding-right: root.large ? Theme.space-md : Theme.space-sm + Theme.space-xs;
+        spacing: Theme.space-sm;
+        alignment: space-between;
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+            alignment: start;
+            if root.icon.width > 0: Image {
+                source: root.icon;
+                width: Theme.icon-sm;
+                height: Theme.icon-sm;
+                colorize: root.fg;
+                y: (parent.height - self.height) / 2;
+            }
+            Text {
+                text: root.text;
+                color: root.fg;
+                font-size: root.large ? Theme.text-md : Theme.text-sm;
+                font-weight: root.filled ? Theme.weight-semibold : Theme.weight-medium;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+        if root.key-hint != "": VerticalLayout {
+            alignment: center;
+            Keycap {
+                text: root.key-hint;
+                inverse: root.filled;
+            }
+        }
+    }
+
+    FocusRing {
+        active: fs.has-focus;
+        corner: Theme.radius-md;
+    }
+}
+
+export component PrimaryButton inherits Button {
+    kind: ButtonKind.primary;
+}
+
+export component SecondaryButton inherits Button {
+    kind: ButtonKind.secondary;
+}
+
+export component GhostButton inherits Button {
+    kind: ButtonKind.ghost;
+}
+
+export component DangerButton inherits Button {
+    kind: ButtonKind.danger;
+}
+
+// Square icon-only button (toolbar). `label` is the accessible name and tooltip text.
+export component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> active;
+    in property <bool> enabled: true;
+    callback clicked();
+    width: Theme.control-height;
+    height: Theme.control-height;
+    border-radius: Theme.radius-md;
+    background: self.active ? Theme.primary-soft : ta.has-hover ? Theme.surface-hover : transparent;
+    animate background { duration: Theme.duration-fast; }
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            fs.focus();
+            root.clicked();
+        }
+    }
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    Image {
+        source: root.icon;
+        width: Theme.icon-md;
+        height: Theme.icon-md;
+        colorize: !root.enabled ? Theme.ink-disabled : root.active ? Theme.primary : Theme.ink-2;
+    }
+    FocusRing {
+        active: fs.has-focus;
+    }
+}
+
+// ---------------------------------------------------------------- chips, pills, tags
+
+// Filter / segment chip with optional count.
+export component Chip inherits Rectangle {
+    in property <string> text;
+    in property <string> count;
+    in property <bool> selected;
+    callback clicked();
+    height: 28px;
+    width: max(Theme.target-min, chip-layout.preferred-width);
+    border-radius: self.height / 2;
+    background: self.selected ? Theme.ink : ta.has-hover ? Theme.surface-hover : Theme.surface;
+    border-width: 1px;
+    border-color: self.selected ? Theme.ink : Theme.border-strong;
+    animate background { duration: Theme.duration-fast; }
+    accessible-role: AccessibleRole.button;
+    accessible-checkable: true;
+    accessible-checked: root.selected;
+    accessible-label: root.count == "" ? root.text : root.text + ", " + root.count;
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        clicked => {
+            fs.focus();
+            root.clicked();
+        }
+    }
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    chip-layout := HorizontalLayout {
+        padding-left: Theme.space-md;
+        padding-right: Theme.space-md;
+        spacing: Theme.space-xs + Theme.space-2xs;
+        Text {
+            text: root.text;
+            font-size: Theme.text-xs;
+            font-weight: Theme.weight-medium;
+            color: root.selected ? Theme.ink-inverse : Theme.ink;
+            vertical-alignment: center;
+        }
+        if root.count != "": Text {
+            text: root.count;
+            font-family: Theme.font-mono;
+            font-size: Theme.text-xs;
+            color: root.selected ? Theme.ink-inverse : Theme.ink-2;
+            vertical-alignment: center;
+        }
+    }
+    FocusRing {
+        active: fs.has-focus;
+        corner: root.height / 2;
+    }
+}
+
+// Status pill: icon shape + text + tone. Never colour alone.
+export component StatusPill inherits Rectangle {
+    in property <string> text;
+    in property <Tone> tone: Tone.neutral;
+    height: 22px;
+    width: pill-layout.preferred-width;
+    border-radius: self.height / 2;
+    background: Theme.tone-soft(self.tone);
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.text;
+    pill-layout := HorizontalLayout {
+        padding-left: Theme.space-sm;
+        padding-right: Theme.space-sm + Theme.space-2xs;
+        spacing: Theme.space-xs + Theme.space-2xs;
+        VerticalLayout {
+            alignment: center;
+            Path {
+                width: 10px;
+                height: 10px;
+                viewbox-width: 12;
+                viewbox-height: 12;
+                stroke: Theme.tone-fg(root.tone);
+                stroke-width: 1.5px;
+                // success: ring + check; warning: triangle; error: diamond; info: ring; others: dot
+                commands: root.tone == Tone.success ? "M 1.2 6 A 4.8 4.8 0 1 1 10.8 6 A 4.8 4.8 0 1 1 1.2 6 Z M 3.6 6.2 L 5.3 7.9 L 8.5 4.4"
+                    : root.tone == Tone.warning ? "M 6 1 L 11.4 10.6 L 0.6 10.6 Z"
+                    : root.tone == Tone.error ? "M 6 0.6 L 11.4 6 L 6 11.4 L 0.6 6 Z"
+                    : root.tone == Tone.info ? "M 1.2 6 A 4.8 4.8 0 1 1 10.8 6 A 4.8 4.8 0 1 1 1.2 6 Z"
+                    : "M 3 6 A 3 3 0 1 1 9 6 A 3 3 0 1 1 3 6 Z";
+                fill: root.tone == Tone.warning || root.tone == Tone.error || root.tone == Tone.neutral || root.tone == Tone.primary || root.tone == Tone.accent ? Theme.tone-fg(root.tone) : transparent;
+            }
+        }
+        Text {
+            text: root.text;
+            font-size: Theme.text-xs;
+            font-weight: Theme.weight-medium;
+            color: Theme.tone-fg(root.tone);
+            vertical-alignment: center;
+        }
+    }
+}
+
+// Small monospace tag, e.g. form letters "A", codes "MRK-001", "Key v2".
+export component Tag inherits Rectangle {
+    in property <string> text;
+    in property <Tone> tone: Tone.neutral;
+    in property <bool> mono: true;
+    height: 18px;
+    width: tag-layout.preferred-width;
+    border-radius: Theme.radius-xs;
+    background: self.tone == Tone.neutral ? Theme.surface-sunken : Theme.tone-soft(self.tone);
+    border-width: 1px;
+    border-color: self.tone == Tone.neutral ? Theme.border : transparent;
+    tag-layout := HorizontalLayout {
+        padding-left: Theme.space-xs + Theme.space-2xs;
+        padding-right: Theme.space-xs + Theme.space-2xs;
+        Text {
+            text: root.text;
+            font-family: root.mono ? Theme.font-mono : Theme.font-sans;
+            font-size: Theme.text-2xs;
+            font-weight: Theme.weight-medium;
+            color: root.tone == Tone.neutral ? Theme.ink-2 : Theme.tone-fg(root.tone);
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+// Mark-state glyph used in option chips and legends (same shapes as the overlays).
+export component MarkGlyph inherits Rectangle {
+    in property <MarkState> mark: MarkState.selected;
+    in property <length> size: 14px;
+    in property <color> tint: Theme.mark-color(self.mark);
+    width: self.size;
+    height: self.size;
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        stroke: root.tint;
+        stroke-width: 1.6px;
+        commands: root.mark == MarkState.selected ? "M 10 50 A 40 40 0 1 1 90 50 A 40 40 0 1 1 10 50 Z M 30 52 L 44 66 L 72 36"
+            : root.mark == MarkState.ambiguous ? "M 50.00 10.00 A 40 40 0 0 1 62.36 11.96 M 70.00 15.36 A 40 40 0 0 1 79.73 23.23 M 84.64 30.00 A 40 40 0 0 1 89.13 41.68 M 90.00 50.00 A 40 40 0 0 1 88.04 62.36 M 84.64 70.00 A 40 40 0 0 1 76.77 79.73 M 70.00 84.64 A 40 40 0 0 1 58.32 89.13 M 50.00 90.00 A 40 40 0 0 1 37.64 88.04 M 30.00 84.64 A 40 40 0 0 1 20.27 76.77 M 15.36 70.00 A 40 40 0 0 1 10.87 58.32 M 10.00 50.00 A 40 40 0 0 1 11.96 37.64 M 15.36 30.00 A 40 40 0 0 1 23.23 20.27 M 30.00 15.36 A 40 40 0 0 1 41.68 10.87"
+            : root.mark == MarkState.unreadable ? "M 14 14 L 86 14 L 86 86 L 14 86 Z M 14 38 L 38 14 M 14 62 L 62 14 M 14 86 L 86 14 M 38 86 L 86 38 M 62 86 L 86 62"
+            : "M 50.00 10.00 A 40 40 0 0 1 51.40 10.02 M 70.00 15.36 A 40 40 0 0 1 71.20 16.08 M 84.64 30.00 A 40 40 0 0 1 85.32 31.22 M 90.00 50.00 A 40 40 0 0 1 89.98 51.40 M 84.64 70.00 A 40 40 0 0 1 83.92 71.20 M 70.00 84.64 A 40 40 0 0 1 68.78 85.32 M 50.00 90.00 A 40 40 0 0 1 48.60 89.98 M 30.00 84.64 A 40 40 0 0 1 28.80 83.92 M 15.36 70.00 A 40 40 0 0 1 14.68 68.78 M 10.00 50.00 A 40 40 0 0 1 10.02 48.60 M 15.36 30.00 A 40 40 0 0 1 16.08 28.80 M 30.00 15.36 A 40 40 0 0 1 31.22 14.68";
+    }
+}
+
+// Review decision chip: A-E, or a special decision (Blank / Multi / Unreadable).
+// `suggested` marks the engine suggestion (gold underline + "suggested" caption);
+// `selected` marks the reviewer's current choice (filled + check badge).
+export component OptionChip inherits Rectangle {
+    in property <string> label;       // "A".."E", or "Blank" / "Multi" / "Unreadable"
+    in property <string> key-hint;    // "A", "Backspace", "Ctrl+M", "Ctrl+U"
+    in property <bool> selected;
+    in property <bool> suggested;
+    in property <bool> special;       // true for Blank / Multi / Unreadable
+    in property <MarkState> glyph: MarkState.blank;
+    callback clicked();
+
+    min-width: self.special ? 92px : 52px;
+    min-height: self.special ? 52px : 60px;
+    max-height: self.min-height;
+    border-radius: Theme.radius-lg;
+    background: self.selected ? Theme.primary : ta.has-hover ? Theme.surface-hover : Theme.surface-raised;
+    border-width: self.selected ? 0px : 1px;
+    border-color: self.suggested ? Theme.accent : Theme.border-strong;
+    animate background { duration: Theme.duration-fast; }
+    accessible-role: AccessibleRole.button;
+    accessible-checkable: true;
+    accessible-checked: root.selected;
+    accessible-label: root.suggested ? root.label + ", suggested" : root.label;
+    accessible-description: root.key-hint;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    ta := TouchArea {
+        clicked => {
+            fs.focus();
+            root.clicked();
+        }
+    }
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    VerticalLayout {
+        padding: Theme.space-sm;
+        spacing: Theme.space-xs;
+        alignment: center;
+        HorizontalLayout {
+            alignment: center;
+            spacing: Theme.space-xs + Theme.space-2xs;
+            if root.special: VerticalLayout {
+                alignment: center;
+                MarkGlyph {
+                    mark: root.glyph;
+                    size: 14px;
+                    tint: root.selected ? Theme.on-primary : Theme.mark-color(root.glyph);
+                }
+            }
+            Text {
+                text: root.label;
+                font-size: root.special ? Theme.text-sm : Theme.text-xl;
+                font-weight: Theme.weight-semibold;
+                color: root.selected ? Theme.on-primary : Theme.ink;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        HorizontalLayout {
+            alignment: center;
+            Keycap {
+                text: root.key-hint;
+                inverse: root.selected;
+            }
+        }
+    }
+
+    // engine suggestion: gold bar along the bottom edge
+    if root.suggested && !root.selected: Rectangle {
+        x: Theme.space-sm;
+        y: root.height - 4px;
+        width: root.width - 2 * Theme.space-sm;
+        height: 3px;
+        border-radius: 1.5px;
+        background: Theme.accent;
+    }
+
+    // selection badge
+    if root.selected: Rectangle {
+        x: root.width - 12px;
+        y: -6px;
+        width: 18px;
+        height: 18px;
+        border-radius: 9px;
+        background: Theme.surface-raised;
+        border-width: 1px;
+        border-color: Theme.primary;
+        Path {
+            width: 10px;
+            height: 10px;
+            viewbox-width: 12;
+            viewbox-height: 12;
+            commands: "M 2 6.3 L 4.8 9 L 10 3.4";
+            stroke: Theme.primary;
+            stroke-width: 1.8px;
+        }
+    }
+
+    FocusRing {
+        active: fs.has-focus;
+        corner: Theme.radius-lg;
+    }
+}
+
+// ---------------------------------------------------------------- containers
+
+export component Card inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <length> inset: Theme.space-lg;   // content padding; title is always padded
+    in property <bool> elevated: true;
+    background: Theme.surface;
+    border-radius: Theme.radius-lg;
+    border-width: 1px;
+    border-color: Theme.border;
+    drop-shadow-blur: self.elevated ? Theme.shadow-1-blur : 0px;
+    drop-shadow-offset-y: self.elevated ? Theme.shadow-1-offset : 0px;
+    drop-shadow-color: self.elevated ? Theme.shadow-1-color : transparent;
+    VerticalLayout {
+        if root.title != "": VerticalLayout {
+            padding-left: Theme.space-lg;
+            padding-right: Theme.space-lg;
+            padding-top: Theme.space-lg;
+            padding-bottom: root.inset > 0 ? 0 : Theme.space-md;
+            spacing: Theme.space-2xs;
+            vertical-stretch: 0;
+            Text {
+                text: root.title;
+                font-size: Theme.text-lg;
+                font-weight: Theme.weight-semibold;
+                color: Theme.ink;
+                accessible-role: AccessibleRole.text;
+            }
+            if root.subtitle != "": Text {
+                text: root.subtitle;
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                wrap: word-wrap;
+            }
+        }
+        VerticalLayout {
+            padding: root.inset;
+            spacing: Theme.space-md;
+            @children
+        }
+    }
+}
+
+// KPI tile: small caps label, large value, optional unit and caption.
+export component StatTile inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <string> unit;
+    in property <string> caption;
+    in property <Tone> caption-tone: Tone.neutral;
+    min-width: 160px;
+    background: Theme.surface;
+    border-radius: Theme.radius-lg;
+    border-width: 1px;
+    border-color: Theme.border;
+    drop-shadow-blur: Theme.shadow-1-blur;
+    drop-shadow-offset-y: Theme.shadow-1-offset;
+    drop-shadow-color: Theme.shadow-1-color;
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.label + ": " + root.value + " " + root.unit + (root.caption == "" ? "" : ", " + root.caption);
+    VerticalLayout {
+        padding: Theme.space-md + Theme.space-2xs;
+        spacing: Theme.space-xs;
+        alignment: start;
+        Text {
+            text: root.label;
+            font-size: Theme.text-2xs;
+            font-weight: Theme.weight-semibold;
+            letter-spacing: 0.6px;
+            color: Theme.ink-2;
+            overflow: elide;
+        }
+        HorizontalLayout {
+            spacing: Theme.space-xs;
+            alignment: start;
+            Text {
+                text: root.value;
+                font-size: Theme.text-2xl;
+                font-weight: Theme.weight-semibold;
+                color: Theme.ink;
+                vertical-alignment: bottom;
+            }
+            if root.unit != "": Text {
+                text: root.unit;
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                vertical-alignment: bottom;
+            }
+        }
+        if root.caption != "": Text {
+            text: root.caption;
+            font-size: Theme.text-xs;
+            color: Theme.tone-fg(root.caption-tone);
+            overflow: elide;
+        }
+    }
+}
+
+// Ornamental girih rule for page headers (decorative; not exposed to AT).
+export component GirihDivider inherits Rectangle {
+    height: 10px;
+    accessible-role: AccessibleRole.none;
+    Image {
+        width: 100%;
+        height: 10px;
+        source: @image-url("assets/girih-strip.svg");
+        horizontal-tiling: repeat;
+        colorize: Theme.border;
+    }
+}
+
+// Left navigation rail: deep teal with a faint girih tile.
+export component NavRail inherits Rectangle {
+    width: Theme.nav-rail-width;
+    background: Theme.nav-bg;
+    Image {
+        width: 100%;
+        height: 100%;
+        source: @image-url("assets/girih-tile.svg");
+        horizontal-tiling: repeat;
+        vertical-tiling: repeat;
+        opacity: Theme.pattern-opacity;
+        accessible-role: AccessibleRole.none;
+    }
+    VerticalLayout {
+        padding-top: Theme.space-md;
+        padding-bottom: Theme.space-md;
+        spacing: Theme.space-xs;
+        alignment: start;
+        @children
+    }
+}
+
+export component NavItem inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <string> badge;   // e.g. open ERROR count; empty hides it
+    in property <bool> active;
+    callback clicked();
+    width: Theme.nav-rail-width;
+    height: 60px;
+    background: self.active ? Theme.nav-active-bg : ta.has-hover ? Theme.nav-hover-bg : transparent;
+    animate background { duration: Theme.duration-fast; }
+    accessible-role: AccessibleRole.tab;
+    accessible-label: root.badge == "" ? root.label : root.label + ", " + root.badge + " open";
+    accessible-checked: root.active;
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        clicked => {
+            fs.focus();
+            root.clicked();
+        }
+    }
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    // gold active marker
+    Rectangle {
+        x: 0;
+        y: (parent.height - self.height) / 2;
+        width: 3px;
+        height: 28px;
+        border-radius: 1.5px;
+        background: Theme.accent;
+        visible: root.active;
+    }
+    VerticalLayout {
+        alignment: center;
+        spacing: Theme.space-xs;
+        HorizontalLayout {
+            alignment: center;
+            Image {
+                source: root.icon;
+                width: Theme.icon-lg;
+                height: Theme.icon-lg;
+                colorize: root.active ? Theme.nav-fg : Theme.nav-fg-2;
+            }
+        }
+        Text {
+            text: root.label;
+            font-size: Theme.text-2xs;
+            font-weight: root.active ? Theme.weight-semibold : Theme.weight-medium;
+            color: root.active ? Theme.nav-fg : Theme.nav-fg-2;
+            horizontal-alignment: center;
+        }
+    }
+    if root.badge != "": Rectangle {
+        x: root.width / 2 + 6px;
+        y: 8px;
+        height: 16px;
+        width: max(16px, badge-text.preferred-width + 8px);
+        border-radius: 8px;
+        background: Theme.accent;
+        badge-text := Text {
+            text: root.badge;
+            font-family: Theme.font-mono;
+            font-size: 10px;
+            font-weight: Theme.weight-semibold;
+            color: #1C2430;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    FocusRing {
+        x: 4px;
+        y: 2px;
+        width: parent.width - 8px;
+        height: parent.height - 4px;
+        active: fs.has-focus;
+        corner: Theme.radius-md;
+        ring-color: Theme.nav-focus;
+    }
+}
+
+export component TopBar inherits Rectangle {
+    height: Theme.top-bar-height;
+    background: Theme.surface;
+    HorizontalLayout {
+        padding-left: Theme.space-xl;
+        padding-right: Theme.space-lg;
+        spacing: Theme.space-lg;
+        alignment: space-between;
+        @children
+    }
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.border;
+    }
+}
+
+export component StatusBar inherits Rectangle {
+    height: Theme.status-bar-height;
+    background: Theme.surface-sunken;
+    HorizontalLayout {
+        padding-left: Theme.space-lg;
+        padding-right: Theme.space-lg;
+        spacing: Theme.space-lg;
+        @children
+    }
+    Rectangle {
+        y: 0;
+        height: 1px;
+        background: Theme.border;
+    }
+}
+
+// Breadcrumb trail "MATH 101 / Midterm 1 / Term 1448-1"; last part is current.
+export component Breadcrumb inherits HorizontalLayout {
+    in property <[string]> parts;
+    spacing: Theme.space-sm;
+    for part[i] in root.parts: HorizontalLayout {
+        spacing: Theme.space-sm;
+        Text {
+            text: part;
+            font-size: Theme.text-sm;
+            font-weight: i == root.parts.length - 1 ? Theme.weight-semibold : Theme.weight-regular;
+            color: i == root.parts.length - 1 ? Theme.ink : Theme.ink-2;
+            vertical-alignment: center;
+        }
+        if i < root.parts.length - 1: Text {
+            text: "/";
+            font-size: Theme.text-sm;
+            color: Theme.ink-3;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// Search field with placeholder and key hint ("/").
+export component SearchField inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder: "Search";
+    in property <string> key-hint: "/";
+    callback accepted(string);
+    callback edited(string);
+    height: Theme.control-height;
+    min-width: 200px;
+    border-radius: Theme.radius-md;
+    background: Theme.surface-raised;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.primary : Theme.border-strong;
+    accessible-role: AccessibleRole.text-input;
+    accessible-label: root.placeholder;
+    accessible-value: root.text;
+    HorizontalLayout {
+        padding-left: Theme.space-sm + Theme.space-2xs;
+        padding-right: Theme.space-sm;
+        spacing: Theme.space-sm;
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: @image-url("assets/icons/search.svg");
+                width: Theme.icon-sm;
+                height: Theme.icon-sm;
+                colorize: Theme.ink-3;
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            Text {
+                x: 0;
+                width: parent.width;
+                height: parent.height;
+                text: root.placeholder;
+                visible: root.text == "";
+                font-size: Theme.text-sm;
+                color: Theme.ink-3;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            input := TextInput {
+                text <=> root.text;
+                font-size: Theme.text-sm;
+                color: Theme.ink;
+                vertical-alignment: center;
+                single-line: true;
+                selection-background-color: Theme.primary-soft;
+                accepted => {
+                    root.accepted(self.text);
+                }
+                edited => {
+                    root.edited(self.text);
+                }
+            }
+        }
+        if root.key-hint != "": VerticalLayout {
+            alignment: center;
+            Keycap {
+                text: root.key-hint;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- data display
+
+export component ProgressBar inherits Rectangle {
+    in property <float> value;        // 0..1
+    in property <Tone> tone: Tone.primary;
+    in property <length> thickness: 6px;
+    height: self.thickness;
+    border-radius: self.thickness / 2;
+    background: Theme.track;
+    accessible-role: AccessibleRole.progress-indicator;
+    accessible-value: round(clamp(root.value, 0, 1) * 100) + "%";
+    Rectangle {
+        x: 0;
+        width: parent.width * clamp(root.value, 0, 1);
+        height: parent.height;
+        border-radius: parent.border-radius;
+        background: root.tone == Tone.neutral ? Theme.ink-2 : Theme.tone-fg(root.tone);
+        animate width { duration: Theme.duration-slow; easing: ease-out; }
+    }
+}
+
+// Horizontal measure bar with target marker and optional 95% CI whisker,
+// e.g. CLO attainment. Values are fractions 0..1. The value text is ink, not the series colour.
+export component MeterBar inherits Rectangle {
+    in property <float> value;
+    in property <float> target: -1;   // < 0 hides the target marker
+    in property <float> ci-low: -1;   // < 0 hides the whisker
+    in property <float> ci-high: -1;
+    in property <color> fill: Theme.series-1;
+    in property <string> value-text;
+    in property <length> thickness: 8px;
+    height: 20px;
+    accessible-role: AccessibleRole.progress-indicator;
+    accessible-value: root.value-text;
+    property <length> track-width: self.width - 48px;
+    // track
+    Rectangle {
+        x: 0;
+        y: (parent.height - root.thickness) / 2;
+        width: root.track-width;
+        height: root.thickness;
+        border-radius: root.thickness / 2;
+        background: Theme.track;
+    }
+    // value
+    Rectangle {
+        x: 0;
+        y: (parent.height - root.thickness) / 2;
+        width: root.track-width * clamp(root.value, 0, 1);
+        height: root.thickness;
+        border-radius: root.thickness / 2;
+        background: root.fill;
+        animate width { duration: Theme.duration-slow; easing: ease-out; }
+    }
+    // CI whisker
+    if root.ci-low >= 0 && root.ci-high >= 0: Rectangle {
+        x: root.track-width * clamp(root.ci-low, 0, 1);
+        y: parent.height / 2 - 0.5px;
+        width: root.track-width * (clamp(root.ci-high, 0, 1) - clamp(root.ci-low, 0, 1));
+        height: 1px;
+        background: Theme.ink-2;
+        Rectangle { x: 0; y: -4px; width: 1px; height: 9px; background: Theme.ink-2; }
+        Rectangle { x: parent.width - 1px; y: -4px; width: 1px; height: 9px; background: Theme.ink-2; }
+    }
+    // target marker: ink line with a diamond cap
+    if root.target >= 0: Rectangle {
+        x: root.track-width * clamp(root.target, 0, 1) - 1px;
+        y: 0;
+        width: 2px;
+        height: parent.height;
+        background: Theme.chart-target;
+        Path {
+            x: -3px;
+            y: -4px;
+            width: 8px;
+            height: 8px;
+            viewbox-width: 8;
+            viewbox-height: 8;
+            commands: "M 4 0 L 8 4 L 4 8 L 0 4 Z";
+            fill: Theme.chart-target;
+        }
+    }
+    Text {
+        x: root.track-width + Theme.space-sm;
+        width: 40px;
+        height: parent.height;
+        text: root.value-text;
+        font-family: Theme.font-mono;
+        font-size: Theme.text-xs;
+        color: Theme.ink;
+        vertical-alignment: center;
+        horizontal-alignment: right;
+    }
+}
+
+// Semicircular gauge (e.g. pages/s) with an optional floor tick (e.g. 40 pages/s).
+export component Gauge inherits Rectangle {
+    in property <float> value;
+    in property <float> maximum: 100;
+    in property <float> floor-mark: -1; // < 0 hides the tick
+    in property <string> value-text;
+    in property <string> unit;
+    in property <string> label;
+    in property <color> fill: Theme.primary;
+    width: 180px;
+    height: 120px;
+    accessible-role: AccessibleRole.progress-indicator;
+    accessible-label: root.label;
+    accessible-value: root.value-text + " " + root.unit;
+    property <float> frac: clamp(self.value / max(self.maximum, 0.0001), 0, 1);
+    property <angle> end-angle: 180deg + 180deg * self.frac;
+    property <angle> floor-angle: 180deg + 180deg * clamp(self.floor-mark / max(self.maximum, 0.0001), 0, 1);
+    // track
+    Path {
+        width: 180px;
+        height: 100px;
+        viewbox-width: 180;
+        viewbox-height: 100;
+        stroke: Theme.track;
+        stroke-width: 12px;
+        stroke-line-cap: round;
+        MoveTo { x: 18; y: 92; }
+        ArcTo { x: 162; y: 92; radius-x: 72; radius-y: 72; sweep: true; large-arc: false; }
+    }
+    // value arc
+    if root.frac > 0.001: Path {
+        width: 180px;
+        height: 100px;
+        viewbox-width: 180;
+        viewbox-height: 100;
+        stroke: root.fill;
+        stroke-width: 12px;
+        stroke-line-cap: round;
+        MoveTo { x: 18; y: 92; }
+        ArcTo {
+            x: 90 + 72 * cos(root.end-angle);
+            y: 92 + 72 * sin(root.end-angle);
+            radius-x: 72;
+            radius-y: 72;
+            sweep: true;
+            large-arc: false;
+        }
+    }
+    // floor tick
+    if root.floor-mark >= 0: Path {
+        width: 180px;
+        height: 100px;
+        viewbox-width: 180;
+        viewbox-height: 100;
+        stroke: Theme.chart-target;
+        stroke-width: 2px;
+        MoveTo { x: 90 + 60 * cos(root.floor-angle); y: 92 + 60 * sin(root.floor-angle); }
+        LineTo { x: 90 + 84 * cos(root.floor-angle); y: 92 + 84 * sin(root.floor-angle); }
+    }
+    VerticalLayout {
+        y: 46px;
+        height: 72px;
+        spacing: 0;
+        alignment: start;
+        Text {
+            text: root.value-text;
+            font-size: Theme.text-3xl;
+            font-weight: Theme.weight-semibold;
+            color: Theme.ink;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: root.unit;
+            font-size: Theme.text-xs;
+            color: Theme.ink-2;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+// Group header in the exception list: "MRK-001  Low-confidence mark   41".
+export component GroupHeader inherits Rectangle {
+    in property <string> code;
+    in property <string> title;
+    in property <string> count;
+    in property <Severity> severity: Severity.error;
+    in property <bool> expanded: true;
+    callback toggled();
+    height: 32px;
+    background: Theme.surface-sunken;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.code + " " + root.title + ", " + root.count + " items";
+    accessible-action-default => {
+        root.toggled();
+    }
+    TouchArea {
+        clicked => {
+            root.toggled();
+        }
+    }
+    HorizontalLayout {
+        padding-left: Theme.space-lg;
+        padding-right: Theme.space-md;
+        spacing: Theme.space-sm;
+        VerticalLayout {
+            alignment: center;
+            SeverityGlyph {
+                severity: root.severity;
+                size: 10px;
+            }
+        }
+        Text {
+            text: root.code;
+            font-family: Theme.font-mono;
+            font-size: Theme.text-xs;
+            font-weight: Theme.weight-medium;
+            color: Theme.ink;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.title;
+            font-size: Theme.text-xs;
+            color: Theme.ink-2;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        VerticalLayout {
+            alignment: center;
+            Tag {
+                text: root.count;
+            }
+        }
+    }
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.border;
+    }
+}
+
+// Table building blocks. A row lays out its children horizontally; give cells fixed
+// widths or stretch factors so header and rows align.
+export component TableHeaderCell inherits Rectangle {
+    in property <string> text;
+    in property <TextHorizontalAlignment> align: left;
+    height: Theme.row-height-compact + 4px;
+    Text {
+        x: Theme.space-md;
+        width: parent.width - 2 * Theme.space-md;
+        height: parent.height;
+        text: root.text;
+        font-size: Theme.text-xs;
+        font-weight: Theme.weight-medium;
+        color: Theme.ink-2;
+        vertical-alignment: center;
+        horizontal-alignment: root.align;
+        overflow: elide;
+    }
+}
+
+export component TableCell inherits Rectangle {
+    in property <string> text;
+    in property <string> secondary;   // second line, e.g. Arabic name or Hijri date
+    in property <bool> mono;
+    in property <bool> arabic-secondary;
+    in property <bool> strong;
+    in property <TextHorizontalAlignment> align: left;
+    in property <color> tint: Theme.ink;
+    VerticalLayout {
+        padding-left: Theme.space-md;
+        padding-right: Theme.space-md;
+        alignment: center;
+        spacing: 1px;
+        Text {
+            text: root.text;
+            font-family: root.mono ? Theme.font-mono : Theme.font-sans;
+            font-size: Theme.text-sm;
+            font-weight: root.strong ? Theme.weight-semibold : Theme.weight-regular;
+            color: root.tint;
+            horizontal-alignment: root.align;
+            overflow: elide;
+        }
+        if root.secondary != "": Text {
+            text: root.secondary;
+            font-family: root.arabic-secondary ? Theme.font-arabic : Theme.font-sans;
+            font-size: Theme.text-xs;
+            color: Theme.ink-2;
+            horizontal-alignment: root.align;
+            overflow: elide;
+        }
+    }
+}
+
+export component TableRow inherits Rectangle {
+    in property <bool> selected;
+    in property <bool> header;
+    in property <length> row-height: Theme.row-height + 8px;
+    callback clicked();
+    min-height: self.header ? Theme.row-height-compact + 4px : self.row-height;
+    background: self.header ? Theme.surface-sunken : self.selected ? Theme.primary-soft : ta.has-hover ? Theme.surface-hover : transparent;
+    accessible-role: self.header ? AccessibleRole.none : AccessibleRole.list-item;
+    accessible-checked: self.selected;
+    ta := TouchArea {
+        enabled: !root.header;
+        clicked => {
+            root.clicked();
+        }
+    }
+    HorizontalLayout {
+        @children
+    }
+    if root.selected: Rectangle {
+        x: 0;
+        width: 3px;
+        background: Theme.primary;
+    }
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.border;
+    }
+}
+
+// ---------------------------------------------------------------- mark overlays
+
+// Overlay for one bubble on the scan canvas. Place it centred on the bubble with
+// `size` ~1.6x the bubble diameter. Shapes carry the state; colour reinforces it:
+//   selected   solid ring   + check badge
+//   ambiguous  dashed ring  + "?" badge
+//   unreadable hatched square + "!" badge
+//   blank      dotted ring  + "-" badge (only drawn when overlays show all bubbles)
+export component BubbleOverlay inherits Rectangle {
+    in property <MarkState> mark: MarkState.selected;
+    in property <length> size: 48px;
+    in property <bool> show-badge: true;
+    in property <string> option-label;  // for the accessible name, e.g. "B"
+    width: self.size;
+    height: self.size;
+    accessible-role: AccessibleRole.image;
+    accessible-label: root.option-label + ": " + (root.mark == MarkState.selected ? "filled"
+        : root.mark == MarkState.ambiguous ? "ambiguous"
+        : root.mark == MarkState.unreadable ? "unreadable" : "blank");
+
+    property <string> ring: root.mark == MarkState.selected ? "M 10 50 A 40 40 0 1 1 90 50 A 40 40 0 1 1 10 50 Z"
+        : root.mark == MarkState.ambiguous ? "M 50.00 10.00 A 40 40 0 0 1 62.36 11.96 M 70.00 15.36 A 40 40 0 0 1 79.73 23.23 M 84.64 30.00 A 40 40 0 0 1 89.13 41.68 M 90.00 50.00 A 40 40 0 0 1 88.04 62.36 M 84.64 70.00 A 40 40 0 0 1 76.77 79.73 M 70.00 84.64 A 40 40 0 0 1 58.32 89.13 M 50.00 90.00 A 40 40 0 0 1 37.64 88.04 M 30.00 84.64 A 40 40 0 0 1 20.27 76.77 M 15.36 70.00 A 40 40 0 0 1 10.87 58.32 M 10.00 50.00 A 40 40 0 0 1 11.96 37.64 M 15.36 30.00 A 40 40 0 0 1 23.23 20.27 M 30.00 15.36 A 40 40 0 0 1 41.68 10.87"
+        : root.mark == MarkState.unreadable ? "M 14 14 L 86 14 L 86 86 L 14 86 Z M 14 26 L 26 14 M 14 38 L 38 14 M 14 50 L 50 14 M 14 62 L 62 14 M 14 74 L 74 14 M 14 86 L 86 14 M 26 86 L 86 26 M 38 86 L 86 38 M 50 86 L 86 50 M 62 86 L 86 62 M 74 86 L 86 74"
+        : "M 50.00 10.00 A 40 40 0 0 1 51.40 10.02 M 60.35 11.36 A 40 40 0 0 1 61.69 11.75 M 70.00 15.36 A 40 40 0 0 1 71.20 16.08 M 78.28 21.72 A 40 40 0 0 1 79.25 22.72 M 84.64 30.00 A 40 40 0 0 1 85.32 31.22 M 88.64 39.65 A 40 40 0 0 1 88.97 41.00 M 90.00 50.00 A 40 40 0 0 1 89.98 51.40 M 88.64 60.35 A 40 40 0 0 1 88.25 61.69 M 84.64 70.00 A 40 40 0 0 1 83.92 71.20 M 78.28 78.28 A 40 40 0 0 1 77.28 79.25 M 70.00 84.64 A 40 40 0 0 1 68.78 85.32 M 60.35 88.64 A 40 40 0 0 1 59.00 88.97 M 50.00 90.00 A 40 40 0 0 1 48.60 89.98 M 39.65 88.64 A 40 40 0 0 1 38.31 88.25 M 30.00 84.64 A 40 40 0 0 1 28.80 83.92 M 21.72 78.28 A 40 40 0 0 1 20.75 77.28 M 15.36 70.00 A 40 40 0 0 1 14.68 68.78 M 11.36 60.35 A 40 40 0 0 1 11.03 59.00 M 10.00 50.00 A 40 40 0 0 1 10.02 48.60 M 11.36 39.65 A 40 40 0 0 1 11.75 38.31 M 15.36 30.00 A 40 40 0 0 1 16.08 28.80 M 21.72 21.72 A 40 40 0 0 1 22.72 20.75 M 30.00 15.36 A 40 40 0 0 1 31.22 14.68 M 39.65 11.36 A 40 40 0 0 1 41.00 11.03";
+    property <length> stroke-px: root.mark == MarkState.unreadable ? 2px : root.mark == MarkState.blank ? 3px : 3px;
+
+    // halo
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        commands: root.ring;
+        stroke: Theme.mark-halo;
+        stroke-width: root.stroke-px + 2px;
+        stroke-line-cap: round;
+    }
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        commands: root.ring;
+        stroke: Theme.mark-color(root.mark);
+        stroke-width: root.stroke-px;
+        stroke-line-cap: round;
+    }
+    if root.show-badge: Rectangle {
+        x: root.width * 0.70;
+        y: -root.width * 0.06;
+        width: max(14px, root.width * 0.36);
+        height: self.width;
+        border-radius: self.width / 2;
+        background: Theme.mark-color(root.mark);
+        border-width: 1px;
+        border-color: Theme.mark-halo;
+        if root.mark == MarkState.selected: Path {
+            width: 70%;
+            height: 70%;
+            viewbox-width: 12;
+            viewbox-height: 12;
+            commands: "M 2.2 6.3 L 5 9 L 9.8 3.6";
+            stroke: #FFFFFF;
+            stroke-width: 1.8px;
+            stroke-line-cap: round;
+        }
+        if root.mark != MarkState.selected: Text {
+            text: root.mark == MarkState.ambiguous ? "?" : root.mark == MarkState.unreadable ? "!" : "–";
+            color: #FFFFFF;
+            font-size: max(10px, root.width * 0.24);
+            font-weight: Theme.weight-semibold;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}

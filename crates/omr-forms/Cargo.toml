@@ -12,6 +12,7 @@ omr-model.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
 sha2.workspace = true
 hmac.workspace = true
 data-encoding.workspace = true
@@ -19,8 +20,22 @@ qrcode.workspace = true
 usvg = { workspace = true, optional = true }
 resvg = { workspace = true, optional = true }
 svg2pdf = { workspace = true, optional = true }
+pdf-writer = { workspace = true, optional = true }
 tiny-skia = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
 
 [features]
 default = []
-render = ["dep:usvg", "dep:resvg", "dep:svg2pdf", "dep:tiny-skia"]
+render = ["dep:usvg", "dep:resvg", "dep:svg2pdf", "dep:pdf-writer", "dep:tiny-skia", "dep:image"]
+
+[dev-dependencies]
+proptest.workspace = true
+kornia-apriltag.workspace = true
+kornia-image.workspace = true
+rxing = { workspace = true, features = ["decoders", "qrcode", "encoding_rs"] }
+image.workspace = true
+lopdf.workspace = true
+
+[[example]]
+name = "render_sample"
+required-features = ["render"]

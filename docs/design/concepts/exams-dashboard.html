@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OMR Correction - Exams Dashboard</title>
+    
+    <!-- Typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Arabic:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Tailwind Configuration -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            primary: '#0E5E57',
+                            primaryHover: '#0B4A45',
+                            nav: '#0B3B37',
+                            bg: '#F5F0E6',
+                            surface: '#FFFDF8',
+                            ink: '#1C2430',
+                            inkMuted: '#55606E',
+                            border: '#E3DACB',
+                            accent: '#B0832A',
+                            success: '#2E7D4F',
+                            warning: '#B26B00',
+                            error: '#B3261E'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['"IBM Plex Sans"', 'sans-serif'],
+                        mono: ['"IBM Plex Mono"', 'monospace'],
+                        arabic: ['"IBM Plex Sans Arabic"', 'sans-serif']
+                    },
+                    spacing: {
+                        '4.5': '1.125rem',
+                        '18': '4.5rem',
+                        '72px': '72px',
+                    },
+                    boxShadow: {
+                        'app-soft': '0 2px 8px -2px rgba(28, 36, 48, 0.05), 0 4px 16px -4px rgba(28, 36, 48, 0.02)',
+                        'drawer': '-4px 0 24px -4px rgba(28, 36, 48, 0.08)',
+                        'inner-selected': 'inset 3px 0 0 0 #0E5E57'
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- Custom CSS for Native Feel & Specific Component Details -->
+    <style>
+        :root {
+            /* Girih pattern encoded for background - 8 point star geometry */
+            --girih-pattern: url("data:image/svg+xml,%3Csvg width='40' height='40' viewBox='0 0 40 40' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M20 0L24.5 15.5L40 20L24.5 24.5L20 40L15.5 24.5L0 20L15.5 15.5L20 0Z' fill='white' fill-opacity='0.04'/%3E%3Cpath d='M0 0L10 10M40 0L30 10M0 40L10 30M40 40L30 30' stroke='white' stroke-width='0.5' stroke-opacity='0.04'/%3E%3C/svg%3E");
+        }
+
+        body {
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            user-select: none; /* Native app feel */
+            font-size: 13px; /* Dense UI baseline */
+            background-color: theme('colors.brand.bg');
+            color: theme('colors.brand.ink');
+        }
+
+        /* Allow selection in specific data areas */
+        .selectable {
+            user-select: text;
+        }
+
+        /* Tabular numerals for data density and alignment */
+        .tabular-data {
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Custom Native-like Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(85, 96, 110, 0.2);
+            border-radius: 4px;
+            border: 2px solid theme('colors.brand.bg'); /* Faux padding */
+        }
+        .bg-surface ::-webkit-scrollbar-thumb {
+            border-color: theme('colors.brand.surface');
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(85, 96, 110, 0.4);
+        }
+
+        /* Nav rail active state specific layout */
+        .nav-item-active {
+            position: relative;
+        }
+        .nav-item-active::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            height: 24px;
+            width: 3px;
+            background-color: theme('colors.brand.accent');
+            border-top-right-radius: 4px;
+            border-bottom-right-radius: 4px;
+        }
+
+        /* Complex Table styling */
+        .app-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+        .app-table th {
+            position: sticky;
+            top: 0;
+            background-color: theme('colors.brand.bg');
+            z-index: 10;
+            border-bottom: 1px solid theme('colors.brand.border');
+            font-weight: 500;
+            color: theme('colors.brand.inkMuted');
+            padding: 8px 12px;
+            text-align: left;
+            font-size: 12px;
+        }
+        .app-table th::after {
+            content: '';
+            position: absolute;
+            bottom: -1px;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background-color: theme('colors.brand.border');
+        }
+        .app-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid theme('colors.brand.border');
+            vertical-align: middle;
+        }
+        .app-table tr:hover:not(.row-selected) td {
+            background-color: rgba(255, 253, 248, 0.5); /* Slight surface tint */
+        }
+        
+        /* Selected Row Logic */
+        .row-selected td {
+            background-color: theme('colors.brand.surface');
+            border-bottom-color: transparent;
+        }
+        .row-selected td:first-child {
+            box-shadow: inset 3px 0 0 0 theme('colors.brand.primary');
+        }
+        /* Fix border on row above selected */
+        .app-table tr.row-above-selected td {
+            border-bottom-color: transparent;
+        }
+
+        /* Circular Progress */
+        .circular-chart {
+            display: block;
+            margin: 0 auto;
+            max-width: 80%;
+            max-height: 250px;
+        }
+        .circle-bg {
+            fill: none;
+            stroke: theme('colors.brand.border');
+            stroke-width: 2.5;
+        }
+        .circle {
+            fill: none;
+            stroke-width: 2.5;
+            stroke-linecap: round;
+        }
+
+        /* Decorative Girih Header Line */
+        .girih-divider {
+            height: 6px;
+            background-image: url("data:image/svg+xml,%3Csvg width='60' height='6' viewBox='0 0 60 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 3H15M15 3L20 0M15 3L20 6M30 3L25 0M30 3L25 6M30 3H60M20 0H25M20 6H25' stroke='%23E3DACB' stroke-width='1'/%3E%3C/svg%3E");
+            background-repeat: repeat-x;
+            background-position: left center;
+        }
+    </style>
+</head>
+<body class="h-[100dvh] w-full flex flex-col overflow-hidden bg-brand-bg text-brand-ink">
+
+    <!-- Top App Bar -->
+    <header class="h-[56px] flex-shrink-0 flex items-center justify-between px-4 border-b border-brand-border bg-brand-bg relative z-20">
+        <div class="flex items-center gap-6 h-full">
+            <!-- Logo area implicitly aligned with nav rail width roughly -->
+            <div class="w-[36px] flex justify-center">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-brand-primary">
+                    <path d="M3 3h18v18H3zM9 3v18M15 3v18M3 9h18M3 15h18" opacity="0.3"/>
+                    <circle cx="12" cy="12" r="2" fill="currentColor"/>
+                    <circle cx="6" cy="12" r="1.5" fill="currentColor"/>
+                    <circle cx="18" cy="12" r="1.5" fill="currentColor"/>
+                </svg>
+            </div>
+            <div class="flex items-center gap-4">
+                <h1 class="font-semibold text-[15px] tracking-tight">OMR Correction</h1>
+                
+                <!-- Term Selector -->
+                <button class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-brand-border/50 text-brand-inkMuted text-[13px] font-medium transition-colors">
+                    <span>Term 1448-1 (Fall 2026)</span>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-4">
+            <!-- Global Search -->
+            <div class="relative group">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="absolute left-2.5 top-1/2 -translate-y-1/2 text-brand-inkMuted"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                <input type="text" placeholder="Search exams, courses..." class="pl-8 pr-3 py-1.5 bg-brand-surface border border-brand-border rounded-full text-[12px] w-64 focus:outline-none focus:border-brand-primary focus:ring-1 focus:ring-brand-primary/20 placeholder-brand-inkMuted/70 transition-all">
+                <div class="absolute right-2 top-1/2 -translate-y-1/2 flex gap-0.5">
+                    <kbd class="font-mono text-[9px] bg-brand-bg border border-brand-border rounded px-1 text-brand-inkMuted">⌘</kbd>
+                    <kbd class="font-mono text-[9px] bg-brand-bg border border-brand-border rounded px-1 text-brand-inkMuted">K</kbd>
+                </div>
+            </div>
+
+            <!-- New Exam Action -->
+            <button class="bg-brand-primary hover:bg-brand-primaryHover text-white px-3 py-1.5 rounded-[6px] font-medium text-[13px] shadow-sm transition-colors flex items-center gap-1.5 active:scale-[0.98]">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                New exam
+            </button>
+
+            <!-- Theme Toggle & Dividers -->
+            <div class="w-px h-4 bg-brand-border mx-1"></div>
+            
+            <button class="text-brand-inkMuted hover:text-brand-ink p-1 rounded-md hover:bg-brand-border/50 transition-colors">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+            </button>
+
+            <!-- User -->
+            <button class="flex items-center gap-2 pl-2 hover:opacity-80 transition-opacity">
+                <div class="text-right flex flex-col justify-center">
+                    <span class="text-[12px] font-semibold leading-tight">Dr. Huda Al-Qahtani</span>
+                    <span class="text-[10px] text-brand-inkMuted leading-tight">Instructor</span>
+                </div>
+                <div class="w-8 h-8 rounded-full bg-brand-primary/10 border border-brand-primary/20 flex items-center justify-center text-brand-primary font-bold text-[12px]">
+                    HA
+                </div>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <div class="flex flex-1 overflow-hidden relative">
+        
+        <!-- Left Nav Rail -->
+        <nav class="w-[72px] flex-shrink-0 bg-brand-nav flex flex-col items-center py-4 relative z-10" style="background-image: var(--girih-pattern);">
+            <div class="flex flex-col gap-6 w-full">
+                <!-- Exams (Active) -->
+                <button class="nav-item-active w-full flex flex-col items-center gap-1.5 text-white group outline-none">
+                    <div class="w-10 h-10 rounded-[8px] bg-white/10 flex items-center justify-center shadow-sm group-hover:bg-white/15 transition-colors">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/><path d="M9 10h6"/><path d="M9 14h6"/></svg>
+                    </div>
+                    <span class="text-[10px] font-medium tracking-wide">Exams</span>
+                </button>
+
+                <!-- Scan -->
+                <button class="w-full flex flex-col items-center gap-1.5 text-white/60 hover:text-white group outline-none transition-colors">
+                    <div class="w-10 h-10 rounded-[8px] flex items-center justify-center group-hover:bg-white/5 transition-colors">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg>
+                    </div>
+                    <span class="text-[10px] font-medium tracking-wide">Scan</span>
+                </button>
+
+                <!-- Review -->
+                <button class="w-full flex flex-col items-center gap-1.5 text-white/60 hover:text-white group outline-none transition-colors">
+                    <div class="w-10 h-10 rounded-[8px] flex items-center justify-center group-hover:bg-white/5 transition-colors relative">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>
+                        <!-- Badge indicator -->
+                        <div class="absolute top-2 right-2 w-2 h-2 bg-brand-warning rounded-full border-[1.5px] border-brand-nav"></div>
+                    </div>
+                    <span class="text-[10px] font-medium tracking-wide">Review</span>
+                </button>
+
+                <!-- Results -->
+                <button class="w-full flex flex-col items-center gap-1.5 text-white/60 hover:text-white group outline-none transition-colors">
+                    <div class="w-10 h-10 rounded-[8px] flex items-center justify-center group-hover:bg-white/5 transition-colors">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>
+                    </div>
+                    <span class="text-[10px] font-medium tracking-wide">Results</span>
+                </button>
+
+                <!-- Outcomes -->
+                <button class="w-full flex flex-col items-center gap-1.5 text-white/60 hover:text-white group outline-none transition-colors">
+                    <div class="w-10 h-10 rounded-[8px] flex items-center justify-center group-hover:bg-white/5 transition-colors">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                    </div>
+                    <span class="text-[10px] font-medium tracking-wide">Outcomes</span>
+                </button>
+                
+                <!-- Export -->
+                <button class="w-full flex flex-col items-center gap-1.5 text-white/60 hover:text-white group outline-none transition-colors">
+                    <div class="w-10 h-10 rounded-[8px] flex items-center justify-center group-hover:bg-white/5 transition-colors">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                    </div>
+                    <span class="text-[10px] font-medium tracking-wide">Export</span>
+                </button>
+            </div>
+
+            <!-- Settings at bottom -->
+            <div class="mt-auto pb-2 w-full flex flex-col items-center">
+                 <button class="w-full flex flex-col items-center gap-1.5 text-white/60 hover:text-white group outline-none transition-colors">
+                    <div class="w-10 h-10 rounded-[8px] flex items-center justify-center group-hover:bg-white/5 transition-colors">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+                    </div>
+                </button>
+            </div>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="flex-1 flex flex-col overflow-hidden relative">
+            
+            <!-- Scrollable Content wrapper -->
+            <div class="flex-1 overflow-y-auto px-6 py-5">
+                
+                <!-- Page Header -->
+                <div class="mb-5">
+                    <div class="flex items-end justify-between mb-2">
+                        <h2 class="text-[22px] font-medium tracking-tight text-brand-ink">Exams Dashboard</h2>
+                        
+                        <!-- View Toggle -->
+                        <div class="flex items-center p-0.5 bg-brand-border/40 rounded-md border border-brand-border/60">
+                            <button class="p-1.5 rounded text-brand-inkMuted hover:text-brand-ink hover:bg-white/50 transition-colors" title="Card View">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+                            </button>
+                            <button class="p-1.5 rounded bg-white shadow-sm text-brand-ink" title="Table View">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" x2="21" y1="12" y2="12"/><line x1="3" x2="21" y1="6" y2="6"/><line x1="3" x2="21" y1="18" y2="18"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Decorative Girih Divider -->
+                    <div class="girih-divider w-full mb-4"></div>
+
+                    <!-- Filter Chips -->
+                    <div class="flex items-center gap-2 overflow-x-auto pb-1 hide-scrollbar">
+                        <button class="px-3 py-1 bg-brand-ink text-white rounded-full text-[12px] font-medium border border-brand-ink whitespace-nowrap">
+                            All <span class="text-white/70 ml-1 tabular-data">14</span>
+                        </button>
+                        <button class="px-3 py-1 bg-brand-surface text-brand-inkMuted hover:text-brand-ink hover:border-brand-ink/30 rounded-full text-[12px] font-medium border border-brand-border transition-colors whitespace-nowrap">
+                            Setup <span class="opacity-60 ml-1 tabular-data">2</span>
+                        </button>
+                        <button class="px-3 py-1 bg-brand-surface text-brand-inkMuted hover:text-brand-ink hover:border-brand-ink/30 rounded-full text-[12px] font-medium border border-brand-border transition-colors whitespace-nowrap">
+                            Scanning <span class="opacity-60 ml-1 tabular-data">3</span>
+                        </button>
+                        <button class="px-3 py-1 bg-brand-warning/10 text-brand-warning hover:bg-brand-warning/20 border-brand-warning/20 rounded-full text-[12px] font-medium border transition-colors whitespace-nowrap">
+                            Review <span class="opacity-70 ml-1 tabular-data">4</span>
+                        </button>
+                        <button class="px-3 py-1 bg-brand-surface text-brand-inkMuted hover:text-brand-ink hover:border-brand-ink/30 rounded-full text-[12px] font-medium border border-brand-border transition-colors whitespace-nowrap">
+                            Ready to release <span class="opacity-60 ml-1 tabular-data">3</span>
+                        </button>
+                        <button class="px-3 py-1 bg-brand-surface text-brand-inkMuted hover:text-brand-ink hover:border-brand-ink/30 rounded-full text-[12px] font-medium border border-brand-border transition-colors whitespace-nowrap">
+                            Released <span class="opacity-60 ml-1 tabular-data">2</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Stats Row -->
+                <div class="grid grid-cols-4 gap-4 mb-6">
+                    <!-- Stat 1 -->
+                    <div class="bg-brand-surface border border-brand-border rounded-[8px] p-3.5 shadow-app-soft flex flex-col justify-between h-20 relative overflow-hidden">
+                        <span class="text-brand-inkMuted text-[11px] font-medium uppercase tracking-wider">Sheets scanned this week</span>
+                        <div class="text-[20px] font-semibold tabular-data text-brand-ink">3,812</div>
+                        <!-- Decorative bg graph -->
+                        <svg class="absolute -bottom-2 -right-2 text-brand-primary/5" width="80" height="40" viewBox="0 0 100 40" preserveAspectRatio="none"><path d="M0,40 L0,20 Q20,30 40,15 T80,25 T100,5 L100,40 Z" fill="currentColor"/></svg>
+                    </div>
+                    <!-- Stat 2 -->
+                    <div class="bg-brand-surface border border-brand-border rounded-[8px] p-3.5 shadow-app-soft flex flex-col justify-between h-20">
+                        <span class="text-brand-inkMuted text-[11px] font-medium uppercase tracking-wider">Open exceptions</span>
+                        <div class="flex items-baseline gap-2">
+                            <span class="text-[20px] font-semibold tabular-data text-brand-warning">147</span>
+                            <span class="text-[11px] text-brand-error font-medium bg-brand-error/10 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                <svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L22 12L12 22L2 12L12 2Z"/></svg>
+                                ERROR 38
+                            </span>
+                        </div>
+                    </div>
+                    <!-- Stat 3 -->
+                    <div class="bg-brand-surface border border-brand-border rounded-[8px] p-3.5 shadow-app-soft flex flex-col justify-between h-20">
+                        <span class="text-brand-inkMuted text-[11px] font-medium uppercase tracking-wider">Median review time</span>
+                        <div class="flex items-baseline gap-1">
+                            <span class="text-[20px] font-semibold tabular-data text-brand-ink">1.4</span>
+                            <span class="text-[12px] text-brand-inkMuted">s / sheet</span>
+                        </div>
+                    </div>
+                    <!-- Stat 4 -->
+                    <div class="bg-brand-surface border border-brand-border rounded-[8px] p-3.5 shadow-app-soft flex flex-col justify-between h-20">
+                        <span class="text-brand-inkMuted text-[11px] font-medium uppercase tracking-wider">Throughput</span>
+                        <div class="flex items-baseline gap-1">
+                            <span class="text-[20px] font-semibold tabular-data text-brand-ink">62</span>
+                            <span class="text-[12px] text-brand-inkMuted">pages / s</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Data Table Container -->
+                <div class="bg-brand-surface border border-brand-border rounded-[10px] shadow-app-soft overflow-hidden">
+                    <div class="overflow-x-auto hide-scrollbar">
+                        <table class="app-table whitespace-nowrap">
+                            <thead>
+                                <tr>
+                                    <th class="w-[28%]">Course</th>
+                                    <th class="w-[10%]">Assessment</th>
+                                    <th class="w-[15%]">Date</th>
+                                    <th class="w-[8%]">Forms</th>
+                                    <th class="w-[12%]">Sheets</th>
+                                    <th class="w-[12%]">Exceptions</th>
+                                    <th class="w-[10%]">Status</th>
+                                    <th class="w-[5%] text-right pr-4"></th>
+                                </tr>
+                            </thead>
+                            <tbody class="tabular-data">
+                                
+                                <!-- Row 1: MATH 101 -->
+                                <tr>
+                                    <td>
+                                        <div class="flex flex-col">
+                                            <div class="flex items-center gap-1.5">
+                                                <span class="font-mono font-semibold text-[13px] text-brand-primary">MATH 101</span>
+                                                <span class="text-brand-border">|</span>
+                                                <span class="text-[13px] font-medium truncate w-48" title="Calculus I">Calculus I</span>
+                                            </div>
+                                            <span class="font-arabic text-[11px] text-brand-inkMuted dir-rtl inline-block truncate w-64 text-left">حساب التفاضل والتكامل ١</span>
+                                        </div>
+                                    </td>
+                                    <td>Midterm 1</td>
+                                    <td>
+                                        <div class="flex flex-col gap-0.5">
+                                            <span class="text-[12px]">2026-10-12</span>
+                                            <span class="text-[11px] text-brand-inkMuted">1448/04/20 AH</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="flex gap-1">
+                                            <span class="w-4 h-4 bg-brand-bg border border-brand-border rounded flex items-center justify-center text-[10px] font-mono text-brand-inkMuted">A</span>
+                                            <span class="w-4 h-4 bg-brand-bg border border-brand-border rounded flex items-center justify-center text-[10px] font-mono text-brand-inkMuted">B</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="flex flex-col gap-1 w-full max-w-[100px]">
+                                            <div class="flex justify-between text-[11px]">
+                                                <span class="font-medium text-brand-ink">512</span>
+                                                <span class="text-brand-inkMuted">/ 512</span>
+                                            </div>
+                                            <div class="w-full h-1 bg-brand-border rounded-full overflow-hidden">
+                                                <div class="h-full bg-brand-success w-full rounded-full"></div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="text-brand-inkMuted text-[12px] italic">None</span>
+                                    </td>
+                                    <td>
+                                        <div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-brand-success/10 border border-brand-success/20 text-brand-success text-[11px] font-medium">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
+                                            Released
+                                        </div>
+                                    </td>
+                                    <td class="text-right pr-4">
+                                        <div class="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <button class="p-1.5 text-brand-inkMuted hover:text-brand-primary hover:bg-brand-primary/10 rounded" title="Results"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg></button>
+                                            <button class="p-1.5 text-brand-inkMuted hover:text-brand-primary hover:bg-brand-primary/10 rounded" title="Export"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg></button>
+                                        </div>
+                                    </td>
+                                </tr>
+
+                                <!-- Row 2: PHYS 110 -->
+                                <tr class="row-above-selected">
+                                    <td>
+                                        <div class="flex flex-col">
+                                            <div class="flex items-center gap-1.5">
+                                                <span class="font-mono font-semibold text-[13px] text-brand-primary">PHYS 110</span>
+                                                <span class="text-brand-border">|</span>
+                                                <span class="text-[13px] font-medium truncate w-48" title="General Physics I">General Physics I</span>
+                                            </div>
+                                            <span class="font-arabic text-[11px] text-brand-inkMuted dir-rtl inline-block truncate w-64 text-left">الفيزياء العامة ١</span>
+                                        </div>
+                                    </td>
+                                    <td>Final</td>
+                                    <td>
+                                        <div class="flex flex-col gap-0.5">
+                                            <span class="text-[12px]">2026-10-14</span>
+                                            <span class="text-[11px] text-brand-inkMuted">1448/04/22 AH</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="flex gap-1 flex-wrap w-14">
+                                            <span class="w-4 h-4 bg-brand-bg border border-brand-border rounded flex items-center justify-center text-[10px] font-mono text-brand-inkMuted">A</span>
+                                            <span class="w-4 h-4 bg-brand-bg border border-brand-border rounded flex items-center justify-center text-[10px] font-mono text-brand-inkMuted">B</span>
+                                            <span class="w-4 h-4 bg-brand-bg border border-brand-border rounded flex items-center justify-center text-[10px] font-mono text-brand-inkMuted mt-0.5">C</span>
+                                            <span class="w-4 h-4 bg-brand-bg border border-brand-border rounded flex items-center justify-center text-[10px] font-mono text-brand-inkMuted mt-0.5">D</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="flex flex-col gap-1 w-full max-w-[100px]">
+                                            <div class="flex justify-between text-[11px]">
+                                                <span class="font-medium text-brand-ink">840</span>
+                                                <span class="text-brand-inkMuted">/ 840</span>
+                                            </div>
+                                            <div class="w-full h-1 bg-brand-border rounded-full overflow-hidden">
+                                                <div class="h-full bg-brand-success w-full rounded-full"></div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="flex flex-col gap-1 w-[110px]">
+                                            <div class="flex h-1.5 w-full rounded-full overflow-hidden">
+                                                <div class="bg-brand-warning w-full"></div>
+                                            </div>
+                                            <div class="flex items-center gap-1.5 text-[10px] font-mono text-brand-inkMuted">
+                                                <span class="flex items-center gap-0.5 text-brand-warning"><svg width="6" height="6" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><polygon points="12 2 22 20 2 20 12 2"/></svg> 12</span>
+                                                <span class="flex items-center gap-0.5"><svg width="6" height="6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10"/></svg> 3</span>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-brand-success/10 border border-brand-success/20 text-brand-success text-[11px] font-medium">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="m9 12 2 2 4-4"/></svg>
+                                            Ready
+                                        </div>
+                                    </td>
+                                    <td class="text-right pr-4">
+                                       <button class="text-brand-primary text-[12px] font-medium hover:underline">Release</button>
+                                    </td>
+                                </tr>
+
+                                <!-- Row 3: CHEM 101 (SELECTED ROW) -->
+                                <tr class="row-selected relative">
+                                    <td>
+                                        <div class="flex flex-col">
+                                            <div class="flex items-center gap-1.5">
+                                                <span class="font-mono font-semibold text-[13px] text-brand-primary">CHEM 101</span>
+                                                <span class="text-brand-border">|</span>
+                                                <span class="text-[13px] font-medium truncate w-48" title="General Chemistry I">General Chemistry I</span>
+                                            </div>
+                                            <span class="font-arabic text-[11px] text-brand-inkMuted dir-rtl inline-block truncate w-64 text-left">الكيمياء العامة ١</span>
+                                        </div>
+                                    </td>
+                                    <td>Midterm 1</td>
+                                    <td>
+                                        <div class="flex flex-col gap-0.5">
+                                            <span class="text-[12px]">2026-10-15</span>
+                                            <span class="text-[11px] text-brand-inkMuted">1448/04/23 AH</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="flex gap-1 flex-wrap w-14">
+                                            <span class="w-4 h-4 bg-brand-bg border border-brand-border rounded flex items-center justify-center text-[10px] font-mono text-brand-inkMuted">A</span>
+                                            <span class="w-4 h-4 bg-brand-bg border border-brand-border rounded flex items-center justify-center text-[10px] font-mono text-brand-inkMuted">B</span>
+                                            <span class="w-4 h-4 bg-brand-bg border border-brand-border rounded flex items-center justify-center text-[10px] font-mono text-brand-inkMuted mt-0.5">C</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="flex flex-col gap-1 w-full max-w-[100px]">
+                                            <div class="flex justify-between text-[11px]">
+                                                <span class="font-medium text-brand-ink">412</span>
+                                                <span class="text-brand-inkMuted">/ 418</span>
+                                            </div>
+                                            <div class="w-full h-1 bg-brand-border rounded-full overflow-hidden">
+                                                <div class="h-full bg-brand-warning w-[98%] rounded-full"></div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="flex flex-col gap-1 w-[110px]">
+                                            <!-- Stacked Mini Bar -->
+                                            <div class="flex h-1.5 w-full rounded-full overflow-hidden bg-brand-border/50">
+                                                <div class="bg-brand-error w-[40%]"></div>
+                                                <div class="bg-brand-warning w-[60%] border-l border-white/50"></div>
+                                            </div>
+                                            <!-- Counts -->
+                                            <div class="flex items-center gap-1.5 text-[10px] font-mono text-brand-inkMuted">
+                                                <span class="flex items-center gap-0.5 text-brand-error"><svg width="6" height="6" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L22 12L12 22L2 12L12 2Z"/></svg> 38</span>
+                                                <span class="flex items-center gap-0.5 text-brand-warning"><svg width="6" height="6" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><polygon points="12 2 22 20 2 20 12 2"/></svg> 57</span>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-brand-warning/10 border border-brand-warning/20 text-brand-warning text-[11px] font-medium">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>
+                                            In review
+                                        </div>
+                                    </td>
+                                    <td class="text-right pr-4">
+                                        <button class="bg-brand-primary text-white p-1.5 rounded-[4px] shadow-sm hover:bg-brand-primaryHover transition-colors" title="Continue Review">
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                                        </button>
+                                    </td>
+                                </tr>
+
+                                <!-- Row 4: STAT 201 -->
+                                <tr>
+                                    <td>
+                                        <div class="flex flex-col">
+                                            <div class="flex items-center gap-1.5">
+                                                <span class="font-mono font-semibold text-[13px] text-brand-primary">STAT 201</span>
+                                                <span class="text-brand-border">|</span>
+                                                <span class="text-[13px] font-medium truncate w-48" title="Intro to Statistics">Intro to Statistics</span>
+                                            </div>
+                                            <span class="font-arabic text-[11px] text-brand-inkMuted dir-rtl inline-block truncate w-64 text-left">مقدمة في الإحصاء</span>
+                                        </div>
+                                    </td>
+                                    <td>Quiz 3</td>
+                                    <td>
+                                        <div class="flex flex-col gap-0.5">
+                                            <span class="text-[12px]">2026-10-15</span>
+                                            <span class="text-[11px] text-brand-inkMuted">1448/04/23 AH</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="flex gap-1">
+                                            <span class="w-4 h-4 bg-brand-bg border border-brand-border rounded flex items-center justify-center text-[10px] font-mono text-brand-inkMuted">A</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="flex flex-col gap-1 w-full max-w-[100px]">
+                                            <div class="flex justify-between text-[11px]">
+                                                <span class="font-medium text-brand-ink">140</span>
+                                                <span class="text-brand-inkMuted">/ 350</span>
+                                            </div>
+                                            <div class="w-full h-1 bg-brand-border rounded-full overflow-hidden">
+                                                <div class="h-full bg-brand-primary w-[40%] rounded-full relative overflow-hidden">
+                                                    <!-- Indeterminate shimmer effect for scanning -->
+                                                    <div class="absolute inset-0 bg-white/30 -translate-x-full animate-[shimmer_2s_infinite]"></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="text-brand-inkMuted text-[12px] italic">Processing...</span>
+                                    </td>
+                                    <td>
+                                        <div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-brand-primary/5 border border-brand-primary/10 text-brand-primary text-[11px] font-medium">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="animate-spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                                            Scanning
+                                        </div>
+                                    </td>
+                                    <td class="text-right pr-4">
+                                         <button class="p-1.5 text-brand-inkMuted hover:text-brand-primary hover:bg-brand-primary/10 rounded" title="Scan More"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg></button>
+                                    </td>
+                                </tr>
+
+                                 <!-- Row 5: ENGL 102 -->
+                                <tr>
+                                    <td>
+                                        <div class="flex flex-col">
+                                            <div class="flex items-center gap-1.5">
+                                                <span class="font-mono font-semibold text-[13px] text-brand-primary">ENGL 102</span>
+                                                <span class="text-brand-border">|</span>
+                                                <span class="text-[13px] font-medium truncate w-48" title="Academic Writing">Academic Writing</span>
+                                            </div>
+                                            <span class="font-arabic text-[11px] text-brand-inkMuted dir-rtl inline-block truncate w-64 text-left">الكتابة الأكاديمية</span>
+                                        </div>
+                                    </td>
+                                    <td>Midterm 1</td>
+                                    <td>
+                                        <div class="flex flex-col gap-0.5">
+                                            <span class="text-[12px]">2026-10-16</span>
+                                            <span class="text-[11px] text-brand-inkMuted">1448/04/24 AH</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="text-brand-inkMuted text-[11px] italic">Pending</span>
+                                    </td>
+                                    <td>
+                                        <div class="flex flex-col gap-1 w-full max-w-[100px]">
+                                            <div class="flex justify-between text-[11px]">
+                                                <span class="font-medium text-brand-ink">0</span>
+                                                <span class="text-brand-inkMuted">/ 210</span>
+                                            </div>
+                                            <div class="w-full h-1 bg-brand-border rounded-full overflow-hidden"></div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="text-brand-border">-</span>
+                                    </td>
+                                    <td>
+                                        <div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-brand-border/30 border border-brand-border text-brand-inkMuted text-[11px] font-medium">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                                            Setup
+                                        </div>
+                                    </td>
+                                    <td class="text-right pr-4">
+                                        <button class="text-brand-inkMuted text-[12px] font-medium hover:text-brand-ink">Configure</button>
+                                    </td>
+                                </tr>
+
+                                 <!-- Row 6, 7, 8: Dummy Fillers to show density -->
+                                 <tr class="opacity-70 grayscale-[30%] pointer-events-none">
+                                    <td><div class="flex flex-col"><div class="flex items-center gap-1.5"><span class="font-mono font-semibold text-[13px] text-brand-primary">CS 211</span><span class="text-brand-border">|</span><span class="text-[13px] font-medium truncate w-48">Data Structures</span></div></div></td>
+                                    <td>Midterm 2</td><td>2026-10-18</td><td><span class="w-4 h-4 bg-brand-bg border border-brand-border rounded flex items-center justify-center text-[10px] font-mono text-brand-inkMuted">A</span></td>
+                                    <td>0 / 120</td><td>-</td><td><div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-brand-border/30 text-brand-inkMuted text-[11px]">Setup</div></td><td></td>
+                                </tr>
+                                 <tr class="opacity-70 grayscale-[30%] pointer-events-none">
+                                    <td><div class="flex flex-col"><div class="flex items-center gap-1.5"><span class="font-mono font-semibold text-[13px] text-brand-primary">BIOL 101</span><span class="text-brand-border">|</span><span class="text-[13px] font-medium truncate w-48">General Biology</span></div></div></td>
+                                    <td>Quiz 1</td><td>2026-10-05</td><td><span class="w-4 h-4 bg-brand-bg border border-brand-border rounded flex items-center justify-center text-[10px] font-mono text-brand-inkMuted">A</span></td>
+                                    <td>300 / 300</td><td>None</td><td><div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-brand-success/10 text-brand-success text-[11px]">Released</div></td><td></td>
+                                </tr>
+                                <tr class="opacity-70 grayscale-[30%] pointer-events-none">
+                                    <td><div class="flex flex-col"><div class="flex items-center gap-1.5"><span class="font-mono font-semibold text-[13px] text-brand-primary">ISLM 101</span><span class="text-brand-border">|</span><span class="text-[13px] font-medium truncate w-48">Islamic Ethics</span></div></div></td>
+                                    <td>Final</td><td>2026-05-20</td><td><span class="w-4 h-4 bg-brand-bg border border-brand-border rounded flex items-center justify-center text-[10px] font-mono text-brand-inkMuted">A</span></td>
+                                    <td>650 / 650</td><td>None</td><td><div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-brand-success/10 text-brand-success text-[11px]">Released</div></td><td></td>
+                                </tr>
+
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <!-- End Main Scroll Area Padding -->
+            </div>
+        </main>
+
+        <!-- Right Side Drawer (Exam Details) -->
+        <!-- Fixed to right, bordering the main table area. In a real app this might slide in. -->
+        <aside class="w-[360px] flex-shrink-0 bg-brand-surface border-l border-brand-border shadow-drawer flex flex-col relative z-20">
+            
+            <!-- Drawer Header -->
+            <div class="p-5 border-b border-brand-border flex items-start justify-between bg-brand-bg/50">
+                <div>
+                    <div class="flex items-center gap-2 mb-1">
+                        <h3 class="font-mono font-semibold text-[18px] text-brand-primary tracking-tight">CHEM 101</h3>
+                        <span class="px-1.5 py-0.5 rounded bg-brand-bg border border-brand-border text-[10px] font-medium text-brand-inkMuted uppercase tracking-wider">Midterm 1</span>
+                    </div>
+                    <p class="text-[13px] text-brand-ink font-medium">General Chemistry I</p>
+                    <p class="font-arabic text-[12px] text-brand-inkMuted dir-rtl mt-0.5">الكيمياء العامة ١</p>
+                </div>
+                <button class="p-1 text-brand-inkMuted hover:bg-brand-border/50 rounded-md transition-colors">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+
+            <!-- Drawer Scrollable Content -->
+            <div class="flex-1 overflow-y-auto p-5 space-y-6">
+                
+                <!-- Status & Action Priority -->
+                <div class="bg-brand-warning/10 border border-brand-warning/20 rounded-[8px] p-4">
+                    <div class="flex items-center gap-2 mb-2 text-brand-warning">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1"><polygon points="12 2 22 20 2 20 12 2"/></svg>
+                        <h4 class="font-semibold text-[13px]">Review Required</h4>
+                    </div>
+                    <p class="text-[12px] text-brand-ink leading-relaxed mb-3">There are 38 critical errors preventing scoring, and 57 warnings for manual verification.</p>
+                    
+                    <button class="w-full bg-brand-primary hover:bg-brand-primaryHover text-white py-2 rounded-[6px] font-medium text-[13px] shadow-sm transition-colors flex items-center justify-center gap-2 active:scale-[0.98]">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>
+                        Continue review (38)
+                    </button>
+                </div>
+
+                <!-- Setup Details -->
+                <div class="space-y-4">
+                    <h4 class="text-[11px] font-semibold text-brand-inkMuted uppercase tracking-wider border-b border-brand-border pb-1">Configuration</h4>
+                    
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2 text-[13px]">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-brand-success"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
+                            <span>Answer Key</span>
+                        </div>
+                        <span class="text-[12px] bg-brand-bg px-2 py-0.5 rounded border border-brand-border tabular-data">v2 published</span>
+                    </div>
+
+                    <div class="flex items-center justify-between">
+                        <div class="flex flex-col">
+                            <div class="flex items-center gap-2 text-[13px] mb-1">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-brand-primary"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                                <span>CLO Mapping</span>
+                            </div>
+                            <span class="text-[11px] text-brand-inkMuted ml-6">Coverage across 3 forms</span>
+                        </div>
+                        <!-- Mini Radial Progress -->
+                        <div class="relative w-10 h-10 flex items-center justify-center">
+                            <svg viewBox="0 0 36 36" class="circular-chart w-full h-full rotate-[-90deg]">
+                                <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                                <!-- 18/20 = 90% -->
+                                <path class="circle stroke-brand-primary" stroke-dasharray="90, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                            </svg>
+                            <span class="absolute text-[9px] font-mono font-medium">90%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Logistics / Data Details -->
+                <div class="space-y-4">
+                    <h4 class="text-[11px] font-semibold text-brand-inkMuted uppercase tracking-wider border-b border-brand-border pb-1">Logistics</h4>
+                    
+                    <div class="grid grid-cols-2 gap-y-3 text-[13px]">
+                        <div class="text-brand-inkMuted">Roster:</div>
+                        <div class="text-right font-medium">418 students</div>
+                        
+                        <div class="text-brand-inkMuted">Sections:</div>
+                        <div class="text-right font-medium">171, 172</div>
+                        
+                        <div class="text-brand-inkMuted">Last Scan:</div>
+                        <div class="text-right font-medium text-[12px] tabular-data">Today, 10:42 AM</div>
+                        
+                        <div class="text-brand-inkMuted">Batch ID:</div>
+                        <div class="text-right font-mono text-[11px] text-brand-inkMuted">scn_8f291a</div>
+                    </div>
+                </div>
+                
+                <!-- Secondary Actions -->
+                <div class="pt-4 border-t border-brand-border flex gap-2">
+                    <button class="flex-1 bg-brand-bg hover:bg-brand-border/50 border border-brand-border text-brand-ink py-2 rounded-[6px] font-medium text-[13px] transition-colors flex items-center justify-center gap-2">
+                        Open results
+                    </button>
+                    <button class="px-3 bg-brand-bg hover:bg-brand-border/50 border border-brand-border text-brand-ink py-2 rounded-[6px] transition-colors" title="Exam Settings">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    </button>
+                </div>
+
+            </div>
+        </aside>
+
+    </div>
+
+    <!-- Footer Status Bar -->
+    <footer class="h-[28px] bg-brand-primary text-white flex-shrink-0 flex items-center justify-between px-3 text-[11px] font-mono z-30 relative shadow-[0_-1px_4px_rgba(0,0,0,0.1)]">
+        <div class="flex items-center gap-3">
+            <div class="flex items-center gap-1.5">
+                <!-- Tiny success dot -->
+                <div class="w-1.5 h-1.5 bg-brand-success rounded-full"></div>
+                <span class="opacity-90">Project saved</span>
+            </div>
+            <span class="opacity-40">|</span>
+            <span class="opacity-70 truncate max-w-md" title="/Volumes/Exams_Data/1448_Fall/omr_workspace.db">~/Volumes/Exams_Data/1448_Fall/omr_workspace.db</span>
+        </div>
+        <div class="opacity-70 flex items-center gap-4">
+            <span>engine: omr 0.1.0</span>
+            <span>manifest: 7f3a8b2</span>
+        </div>
+    </footer>
+
+    <!-- Keyframes defined here for tailwind arbitrary values -->
+    <style>
+        @keyframes shimmer {
+            100% {
+                transform: translateX(100%);
+            }
+        }
+    </style>
+
+</body>
+</html>

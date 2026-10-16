@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>OMR Correction</title>
+  <!-- App mark: a 3x3 bubble-sheet dot grid on deep teal; the check mark is drawn
+       through three grid bubbles (the "marked" answers). Designed to read at 32 px. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#11695F"/>
+      <stop offset="1" stop-color="#0B4A45"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
+  <!-- faint 8-point girih star, visible only at large sizes -->
+  <g fill="none" stroke="#F5F0E6" stroke-opacity="0.07" stroke-width="6">
+    <rect x="156" y="156" width="200" height="200"/>
+    <rect x="156" y="156" width="200" height="200" transform="rotate(45 256 256)"/>
+  </g>
+  <!-- unmarked bubbles -->
+  <g fill="none" stroke="#F5F0E6" stroke-opacity="0.45" stroke-width="14">
+    <circle cx="136" cy="136" r="30"/>
+    <circle cx="256" cy="136" r="30"/>
+    <circle cx="256" cy="256" r="30"/>
+    <circle cx="376" cy="256" r="30"/>
+    <circle cx="136" cy="376" r="30"/>
+    <circle cx="376" cy="376" r="30"/>
+  </g>
+  <!-- the check, through three filled bubbles -->
+  <path d="M136 256 L256 376 L376 136" fill="none" stroke="#E2BD6E" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="#E2BD6E">
+    <circle cx="136" cy="256" r="40"/>
+    <circle cx="256" cy="376" r="40"/>
+    <circle cx="376" cy="136" r="40"/>
+  </g>
+</svg>

@@ -53,6 +53,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 zune-jpeg = "0.5.16-rc2"
 fast_image_resize = "6.1.0"
 kornia-apriltag = "0.2.0"
+kornia-image = "0.2.0"
 rxing = { version = "0.9.3", default-features = false }
 qrcode = { version = "0.14.1", default-features = false }
 # rendering
@@ -60,6 +61,7 @@ tiny-skia = "0.12.0"
 resvg = "0.48.1"
 usvg = "0.48.1"
 svg2pdf = "0.13.0"
+pdf-writer = "0.12.1"
 # crypto (NCS profile, §19.2)
 sha2 = "0.11.1"
 hmac = "0.13.0"
