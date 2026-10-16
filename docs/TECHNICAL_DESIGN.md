@@ -248,7 +248,7 @@ The product works fully offline, records every decision in a tamper-evident audi
 
 The design rests on one observation from the research. Speed and raw per-answer accuracy are no longer where the competition is:
 - the throughput target of ≥ 200 pages/s on an 8-core laptop is about 28× the fastest production document scanner (≈ 7 images/s), and the stretch target of 400 pages/s is about 57× (§21);
-- published systems already reach 99.95 % per answer, and that still leaves about 4 % of 100-question sheets with at least one error (§8).
+- published systems already reach 99.95 % per answer, yet at that rate about 5 % of 100-question sheets carry at least one error (1 − 0.9995¹⁰⁰); Hernández-Mier et al. found 3.85 % of their sheets affected (§8).
 
 The real competition is on four fronts:
 - **Never silently wrong.** Calibrated abstention, with every doubtful mark routed to a fast human review.
@@ -260,10 +260,10 @@ The real competition is on four fronts:
 
 | Owner's request | Design answer | Where |
 |---|---|---|
-| Extremely fast, state-of-the-art grading | **Throughput.** Page-per-task Rust pipeline, target ≥ 200 pages/s on an 8-core laptop. A partial-pipeline harness (decode, fiducials, homography and mean darkness, on clean synthetic sheets, 4 vCPU) measured 219–266 pages/s [M]. Full-pipeline cost, including CNN routing and identity HTR, is still to be measured. **Recognition.** Fiducial-first registration with a thin-plate-spline correction. Calibrated mark classification: batch Gaussian mixture, then a tiny CNN, then Mondrian conformal sets judged on the selection outcome. **Accuracy contract.** Silent-error rate ≤ 10⁻⁵ per question at ≤ 0.5 % review rate. Until the corpus certifies it, the achieved bound is published instead. **Re-scoring.** Recognition and scoring are separate, so a key change re-scores 10,000 sheets in milliseconds | §8, §10, §21, §23 |
-| Fetch student name, ID and other context | **Channels:** bubbled ID grid, handwritten ID boxes (Western and Arabic-Indic digits), handwritten names (Latin and Arabic, local HTR), barcodes and the page code, seat maps. **Fusion:** against a versioned roster snapshot with Fellegi–Sunter weights and exact CTC scoring of roster candidates, then a batch one-sheet-per-student assignment. **Auto-accept** needs the ID channel plus an independent name or page-code channel; everything else goes to a keyboard-first review queue. Rosterless and anonymous modes are supported | §9, §13 |
+| Extremely fast, state-of-the-art grading | **Throughput.** Page-per-task Rust pipeline, target ≥ 200 pages/s on an 8-core laptop. A partial-pipeline harness (decode, fiducials, homography and mean darkness, on clean synthetic sheets, 4 vCPU) measured 219–266 pages/s [M]. Full-pipeline cost, including CNN routing, is still to be measured. The 200 pages/s target excludes identity HTR: sheets with ID boxes and a name field reach an estimated ≈ 95–140 pages/s (§21.1). **Recognition.** Fiducial-first registration with a thin-plate-spline correction. Calibrated mark classification: batch Gaussian mixture, then a tiny CNN, then Mondrian conformal sets judged on the selection outcome. **Accuracy contract.** Silent-error rate ≤ 10⁻⁵ per question at ≤ 0.5 % review rate on the standard slice (own forms, ADF, 200–300 dpi gray). Imported forms, bitonal and phone input have separate published bounds. Certification needs a labelled corpus of ≥ 13,000 sheets. Until it exists, the achieved bound is published and 10⁻⁵ is labelled "target" (§23.1, §23.2). **Re-scoring.** Recognition and scoring are separate, so a key change re-scores 10,000 sheets in milliseconds | §8, §10, §21, §23 |
+| Fetch student name, ID and other context | **Channels:** bubbled ID grid, handwritten ID boxes (Western and Arabic-Indic digits), handwritten names (Latin and Arabic, local HTR; Arabic name HTR at GA depends on spike S5, with personalised sheets as the fallback), barcodes and the page code. Seat maps and attendance serve only as a prior (§9.1). **Fusion:** against a versioned roster snapshot with Fellegi–Sunter weights and exact CTC scoring of roster candidates, then a batch one-sheet-per-student assignment. **Auto-accept** needs the ID channel plus an independent name or page-code channel. Each capture slice runs in shadow mode (human confirmation) until ≈ 33k labelled sheets certify it (§9.7). Everything else goes to a keyboard-first review queue. Rosterless and anonymous modes are supported | §9, §13 |
 | Map CLOs with specific grade weights and notes | **Mappings:** versioned item→CLO mappings with weight, note, evidence link, rationale and approval, plus assessment weights. **Policies:** selectable, versioned attainment policies (average, threshold-proportion, levels, EAMU), with Wilson confidence intervals and thin-evidence warnings. **Scope:** direct and indirect blending, including course-evaluation surveys read by the same engine. A workspace library aggregates across quizzes, midterms, finals, sections and terms, then rolls up CLO→PLO→ABET/NCAAA/AACSB/NBA. **Follow-through:** closing-the-loop actions and exemplar evidence packs. Attainment is always computed on uncurved item scores | §11, §14.9, §17 |
-| Everything else that might be overlooked | **Engine:** a coded exception catalogue covering every failure mode (Appendix A), item analysis with mis-key detection, responsible integrity analytics. **Exam workflow:** multi-version exams, accommodations, make-ups after release, appeals, on-screen marking of written answers. **Integration:** LMS/SIS standards (LTI 1.3, OneRoster 1.2, CASE 1.1, QTI 3.0), RBAC and SSO, desktop multi-signer governance. **Compliance:** GDPR, FERPA and PDPL features, WCAG 2.2, RTL. **Operations:** scanner qualification, reproducibility, packaging and signing, licensing without dongles. LTI, SSO, server-side RBAC and inferential integrity indices arrive in P3 | §6–§26 |
+| Everything else that might be overlooked | **Engine:** a coded exception catalogue covering every failure mode (Appendix A), item analysis with mis-key detection, responsible integrity analytics. **Exam workflow:** multi-version exams, accommodations, make-ups after release, appeals, on-screen marking of written answers. **Integration:** LMS/SIS standards (LTI 1.3, OneRoster 1.2, CASE 1.1, QTI 3.0), RBAC and SSO, desktop multi-signer governance. **Compliance:** GDPR, FERPA and PDPL features, WCAG 2.2, RTL. **Operations:** scanner qualification, reproducibility, packaging and signing, licensing without dongles. LTI, SSO, server-side RBAC and inferential integrity indices arrive in P3 | Appendix A (codes); §22.6 (master failure-mode table); §7.3–§7.5, §8.12, §9.9, §11.8 (edge-case tables); §3.5, §24.1 (migration and deployment cases); §26 (risks) |
 
 ### 1.3 Ten architectural bets
 
@@ -272,7 +272,7 @@ The real competition is on four fronts:
 3. **Recognition is key-blind.** The crate graph makes it impossible for recognition or identity code to see the answer key (§4.3).
 4. **`UNREADABLE` is never `EMPTY`.** A bubble that is occluded, cut off, glared or badly registered is never silently scored as blank (§8.8).
 5. **We generate our own forms.** Typst-generated sheets carry AprilTag corners, row ticks and a MAC-protected page code. They need no template set-up, and their geometry, identity and version are deterministic. Legacy, third-party and fillable-PDF forms are also read (§6).
-6. **Evidence is preserved.** Originals are immutable, content-addressed and encrypted. Every decision is an event in a SHA-256 hash chain with signed checkpoints. Results carry an engine manifest, and decisions are reproducible across CPUs (§14, §19).
+6. **Evidence is preserved.** Originals are immutable, content-addressed and encrypted. Every decision is an event in a SHA-256 hash chain with signed checkpoints. Results carry an engine manifest. Auto-accepted decisions are identical across CPUs, and review-routing differences are measured and published per release (§14, §19, §23.6).
 7. **Local-first, with an optional server.** Everything works offline:
    - per-exam project packages, plus a workspace library for course- and programme-level data;
    - post-release approvals by a second signer through signed approval bundles.
@@ -294,7 +294,7 @@ The real competition is on four fronts:
 | Capture | **GA:** hot folders and MFP push; driverless eSCL/AirScan; TWAIN (32/64-bit agents). **P3:** WIA, ImageCaptureCore and SANE agents; phone companion |
 | Data | SQLite ≥ 3.51.3 (WAL, STRICT) plus a BLAKE3-addressed, AES-256-GCM-encrypted object store in an `.omrproj` package, plus a workspace library (`.omrlib`). Hash-chained, Ed25519-checkpointed audit log. Crypto-shredding through epoch keys |
 | Server (optional, P3) | axum + Postgres 18 + S3-compatible storage. Cedar authorization, OIDC/SAML/SCIM, LTI 1.3 Advantage, OneRoster 1.2 |
-| Extensibility | Rhai scoring formulas (sandboxed engine). wasmtime WASM-component plugins with deny-by-default capabilities. `omr-cli` with scheduled jobs |
+| Extensibility | Rhai scoring formulas (sandboxed engine). `omr-cli` with scheduled jobs. wasmtime WASM-component plugins with deny-by-default capabilities (P3) |
 
 ### 1.5 Where it is superior to Remark Office OMR 12.4
 
@@ -304,12 +304,12 @@ The real competition is on four fronts:
 | Forms | Designed in Word; templates dragged over a scanned blank | Built-in generator and linter (WYSIWYG plus a Typst DSL). Unlimited variants, per-student shuffles, personalized booklets, fillable-PDF sheets, pre-print simulation (§6) | GA |
 | Capture | TWAIN; bitonal recommended | Grayscale, spool-first capture from scanners, MFPs, eSCL and PDFs in one project, with device qualification (§7) | GA (WIA/ICA/SANE agents and phone P3) |
 | Accuracy | No published figures | A published SER/AR contract per capture slice, calibrated abstention and a public benchmark protocol. Achieved bounds are published until certification (§23) | GA |
-| Identity | Exact-match database lookup; handwriting read through the customer's Azure account | Local multi-channel roster-constrained fusion, including Arabic. Database lookup. Batch conflict detection. A calibrated, certifiable mis-attribution bound (§9) | GA (VLM fallback P3) |
+| Identity | Exact-match database lookup; handwriting read through the customer's Azure account | Local multi-channel roster-constrained fusion, including Arabic digits; Arabic names per spike S5. Database lookup. Batch conflict detection. A calibrated, certifiable mis-attribution bound (§9) | GA (VLM fallback P3) |
 | Outcomes | Per-test objectives and benchmarks | A full CLO/PLO engine across assessments, sections and terms, with accreditor packs, from the workspace library (§11, §14.9) | GA |
 | Psychometrics and integrity | KR-20/21, α, uncorrected point-biserial, non-inferential similarity, changed-answer reports | Corrected item–rest r and CIs; mis-key inference with one-click re-keying; changed-answer and descriptive similarity reports at parity. Rasch, DIF and inferential collusion indices behind role gates (§12) | Parity reports GA; Rasch/DIF/inferential P3 |
 | Review and data handling | Data Center grid, validation rules, data lock, change tracking | Confidence-ranked keyboard review queue; editable data grid with validate-and-transform rules and data lock; on-screen marking of written answers (§13) | GA |
-| Audit and reproducibility | Change tracking | Hash-chained events, signed checkpoints, engine manifests, cross-CPU decision identity (§14) | GA |
-| Collaboration and integration | Single-PC licence; LMS connectors sold separately | Desktop: multi-signer approval bundles, LMS REST/CSV, CASE, QTI, CLI with schedules, plugins. Server: shared projects, review leases, LTI 1.3, OneRoster REST, SSO/SCIM (§15, §16) | Desktop GA; server P3 |
+| Audit and reproducibility | Change tracking | Hash-chained events, signed checkpoints, engine manifests, cross-CPU identity of auto-accepted decisions (§14, §23.6) | GA |
+| Collaboration and integration | Single-PC licence; LMS connectors sold separately | Desktop: multi-signer approval bundles, LMS REST/CSV, CASE, QTI, CLI with schedules, Rhai scoring formulas (WASM plugins P3). Server: shared projects, review leases, LTI 1.3, OneRoster REST, SSO/SCIM (§15, §16) | Desktop GA; server P3 |
 | Openness | Proprietary formats; older versions cannot read newer files | Documented package format, read compatibility across ≥ 2 major versions, `omr-verify` CLI, escrow (§14, §24) | GA |
 
 ### 1.6 Decisions needed from the owner, and the size of the job
@@ -323,9 +323,16 @@ The real competition is on four fronts:
 | Q-05 | Open-source the recognition engine? | A trust and audit asset, weighed against commoditization. Decision deferred to P3 (§24.4) |
 | Q-06 | Are the edition price points acceptable to design partners? | Sets the commercial model in §24.4 |
 | Q-07 | Minimum supported OS versions (Windows 10 ESU, oldest macOS) | Sets the CI matrix and the support burden (§24.1) |
-| Q-24 | Approve the team and budget of §25.3 | Gates kickoff |
+| Q-24 | Approve the team and budget of §25.3: ≈ 8–9 people for 12 months, ≈ 87–93 EM of engineering capacity | Gates kickoff |
 
-**Effort.** Reaching v1.0 GA is estimated at about 48–61 engineer-months before contingency, or about 58–73 with a 20 % contingency. That covers the engineering baseline plus ML data and models, QA automation, psychometric validation and corpus keying (§25.3). The team peaks at about 8–9 people over about 12 months (M0–M11), and the nine de-risking spikes run inside P0 (M0–M2). Some scope is not yet itemized and is sized at P0 exit (§25.3). Server mode, LTI, the mobile companion and the AI pack follow in P3 (M12–M20), and P4 adds further AI features. Sizing P3 and P4 is a deliverable at P2 exit.
+**Effort.** Reaching v1.0 GA with the Slint shell is estimated at ≈ 51–64 engineer-months (EM) before contingency, or ≈ 61–77 EM with a 20 % contingency. With the Qt shell (Q-01 = yes) the figures are ≈ 53–67 EM and ≈ 63–80 EM. The estimate covers:
+- the engineering baseline;
+- ML data and models;
+- QA automation;
+- psychometric validation;
+- corpus keying for a certifiable corpus of ≥ 13,000 sheets.
+
+The plan staffs ≈ 8–9 people for the full 12 months (M0–M11). That is ≈ 87–93 EM of engineering capacity, QA included, plus a 0.5 designer and a part-time psychometrician and domain expert. Capacity above the estimate is the reserve for scope that is not yet itemized and is sized at P0 exit (§25.3). The nine de-risking spikes run inside P0 (M0–M2). Server mode, LTI, the mobile companion and the AI pack follow in P3 (M12–M20), and P4 adds further AI features. Sizing P3 and P4 is a deliverable at P2 exit.
 
 ## 2. Goals, non-goals and success metrics
 
@@ -349,7 +356,7 @@ Paper multiple-choice exams remain the default in large-enrolment courses and ma
 | ID | Goal | Measurable definition | § |
 |---|---|---|---|
 | GO-1 | Fast, state-of-the-art accurate grading (owner ask 1) | §2.4 accuracy contract and throughput targets; ≥ 200 pages/s ≈ 28× the fastest production ADF (≈ 7 images/s; stretch 400 ≈ 57×), so scanner and reviewer set turnaround | §8, §21, §23 |
-| GO-2 | Extract context and reconcile it with rosters (ask 2) | Roster-constrained fusion; auto-accept needs ID-intent channel AB plus name C or page-code binding E (§9.7); local Latin and Arabic HTR in every edition; per-slice certified mis-attribution bound | §9 |
+| GO-2 | Extract context and reconcile it with rosters (ask 2) | Roster-constrained fusion; auto-accept needs ID-intent channel AB plus name C or page-code binding E (§9.7); local HTR in every edition (Latin; Arabic names per spike S5, else personalised sheets AB + E); per-slice certified mis-attribution bound, each slice in shadow mode (contact-sheet confirmation) until ≈ 33k labelled sheets certify it (§9.7) | §9 |
 | GO-3 | Map questions to CLOs with weights and notes (ask 3) | Versioned item→CLO mappings (weight, note, evidence, rationale, approval) and attainment policies; aggregation from workspace snapshots; a weight or key change recomputes everything in ≤ 50 ms for 10k sheets | §11, §14.9 |
 | GO-4 | Cover what the owner may have overlooked (ask 4) | An exception code per failure mode (Appendix A); audit chain, privacy regimes, accessibility, RTL, integrations, procurement artefacts | §13, §19, §20, §22 |
 | GO-5 | Superior to Remark Office OMR in every dimension | 100% of §3.3 parity at GA; each differentiator G1–G11 ships its GA part with its §3.4 metric; P3/P4 parts are claimed only from their phase | §3 |
@@ -375,10 +382,10 @@ Numbers come from the locked decisions; *proposed* rows are W1 proposals. Verifi
 
 | Metric | Target (GA unless noted) | Remark 12.4 baseline | § |
 |---|---|---|---|
-| Silent error rate, standard capture | SER ≤ 1×10⁻⁵ per question at AR ≤ 0.5%; LTT-certified on ≥ 300k × DEFF labelled questions, confirmed on a disjoint ≥ 300k test split (one-sided 95%, §23.1) | No figures published | §23.1 |
-| High-stakes mode | Design target SER ≤ 2×10⁻⁶ at AR ≤ 2%, certified only once ≥ 1.5M real labelled questions are in the certifying split; two-person rule (§13.4) | None | §23.1 |
+| Silent error rate, standard slice (own forms, ADF, 200–300 dpi gray) | SER ≤ 1×10⁻⁵ per question at AR ≤ 0.5%, one-sided 95%: LTT-certified on ≥ 300k × DEFF labelled questions, confirmed on a disjoint ≥ 300k × DEFF test split (bound 3·DEFF/n_test at k = 0; §23.1). Year-1 corpus ≥ 13,000 sheets × 100 questions (≥ 600k LTT + ≥ 600k test at the DEFF floor of 2, §23.2). If partners supply fewer sheets by GA, GA publishes the achieved bound (e.g. ≤ 2×10⁻⁵ on 7,000 sheets), 10⁻⁵ is labelled "target" and the corpus keeps growing | No figures published | §23.1 |
+| High-stakes mode | Design target SER ≤ 2×10⁻⁶ at AR ≤ 2%, certified only once the certifying split holds ≥ 1.5M × DEFF real labelled questions (n_eff ≥ 1.5M; ≥ 3M at the DEFF floor); two-person rule (§13.4) | None | §23.1 |
 | Bitonal / phone input | Separate published targets, e.g. SER ≤ 5×10⁻⁵ at AR ≤ 3%; phone beta until P3 | Bitonal is the recommended mode | §23.1 |
-| Identity mis-attribution | ≤ 10⁻⁴ per auto-accepted sheet, LTT-certified per slice on ≈ 30k labelled auto-accepted sheets (shadow mode until then). Goal ≤ 10⁻⁶ by construction only (AB plus C or E; certifying it would need ≈ 3M sheets); "ID-only" booklets excluded | Exact-match DB lookup | §9.7 |
+| Identity mis-attribution | ≤ 10⁻⁴ per auto-accepted sheet, LTT-certified per slice on ≈ 30k labelled auto-accepted sheets (shadow mode until then); the booklet is the unit, so the test bound is 3/n_test. Goal ≤ 10⁻⁶ by construction only (AB plus C or E; certifying it would need ≈ 3M sheets); "ID-only" booklets excluded | Exact-match DB lookup | §9.7 |
 | Throughput | ≥ 200 pages/s, 8-core laptop, §21.1 reference corpus (stretch 400); ≥ 40 pages/s, 4-core N100-class; scanned PDF ≥ 100 pages/s; scanner-following p99 ≤ 1 s. Identity HTR is outside the 200 pages/s target: single-page sheets with ID boxes and a name field reach ≈ 95–140 pages/s at W = 7 (est., §21.1) | "Tied to scanner speed"; field point ≈ 3 s/sheet | §21.1 |
 | Time to first result, 30 sheets | < 3 s | Not published | §21.1 |
 | Regrade latency | Key change → all scores, CLO and item stats ≤ 50 ms for 10k sheets | Regrade without rescan | §10.1 |
@@ -389,7 +396,7 @@ Numbers come from the locked decisions; *proposed* rows are W1 proposals. Verifi
 | Fault isolation | Zero batch aborts over a 100k-page soak and the fuzz corpus | Users report large-batch crashes on older hardware; 12.4 fixed a large-save CSV error | §22 |
 | Platforms | Windows 10 22H2+/11 (x64, arm64); macOS universal2 (arm64-only from 2028); Linux x86-64; one mobile companion platform in P3, the second in P4 | Windows only | §24.1 |
 | Accessibility | WCAG 2.2 AA and EN 301 549 V4.1.1, external ACR (VPAT 2.5 INT). With NVDA, JAWS, VoiceOver and Orca: every non-visual task completes (keys, scoring, CLO mapping, roster and identity by text, reports); the review UI is fully operable (navigate, escalate, defer, rescan list). Visual mark adjudication is a documented ACR exception, escalated to a sighted reviewer. Reports are PDF/UA-1 | No ACR located (unverified) | §20.3 |
-| Local-first | No telemetry and no outbound connections, except a signed update-manifest check that carries no identifiers. It is ON by default (CRA expectation) and can be disabled by ADMX/MDM or by air-gapped mode; the CI egress test allowlists only that host | Online activation; ICR through the customer's Azure | §19.8 |
+| Local-first | Default: no telemetry and no outbound connections, except a signed update-manifest check that carries no identifiers. It is ON by default (CRA expectation) and can be disabled by ADMX/MDM or by air-gapped mode; the CI egress test allowlists only that host. Features an institution enables (LMS REST, OAuth SMTP, IdP, floating-seat leases) connect only to their configured endpoints | Online activation; ICR through the customer's Azure | §19.8 |
 
 Key sources: https://remarksoftware.com/blog/2026/07/remark-office-omr-12-4-is-now-available/ · https://its.hku.hk/kb/user-guide-on-remark-office-omr-software/ · https://doi.org/10.3390/jimaging11090308 · https://its.uky.edu/news/scantron-service-ending-spring-2026 · https://www.kodakalaris.com/en/scanners/i5850-scanner · https://nda.ie/news/en301549-published
 
@@ -448,19 +455,19 @@ No item may slip past GA; if one does, GA moves (§25.2). Remark features exclud
 | PAR-05 | Review | Grid plus image review; validate-and-transform rules; data lock; database lookup for ID verification and demographics (ODBC/PostgreSQL/MariaDB); change tracking; keyboard-first | §13, §13.6, §9.2 |
 | PAR-06 | Grading | Scanned or typed key; CSV key with partial credit and AND keys; multiple correct answers; negative and decimal marking; bonus and throw-out; version mapping; curves; grade scales; scaled-score lookup; rubric points, including anonymous on-screen marking by several markers; benchmarks (the attainment threshold τ_c); objectives | §10, §11.4, §13.7 |
 | PAR-07 | Reports | KR-20/21, α, point-biserial, CIs, percentiles, demographic comparison; changed-answer reports by item and by student and a descriptive similarity listing (every edition, Integrity Officer role); annotated student reports by LMS file, print or email; survey frequency and crosstab reports by question group | §12, §12.7, §17.2, §17.4 |
-| PAR-08 | Exports | CSV and templated or fixed-width text, XLSX, SPSS .sav, JSON; SQL scripts for SQL Server, Oracle, PostgreSQL and SQLite, including "database update" (upsert) mode, and ODBC; Canvas, Moodle, Blackboard Ultra and D2L CSVs; ExamSoft and Questionmark QSF (layouts from public material, unverified; low priority); destinations: local or sync folder, SMB (SFTP is beyond parity, §16.3) | §16.3 |
+| PAR-08 | Exports | CSV and templated or fixed-width text, XLSX, SPSS .sav, JSON; SQL scripts for SQL Server, Oracle, PostgreSQL and SQLite, including "database update" (upsert) mode, and ODBC; Canvas, Moodle, Blackboard Ultra and D2L CSVs; ExamSoft and Questionmark QSF (layouts from public material, unverified; vendor layouts obtained by P0 exit, Q-23); destinations: local or sync folder, SMB (SFTP is beyond parity, §16.3) | §16.3 |
 | PAR-09 | Migration | Remark data and key import; template library (every edition) | §3.5 |
 | PAR-10 | Localisation | EN, ES, PT and DE UI; RTL/Arabic reports and exports (Remark's own parity is RTL PDF export). A fully mirrored Arabic UI is a differentiator (G11), gated by Q-01 and ADR-001 | §20, §5.2 |
 | PAR-11 | Accommodations | Large-print and alternate layouts on the same key; a single make-up sheet, also after release, scored without rescanning the class or changing released students | §6.11, §9.1, §10.6, §10.9 |
 
 ### 3.4 Differentiators (gap list)
 
-"Available" is the shipping phase (§25.2); GA metrics are *proposed*.
+"Available" is the shipping phase (§25.2); GA metrics are *proposed*, measured on the reference laptops and recorded in the signed release report (release gate CI-3, §23.6).
 
 | Gap | Differentiator | Deliverable | Available | GA metric | § |
 |---|---|---|---|---|---|
 | G1 | Outcome attainment engine (no competitor has it end to end) | Weighted item→CLO mapping with notes; cross-assessment and multi-section aggregation; attainment policies with Wilson CIs; direct and indirect (survey) blending; CLO→PLO→accreditor matrix; PDF/A exemplar scripts | GA | NCAAA or ABET pack from released data with zero manual spreadsheet steps, ≤ 5 min per offering | §11, §14.9, §17.6 |
-| G2 | Cross-platform native app, frictionless licensing | Signed Windows, macOS and Linux builds; offline licences; floating seats for labs and VDI | GA | Install to first graded sheet ≤ 15 min on each OS; zero network calls for licensing | §24 |
+| G2 | Cross-platform native app, frictionless licensing | Signed Windows, macOS and Linux builds; offline licences; floating seats for labs and VDI | GA | Install to first graded sheet ≤ 15 min on each OS; zero vendor network calls for licensing (floating seats contact only the customer's self-hosted lease service) | §24 |
 | G3 | Unified capture | ADF, PDF, hot folder/MFP push, eSCL and phone images in one project; native phone companion | GA; companion P3 (phone images beta until then) | ≥ 5 source types into one project; eSCL discovery ≤ 10 s | §7 |
 | G4 | Local AI and HTR | Offline Latin and Arabic name/ID HTR with roster-constrained decoding, in every edition; optional advise-only VLM | GA (HTR, spike S5); VLM P3 | Identity auto-accept rate at the certified ≤ 10⁻⁴ bound; Arabic name CER published | §9, §18 |
 | G5 | Calibrated confidence and a public benchmark | Per-slice SER/AR contract; low-confidence marks always reviewed; published benchmark protocol | GA | Per-slice SER/AR with achieved bounds published | §8.7, §23 |
@@ -541,7 +548,7 @@ flowchart LR
 | 8 | Score | L1–L6 score run for one key version and one policy version | Run stamped with its Run ID (§10.1) | §10 |
 | 9 | Analyse and CLO | Item and test statistics, mis-key flags, attainment on uncurved L3 | Mis-key flags resolved or acknowledged | §11, §12 |
 | 10 | Release and feedback | Frozen grades, outbox push, annotated sheets; signed AssessmentResultSnapshot published to the workspace | Release gate (§17.4) | §14.9, §16, §17 |
-| 11 | Appeal and regrade | Decision event, new version, impact diff, re-push, re-published snapshot | Reason-coded decision; four-eyes approval after release (§15.5) | §10.8, §17.5 |
+| 11 | Appeal and regrade | Decision event, new version, impact diff, re-push, re-published snapshot | Reason-coded decision; four-eyes approval for any change to a released student's result (§10.8, §15.5) | §10.8, §17.5 |
 | 12 | Archive and retention | Signed `.omrx`; retention schedule, legal holds, crypto-shredding | Retention engine (§19.5) | §14.1, §19.2 |
 
 **Status.** Draft → Printed → Active → Reviewed → Released → Archived; every change is an audit event (§14.4).
@@ -631,7 +638,7 @@ flowchart LR
 | `omr-pdfium-worker` × N | PDFium raster (not thread-safe); zxing-cpp; C AprilTag; WIC/ImageIO for HEIC/HEIF; out-of-process re-runs of the page pipeline, whose code it links (§22.4) | `parser`; read-only grant: vendored font directory; cap ≤ 128 MB | N = clamp(physical cores ÷ 2, 1, 4). Lazy start; exits after 60 s idle | hayro 0.8; rxing only; kornia-apriltag (fallback pixels record `path=alternate`, §22.1); HEIC refused (CAP-001, §7.3) |
 | `omr-capture-agent32` / `omr-capture-agent64` | TWAIN state machine on its own message loop, driver UIs; WIA, ImageCaptureCore and SANE back ends (P3) | Crash containment only, since drivers need devices and sometimes network: a Job Object (cap ≤ 100 MB, kill on close) on Windows, `RLIMIT_AS` on Linux. No keys and no project path (capture path below). The x64 agent also runs under emulation on Windows ARM64 | Opened per device; the architecture choice is remembered per device | eSCL or hot folder (§7.1) |
 | `omr-ml-worker` (optional) | AI-pack ORT models (e5-small, DINOv2-S, template detector) on CPU or GPU/NPU EPs; `mistralrs` 0.8 teacher-forced candidate scoring (PMI, §18.2) | `parser` (no network), plus GPU access at Tier ≥ 2; read-only grant: verified model directory; cap ≤ 400 MB (§21.5), or the §18.2 per-model cap while the PMI scorer is loaded | Lazy; exits when idle | AI-pack models never run in process: those features and PMI scoring turn off (§18.2) |
-| `llama-server` (AI pack) | Free generation with GGUF VLM/LLM: blind reads, narratives, rubric suggestions | `ai-sidecar`; read-only grant: verified model directory; one process per resident model, caps per §18.2; random loopback port; per-launch API key via `--api-key-file` (0600, per-session directory, deleted after start), never on argv (`/proc/<pid>/cmdline` is world-readable) | Lazy; unloads after 5 min idle (default) | AI off; the core is unaffected |
+| `llama-server` (AI pack) | Free generation with GGUF VLM/LLM: blind reads, narratives, rubric suggestions | `ai-sidecar`; read-only grants: verified model directory and the per-launch API-key file; one process per resident model, caps per §18.2; random loopback port; key via `--api-key-file` (0600, per-session directory, deleted after start), never on argv (`/proc/<pid>/cmdline` is world-readable) | Lazy; unloads after 5 min idle (default) | AI off; the core is unaffected |
 
 Helper caps (proposed) are hard limits within the §21.5 process-tree budget; on Linux every helper sets `oom_score_adj = 800` at spawn so the kernel kills helpers first (§22.3). Generation and candidate scoring run in separate processes, and neither output enters auto-accept or the batch assignment (§9.8, §18.1).
 
@@ -642,14 +649,14 @@ Helper caps (proposed) are hard limits within the §21.5 process-tree budget; on
 | `parser` | AppContainer with no capabilities, inside a Job Object (`JOB_OBJECT_LIMIT_PROCESS_MEMORY`, one active process, `KILL_ON_JOB_CLOSE`) | Bundled, signed helper `.app` (own bundle ID) with only `com.apple.security.app-sandbox`. Memory cap: the supervisor polls `proc_pid_rusage` `ri_phys_footprint` every 250 ms and sends SIGKILL above the cap (macOS does not enforce `RLIMIT_AS`) | seccomp-bpf allowlist, always: no `socket`, `connect` or `execve`. Landlock at the best available ABI: no filesystem access beyond the read-only grant, no TCP (ABI ≥ 4). `RLIMIT_AS`, plus cgroup v2 `memory.max` where delegated |
 | `ai-sidecar` | Restricted token at Low integrity in the same Job Object (AppContainer blocks loopback between processes); an MSI-installed outbound-block firewall rule for the executable | As `parser`, plus `com.apple.security.network.server` only (no `network.client`) | As `parser`, but seccomp allows `socket`, `bind`, `listen` and `accept4`, and denies `connect` and addressed `sendto`/`sendmsg`; started with `--host 127.0.0.1` |
 
-- Read-only grants are a Landlock rule (Linux), an ACE for the AppContainer or restricting SID (Windows), or a read-only path entitlement in Developer ID builds (macOS; unverified).
+- Read-only grants are a Landlock rule (Linux), an ACE for the AppContainer or restricting SID (Windows), or a read-only path entitlement in Developer ID builds (macOS; unverified). A per-launch file such as the `llama-server` key file gets its own rule or ACE; on macOS, where entitlements are static, the parent writes it inside the helper's container.
 - Without Landlock (kernel < 5.13, e.g. RHEL 8's 4.18), `parser` is seccomp plus `RLIMIT_AS`; the engine manifest records `sandbox_level` and diagnostics warn.
 - GPU access at Tier ≥ 2 adds device nodes and ioctls (Linux) or GPU access in the AppContainer (Windows); per-vendor details are unverified.
 
 **IPC contract (`omr-ipc`).** The parent creates every channel and buffer and passes handles, never paths.
 - **Channels.** Unix: a `socketpair(AF_UNIX)` inherited at spawn. Windows: parent-created anonymous pipe handles passed via `STARTUPINFOEX` + `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` or `DuplicateHandle`. Nothing is named, so no DACL or path must be reachable from a sandbox. Frames are `u32 LE length (≤ 1 MiB) ‖ postcard(Envelope{proto_ver, req_id, deadline_ms, body})`.
 - **Handshake.** The child returns the one-time 256-bit token the parent sent over its stdin, plus its `build_sha`; on any mismatch the parent refuses it, so mixed builds never run together.
-- **Inputs.** The parent opens input files (PDFs, HEIC, models) and passes read-only handles (`SCM_RIGHTS` on Unix).
+- **Inputs.** Plaintext install files (verified models, vendored fonts) are reached through the profile's read-only grant or passed as read-only handles (`SCM_RIGHTS` on Unix). Stored originals exist only as AEAD envelopes and helpers hold no keys (§19.2), so every input held as an envelope or only in memory (first decode and PDF/HEIC raster, re-runs under §22.4, re-recognition) is decrypted by the main process into a parent-created buffer passed read-only: a sealed `memfd` on Linux; an anonymous pagefile-backed section (`CreateFileMapping(INVALID_HANDLE_VALUE)`, duplicated with `FILE_MAP_READ` only) on Windows; an anonymous shared-memory object passed as a read-only descriptor on macOS (unverified). Never a plaintext file.
 - **Outputs.** Bulk data never travels in frames; a frame carries `BufRef{handle, len, blake3, w, h, stride, format}`.
   - Linux: the helper fills a `memfd`, unmaps it and applies `F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE | F_SEAL_SEAL`; the parent checks `F_GET_SEALS` before `mmap`.
   - macOS and Windows (no sealing): the helper writes a parent-created unlinked (macOS) or delete-on-close (Windows) file handle; the parent copies it into private memory with `pread`/`ReadFile` and checks the hash on the copy.
@@ -665,8 +672,8 @@ Helper caps (proposed) are hard limits within the §21.5 process-tree budget; on
 | Helper crash or OOM | Channel EOF; non-zero exit; Job Object, cgroup or `RLIMIT_AS` limit; macOS footprint watchdog | Requeue the request as *retryable*; restart with exponential back-off. Two crashes on one input quarantine that input. A crash storm of one helper type (including `llama-server` and `omr-ml-worker`) disables it for the session, switches to its fallback and raises SYS-002. An AI process killed at its RSS cap drops one model tier instead (SYS-020, §18.2) |
 | Helper hang | 3 missed heartbeats, or deadline exceeded | Kill it, then handle as a crash |
 | Unsealed or hash-mismatched output | Seal check, or hash of the private copy | Reject the result and kill the helper; handle as a crash |
-| Binary missing, quarantined by AV, or build mismatch | Spawn error, hash check or handshake | SYS-006: the feature switches to its fallback (helper table) and a repair install is offered; the core keeps running. A missing decision-path *model* halts recognition instead (§22.1) |
-| Main app dies during a scan | The agent sees channel EOF | The agent stops the transfer and exits. Acknowledged pages are durable; pages still in its queue are lost. On restart the UI names the last durable imprint and the operator re-feeds from the next sheet (§7.4); reconciliation and the rescan list show the gap (§7.5, SYS-014) |
+| Binary missing, quarantined by AV, or build mismatch | Spawn error, hash check or handshake | SYS-006: the feature switches to its fallback (helper table) and a repair install is offered; the core keeps running. A missing *mark-path* model halts recognition instead; a missing identity model only marks its channel `channel_unavailable` (§22.1) |
+| Main app dies during a scan | The agent sees channel EOF | The agent stops the transfer and exits. Acknowledged pages are durable; pages still in its queue are lost. On restart the UI names the last durable imprint and the operator re-feeds from the next sheet (§7.4); reconciliation and the rescan list show the gap (§7.5). SYS-014 is raised at restart, beside SYS-031 |
 
 ### 4.5 Threading and job model
 
@@ -713,8 +720,8 @@ Every desktop mode runs the same signed binary; being *local* or *server-backed*
 | Desktop solo | One PC. Software renderer under RDP/VDI | `Workspace.omrlib/` (§14.9; chosen at first run) plus one `Exam.omrproj/` per assessment, on local disks; network and sync folders refused (SYS-015, §14.2). A section scanned on another PC arrives as a signed `.omrres` snapshot | No LTI; no concurrent multi-user review; two-principal controls as below | Default: only the signed update-manifest check (§19.8). Per feature: LMS REST, OAuth SMTP, IdP |
 | Department/Institution server | `omr-server` (axum, Postgres 18, S3-compatible store; §15.1), self-hosted in-country; stateless workers on the same engine crates; desktops as capture/review clients through the outbox; browser dashboards and LTI | Server-authoritative; Postgres is the workspace (§14.9); desktops keep a cache | HA tooling is a P3 spike (§15.1) | Campus network. LTI needs public endpoints (§15.1, §16.1) |
 | Mobile companion | SwiftUI or Compose over UniFFI 0.32; one platform in P3, the other in P4 (§25.2). On-device quality gates and full recognition | Device, until synced to the paired desktop or the server | No design, scoring configuration or reports | LAN pairing or server (§7.6) |
-| Headless CLI / scheduled jobs | `omr-cli watch` and `omr-cli schedule` jobs (§16.4) as a Windows service, launchd job or systemd unit/timer behind a production scanner's hot folder | Local workspace and projects; keys from a non-interactive key-store backend; the service's own K_sign (§19.2) | Never releases grades unattended; exceptions wait for desktop review | As desktop solo |
-| Air-gapped exam-centre kit | Offline installers, offline licence (§24.3), signed offline update bundles, AI models on USB | Local; moved by signed sneakernet review bundles (§15.2) and `.omrres` / `.omrapr` files | No RFC 3161 timestamps | None; the update check is off |
+| Headless CLI / scheduled jobs | `omr-cli watch` and `omr-cli schedule` jobs (§16.4) as a Windows service, launchd job or systemd unit/timer behind a production scanner's hot folder | Local workspace and projects; keys from a non-interactive key-store backend; the service's own K_sign (§19.2) | Never releases grades unattended. `watch` keeps the service's Scanner-Operator binding; a scheduled job runs under a job-scoped delegated binding that its owner (an Instructor) signs into `job.toml`: only the listed steps, assessments and destination profile, never ReleaseGrades, PublishKeyVersion or key viewing (§15.4, §16.4). Exceptions wait for desktop review | As desktop solo |
+| Air-gapped exam-centre kit | Offline installers, offline licence (§24.3), signed offline update bundles, AI models on USB | Local; moved as signed `.omrres` snapshots, `.omrapr` approvals and desktop-to-desktop review bundles (§15.2 format; GA). Sneakernet sync to a server is P3 (§25.2) | No RFC 3161 timestamps | None; the update check is off |
 
 **Two-principal controls on one desktop** (§15.5 desktop-solo governance). Four-eyes approval, the two-person rule, blind double review and anonymous-marking separation need a second principal: local, a co-signer's signed `.omrapr` bundle, or server mode. Without one, only four-eyes approval proceeds, as a flagged self-approval under policy `solo_self_approval`, and high-stakes mode shows a persistent banner.
 
@@ -845,7 +852,7 @@ This is the authoritative stack for the whole document: every crate pinned in an
 | Capture | Hot folders (`notify` 8.2, 2-s stability gate, SMB polling); MFP push (SMB, LAN-only FTP via `libunftp`, IMAP); eSCL in pure Rust (`mdns-sd` 0.21); agents: TWAIN 2.x via app-local TWAINDSM 32/64-bit (GA); WIA 2.0 (`windows` 0.62), ImageCaptureCore (`objc2-image-capture-core` 0.3.2), SANE (own bindgen FFI) in P3 | Various; TWAINDSM LGPL (app-local, unmodified; §5.4) | From phone to production ADF | ISIS (proprietary SDK); TWAIN Direct (low adoption); NAPS2 (LGPL; reference only); `twain` 0.1.0 / `sane-scan` 0.1.2 (unmaintained) |
 | Desktop storage | rusqlite 0.40.2 `bundled` (SQLite 3.53.2; ≥ 3.51.3 asserted at open); WAL, STRICT tables; `fullfsync` on macOS (§14.2); rusqlite_migration 2.6; per-page `postcard` 1.1.3 blobs; blake3 1.8.7 content addressing + SHA-256 | MIT; public domain | 10k sheets load in 20–24 ms [M] | DuckDB in desktop v1 (tens of MB of C++); Turso 0.8.3 (beta); libsql (vendor protocol); one row per bubble (4.7 s); SQLCipher as default (no per-student shredding) |
 | Archive and signing | zip 9 (ZIP64); age 0.12; minisign 0.10 / ed25519-dalek 3.0 | MIT; MIT/Apache-2.0; BSD-3 | Standard tools can open and verify | Custom container |
-| Local IPC | interprocess 2.4 (anonymous pipes on Windows) + postcard; `rustix` (socketpair, `SCM_RIGHTS`, sealed `memfd`; version pinned at P0); memmap2 (sealed memfds only) | (unverified); MIT/Apache-2.0 | Handles, not paths: works inside every sandbox (§4.4) | Local gRPC/HTTP (overhead, attack surface); named pipes and path-based temp files (blocked by sandboxes; TOCTOU, SIGBUS) |
+| Local IPC | interprocess 2.4 (anonymous pipes on Windows) + postcard; `rustix` (socketpair, `SCM_RIGHTS`, sealed `memfd`; version pinned at P0); memmap2 (sealed memfds and parent-created read-only input buffers only) | (unverified); MIT/Apache-2.0 | Handles, not paths: works inside every sandbox (§4.4) | Local gRPC/HTTP (overhead, attack surface); named pipes and path-based temp files (blocked by sandboxes; TOCTOU, SIGBUS) |
 | Server | axum 0.8.9; tokio 1.53; tower-http 0.7; sqlx 0.9 + Postgres 18; object_store 0.14 (S3 / Ceph RGW / SeaweedFS); `FOR UPDATE SKIP LOCKED` queue; utoipa 6.0 (OpenAPI 3.1); opentelemetry 0.33; pgaudit; pgBackRest; S3 Object Lock | MIT; PostgreSQL; Apache-2.0 | Stateless workers share the engine crates | MinIO CE (archived April 2026); Garage (AGPL); apalis 1.0 (too fresh); CRDTs (loro/yrs) for grading |
 | AuthZ and AuthN | cedar-policy 4.13; openidconnect 4.0.1 (RFC 8252 PKCE loopback); SAML via a Keycloak broker; SCIM 2.0; jsonwebtoken 11.1 (LTI) | Apache-2.0; MIT | One policy language on desktop and server | samael 0.0.x (libxmlsec1, signature-wrapping risk); ZITADEL (AGPL since v3); atomic-lti 2.2.0 (reference only) |
 | Crypto and secrets | keyring-core 1.0.1 (interactive desktop; service and headless backends in §19.2); AES-256-GCM (`aes-gcm` 0.11.1) everywhere: a random DEK_obj per original, HKDF-SHA256 per-item keys (§19.2); zeroize 1.9; rustls with the platform verifier; SQLCipher 4.17.0 optional | MIT/Apache-2.0 family | Per-student crypto-shredding; FIPS-approved AEAD | XChaCha20-Poly1305 (not FIPS-approved; not offered); keyring 3.x (split); whole-database-only encryption |
@@ -927,11 +934,11 @@ Engineering baseline only (senior Rust engineers, P0–P2 to v1.0 GA). **§25.3 
 |---|---|---|
 | Core engine (ingest, registration, recognition, identity, scoring, CLO model, store, exports, CLI) | 10–14 EM | Same |
 | UI shell | 8–11 EM | 10–14 EM (bridge, C++ glue, build and deploy) |
-| Scanner layer (TWAIN + 32-bit agent 3; WIA 1; ICA 1–1.5; SANE 1; eSCL 1–1.5; hot folder 0.25). WIA, ICA and SANE (3–3.5 EM) move to P3 (§25.2); §25.3 re-allocates that effort to unitemized GA parity items | 7–8 EM | Same |
+| Scanner layer (TWAIN + 32-bit agent 3; WIA 1; ICA 1–1.5; SANE 1; eSCL 1–1.5; hot folder 0.25). WIA, ICA and SANE (3–3.5 EM) move to P3 (§25.2); §25.3 re-allocates that effort to unitemized GA parity items. MFP push over FTP/IMAP (§7.1 A3) is not itemized here (§25.3) | 7–8 EM | Same |
 | PDF ingest + Typst sheets and reports | 2–3 EM | Same |
-| Packaging, signing, updates, CI | 2 EM + 0.25 FTE ongoing | 2.5 EM |
+| Packaging, signing, updates, CI | 2 EM; the 0.25 FTE ongoing upkeep is inside the platform engineer's capacity (§25.3), not added here | 2.5 EM (same upkeep rule) |
 | Accessibility + Arabic/RTL QA, ACR audit | 1.5–2 EM (+ RTL contribution) | 1–1.5 EM |
-| **Engineering baseline** (excludes the §25.3 additions) | **~31–40 EM** | **~34–45 EM** |
+| **Engineering baseline** (excludes the §25.3 additions; sum of the rows above) | **31–40 EM** | **≈ 33–43 EM** |
 
 Key sources: https://github.com/slint-ui/slint/blob/master/LICENSES/LicenseRef-Slint-Royalty-free-2.0.md · https://github.com/slint-ui/slint/issues/2294 · https://doc.qt.io/qt-6/licensing.html · https://github.com/pykeio/ort/releases · https://typst.app/blog/2026/typst-0.15/ · https://github.com/bblanchon/pdfium-binaries · https://github.com/twain/twain-dsm · https://github.com/roboflow/rf-detr
 
@@ -1198,7 +1205,7 @@ Every source lands as an immutable, encrypted original in the project spool (§7
 | A2 | Hot folder | `notify` 8.2; a file is taken once stable for 2 s and openable exclusively. SMB shares polled every 5–10 s | Serves PaperStream, CaptureOnTouch, Kodak Capture Pro and any MFP. Source removed only after the durable acknowledgement (§7.4) |
 | A3 | MFP push | SMB; LAN-only FTP (`libunftp`) with per-device credentials; IMAP mailbox | Jobs split across emails reassembled by job ID; "Auto colour" output checked per page; one settings card per brand |
 | B | eSCL / AirScan | Pure Rust: `mdns-sd` 0.21 discovery (`_uscan._tcp`, `_uscans._tcp`); `ScannerCapabilities`, `ScanJobs`, `NextDocument` | ADF, duplex and Grayscale8 standard. No double-feed or imprinter control, so production sites use C or A2 |
-| C | Capture agent | Out of process (§4.4); streams pages to the main process, never writes the project (§7.4). TWAIN 2.x via TWAINDSM in **separate 32- and 64-bit agents** (x64 also under emulation on Windows ARM64); WIA 2.0; ImageCaptureCore; SANE (own FFI) | A driver crash costs one batch (SYS-014). No ISIS or TWAIN Direct in v1. NAPS2: behavioural reference only (LGPL) |
+| C | Capture agent | Out of process (§4.4); streams pages to the main process, never writes the project (§7.4). TWAIN 2.x via TWAINDSM in **separate 32- and 64-bit agents** (x64 also under emulation on Windows ARM64); WIA 2.0; ImageCaptureCore; SANE (own FFI) | A driver crash loses at most the agent's unacknowledged queue; spooled pages survive (SYS-014). No ISIS or TWAIN Direct in v1. NAPS2: behavioural reference only (LGPL) |
 | D | Phone / tablet | §7.6 | Separate accuracy targets |
 | E | Browser upload | Server mode only: `<input type="file" accept="image/*" capture="environment">` over HTTPS, since `getUserMedia` needs a secure context and `capture=` over plain HTTP is unverified | No live preview; the server validates and bounces bad captures immediately |
 | F | Document camera | Overhead 8–13 MP USB camera via `nokhwa` 0.10.11; fires when the page code changes and the frame is stable | ≈ 15–30 sheets/min (estimate) |
@@ -1219,7 +1226,7 @@ Remark recommends bitonal capture at 200–300 dpi "for speed". We diverge: bito
 |---|---|---|
 | Mode | **8-bit grayscale**; colour only for dropout or ink diagnostics | Bit depth checked per page. Bitonal input raises CAP-003 `bitonal` (WARN) and is held to the bitonal targets |
 | Resolution | 200 dpi for OMR; 300 dpi with ICR or small codes | 4.2 mm = 33 px at 200 dpi. Measured < 100 dpi rejected; 100–150 dpi warns; > 400 dpi gets a downsampled working copy (CAP-002) |
-| Compression | JPEG q ≥ 85, or lossless | JBIG2 symbol substitution swapped digits on Xerox devices in 2013. Estimated Q̂ < 85 → CAP-003 `jpeg_quality_low` (batch WARN) with the settings card (§8.9); Q̂ < 70 also doubles the hysteresis (§8.2). Lossy JBIG2 and MRC refused (CAP-004) |
+| Compression | JPEG q ≥ 85, or lossless | JBIG2 symbol substitution swapped digits on Xerox devices in 2013. Estimated Q̂ < 85 → CAP-003 `jpeg_quality_low` (batch WARN) with the settings card (§8.9); Q̂ < 70 also doubles the hysteresis (§8.7 step 7, §8.9). Lossy JBIG2 and MRC refused (CAP-004) |
 | Blank-page skip | **OFF** | Blank backs carry codes, so a skipped side shows as a gap (COL-001) |
 | Despeckle, sharpening, text enhancement, background removal, driver dropout, hole-punch fill, streak reduction, bitonal thresholding | **OFF** | Each alters mark pixels. Checked by capability read-back and per-page histograms |
 | Deskew / crop | Allowed, with overscan and a **black background** | Tears stay detectable (CAP-009) |
@@ -1257,18 +1264,20 @@ Most "wrong answer" bugs start at ingestion. Every decode path is fuzzed (§23.4
 
 **Header DPI** (often a false 72 or 96) is recorded, never trusted; geometry uses the fiducial-measured scale (§8.2).
 
+**Worker inputs.** Out-of-process decoders (PDFium, HEIC, the fillable-PDF parser) read a stored original, at first decode and on every re-run, only through a parent-created read-only buffer: the main process decrypts the envelope into a sealed memfd (Linux), an anonymous pagefile-backed section (Windows) or anonymous shared memory (macOS), §4.4. Plaintext never goes to a temp file.
+
 ### 7.4 Spool-first ingestion
 
 **Invariant: no source is told "received" before its bytes are durable.** A crash therefore cannot lose an acknowledged page, and recognition can never block a scanner.
 
-**Who writes.** Only the main process's spool writer, for every source. Capture agents hold no long-term keys; they stream pages over IPC and keep at most 8 unacknowledged pages, in memory only (proposed, §4.4). When that is full they stop requesting transfers, so the driver waits instead of failing (TWAIN and SANE transfers are pull-based; per-driver behaviour unverified).
+**Who writes.** Only the main process's spool writer, for every source. Capture agents hold no long-term keys; they stream pages over IPC and keep at most 16 unacknowledged pages, in memory only (initial bound, §4.4). When that is full they stop requesting transfers, so the driver waits instead of failing (TWAIN and SANE transfers are pull-based; per-driver behaviour unverified).
 
 1. Stream the source into `spool/tmp/<uuidv7>` as an AES-256-GCM STREAM envelope under a fresh DEK_obj (format §14.5; wrapping §19.2, never under the PDK), computing **BLAKE3** (content address) and **SHA-256** (evidence hash) over the **plaintext** in the same pass. fsync (F_FULLFSYNC on macOS), rename without replacing to `objects/ab/cd/<plaintext BLAKE3>`, and fsync the directory (write order: §14.5). An existing object is a byte-identical duplicate: CAP-011 (INFO), linked to it.
 2. In one transaction, insert the `source_file` and `page` rows as `Spooled` (§14.8).
 3. **Acknowledge durably** (FTP 226, HTTP 200, release the agent's queue slot, or finish the hot-folder file), then remove the source: delete hot-folder and FTP files; flag IMAP messages `\Deleted` and expunge. A "keep processed copy for N days" policy may use only an app-managed `.omr-done/` folder registered with the retention engine and listed in the data map (§19.5).
 4. Enqueue the page for recognition (§4.5). Compute receives the just-hashed plaintext as `Arc<[u8]>` (§21.2); originals are never mmapped.
 
-If the main process dies, pages still held by an agent were never acknowledged: on restart the UI names the last durable imprint number, and the operator re-feeds from the next sheet (SYS-014).
+If the main process dies, pages still held by an agent were never acknowledged: on restart the UI names the last durable imprint number, and the operator re-feeds from the next sheet (SYS-014, raised at restart beside SYS-031, §22.2).
 
 **Provenance per file:** source kind, device profile, driver version and capability snapshot, operator, batch, imprint string, original name and mtime, `received_at` (UTC + HLC), length, both plaintext hashes, and the page index within its container.
 
@@ -1334,7 +1343,7 @@ Key sources: https://remarksoftware.com/wp-content/uploads/2025/06/Remark-Office
 
 ## 8. Recognition engine
 
-`omr-recog` (primitives in `omr-imaging`) implements `responses = recognize(image, template_rev, engine_manifest)`: per-bubble mark states (L0), per-question responses with calibrated confidence, and coded exceptions. It is key-blind: its only inputs are the image, the template revision and a `BatchContext` without key, policy or roster fields (rule R2, §4.3). It targets the silent-error rate at a stated abstention rate (SER/AR, §2.4), not per-answer accuracy: at 99.95 % per answer, ≈ 4 % of 100-question sheets still carry an error (§23.1).
+`omr-recog` (primitives in `omr-imaging`) implements `responses = recognize(image, template_rev, engine_manifest)`: per-bubble mark states (L0), per-question responses with calibrated confidence, and coded exceptions. It is key-blind: its only inputs are the image, the template revision and a `BatchContext` without key, policy or roster fields (rule R2, §4.3). It targets the silent-error rate at a stated abstention rate (SER/AR, §2.4), not per-answer accuracy: at 99.95 % per answer, about 5 % of 100-question sheets carry at least one error (1 − 0.9995¹⁰⁰), and Hernández-Mier found 3.85 % of their sheets affected (§8.13, §23.1).
 
 Values marked *initial* MUST be replaced before GA by values selected with Learn-then-Test (LTT) on the corpus (§8.7, §23.5).
 
@@ -1570,8 +1579,8 @@ The page stage runs the same router with the prior model and a 2× wider band. C
 
 **8. Threshold selection (Learn-then-Test), per slice** (standard, high-stakes, bitonal, phone).
 - **Search space:** λ = (α, L_q, L_b, L_cnn, erasure ρ and gap, h). Candidates are ordered from conservative to aggressive; the order MUST be fixed on the calibration split, disjoint from the LTT split.
-- **Test:** errors cluster by sheet, so the binomial uses the §23.1 effective sample size. For candidate j with kⱼ silent errors in n held-out LTT questions, pⱼ = P(Binom(⌊n/DEFF⌋, ε*) ≤ ⌈kⱼ/DEFF⌉), DEFF = max(2, 1 + (Q − 1)·ρ̂) (floor initial), with Q questions per sheet and ρ̂ the intra-sheet error correlation estimated as in §23.1. Candidates are accepted in order while pⱼ ≤ δ (fixed-sequence testing); the accepted candidate with the lowest AR is deployed.
-- **Guarantee:** P(SER > ε*) ≤ δ = 0.05 on the held-out LTT split; this is the certification, which the test split only confirms (§23.1). At k = 0 it needs n/DEFF ≥ ln δ / ln(1 − ε*) ≈ 3/ε* (≥ 300k·DEFF questions for ε* = 10⁻⁵); per-slice sizes, the high-stakes design target and achieved-bound publication: §23.1.
+- **Test:** errors cluster by sheet, so the binomial uses the §23.1 effective sample size. For candidate j with kⱼ silent errors in n held-out LTT questions, pⱼ = P(Binom(⌊n/DEFF⌋, ε*) ≤ ⌈kⱼ/DEFF⌉), DEFF = max(2, 1 + (m̄ − 1)·ρ̂) (floor *initial*), with m̄ questions per sheet and ρ̂ the intra-sheet error correlation estimated as in §23.1. Candidates are accepted in order while pⱼ ≤ δ (fixed-sequence testing); the accepted candidate with the lowest AR is deployed.
+- **Guarantee:** P(SER > ε*) ≤ δ = 0.05 on the held-out LTT split; this is the certification, which the test split only confirms (§23.1). At k = 0 it needs n/DEFF ≥ ln δ / ln(1 − ε*) ≈ 3/ε* (≥ 300k·DEFF questions for ε* = 10⁻⁵, ≥ 600k at the DEFF floor); per-slice sizes, the high-stakes design target (≥ 1.5M × DEFF questions) and achieved-bound publication: §23.1.
 
 **9. Drift** (SYS-019; monitors and alarms: §23.5). Adaptation only tightens: adaptive conformal inference, α_{t+1} = α_t + γ(α − err_t) (Gibbs & Candès 2021), is clipped to α_t ≤ α_LTT, and loosening needs a new LTT run. α_t is updated only **between** recognition runs, from adjudicated outcomes (audit sample, review overturns) of earlier runs; the α_t and q̂_y a run uses are frozen at run start in the manifest's calibration state (§14.6) and reused verbatim on re-run and appeal replay. New devices start with the calibration sheet and first-batch supervised mode (§23.5, §23.7).
 
@@ -1832,7 +1841,7 @@ Skeleton-only matching puts C in *skeleton mode* (§9.5, §9.7).
 | A | Calibrated column likelihood from §8.8 bubble posteriors | — | In-process | < 0.5 ms per sheet |
 | B | Per-box CNN (ResNet-8 / MobileNetV3-small class), 32–48 px input; 25 glyph classes: Western 0–9, Arabic-Indic ٠–٩, Persian ۴ ۵ ۶, blank, scribble | 0.3–1.5M params, in-house | `tract-onnx` 0.23.9, FP32 | ~0.1 ms per box |
 | B′ | Whole-row CTC digit reader (PP-OCRv6-small architecture) | ~8M, Apache-2.0 base | `ort` =2.0.0-rc.14, CPU EP | 3–5 ms |
-| C | CTC name recognizers fine-tuned on handwritten names: PP-OCRv6-small architecture (Latin), `arabic_PP-OCRv5_mobile_rec` (~2M, Arabic) | Apache-2.0 base | `ort`, CPU EP | 5–20 ms per line |
+| C | CTC name recognizers fine-tuned on handwritten names: PP-OCRv6-small architecture (Latin), `arabic_PP-OCRv5_mobile_rec` (~2M, Arabic; at GA per spike S5, §25.1) | Apache-2.0 base | `ort`, CPU EP | 5–20 ms per line |
 | D | Same recognizers, lexicon-constrained (course catalogue, rooms) | Apache-2.0 | `ort`, CPU EP | 5–20 ms |
 | E | `rxing` 0.9.3 → 2× adaptive-binarized retry → `zxing-cpp` 0.5.3 → echo-line OCR (Crockford Base32, MAC-checked, §6.4); also Code 128/39, PDF417, DataMatrix stickers | Apache-2.0 | `rxing` in process; `zxing-cpp` in `omr-pdfium-worker` (R5, §4.3) | 1–10 ms, + IPC ≈ 1–3 ms |
 
@@ -1843,9 +1852,9 @@ Skeleton-only matching puts C in *skeleton mode* (§9.5, §9.7).
 
   G(Western) = 0–9 (10 glyphs), G(Arabic-Indic) = ٠–٩ plus ۴ ۵ ۶ (13), G(mixed) = their union (23), so mixed pays a per-box dilution and wins only when both scripts occur. P(g | box)/P_train(g) is the scaled likelihood (training prior removed). Glyphs map to values only inside the §9.5 likelihood, keeping the 0/٥ (٥ = 5) and 7/٦/۷ collisions visible; §9.8 maps VLM glyphs with this posterior.
 - **OOD guard.** An energy score above a calibrated threshold maps the box to `scribble`, never to a confident digit.
-- **Wrong field.** A name read of only digits, or letters in the ID boxes, re-scores the crop with the other channel's recognizer (IDN-004 `wrong_field`, INFO).
+- **Wrong field.** A name read of only digits, or letters in the ID boxes, re-scores the crop with the other channel's recognizer (IDN-004 `wrong_field`, INFO if auto-accepted).
 - **Decision-path models.** B′, C, D and the PP-LCNet orientation model (§8.3) MUST run with batch size 1, or in page-local batches in fixed field order padded to a template-fixed width, with `intra_op_num_threads = 1` and the CPU EP only. Log-likelihoods are quantized to 1/1024 nat before fusion, and the §23.6 cross-ISA gate covers these models; one that fails moves to `tract-onnx` or stops counting toward §9.7 condition 4 (spike S8, §25.1). The cross-page micro-batcher (§21.2) serves only the template detector, embeddings and AI-pack models. No GPU for identity (§4.2 invariant 6).
-- **No timing-dependent evaluation.** Every channel applicable to a booklet (field present, crop exists) is evaluated before the decision; only absent channels are skipped, and the evaluated set is stored. A channel that overruns its §22.4 deadline is marked `timed_out` and the booklet goes to review, never auto-accepted on the remaining channels.
+- **No timing-dependent evaluation.** Every channel applicable to a booklet (field present, crop exists) is evaluated before the decision; only absent channels are skipped, and the evaluated set is stored. A channel that overruns its §22.4 deadline is marked `timed_out`; one whose model (B, B′, C or D) is missing or tampered is marked `channel_unavailable` (SYS-006, §22.1; recorded in the engine manifest, §14.6) and mark recognition continues. Either way the booklet goes to review, never auto-accepted on the remaining channels.
 - **Cost** ≈ 10–40 ms of a core per identity page, ≈ 15–40 ms with ID boxes and a name field (est.), against the ≤ 35 ms per-page mark budget (§8.1). Identity runs in its own lane after mark recognition, but name plus ID boxes on every page need up to ≈ 2× CPU end to end: ≈ 95–140 pages/s on single-page sheets, outside the 200 pages/s target (est.; §2.4, §21.1).
 - **Training data.** Typst-rendered synthetic sheets with commercially licensed handwriting fonts and stroke/slant/elastic/scan-noise augmentation, plus consented pilot data. KHATT, Muharaf (CC BY-NC-SA 4.0) and IFN/ENIT are evaluation-only; MADBase/AHDBase/HODA terms are unverified, so research-only.
 
@@ -1888,7 +1897,7 @@ For booklet i, with observations O = (O_A, O_B, O_C, O_E) and candidates S_i ⊆
 - *CTC mode:* `log ℓ_C(O_C | s) = logsumexp_{v ∈ V(s)} [log ℓ_CTC(v) + log P(v | s)]` over the student's name variants and aliases; split name fields (§6.5) add per-field scores.
 - *Skeleton mode* (skeleton-only cross-script, partial names): Fellegi–Sunter weights, log(m_t/u_t) per agreeing token and log((1−m_t)/(1−u_t)) per disagreeing one. u_t is the token's roster plus institutional frequency (Splink term-frequency adjustment); m and u come from EM on unlabelled batches, refined by corrections. log ℓ_C(O_C | ∅) = 0 (the u-distribution baseline). Each candidate's term in P(s | O) is clamped to ±2.3 nats (initial); the §9.7 contradiction test uses the unclamped weights.
 
-**Channel E.** ℓ_E = 1 − ε_qr for the student bound to the serial, and ε_qr/(|R| − 1) for every other student and for ∅; ε_qr ≈ 10⁻³ models sheet swaps (unverified). An unbound or unreadable code contributes nothing. If both code copies are MAC-valid but disagree, E contributes nothing and COL-004 `code_copies_disagree` is raised (§7.5).
+**Channel E.** ℓ_E = 1 − ε_qr for the student bound to the serial, and ε_qr/(|R| − 1) for every other student and for ∅; ε_qr ≈ 10⁻³ models sheet swaps (unverified). An unbound or unreadable code contributes nothing. If both code copies are MAC-valid but disagree, E contributes nothing and COL-004 `code_copies_disagree` is raised (§6.4, §8.3).
 
 **∅ hypothesis.** ŷ is the unconstrained read (top A×B beam string for the ID, top CTC beam string for the name), scored like roster strings (forward algorithm, not best path).
 - *Posterior:* ℓ(O | ∅) = P_fmt(ŷ_ID)·ℓ_AB(O | ŷ_ID) · ℓ_C(O_C | ∅) · ℓ_E(O_E | ∅). P_fmt is uniform over IDs valid under the institutional format and check digit; in CTC mode ℓ_C(O_C | ∅) = P_shape(ŷ_name)·ℓ_CTC(ŷ_name), with a name-shape prior. π(∅) is a policy value (start 0.01).
@@ -1903,7 +1912,7 @@ For booklet i, with observations O = (O_A, O_B, O_C, O_E) and candidates S_i ⊆
 
 G_∅ defaults to 12 nats and MUST exceed G_w + 2 (≈ 11.2 nats at the default ε_w and |N|).
 
-**Priors π(s)** depend only on exam-instance inputs fixed before decoding: section enrolment (uniform within the session's sections), imported attendance and absent marks, and up-weights from seat map, room and batch header. Other sections stay possible but are surfaced (IDN-004 `cross_section`, INFO). π never depends on other booklets' decisions or on order; one sheet per student is enforced only by the §9.6 duplicate columns. Changed inputs re-run linkage like a roster change; a property test asserts invariance to batch and booklet order (§23.6).
+**Priors π(s)** depend only on exam-instance inputs fixed before decoding: section enrolment (uniform within the session's sections), imported attendance and absent marks, and up-weights from seat map, room and batch header. Other sections stay possible but are surfaced (IDN-004 `cross_section`, INFO if auto-accepted). π never depends on other booklets' decisions or on order; one sheet per student is enforced only by the §9.6 duplicate columns. Changed inputs re-run linkage like a roster change; a property test asserts invariance to batch and booklet order (§23.6).
 
 **Hard conflicts** block auto-accept whatever the posterior: code binding or confirm digits disagree with the handwriting (IDN-006); two booklets claim one student (IDN-005); a channel decisively contradicts s (§9.7). Whether the code outranks handwriting is visible institutional policy.
 
@@ -1956,7 +1965,7 @@ Channel rules for condition 4:
 **Severity.** IDN-004 sub-reasons that did not prevent auto-accept are logged as INFO: `writer_error`, an A-versus-B `channel_conflict` settled by the other channels, `id_blank`, `id_ambiguous`, `namesake`, `wrong_field`, `cross_section`. A sub-reason that leaves identity undecided is ERROR (Appendix A).
 
 **Certification** uses Learn-then-Test only, never conformal risk control (sample sizes restated in §23.1).
-- Risk R(λ) = P(wrong student | auto-accepted at λ), with the booklet as sampling unit. λ moves L_id, τ_m and θ_f together from strict to loose; fixed-sequence testing stops at the first non-rejection. Each λ gets the exact one-sided binomial (Clopper–Pearson) p-value on the auto-accepted subset of a held-out labelled LTT split, δ = 0.05. A separate test split only confirms (achieved bound 3/n_test).
+- Risk R(λ) = P(wrong student | auto-accepted at λ), with the booklet as sampling unit. λ moves L_id, τ_m and θ_f together from strict to loose; fixed-sequence testing stops at the first non-rejection. Each λ gets the exact one-sided binomial (Clopper–Pearson) p-value on the auto-accepted subset of a held-out labelled LTT split, δ = 0.05. A separate test split only confirms (achieved bound 3/n_test; the booklet is the unit, so no DEFF applies, §23.1).
 - n_acc ≥ ln(1/δ)/α ≈ 3.0/α auto-accepted sheets at zero errors (3k for 10⁻³), ≈ 4.74/α at one (47k at 10⁻⁴), so the ≤ 10⁻⁴ launch contract needs ≈ 30k labelled **auto-accepted** sheets in the LTT split (≈ 33k labelled at 90% auto-accept).
 - Certificates are per slice: name script × ID-field design (grid only, grid + boxes, personalized) × capture tier (scanner, bitonal, phone, `digital_fillable` per §6.11); ID-only acceptance is certified separately. An uncertified slice stays in shadow mode and publishes its achieved bound, never the target.
 - The ≤ 10⁻⁶ engineering goal holds by construction only (AB plus an independent C or E, and the hard-conflict rules); certifying it would need ≈ 3M labelled sheets.
@@ -1992,7 +2001,7 @@ Small VLMs fail mainly by following language priors (WildHandBench: 63–91% of 
 
   `S(c) = log P_θ(c | crop, prompt) − log P_θ(c | null, prompt)`
 
-- The image+prompt KV prefix MUST be computed once per field and render and reused across candidates, so each candidate adds only |c| tokens. If the §18.2 P0 check of prefix reuse or teacher-forced log-probs fails, (b) is off.
+- The image+prompt KV prefix MUST be computed once per field and render and reused across candidates, so each candidate adds only |c| tokens. If teacher-forced log-probs fail the §18.2 P0 check, (b) is off; if only prefix reuse fails, (b) is off at Tier 1.
 - *null* is the same field rendered from the blank template (box lines, no ink); its term depends only on (field, candidate, model) and is cached per exam. S is a pointwise-mutual-information ratio: a common name the model would "read" from an empty box gains nothing.
 - ∅ is scored as S(blind read); an `UNREADABLE` or render-disagreeing blind read gives ∅ no AI term.
 - Calibration: ℓ_pmi(s) ∝ exp(S(c_s)/T_V), with T_V fitted on the golden kit.
@@ -2021,9 +2030,9 @@ Small VLMs fail mainly by following language priors (WildHandBench: 63–91% of 
 | 6 | Blank, double, erased or `UNREADABLE` ID columns | Column states | Blank = wildcard; double mark favours the marked digits; `UNREADABLE` = 1; accepted only under §9.7 | IDN-004 `id_blank` / `id_ambiguous` (INFO if auto-accepted) |
 | 7 | Arabic-Indic vs Western digits, or mixed | Script latent; 0/٥ and 7/٦/۷ classes | Script marginalized per string; no collapse to values before fusion | — |
 | 8 | Wrong identifier written (national ID, phone, seat) | Format classifier on length and prefix | Alternate identifiers join N only if authorized; otherwise review | IDN-004 `wrong_identifier` |
-| 9 | ID in the name box, or vice versa | Name read all digits; letters in ID boxes | Re-score with the other recognizer | IDN-004 `wrong_field` (INFO) |
+| 9 | ID in the name box, or vice versa | Name read all digits; letters in ID boxes | Re-score with the other recognizer | IDN-004 `wrong_field` (INFO if auto-accepted) |
 | 10 | Absent student, or sheet assigned to someone marked absent | No booklet at batch close; issued serial not returned; assignment vs absent flag | Absent list reconciled with attendance; no absent or zero release while identity evidence is open (§13.1) | IDN-004 `assigned_to_absent`; COL-007 |
-| 11 | Several sections share one exam | Union roster | Section prior; cross-section matches surfaced; keys follow the student | IDN-004 `cross_section` (INFO) |
+| 11 | Several sections share one exam | Union roster | Section prior; cross-section matches surfaced; keys follow the student | IDN-004 `cross_section` (INFO if auto-accepted) |
 | 12 | Name in another script; nickname; 2 of 4 Arabic tokens | Script detector; low full-name but high subsequence score | Cross-script path, aliases, ordered alignment, TF weights; skeleton mode never supports | — |
 | 13 | Personalized sheet used by another student | Binding ≠ handwriting; confirm digits ≠ pre-printed ID | Hard conflict; hold score; institution precedence applies | IDN-006 |
 | 14 | Photocopied personalized or serialized sheet | Same serial with different marks or identity; MAC-valid code copies disagree | Split into provisional booklets | COL-004 (`marks_differ` / `code_copies_disagree`) + IDN-006 if personalized |
@@ -2032,7 +2041,7 @@ Small VLMs fail mainly by following language priors (WildHandBench: 63–91% of 
 | 17 | Red or green ink erased by dropout | Box empty, strokes visible in the colour scan | Re-measure identity ROIs on luminance; rescan in colour | MRK-007 |
 | 18 | Despeckle removed the dot of ٠; JPEG artefacts in ID boxes | Scanner profile; blank box where the row CTC sees a glyph | Settings card (§7.2); rescan | CAP-003 `bitonal` / `jpeg_quality_low`; IDN-004 |
 | 19 | Roster changed after scanning | New snapshot hash | Idempotent re-run; diff for approval; confirmed pairs stay fixed | IDN-004 `roster_diff` |
-| 20 | Adversarial swap: student writes a stronger student's ID | AB agrees on the victim; C contradicts or does not support; duplicate if the victim's booklet exists | AB alone never auto-accepts (§9.7); duplicate workflow | IDN-005 / IDN-004 `channel_conflict` |
+| 20 | Adversarial swap: student writes a stronger student's ID | AB agrees on the victim; C contradicts or does not support; duplicate if the victim's booklet exists | AB alone never auto-accepts unless policy `id_only_auto_accept` is on (§9.7). Even then, a contradicting C, IDN-005 or `assigned_to_absent` blocks it, and a later victim booklet raises IDN-005 against the fixed pair (§9.6); duplicate workflow | IDN-005 / IDN-004 `channel_conflict` |
 | 21 | Team sheet; accommodation or make-up template | Multi-identity regions; template ID | One row per identity region (§9.6); same pipeline per template and exam instance | — |
 
 ### 9.10 Privacy of identity snippets
@@ -2217,7 +2226,7 @@ CLO interaction (§11.3, §11.4): L5 drop-lowest never removes CLO evidence unle
 
 ### 10.6 Curving/scaling/grade scales
 
-**Transforms** are L4 parameters (step 4, §10.1); L3 is never altered. All act on x%, the step-3 value as a percentage of the student's form maximum M_f, so make-ups on a form with a different M_f work unchanged.
+**Transforms** are L4 parameters (step 4, §10.1); L3 is never altered. All act on x%, the step-3 value of §10.1: a percentage of the student's counted non-bonus maximum, which equals M_f only when nothing is voided-dropped, excused, unselected in a choice group or bonus. Fitting and application therefore see the same numbers, and make-ups on a form with a different M_f work unchanged.
 
 | Transform | Formula | Refused (SCO-016) when |
 |---|---|---|
@@ -2272,7 +2281,7 @@ CLO interaction (§11.3, §11.4): L5 drop-lowest never removes CLO evidence unle
 
 **Release freeze.**
 - `ScoresPublished` freezes the snapshot, and undo stops at that boundary. This freeze is distinct from the data lock of §13.6.
-- After release, any change to the key, a void, a curve, the policy or the grade scale needs a second approver (four-eyes, Cedar), requested as an `approval` task (§15.3); on a single-principal desktop, §15.5 (desktop-solo governance) supplies the second approver. Until approved, the change is not effective and SCO-020 (ERROR) blocks its re-release; the previous release stays current.
+- After release, every change to a released student's result needs a second approver (four-eyes, Cedar): a key, void, curve, policy, weight or grade-scale change, and any L1 correction (`ResponseCorrected`, including an upheld misread-mark appeal; rubric re-mark, §13.7), `IndividualOverride` or re-run adoption (`RERUN_ACCEPTED`, §14.6) that changes it. It is requested as an `approval` task (§15.3); on a single-principal desktop, §15.5 (desktop-solo governance) supplies the second approver. Until approved, the change is not effective and SCO-020 (ERROR) blocks its re-release; the previous release stays current.
 - Released scores computed under a superseded key, policy or roster snapshot raise SCO-021 (ERROR): recompute, diff, re-release.
 - Decreases need a reason and an approver; the `hold_harmless` option forbids them (step 8, §10.1).
 - After release, the one-click mis-key fix (§12.2) defaults to "accept key ∪ {d}", so nobody loses points. Formula-scoring penalties stay frozen (§10.5), and curves re-apply their frozen numbers (§10.6).
@@ -2295,7 +2304,7 @@ CLO interaction (§11.3, §11.4): L5 drop-lowest never removes CLO evidence unle
 | Grade-scale gap, overlap or non-increasing boundary | Validation | Refused | SCO-029 BLOCKER |
 | Near a grade boundary | §10.2 | Boundary list | SCO-017 INFO |
 | Custom rule fails or traps | §10.7 | Run fails closed | SCO-009 BLOCKER |
-| Post-release change awaiting second approver | Event state | Not yet effective | SCO-020 ERROR |
+| Post-release change to a released student's result (any change listed under Release freeze) awaiting second approver | Event state | Not yet effective | SCO-020 ERROR |
 | Released scores stale | Newer score run exists | Recompute, diff, re-release | SCO-021 ERROR |
 | Σ W_a ≠ 100 % | Course policy validation | L5 publication refused (Course scope) | SCO-010 BLOCKER |
 | Sections of one assessment on different key, mapping-set or policy versions | Version compare | Pooled stats and pooled CLO blocked until aligned | SCO-030 WARN |
@@ -2574,7 +2583,7 @@ All reports go through the Typst engine (§17.1), bilingual Arabic/English with 
 
 ### 11.8 Edge cases
 
-Outcome codes have OutcomeReport scope: they never block grade release, only official attainment reports and accreditation exports (§13.1). SCO-010 (Course scope) blocks only L5 publication.
+Outcome codes have OutcomeReport scope: they never block grade release, only official attainment reports and accreditation exports (§13.1). SCO-010 (Course scope) blocks only L5 publication. Only two WARN codes block anything: SCO-030 (pooled statistics and pooled CLO results, until aligned) and SCO-032 (accreditation exports).
 
 | Case | Detection | Handling | Code | Blocks report / export |
 |---|---|---|---|---|
@@ -2787,6 +2796,7 @@ The primary index is fixed per assessment before any result is shown (no index s
 
 - **Isolation.** Oracles run in a separate CI container and write committed JSON fixtures; `cargo-deny` keeps them unlinked and unbundled (§5.4).
 - **Integrity release gate** (module only; the parity tier raises no flags). Simulate honest classes at N ∈ {30, 60, 100, 200, 300} and k ∈ {30, 40, 60, 100}, with misconception-heavy distractors, honest erasure rates and cross-form neighbours; ≥ 200 replicated classes per (N, k) cell (≥ 6,000 simulated examinees at N = 30). Pass: per-examinee false-flag point estimate ≤ 0.001 and one-sided 95 % Clopper–Pearson upper bound ≤ 0.002, separately for same-form pairs, cross-form pairs and erasure flags. Power curves are published.
+- **Mis-key gate** (G8 metric, §3.4; run in release gate CI-3, §23.6). Honest simulated classes (3PL responses, m = 4, misconception-heavy distractors) at N ∈ {30, 100, 300} and k ∈ {40, 100}, ≥ 200 classes per cell, each with 3 keys swapped for a random distractor. Recall = injected mis-keys flagged by a rank 1–4 rule (§12.2) naming the true answer; false-flag rate = correctly keyed items with any rank 1–4 flag. Pass at N ∈ {100, 300}: recall ≥ 90 % and false-flag rate ≤ 5 %. N = 30 is published, not gated: rules 3–4 are low-confidence there (§12.3), and a design-time simulation gave ≈ 10 % false flags at N = 30, mostly rule 4 (est.).
 - **Property tests (`proptest`).** Invariance to examinee order, form permutation and option relabelling; r ∈ [−1, 1]; zero variance → n/a. Analytics SHOULD meet the scoring core's zero-survivor `cargo-mutants` bar.
 
 Key sources: https://www.rasch.org/rmt/rmt74m.htm · https://nces.ed.gov/nationsreportcard/tdw/analysis/scaling_checks_dif_categ.aspx · https://doi.org/10.1111/j.1745-3984.2003.tb01104.x · https://journals.sagepub.com/doi/10.1177/01466210122032118 · https://doi.org/10.1177/01466216261488632 · https://doi.org/10.3102/10769986221143515 · https://pubs.acs.org/doi/10.1021/acs.jchemed.8b00434 · https://cran.r-project.org/package=CopyDetect
@@ -2818,7 +2828,7 @@ pub struct Exception {
 |---|---|---|
 | BLOCKER | The subject cannot be attributed, graded or trusted | Blocks within its scope (below) |
 | ERROR | A response, identity or score is undecided, or a grade-affecting decision is pending | Blocks within its scope |
-| WARN | Attention or sampling wanted; the engine's decision stands | Never blocks |
+| WARN | Attention or sampling wanted; the engine's decision stands | Never blocks grade release. Only two WARN codes block anything: SCO-030 (pooled statistics and pooled CLO results) and SCO-032 (accreditation exports) |
 | INFO | Resolved automatically under a documented rule and logged | Never blocks |
 
 **Severity rules.**
@@ -2850,7 +2860,7 @@ pub struct Exception {
 | Batch | Grade release of every student with a booklet or page in the batch, or on the batch header's section/room list (§7.5) |
 | Exam | Grade release of every student of the exam |
 | Course | L5 course publication only (§10.5) |
-| OutcomeReport | Official attainment reports and accreditation exports only (§11.7, §17.6). SCO-032 (WARN) also blocks accreditation exports |
+| OutcomeReport | Official attainment reports and accreditation exports only (§11.7, §17.6). Two WARN codes also block: SCO-032 accreditation exports, and SCO-030 pooled statistics and pooled CLO results until the section versions are aligned (§10.8, §11.3) |
 | Document | That document only |
 
 - **Unresolved booklets.** An open IDN exception on booklet i blocks every student s with P(s | O_i) ≥ 10⁻³, and its tentative assignee.
@@ -2922,7 +2932,7 @@ pub struct Exception {
 **Two-person rule** (on by default in high-stakes mode).
 - Applies to ERROR and BLOCKER resolutions in the Identity, Marks and Scoring lanes; Capture and System items and self-clearing SYS conditions are exempt.
 - The item enters `awaiting_second`; a different principal resolves it without seeing the first resolution or any suggestion. Agreement → `verified`; disagreement → `adjudication` by the Instructor (identity items under anonymous marking: the identity adjudicator).
-- Post-release key or policy changes always need four-eyes approval (§10.8).
+- After release, every change to a released student's result needs four-eyes approval (§10.8, SCO-020): key, void, curve, policy, weight or grade scale, and any L1 correction (`ResponseCorrected`, rubric re-mark), `IndividualOverride` or re-run adoption (`RERUN_ACCEPTED`).
 
 **Blind double review.**
 - **Sample:** a random 3 % (configurable 2–5 %) of resolved exception items, including engine-resolved WARN instances, plus 100 % of identity-conflict resolutions (IDN-004/005/006) in high-stakes mode. Rates are owned here; §15.3 enforces blindness on the server.
@@ -3012,7 +3022,7 @@ A failure raises MRK-017 with the rule ID as sub-reason (rule severity `error` �
 **Transform rules** (export only): recode map, reverse-score, computed field (Rhai, pure and operation-limited, §10.7), concat/split, and lookup join (roster or database lookup, §9.2). Outputs are derived columns, labelled as such in exports; they never alter L1, scores or CLO evidence. The transform-set hash is written to the export manifest.
 
 **Data lock.**
-- `DataLocked{scope: batch | assessment, l1_hash}` freezes L1 in scope: no grid edits, exception resolutions or L1-changing re-runs. Only the Instructor locks and unlocks (Cedar, §15.5). `DataUnlocked` needs a reason code; after release, L1 changes also need four-eyes approval (§10.8).
+- `DataLocked{scope: batch | assessment, l1_hash}` freezes L1 in scope: no grid edits, exception resolutions or L1-changing re-runs. Only the Instructor locks and unlocks (Cedar, §15.5). `DataUnlocked` needs a reason code; after release, an L1 change that alters a released student's result also needs four-eyes approval (§10.8, SCO-020).
 - The lock is independent of the release freeze (`ScoresPublished`, §10.8), which locks the released L1 snapshot implicitly.
 - Re-scoring under a new key or policy is allowed while locked, because it does not change L1 (§10.1).
 
@@ -3025,7 +3035,7 @@ Manual marking of clipped regions is a GA feature; AI grouping and rubric sugges
 **Rubric.**
 - Each question has a versioned rubric: items {id, label, points (negative allowed), optional criterion_id for CLO evidence (§11.2)}, plus an optional free adjustment in steps (e.g. ½).
 - L1 stores `Points(d)` with source `onscreen` (§10.4), where d = clamp(Σ points + adjustment, 0, M_i) as a rational (§10.2), together with the selection that produced it, `RubricMarks{rubric_version, items, adjustment, marker_id}`.
-- Changing an item's points publishes a new rubric version and re-derives d for every response it was applied to, giving a new score run (§10.1); selections are never re-entered.
+- Changing an item's points publishes a new rubric version and re-derives d for every response it was applied to, giving a new score run (§10.1); selections are never re-entered. After release, such a re-mark needs four-eyes approval (§10.8).
 - Stamps and comments are positioned on the clip in template millimetres (`OverlayScene`, §4.7) and rendered into annotated student reports (§17.3). Comments are personal data the student can access (§13.3).
 
 **Workflow.**
@@ -3079,7 +3089,7 @@ Exam.omrproj/
 | `project.db` | Backup-API snapshot, never the live file plus WAL |
 | `objects/…` | Envelopes, ZIP method *stored* (no recompression) |
 | `keys/pdk.age` | Project key wrapped to the recipients (`age` 0.12.1, X25519 or passphrase; escrow recipient by policy); opens answer keys and the other PDK children (§19.2) |
-| `keys/epoch-<e>.age` | Epoch keys for PII, notes and images, wrapped to the archive's recipients (escrow by policy), never in clear (§19.2). Each personal recipient is a `disclosure_record` named by the erasure inventory. Exported without them, the archive is **pseudonymous**: scores are readable, PII and images are not |
+| `keys/epoch-<e>.age` | Epoch keys for PII, notes and images, never in clear, wrapped by default to the escrow recipients only; any additional personal recipient is an explicit choice recorded as a `disclosure_record` named by the erasure inventory (§19.2). Exported without them, the archive is **pseudonymous**: scores are readable, PII and images are not |
 | `engine/`; outer `.age` layer | Optional: the WASM decision core (§14.6); whole-archive encryption that stock `age`/`rage` can decrypt for escrow |
 
 **Signer trust.** Device signing keys are certified by the server or by an institution signing key distributed through ADMX/MDM. An unknown signer shows "integrity verified, signer unverified (fingerprint …)" and imports only as a read-only copy unless the user pins the key (trust on first use, logged); the server rejects unknown device keys (§15.2).
@@ -3231,7 +3241,7 @@ outbox (§16.6) ; export ; events ; checkpoint ; access_log ; legal_hold ; reten
 
 **Deduplication.** An existing target is an exact duplicate (CAP-011); rescans with different bytes are linked by COL-003.
 
-**Hashes and envelope.** Content address = BLAKE3 1.8.7 of the plaintext; evidence hash = SHA-256 of the plaintext, for anything a third party verifies (BLAKE3 is not FIPS-approved). Manifests add the envelope SHA-256, so envelopes verify without keys. Envelope = `magic ‖ version ‖ dek_id ‖ nonce_prefix ‖ chunks`: AES-256-GCM STREAM over 1 MiB plaintext chunks (nonce layout: §19.2), header as associated data, so truncation, reordering and appending fail. The plaintext is the original bit for bit, so DCT passthrough works after decryption (§17.3).
+**Hashes and envelope.** Content address = BLAKE3 1.8.7 of the plaintext; evidence hash = SHA-256 of the plaintext, for anything a third party verifies (BLAKE3 is not FIPS-approved). Manifests add the envelope SHA-256, so envelopes verify without keys. Envelope = `magic ‖ version ‖ dek_id ‖ nonce_prefix ‖ chunks`: AES-256-GCM STREAM over 1 MiB plaintext chunks (nonce layout: §19.2), header as associated data, so truncation, reordering and appending fail. The plaintext is the original bit for bit, so DCT passthrough works after decryption (§17.3). Helpers never receive an envelope: for re-runs, re-recognition and PDF/HEIC re-raster the main process decrypts into a parent-created read-only buffer (§4.4), never a plaintext file.
 
 **Garbage collection and retention.**
 - Loose files with no database row are swept after 24 h.
@@ -3255,7 +3265,7 @@ Every recognition, identity and score run stores a manifest as JCS JSON, identif
 
 **Cache keys.** The page stage uses `H(image ‖ template revision ‖ engine manifest ‖ config)`. Score runs are memoized by the Run ID of §10.1; attainment results key on (score_run_id, mapping_set_hash, attainment_policy_hash) (§11.4).
 
-**Re-runs.** A manifest differing from the running engine raises SYS-007; nothing is re-recognized silently. "Re-recognize with current engine" adds a new run beside the old one plus a signed per-question diff; a run contradicting a human resolution raises SYS-032, and the human value stays in force (§13.4). The §10.8 impact report adds the effect on scores and CLOs. Adoption is an event (`RERUN_ACCEPTED`) and needs four-eyes approval if it touches released students (§10.8).
+**Re-runs.** A manifest differing from the running engine raises SYS-007; nothing is re-recognized silently. "Re-recognize with current engine" adds a new run beside the old one plus a signed per-question diff; a run contradicting a human resolution raises SYS-032, and the human value stays in force (§13.4). The §10.8 impact report adds the effect on scores and CLOs. Adoption is an event (`RERUN_ACCEPTED`, Cedar `AdoptRerun`) and needs four-eyes approval if it touches released students (§10.8, §15.5).
 
 **Appeal replay** shows, per booklet, the original's hash, template revision and manifest, each bubble's decision path, the identity decision with its roster snapshot, and every correction with its author. Re-execution needs the matching engine, the archived core, or an archived signed `omr-cli` build. *Proposed:* every release stays downloadable for ≥ 6 years.
 
@@ -3383,7 +3393,7 @@ Key sources: https://mjtsai.com/blog/2026/08/14/sqlite-wal-reset-bug/ · https:/
 | RPO / RTO | RPO ≤ 5 min: pgBackRest continuous WAL archiving (`archive_timeout` ≤ 60 s) plus one streaming standby; objects are immutable and replicated by the store. RTO ≤ 1 h, measured in the quarterly restore drill |
 | Outage behaviour | Desktops keep capturing and reviewing through the outbox (§15.2); release, LMS pushes and LTI launches wait |
 | Topologies | *Small* (one department): one node with all three roles; Postgres with an off-host WAL archive; local FS or S3. *Standard*: ≥ 2 stateless API nodes behind a load balancer, N workers, Postgres primary + standby, S3 with Object Lock. The failover tool (e.g. Patroni or CloudNativePG; unverified) is a P3 spike |
-| Worker sizing | ≈ 55–66 clean pages/s per vCPU [M] (219–266 on 4 vCPU, partial pipeline), ≈ 27–37 for noisy real pages (est.; §21.1); recognition is rarely the bottleneck (10 scanners at 120 ppm ≈ 20 pages/s) |
+| Worker sizing | ≈ 55–66 clean pages/s per vCPU [M] (219–266 on 4 vCPU, partial pipeline), ≈ 18–23 for noisy real pages (44–54 ms per page, est.; §8.1, §21.1); recognition is rarely the bottleneck (10 scanners at 120 ppm ≈ 20 pages/s) |
 | Storage per 10k pages | Objects 1–10 GB (§14.1); Postgres ≈ 0.3–0.5 GB, dominated by `page_record` (§14.3) |
 | Exam-week target | 300 concurrent reviewers (≈ 150 decisions/s) at p99 decision commit ≤ 200 ms, load-tested before the first institutional deployment |
 | Upgrades | None inside configured exam windows, except security fixes. Expand/contract schema migrations keep N and N−1 desktop and API clients working (§16.4); stateless roles restart rolling |
@@ -3415,7 +3425,7 @@ The server is authoritative. On a desktop, a server-backed project is a local SQ
 
 CRDTs are rejected (an override needs an accountable decision, not a merge), as are SQLite session changesets as transport (no actor, reason or chain).
 
-**Sneakernet bundles** (exam centres without a network; also desktop-to-desktop review, §15.5).
+**Sneakernet bundles** (exam centres without a network; also desktop-to-desktop review with a local base seq, §15.5). The format and desktop-to-desktop exchange ship at GA (P2); server import of bundles is P3 (§25.2).
 1. The coordinator exports a bundle, `age`-encrypted to the reviewer's device key, Ed25519-signed and expiring after 14 days: a base seq, the exception IDs in scope, the needed crops, and the roster subset (identity lane only).
 2. The reviewer works offline.
 3. The returned event bundle is checked for device signature, actor binding, replay (`device_seq`) and scope; the conflict classes above apply, and the bundle hash is recorded as an event.
@@ -3480,7 +3490,7 @@ FOR UPDATE OF e SKIP LOCKED;
 | Break-glass | ≥ 2 local accounts; credentials sealed by Admin and Registrar; WebAuthn or a long random secret. Each use raises an event and an alert, is valid for 8 h (proposed) and is reviewed. Covers an IdP outage on exam day |
 | Desktop offline grant | Server-signed Ed25519 grant {user, bindings, expiry ≤ 14 days}, unlocked by a PIN, kept in the keychain. Expired → read-only (SYS-022) |
 | Machine clients | OAuth2 client credentials (server); bearer token (local API, §16.4) |
-| Headless service (`omr-cli watch`, `omr-cli schedule`) | Own service principal (Scanner-Operator binding; never releases grades, §4.6) and own K_sign, enrolled like a device key. KEK from a non-interactive backend (§19.2: DPAPI, `systemd-creds`, System keychain; Linux desktops without Secret Service: kernel session keyring after one prompt per session), never a plain key file; the backend in use is recorded in the engine manifest (§14.6) |
+| Headless service (`omr-cli watch`, `omr-cli schedule`) | Own service principal and own K_sign, enrolled like a device key; never releases grades (§4.6). `watch` holds a Scanner-Operator binding. A scheduled job (§16.4) runs under a job-scoped delegated binding that its owner, an Instructor, signs into `job.toml`: only the listed steps, assessments and destination profile, within the signer's own rights, never `ReleaseGrades`, `PublishKeyVersion` or key viewing (§15.5, restriction v). KEK from a non-interactive backend (§19.2: DPAPI, `systemd-creds`, System keychain; Linux desktops without Secret Service: kernel session keyring after one prompt per session), never a plain key file; the backend in use is recorded in the engine manifest (§14.6) |
 
 **Cookies.**
 
@@ -3495,7 +3505,7 @@ FOR UPDATE OF e SKIP LOCKED;
 
 ### 15.5 AuthZ with Cedar
 
-**Engine.** `cedar-policy` 4.13 runs in `omr-app` on the desktop and in the API middleware on the server, with one policy set and one schema. Its principal types are `User` and `Engine` (`engine:<component>`, §14.4); decision actions include `ResolveException`, `SetResponse`, `ConfirmIdentity`, `PublishKeyVersion`, `ApproveMapping`, `ReleaseGrades` and `AcceptSuggestion` (§18.1), plus `LockData`/`UnlockData` (§13.6), `MarkResponse` (§13.7) and `LowerSeverity` (§13.1); blind review forbids the read action `ViewPriorResolution` (§15.3). These action names are canonical.
+**Engine.** `cedar-policy` 4.13 runs in `omr-app` on the desktop and in the API middleware on the server, with one policy set and one schema. Its principal types are `User` and `Engine` (`engine:<component>`, §14.4); decision actions include `ResolveException`, `SetResponse`, `ConfirmIdentity`, `PublishKeyVersion`, `PublishPolicyVersion`, `VoidItem`, `ApplyCurve`, `PublishGradeScale`, `IndividualOverride`, `AdoptRerun` (§14.6), `ApproveMapping`, `ReleaseGrades` and `AcceptSuggestion` (§18.1), plus `LockData`/`UnlockData` (§13.6), `MarkResponse` (§13.7) and `LowerSeverity` (§13.1); blind review forbids the read action `ViewPriorResolution` (§15.3). These action names are canonical.
 
 **Principals and scope.**
 - A principal holds any number of role bindings: (role, scope ∈ {institution … section}, valid_from, valid_to). A coordinator is an Instructor bound at offering scope.
@@ -3534,6 +3544,7 @@ Legend: ● allowed in scope; letter = restricted (key below); — denied.
 | Integrity analytics (§12.7) | n | — | — | — | — | ● | — | — | — |
 | Audit and access logs | o | o | — | — | o | — | — | ● | p |
 | Export data with PII | ● | ● | — | — | — | — | ● | — | — |
+| Delegate steps to a scheduled job (§16.4) | v | — | — | — | — | — | — | — | — |
 | Erasure, legal hold | — | — | — | — | — | — | q | — | q |
 | Users, roles, plugins, integrations | — | — | — | — | — | — | — | — | ● |
 
@@ -3559,10 +3570,11 @@ Legend: ● allowed in scope; letter = restricted (key below); — denied.
 - s: with a marking assignment; identity masked (§13.7).
 - t: Instructor and QA together, under four-eyes; never Admin alone; future runs only.
 - u: only as the designated identity adjudicator under anonymous marking (§9.10).
+- v: signs into `job.toml` a job-scoped delegated binding for the job's service principal (§15.4): only the listed steps, assessments and destination profile, a subset of the signer's own rights; never `ReleaseGrades`, `PublishKeyVersion` or key viewing. A `score` step uses the key inside the scoring service without displaying it (§19.3).
 
 **Global `forbid` rules:**
 - Keys are sealed for everyone but the owner, Admin included. Sole exception: Admin and Registrar together, by two-person break-glass, may transfer ownership to a named Co-instructor without either viewing the key (`KEY_OWNERSHIP_TRANSFER`, §19.3); the previous owner gets a task.
-- Released runs change only through four-eyes approval.
+- After release, a change to a released student's result takes effect only through four-eyes approval (§10.8, SCO-020): key, void, curve, policy (weights included) or grade scale; any L1 correction (`SetResponse`, appeal outcomes included; `MarkResponse` re-mark); `IndividualOverride`; re-run adoption (`AdoptRerun`).
 - Bindings expire: TA at term end plus the appeal window; Scanner-Operator at the end of the exam window.
 - Accommodation variants are visible only to Instructor, Co-instructor and Registrar (GDPR Art. 9); `special_category` roster attributes only to QA (§9.2).
 - Admin cannot read PII without break-glass, and never reads keys, even with break-glass (§19.3).
@@ -3575,11 +3587,14 @@ Legend: ● allowed in scope; letter = restricted (key below); — denied.
 permit (principal, action == Action::"ResolveException", resource)
 when { resource.lane == "marks" && principal in resource.section.taReviewers };
 
-// Four-eyes after release. `approval` is an ApprovalRequest entity loaded by ID from the approvals table
+// Four-eyes after release (§10.8). The loader sets `affectsRelease`: for an assessment-scoped resource once
+// any sitting is released; for a booklet, response or re-run once it touches a released student (§14.8).
+// `approval` is an ApprovalRequest entity loaded by ID from the approvals table
 // (desktop: only after its ApprovalToken signature verifies), never taken from the request payload.
 forbid (principal, action in [Action::"PublishKeyVersion", Action::"PublishPolicyVersion",
-        Action::"VoidItem", Action::"ApplyCurve", Action::"PublishGradeScale"], resource)
-when { resource.assessment.released }
+        Action::"VoidItem", Action::"ApplyCurve", Action::"PublishGradeScale", Action::"SetResponse",
+        Action::"MarkResponse", Action::"IndividualOverride", Action::"AdoptRerun"], resource)
+when { resource.affectsRelease }
 unless {
   context has approval && context.approval.status == "approved" &&
   context.approval.subject == resource &&
@@ -3589,9 +3604,10 @@ unless {
 
 // Engines and AI advise only (base policy set, §18.1).
 forbid (principal is Engine, action in [Action::"ResolveException", Action::"SetResponse",
-        Action::"ConfirmIdentity", Action::"PublishKeyVersion", Action::"ApproveMapping",
-        Action::"ReleaseGrades", Action::"AcceptSuggestion", Action::"LockData", Action::"UnlockData",
-        Action::"MarkResponse", Action::"LowerSeverity"], resource);
+        Action::"ConfirmIdentity", Action::"PublishKeyVersion", Action::"PublishPolicyVersion",
+        Action::"VoidItem", Action::"ApplyCurve", Action::"PublishGradeScale", Action::"IndividualOverride",
+        Action::"AdoptRerun", Action::"ApproveMapping", Action::"ReleaseGrades", Action::"AcceptSuggestion",
+        Action::"LockData", Action::"UnlockData", Action::"MarkResponse", Action::"LowerSeverity"], resource);
 ```
 
 **Desktop solo.** The local user holds every role on their own projects, Integrity Officer included, except where ADMX/MDM policy forces key sealing, retention or AI off.
@@ -3606,7 +3622,7 @@ forbid (principal is Engine, action in [Action::"ResolveException", Action::"Set
 
 - **Feature availability.** Two-person review, blind double review and anonymous-marking separation require ≥ 2 principals (local or bundle) or server mode. A single-principal desktop offers anonymous marking as masking only, labelled "masked, not separated" (§9.10), and in high-stakes mode shows a persistent banner. Remote reviewers exchange review bundles (§15.2) desktop to desktop, with a local base seq.
 - On a single-principal desktop the cool-off is deliberate friction, not a security control: the user controls the machine.
-- **Phases** (§25.2). P1: the desktop Cedar set with solo roles, key sealing, local second principals and the self-approval policy. P2: `.omrapr` bundles and blind double review. P3: server role bindings and SCIM.
+- **Phases** (§25.2). P1: the desktop Cedar set with solo roles, key sealing, local second principals and the self-approval policy. P2: `.omrapr` bundles, desktop-to-desktop review bundles (§15.2 format, local base seq) and blind double review. P3: server role bindings, server import of sneakernet bundles and SCIM.
 
 **Policy governance.** Policies and the schema are versioned, and every change is an event. CI validates them against the schema and tests every cell of the matrix, including binding-validity boundaries and principals with several bindings.
 
@@ -3648,7 +3664,7 @@ Key sources: https://postgresql.org/developer/roadmap · https://blog.elest.io/m
 | OneRoster 1.2 Rostering | Import orgs, classes, users and enrollments (CSV binding; REST in P3). `sourcedId` is kept as an alias; each import is a roster snapshot (§9.2) |
 | OneRoster 1.2 Gradebook | Export `LineItem`/`Result`. `learningObjectiveSet` carries CLO-level results keyed by CASE GUIDs; `AssessmentLineItem`/`AssessmentResult` carry item-level results. 22 CSV files and 81 REST endpoints in total; the ARP-GS profile can be adopted alone. Field names are unverified, so CI validates against the 1EdTech JSON schema |
 | CASE 1.1 | Frameworks and CLO sets as `CFDocument`/`CFItem`/`CFAssociation` (with `notes`). GUID ↔ UUIDv7 table and round-trip test (§11.1) |
-| Banner (Ellucian Ethos); PeopleSoft Campus Solutions; Workday Student (WWS, REST, RaaS) | `roster-connector` and `lms-connector` plugins over the CSV/OneRoster core. Ethos documentation is gated and keys are per institution; grade write-back is unverified |
+| Banner (Ellucian Ethos); PeopleSoft Campus Solutions; Workday Student (WWS, REST, RaaS) | `roster-connector` and `lms-connector` plugins (WASM tier, P3, §16.5) over the CSV/OneRoster core, which serves them until then. Ethos documentation is gated and keys are per institution; grade write-back is unverified |
 | Registrar correction CSV | Always-available fallback after post-release changes (§10.8) |
 
 ### 16.3 File formats in/out
@@ -3668,7 +3684,7 @@ Key sources: https://postgresql.org/developer/roadmap · https://blog.elest.io/m
 | Seat map; attendance | ● / — | `csv` / `calamine` | Seat map: student, sitting, room, seat, row, col, optional neighbour list. Attendance: CSV, or a printed per-room OMR sign-in sheet. Both feed §9.5, §12.7 and key sealing (§19.3) |
 | Fillable-PDF response sheet (PAR-01) | ● / ● | `pdf-writer` 0.15 (AcroForm unverified; spike) / `lopdf` 0.45 | One radio group per item; values read without OMR (provenance `digital_fillable`), then the normal identity and scoring pipeline; JavaScript and XFA ignored |
 | LMS gradebook CSVs (Canvas, Moodle, Blackboard Ultra, D2L); Remark-compatible layouts | — / ● (Remark keys and data also ● in) | Versioned templates | Remark layouts documented from public material; no proprietary binaries; legal note in §3.5 |
-| ExamSoft format; Questionmark QSF | — / ● | Versioned templates | Layouts from public material (unverified); obtain the vendor specifications before GA |
+| ExamSoft format; Questionmark QSF | — / ● | Versioned templates | Layouts from public material (unverified); vendor layouts obtained by P0 exit (PAR-08, Q-23, §25.2) |
 
 **Export destinations** (named profiles, also used by `omr-cli run`): a local folder, including OneDrive, Dropbox and Google Drive sync folders (SYS-015 allows them for exports; this is how cloud drives are reached); an SMB share; SFTP (pinned host key; client crate unverified); OAuth SMTP email, with PII exports blocked by default (student reports: §17.4).
 
@@ -3699,7 +3715,7 @@ Key sources: https://postgresql.org/developer/roadmap · https://blog.elest.io/m
 - **Subcommands:** `import`, `recognize`, `score`, `report`, `export`, `archive` (signed `.omrx`), `run`, `schedule`, `watch`, `verify`, `migrate`, `pack`, `bench`. `--json` output, documented exit codes, no prompts.
 - **Jobs.** `omr-cli run <job.toml>` runs ordered steps, validated against a published JSON Schema: `open`; `scan` (eSCL device or hot folder); `read` (recognition and identity); `review` (builds the exception queue and a digest, never resolves anything); `score`; `report`; `export` (to a destination profile, §16.3); `archive`.
 - **Scheduling** (Remark Automation Control Center parity, Pro and above, §24.4). `omr-cli schedule install|list|remove <job.toml> --at <cron>` writes Windows Task Scheduler XML, a launchd plist or a systemd timer. Every run and step is an audit event; a failure raises its exception code plus `job.failed` (server) or a desktop notification.
-- **Service principal.** `omr-cli watch` and scheduled runs act as their own service principal (Scanner-Operator binding, own K_sign; §15.4) with a non-interactive key-store backend (§19.2), and never release grades (§4.6).
+- **Principals.** `omr-cli watch` acts as its own service principal (Scanner-Operator binding, own K_sign; §15.4). A scheduled job runs under a job-scoped delegated binding that its owner, an Instructor, signs into `job.toml` (§15.5, restriction v): only the listed steps, assessments and destination profile, within the signer's own rights, never `ReleaseGrades`, `PublishKeyVersion` or key viewing; any edit to `job.toml` needs a new signature. Cedar checks every step against that binding. Both use a non-interactive key-store backend (§19.2) and never release grades (§4.6).
 - `omr-verify` also ships as a minimal separate binary for auditors; `omr-verify approve <file.omrapr>` lets a remote co-signer issue the ApprovalToken (§15.5).
 
 ### 16.5 Plugin system
@@ -3863,7 +3879,7 @@ Candidate-number and "none" identity modes release to an export only, never to a
 
 **Encrypted email copies.** PDF/A forbids encryption, so the archived copy stays unencrypted PDF/A-2a + PDF/UA-1. The delivery copy uses the PDF 2.0 AES-256 security handler with permission bit 10 (accessibility extraction) set, as PDF/UA-1 requires; library support unverified (`lopdf`, `krilla`). High-stakes mode SHOULD require encryption, since a wrong roster address would expose the PDF.
 
-**Logging.** Every release, link, email, delivery, download and view is an event; the read-access log answers "who saw what" within the PDPL 72-hour window (§19.5).
+**Logging.** Every release, link, email, delivery, download and view is an event; the read-access log answers "who saw what" within the PDPL 72-hour window (§19.5). The release receipt (§17.2) reports the share of released students with a logged delivery, the G10 metric (§3.4).
 
 **Regrades** re-deliver with an "updated" banner and revoke old links; pushed LMS comments and sent emails cannot be recalled.
 
@@ -3898,7 +3914,7 @@ Candidate-number and "none" identity modes release to an export only, never to a
 
 ### 17.6 Exports for accreditation
 
-**Evidence binder** per offering: a PDF/A-2a + PDF/UA-1 document plus a ZIP of CSV, XLSX and JSON, with a signed `manifest.json` and the chain head. Contents: course summary, CLO reports with CIs (§11.7), item→CLO map with versions and notes, action tracker, evidence samples (§11.6). Layouts per §11.7 (NCAAA TP-154, ABET, AACSB); machine-readable exports per §16.2.
+**Evidence binder** per offering: a PDF/A-2a + PDF/UA-1 document plus a ZIP of CSV, XLSX and JSON, with a signed `manifest.json` and the chain head. Contents: course summary, CLO reports with CIs (§11.7), item→CLO map with versions and notes, action tracker, evidence samples (§11.6). Layouts per §11.7 (NCAAA TP-154, ABET, AACSB); machine-readable exports per §16.2. Building the binder from released snapshots, with no manual spreadsheet step, is the G1 metric (§3.4: ≤ 5 min per offering), timed in release gate CI-3 (§23.6).
 
 **Evidence materialized at release**, because binders are often built years after full scans are purged (§19.5).
 - On each `GradesReleased` of an assessment with CLO mappings, and each post-release re-run, `omr-report` materializes a candidate pool: per CLO, the 5 students *(proposed)* nearest each of the 10th, 50th and 90th percentiles of that assessment's P_{n,c}, after the §11.6 exclusions. Each gets redacted, re-encoded crops of the items mapped to that CLO, stored in the exam project with retention class "evidence", keyed by (score_run_id, mapping_set_hash, attainment_policy_hash) and referenced by hash from the AssessmentResultSnapshot (§14.9).
@@ -3958,12 +3974,12 @@ This section covers the optional AI pack (`omr-ai`, the `llama-server` sidecar, 
 
 | Process | Runs | Isolation | Lifecycle |
 |---|---|---|---|
-| `llama-server` (llama.cpp, MIT; one pinned `bNNNN` build per platform and backend) | All free generation: blind reads, transcriptions, rubric and Bloom suggestions, narratives, query plans | `ai-sidecar` (§4.4): listens on `127.0.0.1` at a random port, never connects out; API key via `--api-key-file` (0600, per-session directory, deleted after start), never on the command line; GPU at Tier ≥ 2 | One per resident model; lazy; unloads after 5 min idle |
+| `llama-server` (llama.cpp, MIT; one pinned `bNNNN` build per platform and backend) | All free generation: blind reads, transcriptions, rubric and Bloom suggestions, narratives, query plans | `ai-sidecar` (§4.4): listens on `127.0.0.1` at a random port, never connects out; API key via `--api-key-file`, a 0600 per-launch file inside the profile's read-only grant (its own Landlock rule or ACE; on macOS written into the helper's container, §4.4), deleted after start, never on the command line; GPU at Tier ≥ 2 | One per resident model; lazy; unloads after 5 min idle |
 | `omr-ml-worker`, AI-pack build | `mistralrs` 0.8 (MIT) PMI scoring, in process; AI-pack ORT models (e5-small, DINOv2-S, template detector) on CPU or a GPU EP | `parser`, no network (§4.4); inherited IPC channel only; GPU at Tier ≥ 2 | Lazy; loads AI-pack models only on a supervisor request (`AiRuntimeStarted`, §18.1) |
 
 - **Caps.** Per process 1.2 × (GGUF + `mmproj` bytes) + KV bytes + 256 MB, with KV bytes = 2 × n_ctx × n_attn_layers × n_kv_heads × head_dim × 2 B (f16) or the runtime's figure at load; n_ctx is 4,096 for reads and 8,192 for narratives (proposed). It applies to each `llama-server` and to `omr-ml-worker` while the PMI scorer is loaded; otherwise `omr-ml-worker` keeps its ≤ 400 MB helper cap (§4.4, §21.5). AI caps sit outside the §21.5 tree limit. Enforcement per OS: §4.4.
 - **Residency.** Tier 1 runs the AI lane in model-grouped phases (queued blind reads per model, then PMI scoring), stopping one process before starting the next. Tier ≥ 2 swaps processes LRU when caps exceed free RAM minus the app budget.
-- **PMI scoring** (§18.3a step 3, §9.8) uses `mistralrs` because prompt-token log-probs in `llama-server` are unverified (`llama-cpp-2` is not used, §5.3), and Qwen3.5-2B (4B at Tier ≥ 2) because `mistralrs` does not list PaddleOCR-VL-1.6. The image+prompt KV prefix MUST be computed once per crop and render and reused, so each candidate adds only its |c| tokens. A P0 check (§5.5) MUST verify teacher-forced log-probs and prefix reuse in the pinned build (both unverified): without log-probs PMI scoring is off; without prefix reuse it is off at Tier 1 (§9.8). Badges then use the blind read and the second reader only.
+- **PMI scoring** (§18.3a step 3, §9.8) uses `mistralrs` because prompt-token log-probs in `llama-server` are unverified (`llama-cpp-2` is not used, §5.3), and Qwen3.5-2B (4B at Tier ≥ 2) because `mistralrs` does not list PaddleOCR-VL-1.6. The image+prompt KV prefix MUST be computed once per crop and render and reused, so each candidate adds only its |c| tokens. A P0 check (§25.1; risk row §5.5) MUST verify teacher-forced log-probs and prefix reuse in the pinned build (both unverified): without log-probs PMI scoring is off; without prefix reuse it is off at Tier 1 (§9.8). Badges then use the blind read and the second reader only.
 - **Embeddings and detector.** AI-pack ORT models never run in the main process. `fastembed` 7.1.1 (`default-features = false`) loads e5-small only from the manifest path, never from the Hugging Face Hub; CI (`cargo tree -i ort`) asserts a single `ort 2.0.0-rc.14`, else `ort` plus `tokenizers` replace fastembed (mean pooling, L2 normalization).
 - **Decoding.** Local reads: greedy (T = 0), top-2 log-probs (`n_probs`), GBNF or `llguidance` 1.9.1 grammars. Self-consistency (§18.3b): locally T = 0.7 and 5 samples with recorded seeds; in the cloud, 5 independent requests at provider defaults (§18.4), recorded as `sampling: provider_default, seed: n/a`. Deadlines follow §22.4 from the measured pp/tg rates; long generations stream and can be cancelled.
 
@@ -4189,7 +4205,7 @@ Key store (backends below)                    server: KMS or Vault
 **Rules (MUST).**
 - **Epochs.** No student-linkable key is wrapped directly under the PDK; each hangs under the current K_vault,e. The workspace has its own `keys/epochs.kst`.
 - **Pre-identity originals.** The booklet is unknown at spool time, so DEK_obj is first wrapped under K_vault,e, then under K_booklet at collation; `IdentityConfirmed` wraps K_booklet under K_student. Wraps are database rows (`object.wrap_key_id`, §14.5), so re-wrapping and shredding never rewrite the envelope.
-- **Helpers hold no keys** (capture agents, PDFium workers, AI processes); only the main process writes envelopes (§4.4, §7.4).
+- **Helpers hold no keys** (capture agents, PDFium workers, AI processes); only the main process writes envelopes (§4.4, §7.4). A helper that needs a stored original (PDF/HEIC raster, re-recognition, a §22.4 re-run) gets main-process-decrypted plaintext in a parent-created read-only buffer (sealed `memfd`, anonymous section or shared-memory object, §4.4), never a plaintext file.
 - **Re-attribution.** `ID_CORRECTION` re-wraps K_booklet to the new K_student and deletes the old wrap (`BookletRekeyed`); snippets follow, since W_snip hangs under K_booklet (§9.10), so erasing the wrong student never shreds the true owner's evidence. A page moved between booklets (COL-004, page attach) has its DEK_obj and snippet wraps re-wrapped under the new K_booklet (`SnippetRekeyed`).
 - **Cache.** `cache/` is never plaintext on disk; K_cache,session is never stored, so the cache dies with the session.
 
@@ -4229,7 +4245,7 @@ Key store (backends below)                    server: KMS or Vault
 **Epochs, snapshots and archives.**
 - **Keystore.** In-app snapshots never copy `keys/epochs.kst`; off-device backups copy it as one file overwritten in place, with no version history. The app excludes it from OS backups where an API exists (macOS `NSURLIsExcludedFromBackupKey`; Windows `FilesNotToSnapshot`/`FilesNotToBackup`; coverage unverified).
 - **Rotation.** Epochs last 30 days by default, and any erasure forces a rotation within 30 days: create K_vault,e+1 and re-wrap the surviving K_student, K_booklet, pre-collation DEK_obj and K_snip,exam under it. When the last in-app snapshot needing epoch e has aged out (≤ 35 days, §14.7), destroy K_vault,e in the keystore, every backend and escrow.
-- **Archives.** `.omrx` carries `keys/epoch-<e>.age` wrapped to escrow recipients only by default (a personal recipient is a `disclosure_record`, §14.1), never a clear epoch key. An archive is shredded once every recipient destroys that key; the erasure inventory names the archives that hold the student.
+- **Archives.** `.omrx` carries `keys/epoch-<e>.age`, never a clear epoch key, wrapped by default to the escrow recipients only; any additional personal recipient is an explicit choice recorded as a `disclosure_record` (§14.1, §16.3). An archive is shredded once every recipient destroys that key; the erasure inventory names the archives that hold the student and those personal recipients.
 - **Bound.** Residual copies become undecryptable ≤ epoch length + 35 days after erasure (≤ 65 days by default), provided escrow destroys retired epoch keys. A keystore copy outside the app's control (an OS backup that ignored the exclusion, a versioned sync folder) voids the bound for that copy, and users are told so.
 
 ### 19.3 Answer-key secrecy
@@ -4258,7 +4274,7 @@ Key-derived values, such as the score under each key for IDN-003, appear only in
 
 | Input | Risk | Control |
 |---|---|---|
-| Images and PDFs | Parser bugs; decompression bombs; a subverted worker | Pure-Rust decoders under `catch_unwind` and header limits (§7.4). PDFium only in sandboxed `parser` workers fed read-only handles, never paths (per-OS profiles, Landlock fallback and `sandbox_level`, output sealing: §4.4). `cargo-fuzz` 0.13 on every ingest path, nightly |
+| Images and PDFs | Parser bugs; decompression bombs; a subverted worker | Pure-Rust decoders under `catch_unwind` and header limits (§7.4). PDFium only in sandboxed `parser` workers fed parent-created read-only buffers of decrypted input, never paths or plaintext files (per-OS profiles, Landlock fallback and `sandbox_level`, output sealing: §4.4). `cargo-fuzz` 0.13 on every ingest path, nightly |
 | CSV, XLSX, QTI, GIFT | Formula injection; XXE; entity expansion | No evaluation; no DTD processing; size limits (§16.3) |
 | Foreign `.omrx` or `project.db` | Zip-slip; forged manifest; hostile schema (SQL triggers and views) | The §14.1 import rule: ZIP limits, signature and hashes; sandboxed or hardened read-only open; schema hash match; rows copied into a fresh `project.db`, never opened read-write. Server import does the same (§15.2) |
 | Plugins; GGUF models | Malicious code; GGUF parser bugs | WASM sandbox and signatures (§16.5); hash-pinned models; low-privilege `llama-server` sidecar and `omr-ml-worker` (§18.7) |
@@ -4476,7 +4492,7 @@ Pools, priorities, channel capacities and the writer actor: §4.5.
 **Data flow.**
 - **Spool first** (§7.4). Back-pressure exists only between spool and compute, so no scanner waits.
 - **Page per task.** One worker decodes, registers and reads a page while its 8.7 MB image is cache-hot. This scaled linearly (16.7 ms per page on 1 thread → 219 pages/s on 4 [M]); stage-per-thread pipelines would ship 8.7 MB buffers between cores. Decode once, then downsample (decoding twice: 171 pages/s [M]).
-- **Zero copy.** Compute takes the plaintext the spool has just hashed and encrypted (§7.4) as `Arc<[u8]>`; re-runs decrypt the envelope (§19.2) into a pooled buffer. Originals are never memory-mapped (ciphertext; SIGBUS on truncated removable media). Decoded buffers come from a pool (`ArrayQueue<Vec<u8>>`), saving ≈ 2,100 page faults per 8.7 MB allocation; ROIs are stride views.
+- **Zero copy.** Compute takes the plaintext the spool has just hashed and encrypted (§7.4) as `Arc<[u8]>`; re-runs decrypt the envelope (§19.2) into a pooled buffer, or, for an out-of-process re-run, into a parent-created read-only buffer (§4.4). Originals are never memory-mapped (ciphertext; SIGBUS on truncated removable media). Decoded buffers come from a pool (`ArrayQueue<Vec<u8>>`), saving ≈ 2,100 page faults per 8.7 MB allocation; ROIs are stride views.
 
 **ML.**
 - **Decision CNN** (tract): micro-batches of ≤ 16 within a page, since tract's per-crop cost *rises* with batch (83 → 157 µs [M]).
@@ -4604,7 +4620,9 @@ The goal is the §2.4 metric (zero batch aborts over a 100k-page soak and the fu
 - A crash storm (≥ 5 crashes in 10 min; proposed; SYS-002), or a helper binary missing or quarantined by antivirus (SYS-006), disables the helper for the session and switches to its §4.4 fallback: `hayro`, `rxing`, `kornia-apriltag`, eSCL or hot folder, ORT CPU, or AI off.
 - **Fallbacks never change decisions silently.** A page whose pixels or tag corners come from a fallback (e.g. a `hayro` raster) records `path=alternate` and its questions go to review, unless CI proves the fallback bit-identical. MAC-checked `rxing` reads need no flag.
 
-**Decision-path model missing or tampered** (SYS-006, BLOCKER). Recognition halts and a repair install is offered. An Admin MAY instead start an explicit *classical-only* run (§18.1), recorded in the engine manifest, with every CNN-routed bubble sent to review. Silently continuing with fewer models is forbidden: it would change decisions without changing the manifest.
+**Decision-path model missing or tampered** (SYS-006). Silently continuing with fewer models is forbidden: it would change decisions without changing the manifest.
+- **Mark-path model** (tract CNN, PP-LCNet orientation; BLOCKER). Recognition halts and a repair install is offered. An Admin MAY instead start an explicit *classical-only* run (§18.1), recorded in the engine manifest, with every CNN-routed bubble sent to review.
+- **Identity model** (B, B′, C, D; ERROR). Mark recognition continues. The channel is recorded as `channel_unavailable` in the engine manifest (§14.6), and every booklet where it applies goes to identity review, never auto-accepted on the remaining channels (as with `timed_out`, §9.4).
 
 ### 22.2 Crash safety and resumability
 
@@ -4615,7 +4633,7 @@ Ingest state machine: §14.8; durability lanes and pragmas: §14.2; snapshot rot
 - **Lanes** (§14.2). Human decisions commit on the FULL lane before the UI acknowledges them, with `fullfsync` and `checkpoint_fullfsync` on macOS, where plain `fsync()` does not flush the drive cache. The last NORMAL group of recognition output may be lost on power loss and is recomputed.
 - **Commit cost.** FULL 0.33 ms, NORMAL 0.022 ms on a virtio SSD [M]. With `F_FULLFSYNC` or USB media a decision commit may take ≈ 20 ms (est.; measured per OS in the spike), acceptable at human decision rates.
 - **Removable media** (exFAT, USB) may still lose acknowledged commits; the app MUST warn when a live project is on one.
-- **Spool.** No source is acknowledged before its bytes are durable (§7.4). A crash loses at most the page in flight and the capture agent's unacknowledged queue (initial bound 16 pages); the UI names the last durable imprint for re-feeding (§14.8).
+- **Spool.** No source is acknowledged before its bytes are durable (§7.4). A crash loses at most the page in flight and the capture agent's unacknowledged queue (initial bound 16 pages); the UI names the last durable imprint for re-feeding (SYS-014, raised at restart beside SYS-031 if a scan was running; §14.8).
 
 **Storage integrity.**
 - **Open and check.** WAL recovery is automatic. The project opens read-only; `PRAGMA quick_check` then runs in the background on a reader connection (timing: §21.6), and writes queue until it passes. On failure the project stays read-only, raises SYS-010 and offers the last verified snapshot. A weekly `integrity_check` also runs.
@@ -4658,7 +4676,7 @@ Cancellation tokens are checked at stage boundaries and inside own loops. Third-
 
 **A missed deadline never changes the processing path** (invariant 6). *Overrun rule* for decode, registration and read:
 1. Cancel, or abandon a call that cannot be cancelled.
-2. Re-run the same path once, with a 4× deadline, in the out-of-process `omr-pdfium-worker`, which links the same page-task code and engine manifest.
+2. Re-run the same path once, with a 4× deadline, in the out-of-process `omr-pdfium-worker`, which links the same page-task code and engine manifest. The main process decrypts the input into a parent-created read-only buffer (§4.4), never a plaintext file.
 3. If it overruns again, quarantine the page (SYS-003).
 4. An alternate decoder or reduced dpi is used only in an explicit, operator-initiated re-run, which records `path=alternate` in provenance and the engine manifest and routes every question on the page to review.
 5. A lossless alternate (`fax` ↔ `hayro-ccitt`) MAY run automatically once CI proves bit-identical pixels on the golden and fuzz corpora (§23.4).
@@ -4717,7 +4735,7 @@ System-level failures only (recognition: §8.12; identity: §9.9; capture and de
 | 12 | Two users open one project | Second user read-only; stale-lease takeover | — | §14.2 |
 | 13 | Project schema newer than the app | Read-only; upgrade prompt | SYS-016 | §14.7 |
 | 14 | Key unwrap fails (lost keychain, new OS profile) | Recovery key or escrow | SYS-017 | §19.2 |
-| 15 | Model, helper or ORT DLL missing, tampered or AV-quarantined; MSVC runtime missing | Decision path: halt and repair. Optional helper: §4.4 fallback. Optional feature: off (HTR off raises the identity review rate). App-local CRT shipped | SYS-006 | §22.1, §19.7 |
+| 15 | Model, helper or ORT DLL missing, tampered or AV-quarantined; MSVC runtime missing | Mark-path model: halt and repair (BLOCKER). Identity model (B, B′, C, D): channel `channel_unavailable`, its booklets to identity review (ERROR). Optional helper: §4.4 fallback. AI-pack model: feature off. App-local CRT shipped | SYS-006 | §22.1, §19.7 |
 | 16 | Engine changed since the last run | No silent re-run; explicit re-run with a diff | SYS-007 | §14.6 |
 | 17 | Decision self-test mismatch (ISA path, emulation, tampering) | Recognition disabled on that machine | SYS-008 | §23.6 |
 | 18 | Plugin trap or capability violation (an epoch overrun follows §22.4) | Quarantine the plugin; built-in fallback, or the score run fails closed (SCO-009) | SYS-009 | §16.5 |
@@ -4754,17 +4772,17 @@ Key sources: https://www.sqlite.org/pragma.html#pragma_synchronous · https://sq
 - **Silent error (SE):** an auto-accepted question whose L1 response (the selected option set, or blank) differs from the truth; a filled bubble read as blank is an SE. A question routed to review, including `UNREADABLE`, is *abstained*.
 - **SER** = SE ÷ questions; **AR** = abstained ÷ questions.
 - **Also tracked:** sheet SER (sheets with ≥ 1 SE); post-review residual error (blind double review, §13.4; appeal overturns, §17.5); ID mis-attribution, gated separately (§9.7).
-- **Context.** At 99.95% per answer, ≈ 4% of 100-question sheets carry an error (Hernández-Mier 2025); SER ≤ 10⁻⁵ means ≤ 1 silent error per 1,000 such sheets.
+- **Context.** At 99.95% per answer, about 5% of 100-question sheets carry at least one error (1 − 0.9995¹⁰⁰); Hernández-Mier (2025) found 3.85% of their sheets affected. SER ≤ 10⁻⁵ means ≤ 1 silent error per 1,000 such sheets.
 
-| Slice | Target (locked) | Labelled questions in the LTT split (0 errors, one-sided 95%), each × DEFF |
+| Slice | Target (locked) | LTT split for 0 errors, one-sided 95%: n_eff; raw questions at the DEFF floor of 2 |
 |---|---|---|
-| Standard (own forms, ADF, 200–300 dpi gray) | SER ≤ 1×10⁻⁵ at AR ≤ 0.5% | ≥ 300k (3,000 sheets) |
-| High-stakes | SER ≤ 2×10⁻⁶ at AR ≤ 2%; design target until certified | ≥ 1.5M (15k sheets) |
-| Bitonal; phone | Separate, e.g. SER ≤ 5×10⁻⁵ at AR ≤ 3% | ≥ 60k each |
+| Standard (own forms, ADF, 200–300 dpi gray) | SER ≤ 1×10⁻⁵ at AR ≤ 0.5% | n_eff ≥ 300k; ≥ 600k (6,000 sheets) |
+| High-stakes | SER ≤ 2×10⁻⁶ at AR ≤ 2%; design target until certified | n_eff ≥ 1.5M; ≥ 3M (30k sheets) |
+| Bitonal; phone | Separate, e.g. SER ≤ 5×10⁻⁵ at AR ≤ 3% | n_eff ≥ 60k; ≥ 120k each |
 | Identity (unit = booklet, no DEFF) | ≤ 10⁻⁴ per auto-accepted sheet at launch (shadow mode until certified); goal ≤ 10⁻⁶ by construction | ≈ 30k labelled *auto-accepted* sheets (≈ 33k labelled at 90% auto-accept); ≈ 3k for 10⁻³ |
 
 **Certification.**
-- **LTT is the certification:** P(SER > ε*) ≤ δ = 0.05 on the held-out LTT split (§8.7 step 8). The disjoint test split only confirms it, with its achieved bound (3/n_test at k = 0). Until certified, a slice publishes its achieved bound, never the target; for high-stakes, until the certifying split holds ≥ 1.5M × DEFF real labelled questions (n_eff ≥ 1.5M; ≥ 3M at the DEFF floor).
+- **LTT is the certification:** P(SER > ε*) ≤ δ = 0.05 on the held-out LTT split (§8.7 step 8). The disjoint test split only confirms it, with its achieved bound (3/n_eff,test = 3·DEFF/n_test at k = 0; for identity, where the booklet is the unit, 3/n_test). Until certified, a slice publishes its achieved bound, never the target; for high-stakes, until the certifying split holds ≥ 1.5M × DEFF real labelled questions (n_eff ≥ 1.5M; ≥ 3M at the DEFF floor).
 - **Identity** is certified per slice on the auto-accepted subset of the identity LTT split (method, n_acc ≥ 3.0/α, ID-only acceptance: §9.7). The 10⁻⁶ goal is not certifiable (≈ 3M labelled sheets).
 
 **Statistics.**
@@ -4780,7 +4798,8 @@ Key sources: https://www.sqlite.org/pragma.html#pragma_synchronous · https://sq
 ### 23.2 Benchmark corpus
 
 **Contents.**
-- **Real corpus, year 1:** ≥ 7,000 sheets × 100 questions from ≥ 20 institutions, ≥ 10 scanners and ≥ 5 printers: ≥ 300k questions in the LTT split + ≥ 300k in the test split + calibration crops, before DEFF inflation (§23.1). High-stakes and identity certification need more (§23.1); identity labels accrue in shadow mode (§9.7).
+- **Real corpus, year 1:** ≥ 13,000 sheets × 100 questions from ≥ 20 institutions, ≥ 10 scanners and ≥ 5 printers: ≥ 600k questions in the LTT split + ≥ 600k in the test split, sized at the DEFF floor of 2 (§23.1), plus calibration crops. Keying: ≈ 910 person-hours (§25.3). High-stakes and identity certification need more (§23.1); identity labels accrue in shadow mode (§9.7).
+- **Fallback.** If partners cannot supply 13,000 sheets by GA, GA publishes the achieved bound (e.g. ≤ 2×10⁻⁵ on 7,000 sheets), 10⁻⁵ is labelled "target", and the corpus keeps growing after GA.
 - **Coverage:** Latin and Arabic forms (RTL option order, Arabic-Indic ID digits); pen, pencil, phone and bitonal legacy forms. Small slices add §23.3 data, never for a certified bound.
 
 **Labels and splits.**
@@ -4843,16 +4862,16 @@ The AR–SER curve feeds the administrator UI and the operator-hours forecast (�
 
 | Gate | When | Contents | Fails on |
 |---|---|---|---|
-| G1 | Every PR, ≤ 15 min | Unit, property and golden tests; clippy; `cargo-deny`, `cargo-vet`, `cargo-auditable`; 10 min fuzz; `gungraun` | Any failure; +3% instructions without sign-off |
-| G2 | Nightly | Real corpus plus ≥ 500k semi-synthetic sheets; long fuzz; mutation testing; bare-metal pages/s; AI golden kits (§18.6) | SER upper bound above baseline; AR up > 10% relative in any slice; **any** new hall-of-shame error; a surviving scoring mutant; throughput −5% (proposed) |
-| G3 | Release | Decision identity (below); reference-laptop targets (§21.1); 24 h soak; crash-consistency run (§22.2); signed per-slice accuracy report; signed model manifests; SBOM; accessibility audit | A differing auto-accepted value; routing differences over budget; target missed; leak; invariant violation |
+| CI-1 | Every PR, ≤ 15 min | Unit, property and golden tests; clippy; `cargo-deny`, `cargo-vet`, `cargo-auditable`; 10 min fuzz; `gungraun` | Any failure; +3% instructions without sign-off |
+| CI-2 | Nightly | Real corpus plus ≥ 500k semi-synthetic sheets; long fuzz; mutation testing; bare-metal pages/s; AI golden kits (§18.6) | SER upper bound above baseline; AR up > 10% relative in any slice; **any** new hall-of-shame error; a surviving scoring mutant; throughput −5% (proposed) |
+| CI-3 | Release | Decision identity (below); reference-laptop targets (§21.1); §3.4 differentiator GA metrics (gaps G1–G11) measured on the reference laptops and recorded in the signed release report; 24 h soak; crash-consistency run (§22.2); signed per-slice accuracy report; signed model manifests; SBOM; accessibility audit | A differing auto-accepted value; routing differences over budget; a §21.1 or §3.4 target missed; leak; invariant violation |
 
 - **CI matrix:** `ubuntu-24.04`, `windows-2025`, `macos-15` (arm64), `macos-15-intel` (support until Aug 2027 unverified), Windows ARM64 (private-repo availability unverified).
 - **Decision identity** (mechanisms: §8.11, §9.4), on ≈ 200 golden pages, 10k crops and 2,000 identity pages:
   - **One machine:** across 1, 2 and N threads and 3 random page orders, every output (mark states, classes, conformal-set bitmasks, exceptions, identity decisions) MUST be bit-identical.
-  - **Across ISAs** (x86-64-v2, v3, v4; aarch64 on macOS and Windows): auto-accepted responses and identities MUST be identical; a difference blocks the release. Accept ↔ review routing differences (a value within one quantum of a threshold or band edge) are allowed at ≤ 1 per 10⁵ bubbles and ≤ 1 per 10³ identity pages (initial); G3 lists them with the largest deviation in quanta.
+  - **Across ISAs** (x86-64-v2, v3, v4; aarch64 on macOS and Windows): auto-accepted responses and identities MUST be identical; a difference blocks the release. Accept ↔ review routing differences (a value within one quantum of a threshold or band edge) are allowed at ≤ 1 per 10⁵ bubbles and ≤ 1 per 10³ identity pages (initial); CI-3 lists them with the largest deviation in quanta.
   - **Legs:** x86 runs under Intel SDE (`-nhm` v2, `-hsw` v3, `-skx` v4; unverified), exercising CPUID dispatch inside tract, `zune-jpeg` and `fast_image_resize` (`OMR_FORCE_ISA`, proposed, steers only own kernels); aarch64 runs natively.
-  - **Identity models** B′, C, D and PP-LCNet are in the gate (§9.4); one that fails stops counting toward auto-accept (§9.7) until fixed.
+  - **ORT decision-path models** B′, C, D and PP-LCNet are in the gate (§9.4). An identity model (B′, C, D) that fails stops counting toward auto-accept (§9.7) until fixed; a PP-LCNet failure blocks the release like any mark-path difference.
   - **Claim.** Until the bit-identical CNN kernel of §8.11 ships, the published claim is "identical auto-accepted decisions; review-routing differences measured per release".
 - **Runtime self-test** (SYS-008). A signed golden set ships with the app (≈ 20 pages, ≈ 2,000 mark and identity crops, a few MB), every item ≥ 4 quantization steps from every threshold and band edge on all reference legs, so legitimate ISA differences cannot fail it. It runs at first launch, after updates, on a CPU feature-level change and before high-stakes runs (≈ 5 s, est.). Decisions must equal the signed reference (logit deviations are logged), catching broken ISA paths, x64 emulation on ARM, tampering and libm drift; a mismatch disables recognition on that machine.
 
@@ -4877,7 +4896,7 @@ The AR–SER curve feeds the administrator UI and the operator-hours forecast (�
 - **Local fine-tuning** of the bubble and digit classifiers MAY come later (P3+, opt-in). A fine-tuned model is a new decision model: new hash, and it must pass the self-test, a local hold-out and per-assessment pinning.
 - **Opt-in upload** (per-institution consent plus a FERPA/GDPR addendum): option-bubble crops only (**ID, name and signature fields are excluded**, because ID columns encode digits), shuffled in batches of ≥ 500, with no coordinates, sheet linkage or EXIF.
 - **Label noise.** A correction that flips a p > 0.99 prediction needs a second reviewer. Reviewer reliability (§13.4) weights labels; only adjudicated labels enter calibration sets.
-- **Updates.** New models ship as Ed25519-signed (minisign) files with signed evaluation reports and pass G1–G3 (§23.6). Overturn rates and new hall-of-shame cases feed the next cycle.
+- **Updates.** New models ship as Ed25519-signed (minisign) files with signed evaluation reports and pass CI-1–CI-3 (§23.6). Overturn rates and new hall-of-shame cases feed the next cycle.
 
 Key sources: https://doi.org/10.3390/jimaging11090308 · https://doi.org/10.1001/jama.1983.03330370053031 · https://arxiv.org/abs/2110.01052 · https://arxiv.org/abs/2208.02814 · https://arxiv.org/abs/1705.08500 · https://arxiv.org/abs/1706.04599 · https://arxiv.org/abs/2106.00170 · https://pypi.org/pypi/albumentationsx/json
 
@@ -4906,7 +4925,7 @@ Requirements:
 | Lab PC without admin rights | Elevation probe | Per-user MSI or MSIX; no services or drivers |
 | VDI, Citrix or RDP without a GPU | Renderer init failure; crash flag at next start | Slint software renderer; persistent safe mode (SYS-030) |
 | VDI profile folder redirected to SMB | Filesystem probe (§14.2) | Refused as project root; locally mounted VHDX profile containers count as local (per-product behaviour unverified); ADMX sets a local root |
-| Antivirus quarantines a helper or model | Missing file or hash mismatch | SYS-006; repair prompt; the feature switches to its §4.4 fallback. A missing or tampered decision-path model halts recognition until repair or an Admin-started classical-only run (§22.1) |
+| Antivirus quarantines a helper or model | Missing file or hash mismatch | SYS-006; repair prompt; the feature switches to its §4.4 fallback. A missing or tampered mark-path model halts recognition until repair or an Admin-started classical-only run; a missing identity model only marks its channel `channel_unavailable`, so its booklets go to identity review (§22.1) |
 | Update offered mid-exam | Active batch, review or release | Deferred until idle, outside freeze windows |
 
 ### 24.2 Code signing
@@ -4924,7 +4943,7 @@ The legal entity's jurisdiction decides the Windows path (Q-02); e.g. a Saudi en
 
 ### 24.3 Licensing mechanics
 
-- **Licence file.** JCS-canonical JSON: `licence_id` (UUIDv7), licensee, edition, seat model and count, features, `valid_from`, `maintenance_until`, optional `expires`, `grace_days`, optional licence-server binding; Ed25519-signed, verified offline against embedded vendor keys by key ID. No phone-home, hardware fingerprint or dongle; licence checks make no network call (§19.8). Identity is the user or institution, so VMs carry no penalty.
+- **Licence file.** JCS-canonical JSON: `licence_id` (UUIDv7), licensee, edition, seat model and count, features, `valid_from`, `maintenance_until`, optional `expires`, `grace_days`, optional licence-server binding; Ed25519-signed, verified offline against embedded vendor keys by key ID. No phone-home, hardware fingerprint or dongle; licence checks make no vendor network call (§19.8); floating seats contact only the customer's self-hosted lease service. Identity is the user or institution, so VMs carry no penalty.
 - **Free** needs no licence file and never expires. **Pro**: one user, up to 3 devices, any OS; offline verification makes the device count contractual only (accepted trade-off).
 - **Floating seats** (Pro multi-seat for labs and VDI; Department is unlimited-user): a self-hosted licence service issues signed seat leases; standalone at GA, an `omr-server` module in P3. *Proposed:* 24 h TTL renewed hourly; offline borrow ≤ 14 days, matching the desktop offline grant (§15.4).
 - **Never block an in-progress exam** (any recognition run not yet released and exported). On expiry, lease loss or seat exhaustion, the exam keeps full function (scan, review, score, release, export) under a logged *emergency lease* reported as overage. After the grace period only new exam-project creation stops. Opening, viewing, exporting and verifying projects is always allowed in every edition.
@@ -4971,7 +4990,7 @@ All spikes run in parallel in P0. S1, S2 and S5 gate P1 scope; S9 gates design-p
 | ID | Spike | Weeks | Go criteria | If no-go |
 |---|---|---|---|---|
 | S1 | GUI shell (ADR-001, Slint 1.18) | 3 | All ADR-001 criteria S1–S6 (§5.2): 60 fps canvas with 5k overlays (2019 iGPU, RDP); 100k-row sort < 100 ms; the screen-reader task flow (criterion S3); Arabic display and editing, with physical-key (scan-code) events reaching the shell (unverified for Slint); cold start < 1 s on the 8-core reference laptop; installer < 60 MB | Qt 6.12 via cxx-qt 0.10; start on Qt directly if Q-01 makes a mirrored Arabic UI a GA requirement |
-| S2 | Recognition on a 1,000-page double-keyed corpus built in-house from the §23.7 hand-fill pack plus partner sheets (gray JPEG, colour JPEG, phone) | 4 | *(proposed)* ≤ 1 silent error per 100k questions on scanner slices at AR ≤ 1%; ≥ 100 pages/s on 4 cores | Force 300 dpi gray; widen hysteresis; invest in the CNN; re-plan P1 |
+| S2 | Recognition on a 1,000-page double-keyed corpus built in-house from the §23.7 hand-fill pack plus partner sheets (gray JPEG, colour JPEG, phone) | 4 | *(proposed)* 0 silent errors on the scanner slices at AR ≤ 1%, with the achieved one-sided bound reported per §23.1 (n_eff = n ÷ DEFF); ≥ 100 pages/s on 4 cores | Force 300 dpi gray; widen hysteresis; invest in the CNN; re-plan P1 |
 | S3 | `kornia-apriltag` 0.2.0 vs C `apriltag` 0.4 | 2 | Recall ≥ the C library at 3–4 px/module on photocopied 8 mm tags and blurred phone frames | C binding behind the same trait |
 | S4 | PDF ingest | 2 | *(proposed)* ≥ 95% of real MFP pages through image-XObject extraction; ≥ 100 pages/s; zero host crashes on fuzzed PDFs | More PDFium rasterization; `hayro` fallback |
 | S5 | Arabic digit and name HTR | 4 | *(proposed)* On ≥ 3k consented, licence-clean pilot sheets: per-box digit top-1 ≥ 99.0% (Western and Arabic-Indic); Arabic name CER ≤ 10%; ≥ 90% auto-accept on non-personalised sheets under the AB + C rule (§9.7), zero mis-attributions among auto-accepts | Arabic locales use personalised sheets (AB + E) at GA; names stay image clips |
@@ -4990,10 +5009,10 @@ Windows are indicative months from kickoff with the full team (§25.3).
 
 | Phase | Window | Scope | Exit criteria |
 |---|---|---|---|
-| P0 Foundations | M0–M2 | Crate boundaries (key-blindness enforced); 5-target CI with `cargo-deny`, `cargo-vet`, `cargo-auditable`, `cargo-cyclonedx`; `omr-model`, `omr-store`, event log, engine manifest; ingest fuzzing; S1–S9 and P0 checks; corpus programme and consent; certificates ordered; sizing of unitemized scope (§25.3) | ADR-001 decided; 1,000-page labelled corpus; ≥ 3 design partners (≥ 1 Arabic-locale) with fixed exam dates; legal opinion on AI Act Art. 6(3)/6(4), incl. profiling, before any EU partner use (Q-09) |
-| P1 MVP (design-partner beta) | M3–M6 | Own sheets (Typst, fiducials, page code, variants); scanner/PDF/hot-folder ingest; recognition; roster identity (bubbled ID, ID-box digits B/B′, QR page-code binding E); scoring L0–L6; review; CTT; CSV/XLSX; workspace and snapshot publish (§14.9); basic CLO (one course, one policy family); desktop Cedar policies with solo roles, key sealing and four-eyes via a local second principal or policy-gated self-approval (§15.5); P1 privacy minimum (below); Art. 12 logging and Art. 14 oversight documentation; first-batch supervised mode | Each partner grades ≥ 1 real exam; achieved SER bound ≤ 3×10⁻⁵ at AR ≤ 1% (≥ 100k × DEFF labelled questions: the S2 corpus plus keyed partner P1 sheets, §23.1); ≥ 100 pages/s on 4 cores; first result < 3 s; regrade ≤ 50 ms; 100k-page soak without abort; identity in shadow mode; draft ACR (VPAT 2.5 INT) if any partner is a US public institution |
-| P2 v1.0 GA | M7–M11 | All of §3.3, including fillable-PDF sheets, surveys, data grid and lock (§13.6), DB lookup (§9.2), on-screen marking (§13.7), changed-answer and similarity reports, rank lists, email delivery (§17.4), appeal register (§17.5) and `omr-cli schedule`. Also: full CLO engine (frameworks, PLO roll-up from snapshots, policies, report packs, closing the loop); local ID and name HTR; template library and legacy-form import (vector PDF + classical CV); migration kit; native-Rust desktop REST for Canvas, Moodle and the Q-03 market's primary LMS (others by CSV until P3); capture tiers A1–A3, eSCL and the Windows TWAIN agent (§7.1); approval bundles (`.omrapr`) and blind double review (§15.5, §13.4); standalone licence service; onboarding (first-run and new-exam flows, sample project, offline help); Typst reports; signed packaging; EN/ES/PT/DE UI with Arabic reports and exports (mirrored UI only if Q-01 = yes) | 100% parity; standard slice certified at the §2.4 SER/AR target, or its achieved bound published with the contract labelled "target" (§23.1); bitonal and phone bounds published; §2.4 performance on 2 reference laptops; identity certified ≤ 10⁻⁴ per slice, else shadow mode with mandatory confirmation; AI Act Art. 9–15 evidence (§19.6); external ACR; SBOM; security review; HECVAT/DPA templates (§19.8) |
-| P3 Institution | M12–M20 | Server mode (Postgres as workspace), sync, sneakernet bundles, server role bindings, SSO/SCIM, LTI 1.3 Advantage, OneRoster 1.2 REST, student portal links and appeal form; one native mobile companion (UniFFI) chosen by the Q-03 market; browser upload, document camera, and WIA, ImageCaptureCore and SANE agents (§7.1); AI pack; Rasch, DIF, inferential integrity analytics (Department); standard setting (§12.6); marker severity (§12.5; double-marked agreement is GA with §13.7); confidence-based marking; WASM component plugins (third-party connector tier); remaining desktop REST connectors | ASVS 5.0 L2 review; LTI certification sought; phone-slice targets met; AI gates per §18.6 |
+| P0 Foundations | M0–M2 | Crate boundaries (key-blindness enforced); 5-target CI with `cargo-deny`, `cargo-vet`, `cargo-auditable`, `cargo-cyclonedx`; `omr-model`, `omr-store`, event log, engine manifest; ingest fuzzing; S1–S9 and P0 checks; corpus programme and consent; certificates ordered; sizing of unitemized scope (§25.3) | ADR-001 decided; 1,000-page labelled corpus; ≥ 3 design partners (≥ 1 Arabic-locale) with fixed exam dates; ExamSoft and QSF export layouts obtained (PAR-08, Q-23); legal opinion on AI Act Art. 6(3)/6(4), incl. profiling, before any EU partner use (Q-09) |
+| P1 MVP (design-partner beta) | M3–M6 | Own sheets (Typst, fiducials, page code, variants); scanner/PDF/hot-folder ingest; recognition; roster identity (bubbled ID, ID-box digits B/B′, QR page-code binding E); scoring L0–L6; review; CTT; CSV/XLSX; workspace and snapshot publish (§14.9); basic CLO (one course, one policy family); desktop Cedar policies with solo roles, key sealing and four-eyes via a local second principal or policy-gated self-approval (§15.5); P1 privacy minimum (below); Art. 12 logging and Art. 14 oversight documentation; first-batch supervised mode | Each partner grades ≥ 1 real exam; achieved SER bound ≤ 3×10⁻⁵ at AR ≤ 1% (≥ 100k × DEFF labelled standard-slice questions, i.e. ≥ 200k ≈ 2,000 sheets at the DEFF floor: the S2 corpus's scanner pages plus keyed partner P1 sheets for the rest, ≥ 1,000, §23.1); ≥ 100 pages/s on 4 cores; first result < 3 s; regrade ≤ 50 ms; 100k-page soak without abort; identity in shadow mode; draft ACR (VPAT 2.5 INT) if any partner is a US public institution |
+| P2 v1.0 GA | M7–M11 | All of §3.3, including fillable-PDF sheets, surveys, data grid and lock (§13.6), DB lookup (§9.2), on-screen marking (§13.7), changed-answer and similarity reports, rank lists, email delivery (§17.4), appeal register (§17.5) and `omr-cli schedule`. Also: full CLO engine (frameworks, PLO roll-up from snapshots, policies, report packs, closing the loop); local name HTR (channel C: Latin; Arabic per spike S5) and Arabic-Indic hardening of B/B′; template library and legacy-form import (vector PDF + classical CV); migration kit; native-Rust desktop REST for Canvas, Moodle and the Q-03 market's primary LMS (others by CSV until P3); capture tiers A1–A3, eSCL and the Windows TWAIN agent (§7.1); approval bundles (`.omrapr`), desktop-to-desktop review bundles (§15.2 format, local base seq) and blind double review (§15.5, §13.4); standalone licence service; onboarding (first-run and new-exam flows, sample project, offline help); Typst reports; signed packaging; EN/ES/PT/DE UI with Arabic reports and exports (mirrored UI only if Q-01 = yes) | 100% parity; standard slice certified at the §2.4 SER/AR target on the ≥ 13,000-sheet year-1 corpus (§23.2); if partners supply fewer sheets by GA, the achieved bound is published (e.g. ≤ 2×10⁻⁵ on 7,000 sheets) with 10⁻⁵ labelled "target" and the corpus grows after GA (§23.1); bitonal and phone bounds published; §2.4 performance on 2 reference laptops; identity certified ≤ 10⁻⁴ per slice, else shadow mode with mandatory confirmation; AI Act Art. 9–15 evidence (§19.6); external ACR; SBOM; security review; HECVAT/DPA templates (§19.8) |
+| P3 Institution | M12–M20 | Server mode (Postgres as workspace), sync, server import of sneakernet bundles, server role bindings, SSO/SCIM, LTI 1.3 Advantage, OneRoster 1.2 REST, student portal links and appeal form; one native mobile companion (UniFFI) chosen by the Q-03 market; browser upload, document camera, and WIA, ImageCaptureCore and SANE agents (§7.1); AI pack; Rasch, DIF, inferential integrity analytics (Department); standard setting (§12.6); marker severity (§12.5; double-marked agreement is GA with §13.7); confidence-based marking; WASM component plugins (third-party connector tier); remaining desktop REST connectors | ASVS 5.0 L2 review; LTI certification sought; phone-slice targets met; AI gates per §18.6 |
 | P4 AI extensions | M18–M26 | Learned template detector (RF-DETR/D-FINE, synthetic data); short-answer grouping on the §13.7 lane; NL query; second mobile companion platform | Per-feature golden sets (e.g. ≥ 95% exact-plan accuracy on ≥ 200 NL questions); auto-disable on low acceptance |
 
 **P1 privacy and security minimum.** No design partner processes real student data before:
@@ -5015,16 +5034,18 @@ Authoritative for effort; §5.6 shows only the engineering baseline by work pack
 
 | Item | Slint | Qt/cxx-qt |
 |---|---|---|
-| Engineering baseline (§5.6): core, UI shell, scanners, PDF/Typst, packaging, accessibility | 31–40 EM | 34–45 EM |
+| Engineering baseline (§5.6): core, UI shell, scanners, PDF/Typst, packaging, accessibility | 31–40 EM | ≈ 33–43 EM (the §5.6 work packages sum to 32.5–43) |
 | ML data and models: generator, CNN, Latin and Arabic HTR fine-tuning, conformal calibration | 5–8 EM | 5–8 EM |
 | QA automation from P1 | ≈ 8 EM | ≈ 8 EM |
 | Psychometric and CLO validation | 1–2 EM | 1–2 EM |
-| Corpus keying: ≥ 7,000 sheets (§23.2), double-blind at ~2 min per sheet per keyer plus ~10% adjudication (≈ 490 person-hours) | ≈ 2.5–3 EM | ≈ 2.5–3 EM |
-| **Itemized total, before contingency** | **≈ 48–61 EM** | **≈ 51–66 EM** |
-| **With 20% contingency** *(proposed)* | **≈ 58–73 EM** | **≈ 61–79 EM** |
+| Corpus keying: ≥ 13,000 sheets (§23.2), double-blind at ~2 min per sheet per keyer plus ~10% adjudication (≈ 910 person-hours) | ≈ 5.5 EM | ≈ 5.5 EM |
+| **All-in, before contingency** | **≈ 51–64 EM** | **≈ 53–67 EM** |
+| **All-in, with 20% contingency** *(proposed)* | **≈ 61–77 EM** | **≈ 63–80 EM** |
+| Engineering capacity staffed: ≈ 8–9 people for the full 12 months (M0–M11), QA included | ≈ 87–93 EM | ≈ 87–93 EM |
+| **Reserve** for scope sized at P0 exit (capacity minus the with-contingency estimate) | **≈ 10–32 EM** | **≈ 7–30 EM** |
 
-- **Not itemized; sized at P0 exit:** desktop LMS REST, PII vault, audit chain, desktop Cedar, plugin runtime, interop formats, surveys, legacy import, appeals, i18n, workspace (§14.9), and GA parity items the baseline omits (fillable PDF, data grid and rules, on-screen marking, email delivery, scheduling). Moving the WIA, ImageCaptureCore and SANE agents to P3 frees ≈ 3–3.5 EM of the baseline scanner package for these.
-- **Team:** ≈ 8–9 people for ≈ 12 months (M0–M11) to GA (roles below), ≈ 87–93 EM of engineering capacity (QA included, designer excluded). The ≈ 15–35 EM above the with-contingency total is the reserve for unitemized scope; if P0 sizing exceeds it, the §25.2 cut list applies first, then GA moves.
+- **Not itemized; sized at P0 exit:** every §25.2 P2 item that no §5.6 work package covers, including desktop LMS REST, PII vault, audit chain, desktop Cedar, plugin runtime, interop formats, surveys, legacy import, appeals, i18n, workspace (§14.9); fillable PDF, data grid and rules (§13.6), on-screen marking (§13.7), email delivery, scheduling; DB lookup (§9.2); changed-answer and similarity reports (§12.7); rank lists (§17.2); template library and migration kit (§3.5, §6.10); standalone licence service (§24.3); approval and review bundles and `omr-verify approve` (§15.5); onboarding and offline help; CLO report packs and closing the loop (§11.6–§11.7); MFP push over FTP/IMAP (§7.1 A3); AI Act Art. 9–15 evidence and HECVAT/DPA templates (§19.6, §19.8). Moving the WIA, ImageCaptureCore and SANE agents to P3 frees ≈ 3–3.5 EM of the baseline scanner package for these.
+- **Team:** roles below. The capacity row excludes a 0.5 designer and a part-time psychometrician and domain expert. If P0 sizing exceeds the reserve, the §25.2 cut list applies first, then GA moves. The 0.25 FTE ongoing packaging upkeep (§5.6) is inside the platform engineer's capacity.
 - A late shell switch costs 6–9 EM (§5.2); P3/P4 scope is sized at P2 exit.
 
 | Role | Allocation P0–P2 | Owns |
@@ -5033,7 +5054,7 @@ Authoritative for effort; §5.6 shows only the engineering baseline by work pack
 | Rust: imaging, recognition, PDF | 1.5–2 | §7, §8, §21 |
 | Rust: data, scoring, CLO, analytics, exports | 1 | §10–§12, §14, §16 |
 | UI engineer + product designer (0.5) | 1.5 | Shell, review UX, onboarding |
-| Platform: capture agents, packaging, CI | 1 | §7.1, §24 |
+| Platform: capture agents, packaging (incl. 0.25 FTE upkeep), CI | 1 | §7.1, §24 |
 | ML engineer | 1 | §8.7, §9.4, §23.3 |
 | QA / test automation | 1 from P1 | §23 |
 | Psychometrician; accreditation domain expert | 0.25–0.5; 0.25 | Formulas, thresholds, oracles; report-pack specs |
@@ -5064,7 +5085,7 @@ Likelihood (L) and impact (I) are rated H/M/L.
 | ID | Risk | L | I | Mitigation | § |
 |---|---|---|---|---|---|
 | R-01 | Accuracy contract unreachable on low-quality school scans (central product risk) | M | H | Enforced capture spec; check sheet; per-slice targets; tunable AR; supervised first batch | §7.2, §23 |
-| R-02 | Not enough labels to certify the §2.4 targets (label counts in §23.1); sheet clustering (DEFF) inflates every question count | H | H | Year-1 corpus ≥ 7,000 sheets; semi-synthetic generator (never quoted alone); shadow mode; achieved bounds until certified; high-stakes stays a design target | §23.1, §23.2, §9.7 |
+| R-02 | Not enough labels to certify the §2.4 targets (label counts in §23.1); sheet clustering (DEFF) inflates every question count | H | H | Year-1 corpus ≥ 13,000 sheets, else 10⁻⁵ labelled "target" (§2.4); semi-synthetic generator (never quoted alone); shadow mode; achieved bounds until certified; high-stakes stays a design target | §23.1, §23.2, §9.7 |
 | R-03 | New scanners or printers break conformal exchangeability; review rate spikes | H | M | Per-device recalibration; 2% stratified supervised batch; drift monitoring | §23.5 |
 | R-04 | Scanner firmware "enhancements" silently destroy marks | H | H | Device profiles; flag (CAP-003) or refuse (CAP-004) risky settings; duplex parity check | §7.2 |
 | R-05 | Slint RTL (#2294) and bidi editing (#7841) late for MENA | M | H | Q-01; S1; warm Qt fallback; mirrored UI not parity (PAR-10); dated SixtyFPS commitment | §5.2 |
@@ -5072,7 +5093,7 @@ Likelihood (L) and impact (I) are rated H/M/L.
 | R-07 | TWAIN driver hangs; PDFium crashes or ABI drift | H | M | Out-of-process agents and workers; watchdogs; quirks database; fuzzing | §7.1, §22 |
 | R-08 | Licence contamination (AGPL/GPL code, NC weights or datasets, Qt GPL modules, static LGPL) | M | H | `cargo-deny`; model-licence register; legal review | §5.4 |
 | R-09 | Decisions differ across CPUs or versions | M | H | Fixed-point features, hysteresis, FP32 CPU, no INT8; quantized identity log-likelihoods; cross-ISA CI under Intel SDE plus aarch64 (S8) | §14.6, §23.6 |
-| R-10 | Effort underestimate: unitemized GA scope is sized only at P0 exit | H | H | P0 sizing against the §25.3 capacity reserve; spike gates; cut list, then GA date; P3 deferrals | §25.3 |
+| R-10 | Effort underestimate: unitemized GA scope is sized only at P0 exit | H | H | P0 sizing against the §25.3 capacity reserve (≈ 10–32 EM Slint, ≈ 7–30 EM Qt, over ≈ 61–77 / ≈ 63–80 EM with contingency); spike gates; cut list, then GA date; P3 deferrals | §25.3 |
 | R-11 | No code-signing eligibility, or long certificate lead time | M | M | Order OV + HSM in P0; decide the entity (Q-02) | §24.2 |
 | R-12 | Remark EULA blocks benchmark publication; reverse-engineering exposure | M | M | Legal review; own benchmark; customer parallel runs | §3.5 |
 | R-13 | Commodity OMR goes free; strong incumbent (Gravic likely behind TestFlex, unverified) | H | H | Monetise outcomes, integrations and assurance; free funnel; open format | §24.4 |
@@ -5103,7 +5124,7 @@ Likelihood (L) and impact (I) are rated H/M/L.
 - Q-05: Open-core (decided in P3)?
 - Q-06: Are the price points acceptable to partners?
 - Q-07: Minimum OS versions (Windows 10 ESU, oldest macOS).
-- Q-24: Approve the team and budget of §25.3 (≈ 8–9 people for ≈ 12 months to GA; ≈ 58–73 EM with contingency).
+- Q-24: Approve the team and budget of §25.3: ≈ 8–9 people for the full 12 months (M0–M11) to GA, ≈ 87–93 EM of engineering capacity plus a 0.5 designer and part-time psychometrician and domain expert; all-in estimate ≈ 61–77 EM (Slint) / ≈ 63–80 EM (Qt) with 20% contingency; the remainder (≈ 10–32 / ≈ 7–30 EM) is the reserve for scope sized at P0 exit.
 
 *Legal*
 - Q-08: Remark EULA benchmark clause; reverse-engineering scope (DMCA §1201(f) vs EU Art. 6); nominative trademark use.
@@ -5121,7 +5142,7 @@ Likelihood (L) and impact (I) are rated H/M/L.
 - Q-16: SANE linking exception; TWAINDSM; SQLCipher CE text; CopyDetect (probably GPL); heap exclusion in `minidumper` (P0 check, §25.1).
 - Q-17: MADBase, AHDBase and HODA terms; MiniCPM-V-4.5 and Moondream 3 licences.
 - Q-18: Qt 6.12 LTS status and cxx-qt support window; CycloneDX version emitted by `cargo-cyclonedx` 0.5.9.
-- Q-23: ExamSoft and Questionmark QSF export layouts; AcroForm writing in `pdf-writer`/`krilla`; the ODBC crate and its version.
+- Q-23: ExamSoft and Questionmark QSF export layouts (P0 exit, PAR-08); AcroForm writing in `pdf-writer`/`krilla`; the ODBC crate and its version.
 
 *Unverified figures*
 - Q-19: All measured anchors come from synthetic sheets on a 4-vCPU VM; laptop per-core speed, `tract` on ARM64, the progressive-JPEG penalty and antivirus per-file overhead are unmeasured.
@@ -5233,7 +5254,7 @@ Raised by score runs (§10), CLO computation (§11) and item analysis (§12); ne
 | SCO-017 | Boundary student | Final value within the CSEM band or the rounding ε of a grade boundary | Boundary list for review | INFO | Student | §10.2, §12.6 |
 | SCO-018 | Low or negative reliability (α) | α < 0.5, or negative | Hint: mis-key, multidimensionality, or a mis-scanned batch (check person fit, SCO-026) | WARN | Exam | §12.1 |
 | SCO-019 | Exploitable policy | Pick-N with no cap; PS1/t or PS50 on a select-all item; negative marking with no floor | Warning at policy setup; suggest Ripkey or plus/minus, or a floor | WARN | Exam | §10.4, §10.5 |
-| SCO-020 | Post-release change pending approval | Key, void, curve, policy, weight or grade-scale change after `ScoresPublished` | Not effective until four-eyes approval (§10.8, §15.5); impact report; SUPERSEDED watermark; re-push | ERROR | Exam | §10.8 |
+| SCO-020 | Post-release change pending approval | After `ScoresPublished`: a key, void, curve, policy, weight or grade-scale change, or an L1 correction (`ResponseCorrected`, rubric re-mark), `IndividualOverride` or re-run adoption (`RERUN_ACCEPTED`) that changes a released student's result | Not effective until four-eyes approval (§10.8, §15.5); impact report; SUPERSEDED watermark; re-push | ERROR | Exam | §10.8 |
 | SCO-021 | Stale released scores (a newer score run exists) | Released or exported scores computed under a superseded key, policy or roster snapshot | Recompute, diff, re-release | ERROR | Exam | §10.8 |
 | SCO-022 | Form means differ significantly | Welch ANOVA across forms (each n_f ≥ 20), p < 0.01 | Equating offered only under §10.3 conditions (every n_f ≥ 100, declared random groups; make-up and accommodation forms never equated, per-form % of M_f); policy-gated, never silent | WARN | Exam | §10.3 |
 | SCO-023 | Small N | Item statistics N < 30; CLO N_c < 10 (sub-reason `clo_small_n`); report cells n < 5 | Bootstrap CIs, suppression, low-confidence badges | INFO | Exam, OutcomeReport | §12.3, §11.3 |
@@ -5243,7 +5264,7 @@ Raised by score runs (§10), CLO computation (§11) and item analysis (§12); ne
 | SCO-027 | Suspicious key pattern at publish | Multiple marks on an SBA key without explicit multi-accept; letter distribution χ² p < 0.01; a run of ≥ 5 identical letters | Confirm with a reason | WARN | Exam | §10.1 |
 | SCO-028 | Unparseable grid-in | Parser rejects the bubbled value (e.g. "1/0", a gap column) | Score 0; listed | INFO | Booklet | §10.4 |
 | SCO-029 | Grade-scale gap, overlap or non-increasing boundary | Validation of the half-open intervals over (−∞, +∞) | Grade scale refused | BLOCKER | Exam | §10.6 |
-| SCO-030 | Sections on different key, mapping-set or policy versions | Version compare across sections of one assessment | Pooled statistics and pooled CLO blocked until aligned or acknowledged; per-section results unaffected | WARN | Exam, OutcomeReport | §10.8, §11.3 |
+| SCO-030 | Sections on different key, mapping-set or policy versions | Version compare across sections of one assessment | Pooled statistics and pooled CLO blocked until aligned; per-section results unaffected | WARN | Exam, OutcomeReport | §10.8, §11.3 |
 | SCO-031 | "Absent" bubble filled but answers present | Admin bubble vs responses | Review; never auto-zero | WARN | Booklet | §10.8 |
 | SCO-032 | Draft, proposed or imported mappings used in an official report | Mapping status ≠ approved | Watermark; approval queue; blocks accreditation export | WARN | OutcomeReport | §11.2 |
 | SCO-033 | Provisional CLO result (incomplete or make-up pending) | Roster vs sheets; later sitting pending (§10.9); `Pending` responses | Missing-data policy; N per CLO shown; result labelled provisional | INFO | OutcomeReport | §11.3 |
@@ -5261,7 +5282,7 @@ Installation-level conditions are recorded with Exam scope in each project open 
 | SYS-003 | Stage timeout or stalled page | Deadlines (§22.4): decode 2 s, registration 1 s, read 1 s, PDF render 30 s; watchdog every 500 ms. OCR/HTR timeouts (5 s) mark the channel `timed_out` instead (§9.4) | Overrun rule (§22.4): cancel; page BLAKE3 to the session quarantine list; one out-of-process re-run of the same path at 4×; second overrun → quarantine. Never an automatic path change (alternate path: operator re-run, `path=alternate`). Pool replaced at most once per batch; another stuck thread pauses ingest | ERROR | Page | §22.4 |
 | SYS-004 | Disk space low or full | Preflight: batch estimate × 1.3 plus tile-cache cap; low-water mark max(2 GB, min(5 %, 20 GB)); `ENOSPC`, `SQLITE_FULL`, `ERROR_DISK_FULL` | Evict `cache/`, then pause ingest and scanner; release the 128 MB reserve to save state; drop nothing scanned; resume when space is freed | WARN (low) / ERROR (full) | Batch | §22.3 |
 | SYS-005 | Memory pressure | Process-tree private memory vs the §21.5 budget (every 500 ms); Windows `LowMemoryResourceNotification` and commit at 85 % of budget; macOS `DispatchSource`; Linux PSI trigger (kernel ≥ 6.5), else `some avg10` polling plus cgroup v2 `memory.events` | Ladder: drop image LRUs, halve byte budget and workers, unload OCR/HTR models and AI-pack processes, pause ingest | INFO | Batch | §22.3 |
-| SYS-006 | Model, helper or DLL missing (incl. antivirus quarantine), or hash or build mismatch | BLAKE3 vs engine manifest; signature; handshake `build_sha`; `LoadLibrary` error | Refuse to load. Decision-path model: recognition halts for pending batches; repair install, or an Admin classical-only run (§22.1). Optional helper: its §4.4 fallback. AI-pack model or optional feature: off | BLOCKER (decision path) / WARN | Batch | §4.4, §19.7, §22.1 |
+| SYS-006 | Model, helper or DLL missing (incl. antivirus quarantine), or hash or build mismatch | BLAKE3 vs engine manifest; signature; handshake `build_sha`; `LoadLibrary` error | Refuse to load. Mark-path model (tract CNN, PP-LCNet orientation): recognition halts for pending batches; repair install, or an Admin classical-only run (§22.1) (BLOCKER). Identity model (B′, C, D): mark recognition continues; the channel is recorded `channel_unavailable` in the identity-run manifest, and every booklet where it applies goes to identity review, never auto-accepted on the remaining channels (§9.4) (ERROR). Optional helper: its §4.4 fallback; AI-pack model: off (WARN) | BLOCKER / ERROR / WARN | Batch | §4.4, §9.4, §19.7, §22.1 |
 | SYS-007 | Engine changed since the last run | Engine manifest hash ≠ the project's | No silent re-recognition; an explicit re-run creates a new run plus a diff | INFO | Exam | §14.6 |
 | SYS-008 | Decision self-test mismatch | Golden crops at first run or after an update give decisions ≠ reference | Recognition disabled on this machine for pending batches; diagnostics bundle | BLOCKER | Batch | §23.6, §23.7 |
 | SYS-009 | Plugin trap or capability violation | Rhai operation limit; WASM trap or fuel exhaustion (epoch overruns: SYS-003, §22.4); capability denial; schema validation | Kill and quarantine the plugin; mark affected results. Exporters and connectors fall back to built-ins; scoring rules raise SCO-009 | WARN | Exam | §16.5 |
@@ -5269,7 +5290,7 @@ Installation-level conditions are recorded with Exam scope in each project open 
 | SYS-011 | Audit-chain verification failure | Hash mismatch, gap or bad checkpoint signature | Read-only; release blocked; incident report naming the first bad seq | BLOCKER | Exam | §14.4 |
 | SYS-012 | LMS or SIS push failure | 429/5xx, auth error, unenrolled student; outbox per student × line item | Back-off with jitter, honouring `Retry-After`; "released" only after read-back confirms; delivery stays pending once retries are exhausted. Not a gate input (§13.1) | ERROR | Student | §16.6 |
 | SYS-013 | LMS gradebook divergence | Read-back ≠ last pushed value | Never overwrite; `divergence` task (§15.3) | WARN | Student | §16.6 |
-| SYS-014 | Capture fault (jam, driver hang, agent crash) | Agent event or EOF; transfer deadline; expected vs received count; short image | Spooled pages survive; resume and dedupe; rescan list | WARN | Batch | §7.1, §22.5 |
+| SYS-014 | Capture fault (jam, driver hang, agent crash, or main process died during a scan; the last is raised at restart beside SYS-031) | Agent event or EOF; transfer deadline; expected vs received count; short image; crash flag with an open scan session | Spooled pages survive; resume and dedupe; rescan list | WARN | Batch | §7.1, §7.4, §22.5 |
 | SYS-015 | Unsafe project location | Network filesystem, UNC path, cloud-sync root | Refuse the live project; offer copy-to-local; backups and exports may go there | BLOCKER | Exam | §14.2 |
 | SYS-016 | Project schema newer than the app | `user_version` > supported | Open read-only; prompt to upgrade | WARN | Exam | §14.7 |
 | SYS-017 | Key unwrap failure | Keychain entry missing, or the KEK unwrap fails | Recovery key or escrow; otherwise unrecoverable by design | BLOCKER | Exam | §19.2 |
@@ -5316,6 +5337,7 @@ Key sources: https://consensus.app/papers/details/95ba2ba158a85920b65f680a801f8b
 | CSEM / SEM | (Conditional) standard error of measurement |
 | CTC | Connectionist temporal classification. A recognizer output head that allows the exact likelihood of any candidate string to be computed |
 | CTT | Classical test theory: item difficulty, discrimination, KR-20, Cronbach's α |
+| DEFF | Design effect: the inflation of sampling variance because errors cluster within sheets. Certification uses n_eff = n ÷ DEFF, with a floor of 2 (§23.1) |
 | D (normalized darkness) | D = (B − I)/(B − K): pixel darkness relative to local paper white B and measured ink black K |
 | DIF | Differential item functioning (Mantel–Haenszel; ETS A/B/C) |
 | DLT, LM, RANSAC, SPRT, ECC, TPS | Direct linear transform; Levenberg–Marquardt; random sample consensus; sequential probability ratio test; enhanced correlation coefficient alignment; thin-plate spline |
