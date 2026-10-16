@@ -111,6 +111,11 @@ pub const KEY_AWARE: &[&str] = &[
 ];
 /// GUI toolkits restricted by R1.
 pub const GUI_TOOLKITS: &[&str] = &["slint", "cxx-qt", "cxx-qt-lib", "qt"];
+/// R6 audited allowlist: crates allowed `#![deny(unsafe_code)]` instead of `forbid`, each with the
+/// reason. The only `allow(unsafe_code)` in such a crate must sit directly on the module that includes
+/// generated code.
+pub const R6_AUDITED: &[(&str, &str)] =
+    &[("shell-slint", "Slint-generated code expands allow(unsafe_code); scoped to `mod ui` only")];
 /// Test-only crates restricted by R8.
 pub const TEST_ONLY: &[&str] = &[
     "omr-sim",
@@ -161,8 +166,25 @@ pub fn violations(ws: &[Krate]) -> Vec<String> {
             }
         }
         // R6
+        let audited = R6_AUDITED.iter().any(|(n, _)| *n == k.name);
         for root in &k.roots {
             let src = std::fs::read_to_string(root).unwrap_or_default();
+            if audited && src.contains("#![deny(unsafe_code)]") {
+                let allows: Vec<usize> =
+                    src.lines().enumerate().filter(|(_, l)| l.contains("allow(unsafe_code)")).map(|(i, _)| i).collect();
+                let lines: Vec<&str> = src.lines().collect();
+                let ok = allows.iter().all(|&i| {
+                    lines.iter().skip(i + 1).take(3).any(|l| l.trim_start().starts_with("mod ")) &&
+                        src.contains("slint::include_modules!()")
+                });
+                if !ok || allows.len() > 1 {
+                    v.push(format!(
+                        "R6 violated: audited crate `{}` has `allow(unsafe_code)` outside the generated-code module. Fix: keep exactly one `#[allow(unsafe_code)]` directly on `mod ui {{ slint::include_modules!(); }}`.",
+                        k.name
+                    ));
+                }
+                continue;
+            }
             if !src.contains("#![forbid(unsafe_code)]") {
                 v.push(format!(
                     "R6 violated: `{}` root {} lacks `#![forbid(unsafe_code)]`. Fix: add it; unsafe code needs an audited allowlist entry (§4.3 R6).",
