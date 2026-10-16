@@ -86,7 +86,11 @@ impl TagDetector for KorniaDetector {
         let Ok(mut dec) = AprilTagDecoder::new(cfg, size) else {
             return Vec::new();
         };
-        let Ok(dets) = dec.decode(&k) else {
+        // A young third-party detector: a panic on odd input becomes "no tags" (REG-001)
+        // instead of taking the batch down.
+        let decoded =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| dec.decode(&k))).ok();
+        let Some(Ok(dets)) = decoded else {
             return Vec::new();
         };
         let mut out: Vec<TagHit> = dets
@@ -146,8 +150,9 @@ struct Window {
 }
 
 fn windows(width: usize, height: usize, side_px: usize) -> [Window; 4] {
-    let w = side_px.min(width.div_ceil(2) + side_px / 4).min(width).max(1);
-    let h = side_px.min(height.div_ceil(2) + side_px / 4).min(height).max(1);
+    // Windows may overlap on small images; duplicate hits are removed afterwards.
+    let w = side_px.clamp(1, width.max(1));
+    let h = side_px.clamp(1, height.max(1));
     [
         Window { x0: 0, y0: 0, w, h },
         Window {
@@ -263,10 +268,7 @@ pub(crate) fn search(det: &dyn TagDetector, img: &GrayImage, cfg: &TagConfig) ->
             let mut found = Vec::new();
             for &f in &retries {
                 found = detect_in(det, image, win, f, cfg.max_hamming);
-                if found
-                    .iter()
-                    .any(|h| cfg.known_tag_sets.contains(&h.set()))
-                {
+                if found.iter().any(|h| cfg.known_tag_sets.contains(&h.set())) {
                     break;
                 }
             }
@@ -279,7 +281,7 @@ pub(crate) fn search(det: &dyn TagDetector, img: &GrayImage, cfg: &TagConfig) ->
 
     let hits = run(img);
     if let Some((set, tags)) = choose(&hits, cfg)
-        && (tags.len() >= 3 || !mirrored_better(det, img, cfg, &run, tags.len()))
+        && (tags.len() >= 3 || !mirrored_better(img, cfg, &run, tags.len()))
     {
         return TagSearch {
             all_ids: hits.iter().map(|h| h.id).collect(),
@@ -325,7 +327,6 @@ pub(crate) fn search(det: &dyn TagDetector, img: &GrayImage, cfg: &TagConfig) ->
 /// With only two tags the arrangement carries no winding; prefer the mirrored hypothesis
 /// only if it yields more tags of one set.
 fn mirrored_better(
-    _det: &dyn TagDetector,
     img: &GrayImage,
     cfg: &TagConfig,
     run: &dyn Fn(&GrayImage) -> Vec<TagHit>,
@@ -368,6 +369,22 @@ mod tests {
     }
 
     #[test]
+    fn detector_survives_odd_images() {
+        let d = KorniaDetector;
+        for (w, h) in [(1, 1), (15, 15), (17, 40), (64, 64), (300, 37)] {
+            let noise = GrayImage::from_fn(w, h, |x, y| ((x * 7919 + y * 104_729) % 251) as u8);
+            for ds in 1..=4 {
+                assert!(d.detect(&noise, ds).is_empty() || w >= 64);
+            }
+            let flat = GrayImage::new(w, h, 0);
+            assert!(d.detect(&flat, 2).is_empty());
+        }
+        let cfg = TagConfig::default();
+        let s = search(&d, &GrayImage::new(40, 40, 255), &cfg);
+        assert!(s.set.is_none() && s.tags.is_empty());
+    }
+
+    #[test]
     fn set_choice_and_winding() {
         let cfg = TagConfig::default();
         let upright = [
@@ -395,7 +412,11 @@ mod tests {
         ];
         assert!(choose(&mirrored, &cfg).is_none());
         // Proof tag set is recognised as set 3.
-        let proof = [hit(12, 10.0, 10.0), hit(13, 100.0, 10.0), hit(14, 100.0, 140.0)];
+        let proof = [
+            hit(12, 10.0, 10.0),
+            hit(13, 100.0, 10.0),
+            hit(14, 100.0, 140.0),
+        ];
         assert_eq!(choose(&proof, &cfg).unwrap().0, 3);
         // A lone tag is not enough.
         assert!(choose(&upright[..1], &cfg).is_none());

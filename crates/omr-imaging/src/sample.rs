@@ -141,7 +141,23 @@ impl DiskSum {
 
 /// Sums ink over the disk of radius `r` centred at `(cx, cy)`; the pixel set is
 /// `{(x, y) : (x + 0.5 − cx)² + (y + 0.5 − cy)² ≤ r²}` (the prototype's definition).
+///
+/// A non-finite or negative radius, a non-finite centre, or a centre more than 10⁹ px away
+/// yields an empty, [`DiskSum::clipped`] sum (never a reading).
 pub fn disk_sum(img: &GrayImage, cx: f64, cy: f64, r: f64) -> DiskSum {
+    const FAR: f64 = 1e9;
+    if !(cx.is_finite() && cy.is_finite() && r.is_finite())
+        || r < 0.0
+        || cx.abs() > FAR
+        || cy.abs() > FAR
+        || r > FAR
+    {
+        return DiskSum {
+            ink: 0,
+            count: 0,
+            expected: 1,
+        };
+    }
     let r2 = r * r;
     let x0 = (cx - r).floor() as i64;
     let x1 = (cx + r).ceil() as i64 + 1;
@@ -229,5 +245,16 @@ mod tests {
         assert!(c.clipped());
         let white = GrayImage::new(40, 40, 255);
         assert_eq!(disk_sum(&white, 20.0, 20.0, 5.0).darkness_q10(), 0);
+        // Degenerate geometry is clipped (unreadable), never a reading.
+        for (x, y, r) in [
+            (f64::NAN, 20.0, 5.0),
+            (20.0, f64::INFINITY, 5.0),
+            (20.0, 20.0, f64::NAN),
+            (20.0, 20.0, -1.0),
+            (1e300, 20.0, 5.0),
+        ] {
+            let s = disk_sum(&img, x, y, r);
+            assert!(s.clipped() && s.count == 0, "{x} {y} {r}: {s:?}");
+        }
     }
 }

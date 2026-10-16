@@ -1,0 +1,9 @@
+﻿SO,Student outcome,Course,Term,CLO,PLO,Strength,Assessment methods,N,Target %,Result,95% CI low,95% CI high,Verdict,FCAR flag,SO result %,SO target %,SO verdict,Actions
+SO1,"Identify, formulate and solve complex engineering problems",CS 101,1448/1,CLO1,K1,M/3,Quiz 1 Q1–2 (threshold-proportion),6,70.0,83.3,43.6,97.0,"attained (≈ target, 95% CI)",yellow,76.7,70.0,attained,Add tracing practice in week 5
+SO1,"Identify, formulate and solve complex engineering problems",CS 101,1448/1,CLO2,S1,P/2,Quiz 1 Q3–4 (threshold-proportion),6,70.0,66.7,30.0,90.3,"not attained (≈ target, 95% CI)",yellow,76.7,70.0,attained,Add tracing practice in week 5
+SO2,Apply engineering design to meet specified needs,,,,,,,,,,,,not assessed,,,70.0,,
+SO3,Communicate effectively with a range of audiences,,,,,,,,,,,,not assessed,,,70.0,,
+SO4,Ethical and professional responsibilities; informed judgments,CS 101,1448/1,CLO3,V1,I/2,Quiz 1 Q5 (threshold-proportion),6,70.0,33.3,9.7,70.0,"not attained (≈ target, 95% CI)",red,33.3,70.0,not attained,
+SO5,Function effectively on a team,,,,,,,,,,,,not assessed,,,70.0,,
+SO6,Develop and conduct experimentation; analyze and interpret data,CS 101,1448/1,CLO2,S1,P/3,Quiz 1 Q3–4 (threshold-proportion),6,70.0,66.7,30.0,90.3,"not attained (≈ target, 95% CI)",yellow,66.7,70.0,not attained,
+SO7,Acquire and apply new knowledge (learning strategies),,,,,,,,,,,,not assessed,,,70.0,,

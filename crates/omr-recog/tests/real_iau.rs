@@ -30,5 +30,7 @@ fn req_a1_real_iau_sheets_zero_silent_errors() {
         for field in ["student_number", "section", "version", "exam"] {
             assert_eq!(s[field]["wrong_unflagged"], 0, "{mode} {field}: {s:#}");
         }
+        // The IdGridRead contract identity relies on: no exact digits from a flagged grid.
+        assert_eq!(s["id_exact_digits_while_flagged"], 0, "{mode}: {s:#}");
     }
 }

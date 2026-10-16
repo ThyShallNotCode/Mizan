@@ -4703,6 +4703,7 @@ name = "omr-report"
 version = "0.1.0"
 dependencies = [
  "csv",
+ "miniz_oxide 0.8.9",
  "omr-analytics",
  "omr-model",
  "omr-outcomes",
@@ -4710,6 +4711,7 @@ dependencies = [
  "rust_xlsxwriter",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.21",
 ]
 
@@ -6061,9 +6063,11 @@ dependencies = [
 name = "shell-slint"
 version = "0.1.0"
 dependencies = [
+ "i-slint-backend-testing",
  "omr-app",
  "slint",
  "slint-build",
+ "tiny-skia 0.12.0",
 ]
 
 [[package]]

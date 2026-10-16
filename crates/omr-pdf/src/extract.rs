@@ -11,6 +11,7 @@ use crate::ccitt::{self, CcittParams};
 use crate::flate::{self, PredictorParams};
 use crate::raster::{BitImage, GrayImage8, JpegStream, Orientation, PageRaster};
 use crate::reduce;
+use crate::stream::{self, StreamError};
 use crate::{PdfError, Refusal};
 use hayro_syntax::Pdf;
 use hayro_syntax::content::TypedIter;
@@ -24,6 +25,7 @@ use std::sync::Arc;
 
 /// Input limits checked from headers before any allocation (spec §7.4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Limits {
     /// Maximum pages per PDF (5,000).
     pub max_pages: usize,
@@ -33,6 +35,9 @@ pub struct Limits {
     pub max_pixels: u64,
     /// Maximum file size (2 GB).
     pub max_file_bytes: u64,
+    /// Maximum decoded bytes of a page's content streams and Form XObjects together (64 MiB):
+    /// a decompression bomb refuses the page (CAP-001) instead of exhausting memory.
+    pub max_stream_bytes: usize,
 }
 
 impl Default for Limits {
@@ -42,6 +47,7 @@ impl Default for Limits {
             max_side: 20_000,
             max_pixels: 100_000_000,
             max_file_bytes: 2_000_000_000,
+            max_stream_bytes: 64 << 20,
         }
     }
 }
@@ -462,6 +468,10 @@ struct Walk<'a> {
     invisible_text: bool,
     visible_text: bool,
     forms_visited: Vec<(i32, i32)>,
+    /// Decoded content bytes still allowed on this page.
+    budget: usize,
+    /// A Form XObject exceeded the budget (the page is refused).
+    bomb: Option<StreamError>,
 }
 
 impl<'a> Walk<'a> {
@@ -471,6 +481,9 @@ impl<'a> Walk<'a> {
         let mut ctm = base;
         let mut tr = 0i32;
         while let Some(op) = ops.next() {
+            if self.bomb.is_some() {
+                return;
+            }
             match op {
                 TypedInstruction::SaveState(_) => {
                     if stack.len() < 256 {
@@ -546,8 +559,14 @@ impl<'a> Walk<'a> {
                                 .get::<Dict<'a>>(b"Resources")
                                 .map(Resources::new)
                                 .unwrap_or_else(|| resources.clone());
-                            if let Ok(data) = stream.decoded() {
-                                self.run(&data, &res, mul(&fm, &ctm), depth + 1, max);
+                            match decode_bounded(&stream, self.budget) {
+                                Ok(data) => {
+                                    self.budget -= data.len().min(self.budget);
+                                    self.run(&data, &res, mul(&fm, &ctm), depth + 1, max);
+                                }
+                                Err(e @ StreamError::Bound(_)) => self.bomb = Some(e),
+                                // An undecodable form is skipped, as a viewer would.
+                                Err(_) => {}
                             }
                             self.forms_visited.pop();
                         }
@@ -560,6 +579,40 @@ impl<'a> Walk<'a> {
     }
 }
 
+/// Decodes a stream's whole filter chain with an output bound (never `Stream::decoded()`,
+/// which is unbounded).
+fn decode_bounded(s: &Stream<'_>, limit: usize) -> Result<Vec<u8>, StreamError> {
+    let filters = filter_names(s.dict());
+    let parms = decode_parms(s.dict(), filters.len());
+    stream::decode_filters(&s.raw_data(), &filters, &parms, limit).map(|d| d.data)
+}
+
+/// The page's content streams, concatenated, within `budget` decoded bytes. An undecodable
+/// stream is skipped (as a viewer would); one over the bound refuses the page.
+fn page_content(page: &Page<'_>, budget: &mut usize) -> Result<Vec<u8>, Refusal> {
+    let dict = page.raw();
+    let streams: Vec<Stream<'_>> = if let Some(s) = dict.get::<Stream<'_>>(b"Contents") {
+        vec![s]
+    } else if let Some(a) = dict.get::<Array<'_>>(b"Contents") {
+        a.iter::<Stream<'_>>().collect()
+    } else {
+        Vec::new()
+    };
+    let mut out = Vec::new();
+    for s in &streams {
+        match decode_bounded(s, *budget) {
+            Ok(d) => {
+                *budget -= d.len().min(*budget);
+                out.extend_from_slice(&d);
+                out.push(b' ');
+            }
+            Err(e @ StreamError::Bound(_)) => return Err(Refusal::Error(e.into())),
+            Err(_) => {}
+        }
+    }
+    Ok(out)
+}
+
 fn matrix_from(a: &Array<'_>) -> Option<Matrix> {
     let v: Vec<f64> = a.iter::<f64>().collect();
     (v.len() == 6).then(|| [v[0], v[1], v[2], v[3], v[4], v[5]])
@@ -570,9 +623,16 @@ fn matrix_from(a: &Array<'_>) -> Option<Matrix> {
 // ---------------------------------------------------------------------------------------------
 
 fn extract(page: &Page<'_>, index: u32, opts: &ExtractOptions) -> Result<ExtractedPage, Refusal> {
-    let mut walk = Walk::default();
-    let content = page.page_stream().unwrap_or(&[]);
-    walk.run(content, page.resources(), IDENTITY, 0, opts.max_form_depth);
+    let mut budget = opts.limits.max_stream_bytes;
+    let content = page_content(page, &mut budget)?;
+    let mut walk = Walk {
+        budget,
+        ..Walk::default()
+    };
+    walk.run(&content, page.resources(), IDENTITY, 0, opts.max_form_depth);
+    if let Some(e) = walk.bomb.take() {
+        return Err(Refusal::Error(e.into()));
+    }
 
     // JBIG2 anywhere on a scan page refuses the page (lossy symbol substitution, §7.2).
     for d in &walk.images {
@@ -924,10 +984,8 @@ fn color_space(page: &Page<'_>, obj: Option<Object<'_>>, depth: u8) -> Result<Co
                     }
                     let lookup: Vec<u8> = match items.get(3) {
                         Some(Object::String(s)) => s.as_bytes().to_vec(),
-                        Some(Object::Stream(s)) => s
-                            .decoded()
-                            .map_err(|_| PdfError::Corrupt("Indexed lookup stream".into()))?
-                            .to_vec(),
+                        Some(Object::Stream(s)) => decode_bounded(s, 1 << 16)
+                            .map_err(|_| PdfError::Corrupt("Indexed lookup stream".into()))?,
                         _ => return Err(PdfError::Unsupported("Indexed lookup missing".into())),
                     };
                     let nc = base.components as usize;
@@ -1058,7 +1116,13 @@ fn decode_image(
 
     match image_filter.as_deref() {
         Some("CCITTFaxDecode") => {
-            let data = prefiltered(&raw, pre, (pixels / 2 + (1 << 20)) as usize)?;
+            let data = prefiltered(
+                &raw,
+                pre,
+                &parms[..pre.len()],
+                (pixels / 2 + (1 << 20)) as usize,
+                notes,
+            )?;
             let p = parms.last().cloned().flatten();
             let get_i = |k: &[u8]| p.as_ref().and_then(|p| p.get::<i32>(k));
             let get_b = |k: &[u8]| p.as_ref().and_then(|p| p.get::<bool>(k));
@@ -1119,7 +1183,13 @@ fn decode_image(
             Ok((PageRaster::Bilevel(img), source))
         }
         Some("DCTDecode") => {
-            let data = prefiltered(&raw, pre, (pixels * 4 + (1 << 20)) as usize)?;
+            let data = prefiltered(
+                &raw,
+                pre,
+                &parms[..pre.len()],
+                (pixels * 4 + (1 << 20)) as usize,
+                notes,
+            )?;
             source.encoding = ImageEncoding::Dct;
             let info = jpeg_info(&data)?;
             let (jw, jh) = (
@@ -1191,18 +1261,16 @@ fn decode_image(
                 if filters.iter().any(|f| f == "FlateDecode") {
                     source.encoding = ImageEncoding::Flate { predictor: 1 };
                 }
-                // ASCII and RunLength expansions are bounded (≤ 128×); Flate inside a chain
-                // is bounded by the declared size check below only after decoding, so cap
-                // the encoded size first.
-                if raw.len() > expected.saturating_mul(2) + (1 << 20) {
-                    return Err(
-                        PdfError::Corrupt("encoded image larger than its pixels".into()).into(),
-                    );
+                // Every stage is bounded (decompression bombs refuse the page, CAP-001).
+                let limit = expected
+                    .saturating_add(expected / 2)
+                    .saturating_add(1 << 16);
+                let out = stream::decode_filters(&raw, &filters, &parms, limit)
+                    .map_err(PdfError::from)?;
+                if out.damaged {
+                    notes.push(PageNote::DamagedStream);
                 }
-                d.stream
-                    .decoded()
-                    .map_err(|_| PdfError::Corrupt(format!("filter chain {filters:?} failed")))?
-                    .to_vec()
+                out.data
             };
             if samples.len() < expected {
                 return Err(PdfError::Corrupt(format!(
@@ -1217,31 +1285,28 @@ fn decode_image(
     }
 }
 
-/// Applies the supported pre-filters (FlateDecode only) in front of an image filter.
+/// Applies the pre-filters in front of an image filter (Flate, ASCII, RunLength), each stage
+/// bounded by `limit` bytes.
 fn prefiltered<'b>(
     raw: &'b [u8],
     pre: &[String],
+    parms: &[Option<Dict<'_>>],
     limit: usize,
+    notes: &mut Vec<PageNote>,
 ) -> Result<std::borrow::Cow<'b, [u8]>, PdfError> {
-    match pre {
-        [] => Ok(std::borrow::Cow::Borrowed(raw)),
-        [f] if f == "FlateDecode" => {
-            // Unknown output size: inflate up to `limit`, accept whatever the stream holds.
-            let r = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(raw, limit)
-                .or_else(|_| miniz_oxide::inflate::decompress_to_vec_with_limit(raw, limit))
-                .map_err(|e| {
-                    if e.status == miniz_oxide::inflate::TINFLStatus::HasMoreOutput {
-                        PdfError::Corrupt("pre-filter output exceeds the image bound".into())
-                    } else {
-                        PdfError::Corrupt("FlateDecode pre-filter failed".into())
-                    }
-                })?;
-            Ok(std::borrow::Cow::Owned(r))
-        }
-        other => Err(PdfError::Unsupported(format!(
-            "pre-filters {other:?} before an image filter"
-        ))),
+    if pre.is_empty() {
+        return Ok(std::borrow::Cow::Borrowed(raw));
     }
+    let out = stream::decode_filters(raw, pre, parms, limit).map_err(|e| match e {
+        StreamError::Bound(_) => {
+            PdfError::Corrupt("pre-filter output exceeds the image bound".into())
+        }
+        other => PdfError::from(other),
+    })?;
+    if out.damaged {
+        notes.push(PageNote::DamagedStream);
+    }
+    Ok(std::borrow::Cow::Owned(out.data))
 }
 
 /// Unpacks raw samples to a bilevel or gray raster, applying `/Decode`.

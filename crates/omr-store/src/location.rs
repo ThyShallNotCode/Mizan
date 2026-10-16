@@ -12,16 +12,19 @@ use std::path::{Path, PathBuf};
 
 /// Mount types refused on Linux.
 pub const REMOTE_FS_TYPES: &[&str] = &[
-    "nfs", "nfs4", "cifs", "smb3", "smbfs", "afs", "ncpfs", "ceph", "glusterfs",
+    "nfs",
+    "nfs4",
+    "cifs",
+    "smb3",
+    "smbfs",
+    "afs",
+    "ncpfs",
+    "ceph",
+    "glusterfs",
 ];
 
 /// Remote FUSE subtypes (local `ntfs-3g`/`exfat-fuse` disks pass).
-pub const REMOTE_FUSE: &[&str] = &[
-    "fuse.sshfs",
-    "fuse.rclone",
-    "fuse.s3fs",
-    "fuse.gvfsd-fuse",
-];
+pub const REMOTE_FUSE: &[&str] = &["fuse.sshfs", "fuse.rclone", "fuse.s3fs", "fuse.gvfsd-fuse"];
 
 /// Marker files or directories of sync clients, looked for in every ancestor.
 pub const SYNC_MARKERS: &[&str] = &[".dropbox", ".dropbox.cache", ".owncloudsync.log"];

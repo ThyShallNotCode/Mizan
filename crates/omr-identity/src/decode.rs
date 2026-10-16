@@ -72,6 +72,23 @@ pub struct PriorContext {
     pub absent: BTreeSet<StudentKey>,
 }
 
+impl PriorContext {
+    /// The absent keys in canonical form (§9.2 rule 3), so raw attendance keys still match.
+    pub(crate) fn absent_keys(&self) -> BTreeSet<String> {
+        self.absent.iter().map(|k| normalize_id(&k.0)).collect()
+    }
+
+    /// True when the student is expected in this session: every roster section when
+    /// `session_sections` is unset, otherwise a student of a sitting section (or one without a
+    /// section).
+    pub(crate) fn expects(&self, section: Option<&String>) -> bool {
+        match (&self.session_sections, section) {
+            (Some(sections), Some(sec)) => sections.contains(sec),
+            _ => true,
+        }
+    }
+}
+
 /// Decision parameters (§9.5–§9.7 initial values; all unverified until calibrated).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct IdentityPolicy {
@@ -428,6 +445,36 @@ fn parse_typed(text: &str) -> (Vec<Option<u8>>, bool) {
     (out, letters)
 }
 
+/// True when either channel's complete read is a national ID/Iqama (or national-ID shaped) or a
+/// phone number, whose digits are masked wherever shown (§9.2, §9.9 row 8).
+fn reads_need_masking(ev: &BookletEvidence, scheme: &StudentIdScheme) -> bool {
+    let masks = |s: &str| {
+        let c = classify_identifier(s, scheme);
+        c.must_mask() || c == IdentifierClass::Phone
+    };
+    let grid = ev
+        .grid
+        .as_ref()
+        .and_then(IdGridRead::exact_digits)
+        .is_some_and(|e| masks(&e));
+    let typed = ev
+        .typed
+        .as_ref()
+        .and_then(|t| {
+            parse_typed(&t.text)
+                .0
+                .into_iter()
+                .collect::<Option<Vec<u8>>>()
+        })
+        .is_some_and(|f| !f.is_empty() && masks(&digits_str(&f)));
+    grid || typed
+}
+
+/// `x ≥ t` on 1/1024-nat quanta (§9.7: decision values are quantised before comparison).
+fn ge_q(x: f64, t: f64) -> bool {
+    q(x) >= q(t)
+}
+
 fn digits_str(d: &[u8]) -> String {
     d.iter().map(|&x| char::from(b'0' + x)).collect()
 }
@@ -516,6 +563,9 @@ pub fn decode_booklet(
 ) -> IdentityDecision {
     let mut d = IdentityDecision::new(Some(roster.sha384().to_owned()));
     let h = policy.hysteresis;
+    // A national ID/Iqama or phone number recognised in either channel masks the reads of both
+    // (the other channel may show most of the same digits, §9.2, §9.10).
+    let mask_reads = reads_need_masking(ev, scheme);
 
     // ---- Channel A: the bubbled grid.
     let mut grid = ev
@@ -526,6 +576,10 @@ pub fn decode_booklet(
     if let (Some(g), Some(raw)) = (&grid, &ev.grid) {
         d.channels[0] = ChannelUse::Evaluated;
         let mut shown = grid_display(raw);
+        if mask_reads {
+            shown = mask_digits(&shown);
+            d.read.masked = true;
+        }
         let blanks: Vec<usize> = (0..g.n())
             .filter(|&c| g.states[c] == ColumnState::Blank)
             .collect();
@@ -587,6 +641,10 @@ pub fn decode_booklet(
         };
         let model = TypedModel::new(chars, err);
         let mut shown = typed_display(&model.chars);
+        if mask_reads {
+            shown = mask_digits(&shown);
+            d.read.masked = true;
+        }
         if letters {
             d.add(
                 SubReason::WrongField,
@@ -665,6 +723,7 @@ pub fn decode_booklet(
     }
 
     // ---- Priors.
+    let absent = prior.absent_keys();
     let weights: Vec<f64> = rows
         .iter()
         .map(|r| {
@@ -674,7 +733,7 @@ pub fn decode_booklet(
             {
                 w *= policy.out_of_session_weight;
             }
-            if prior.absent.contains(&r.key)
+            if absent.contains(&r.key.0)
                 || matches!(
                     r.record.sis_status,
                     Some(SisStatus::DeniedEntry | SisStatus::Withdrawn)
@@ -767,12 +826,8 @@ pub fn decode_booklet(
         let mut order: Vec<usize> = (0..n_roster)
             .filter(|&i| rank_score[i].is_finite())
             .collect();
-        order.sort_by(|&a, &b| {
-            rank_score[b]
-                .partial_cmp(&rank_score[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(a.cmp(&b))
-        });
+        // Ranked on quantised scores (ties → roster order), so the scored set reproduces.
+        order.sort_by(|&a, &b| q(rank_score[b]).cmp(&q(rank_score[a])).then(a.cmp(&b)));
         let mut s_set: BTreeSet<usize> = order.iter().take(policy.block_k).copied().collect();
         for probe in [y_hat.as_ref(), b_full.as_ref()].into_iter().flatten() {
             if let Some(i) = roster.position(&digits_str(probe)) {
@@ -854,15 +909,15 @@ pub fn decode_booklet(
     let mut scored: Vec<(Option<usize>, f64)> =
         fused.iter().map(|(&i, f)| (Some(i), w_of(i, f))).collect();
     scored.push((None, w_null));
+    // Ranked on 1/1024-nat quanta (§9.6, §9.7) with a fixed tie-break (roster order, ∅ last),
+    // so near-ties resolve identically on every platform.
     scored.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| match (a.0, b.0) {
-                (Some(x), Some(y)) => x.cmp(&y),
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, None) => std::cmp::Ordering::Equal,
-            })
+        q(b.1).cmp(&q(a.1)).then_with(|| match (a.0, b.0) {
+            (Some(x), Some(y)) => x.cmp(&y),
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, None) => std::cmp::Ordering::Equal,
+        })
     });
     let log_z = logsumexp(scored.iter().map(|s| s.1).chain([log_tail]));
     d.null_log_posterior_q = Some(q(w_null - log_z));
@@ -925,10 +980,9 @@ pub fn decode_booklet(
     d.student = Some(rows[best_i].key.clone());
     let others = logsumexp(scored[1..].iter().map(|s| s.1).chain([log_tail]));
     let logit = best.1 - others;
-    let runner_up = scored[1..]
-        .iter()
-        .map(|s| s.1)
-        .fold(f64::NEG_INFINITY, f64::max);
+    // Students outside the exactly scored set (typed channel only) are bounded by the tail,
+    // which also bounds the best of them: the margin uses it so it is never overstated.
+    let runner_up = scored[1..].iter().map(|s| s.1).fold(log_tail, f64::max);
     let margin = best.1 - runner_up;
     d.logit_q = Some(q(logit));
     d.margin_q = Some(q(margin));
@@ -967,8 +1021,8 @@ pub fn decode_booklet(
     .unwrap_or(f64::INFINITY);
     let llr_a = llr(&|f: &Fused| f.a, alt_a);
     let llr_b = llr(&|f: &Fused| f.b, alt_b);
-    let supports = |x: f64| x >= policy.theta_f + h;
-    let contradicts = |x: f64| x < -policy.theta_f + h;
+    let supports = |x: f64| ge_q(x, policy.theta_f + h);
+    let contradicts = |x: f64| !ge_q(x, -policy.theta_f + h);
     let e_supports = bound == Some(best_i);
 
     // ---- ∅ gap test (likelihoods only).
@@ -993,37 +1047,44 @@ pub fn decode_booklet(
             show_id(&digits_str(y)),
             show_id(&digits_str(&best_id))
         );
-        if gap >= g_null + h {
+        if ge_q(gap, g_null + h) {
             not_on_roster = true;
             d.student = None;
             d.add(
                 SubReason::NotOnRoster,
                 format!("read {shown_read} is not a roster ID (gap {gap:.1} nat ≥ G_∅); never snapped to the nearest entry"),
             );
-        } else if gap >= g_w - 2.0 - h {
+        } else if ge_q(gap, g_w - 2.0 - h) {
             d.notes
                 .push(IdentityNote::WriterErrorHypothesis(hypothesis.clone()));
-            if e_supports {
+            // Proceeds only with a supporting second channel, and never within h of G_∅
+            // (§9.7 hysteresis: a value in [G_∅ − h, G_∅ + h) is not auto-decided).
+            if e_supports && !ge_q(gap, g_null - h) {
                 d.add(SubReason::WriterError, hypothesis);
             } else {
                 not_on_roster = true;
                 d.student = None;
+                let why = if e_supports {
+                    "its gap is within h of G_∅"
+                } else {
+                    "no second channel supports it"
+                };
                 d.add(
                     SubReason::NotOnRoster,
-                    format!("read {shown_read} is one writer error from a roster ID and no second channel supports it (gap {gap:.1} nat)"),
+                    format!("read {shown_read} is one writer error from a roster ID and {why} (gap {gap:.1} nat)"),
                 );
                 d.add(SubReason::WriterError, hypothesis);
             }
         }
     }
     if !not_on_roster {
-        if logit < policy.l_id + h {
+        if !ge_q(logit, policy.l_id + h) {
             d.add(
                 SubReason::LowPosterior,
                 format!("logit P = {logit:.2} nat < L_id {:.1} (+h)", policy.l_id),
             );
         }
-        if margin < policy.tau_m + h {
+        if !ge_q(margin, policy.tau_m + h) {
             d.add(
                 SubReason::LowMargin,
                 format!("margin {margin:.2} nat < τ_m {:.1} (+h)", policy.tau_m),
@@ -1074,7 +1135,11 @@ pub fn decode_booklet(
             || (f.sub_reason == SubReason::ChannelConflict && !conflict_settled)
     }) || d.binding_conflict.is_some();
     let ab_supports = supports(llr_ab);
-    let id_only = policy.id_only_auto_accept && scheme.has_check_digit();
+    // ID-only acceptance needs a check-digit scheme *and* an ID that passes it (§9.7); roster
+    // rows failing the scheme are only an import warning (§9.2 rule 4).
+    let id_only = policy.id_only_auto_accept
+        && scheme.has_check_digit()
+        && scheme.accepts(&rows[best_i].key.0);
     d.status = if !preventing && ab_supports && (e_supports || id_only) {
         if !e_supports {
             d.notes.push(IdentityNote::IdOnly);
@@ -1180,7 +1245,7 @@ pub fn decode_rosterless(
         .collect();
     let exact = g.exact_digits();
     let class = exact.as_deref().map(|e| classify_identifier(e, scheme));
-    if class.is_some_and(IdentifierClass::must_mask) {
+    if reads_need_masking(ev, scheme) {
         shown = mask_digits(&shown);
         d.read.masked = true;
     }
@@ -1240,7 +1305,24 @@ pub fn decode_rosterless(
                 format!("letters in the written ID ({tshown})"),
             );
         }
-        if chars.iter().any(Option::is_some) {
+        let written_class = chars
+            .iter()
+            .copied()
+            .collect::<Option<Vec<u8>>>()
+            .map(|f| classify_identifier(&digits_str(&f), scheme))
+            .filter(|c| c.is_wrong_identifier());
+        if let Some(c) = written_class {
+            let what = if c == IdentifierClass::Phone {
+                "a phone number"
+            } else {
+                "a national ID/Iqama"
+            };
+            d.add(
+                SubReason::WrongIdentifier,
+                format!("written ID is {what} ({tshown}), not a student ID"),
+            );
+            d.channels[1] = ChannelUse::Neutralized(format!("{what} written"));
+        } else if chars.iter().any(Option::is_some) {
             d.channels[1] = ChannelUse::Evaluated;
             let kd: Vec<u8> = key.bytes().map(|b| b - b'0').collect();
             let agree = chars.len() == kd.len()

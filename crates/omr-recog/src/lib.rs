@@ -2,7 +2,9 @@
 //! (§6.10, forms without fiducials) validated on 143 real IAU CCSIT sheets: ring-lattice
 //! registration (§8.4 adapted), per-bubble darkness (§8.5–§8.6, bitonal mode §7.2/CAP-003),
 //! the per-position baseline β_p (§8.6) and the per-question decision logic (§8.8) with
-//! Appendix A exceptions (§13.1).
+//! Appendix A exceptions (§13.1). The [`ownform`] module is the own-form path (§6.3–§6.4,
+//! §8.2–§8.4): AprilTag corners, Stage A, the verified page code and row ticks, on the same
+//! decision core.
 //!
 //! ```no_run
 //! use omr_recog::{LegacyEngine, PageRequest};
@@ -28,6 +30,7 @@ pub mod decide;
 mod exc;
 pub mod legacy;
 pub mod measure;
+pub mod ownform;
 pub mod register;
 
 pub use baseline::{Baseline, BaselineSource};

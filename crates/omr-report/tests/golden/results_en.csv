@@ -1,0 +1,8 @@
+﻿Student ID,Name,Section,Booklet,Form,Status,Raw score,Maximum,Percent,Letter,Letter (Arabic),GPA (5),GPA (4),Q1,Q2,Q3,Q4,Q5
+"220000001",Sara Al-Harbi,"101",1,A,scored,10.00,10.00,100.00,A+,أ+,5.00,4.00,A,B,C,D,A
+"220000002",محمد العتيبي,"101",2,A,scored,8.00,10.00,80.00,B,ب,4.00,3.00,A,B,C,D,B
+"220000003",'@Noura Test,"102",3,B,scored,8.00,10.00,80.00,B,ب,4.00,3.00,A,B,C,D,B
+"220000004","Omar Saleh, Jr.","102",4,A,scored,6.00,10.00,60.00,D,د,2.00,1.00,A,B,C,,AC
+"220000005",خالد,"101",5,B,scored,4.00,10.00,40.00,F,هـ,1.00,0.00,A,B,A,A,C
+"220000006",Lina,"102",6,A,provisional,8.00,10.00,80.00,B,ب,4.00,3.00,A,?,C,D,A
+"220000007",Absent Student,"101",7,A,absent_excused,,,,,,,,,,,,

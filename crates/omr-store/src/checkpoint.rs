@@ -55,9 +55,7 @@ impl Checkpoint {
             "seq": seq,
         });
         // Every member is a string or a small integer, so canonicalisation cannot fail.
-        jcs::value_to_jcs(&v)
-            .unwrap_or_default()
-            .into_bytes()
+        jcs::value_to_jcs(&v).unwrap_or_default().into_bytes()
     }
 
     /// This checkpoint's signed message.
@@ -241,7 +239,10 @@ mod tests {
         trust.trust_signer(&s).unwrap();
         trust.verify(&cp).unwrap();
         cp.head_hash = "ac".into();
-        assert!(matches!(trust.verify(&cp), Err(ChainError::BadSignature { .. })));
+        assert!(matches!(
+            trust.verify(&cp),
+            Err(ChainError::BadSignature { .. })
+        ));
         assert!(EcdsaP384Signer::from_secret_bytes(&[0u8; 48]).is_err());
     }
 }

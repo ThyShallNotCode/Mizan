@@ -139,6 +139,7 @@ CREATE TABLE master_item (
 CREATE TABLE form (
     exam_id TEXT NOT NULL REFERENCES exam (exam_id),
     code INTEGER NOT NULL,
+    ordinal INTEGER NOT NULL,
     lang TEXT NOT NULL,
     template_sha384 TEXT REFERENCES template_revision (sha384),
     positions TEXT NOT NULL,
@@ -394,6 +395,37 @@ CREATE INDEX exception_by_state ON exception (state, code);
 CREATE INDEX question_result_by_page ON question_result (page_id);
 "#;
 
+/// Version 3: the identity decision log. `identity_decision` is a projection updated in place;
+/// the log keeps every decision with the nonce that opens its event commitment, so a
+/// superseded (human) decision is never lost (§14 "no human decision is ever lost"). A
+/// version-2 project gets its current decisions back-filled (earlier ones were overwritten).
+const V3: &str = r#"
+CREATE TABLE identity_decision_log (
+    event_seq INTEGER PRIMARY KEY REFERENCES events (seq),
+    run_id TEXT NOT NULL REFERENCES identity_run (run_id),
+    booklet_id TEXT NOT NULL REFERENCES booklet (booklet_id),
+    student_id TEXT,
+    status TEXT NOT NULL,
+    commit_nonce TEXT NOT NULL,
+    actor_id TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX identity_decision_log_by_booklet ON identity_decision_log (run_id, booklet_id);
+
+CREATE TRIGGER identity_decision_log_append_only BEFORE UPDATE ON identity_decision_log
+BEGIN SELECT RAISE(ABORT, 'the identity decision log is append-only'); END;
+
+INSERT INTO identity_decision_log (event_seq, run_id, booklet_id, student_id, status,
+                                   commit_nonce, actor_id)
+SELECT e.seq, d.run_id, d.booklet_id, d.student_id, d.status, d.commit_nonce, e.actor_id
+FROM identity_decision d
+JOIN events e ON e.seq = (
+    SELECT max(x.seq) FROM events x
+    WHERE x.entity_type = 'booklet' AND x.entity_id = d.booklet_id
+      AND x.type IN ('IdentityDecided', 'IdentityConfirmed')
+      AND json_extract(x.payload, '$.run') = d.run_id);
+"#;
+
 /// All migrations, in order.
 pub const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -406,10 +438,15 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "export_registry_and_indexes",
         sql: V2,
     },
+    Migration {
+        version: 3,
+        name: "identity_decision_log",
+        sql: V3,
+    },
 ];
 
 /// The newest schema version this build knows.
-pub const LATEST_VERSION: i64 = 2;
+pub const LATEST_VERSION: i64 = 3;
 
 /// What a migration call did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -442,8 +479,7 @@ pub fn migrate_to(conn: &mut Connection, target: i64) -> Result<MigrationReport>
     let from = user_version(conn)?;
     let app = application_id(conn)?;
     if app != APPLICATION_ID {
-        let empty: i64 =
-            conn.query_row("SELECT count(*) FROM sqlite_schema", [], |r| r.get(0))?;
+        let empty: i64 = conn.query_row("SELECT count(*) FROM sqlite_schema", [], |r| r.get(0))?;
         if app != 0 || from != 0 || empty != 0 {
             return Err(StoreError::NotAProject(app));
         }

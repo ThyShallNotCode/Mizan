@@ -56,9 +56,7 @@ fn fit_line(pts: &[PointPx]) -> Option<Line> {
     if n < 2 {
         return None;
     }
-    let (mx, my) = pts
-        .iter()
-        .fold((0.0, 0.0), |(x, y), p| (x + p.x, y + p.y));
+    let (mx, my) = pts.iter().fold((0.0, 0.0), |(x, y), p| (x + p.x, y + p.y));
     let (mx, my) = (mx / n as f64, my / n as f64);
     let (mut sxx, mut sxy, mut syy) = (0.0, 0.0, 0.0);
     for p in pts {
@@ -112,7 +110,6 @@ pub(crate) fn refine_quad(
     if white <= black.saturating_add(20) {
         return None;
     }
-    let level = (f64::from(white) + f64::from(black)) / 2.0;
     let search = search.min(module * 0.75).max(1.5);
 
     let mut lines = [None; 4];
@@ -120,10 +117,8 @@ pub(crate) fn refine_quad(
     let mut cnt = 0usize;
     for (i, slot) in lines.iter_mut().enumerate() {
         let (a, b) = (quad[i], quad[(i + 1) % 4]);
-        let pts = edge_crossings(img, a, b, level, search, trim);
-        let Some(mut line) = fit_line(&pts) else {
-            return None;
-        };
+        let pts = edge_crossings(img, a, b, f64::from(black), f64::from(white), search, trim);
+        let mut line = fit_line(&pts)?;
         let kept: Vec<PointPx> = pts
             .iter()
             .copied()
@@ -191,21 +186,27 @@ fn levels(img: &GrayImage, quad: &[PointPx; 4], depth: f64) -> Option<(u8, u8)> 
     Some((median_u8(&mut inside)?, median_u8(&mut outside)?))
 }
 
-/// The 50 % crossings of edge `a → b` along integer columns or rows.
+/// Edge positions along integer columns or rows of edge `a → b`: the 50 % crossing locates
+/// the edge to a pixel, then the ink mass in a 5-pixel window centred on it gives the
+/// sub-pixel position (exact for a blurred step edge with a symmetric point-spread function,
+/// whatever the blur, because blur conserves mass).
+#[allow(clippy::too_many_arguments)]
 fn edge_crossings(
     img: &GrayImage,
     a: PointPx,
     b: PointPx,
-    level: f64,
+    black: f64,
+    white: f64,
     search: f64,
     trim: f64,
 ) -> Vec<PointPx> {
     let (dx, dy) = (b.x - a.x, b.y - a.y);
     let len = dx.hypot(dy);
     let mut out = Vec::new();
-    if len < 1.0 {
+    if len < 1.0 || white - black < 1.0 {
         return out;
     }
+    let level = (white + black) / 2.0;
     // Inward normal of a clockwise-on-screen quad (y down): values fall along it.
     let (nx, ny) = (-dy / len, dx / len);
     let horizontal = dx.abs() >= dy.abs();
@@ -220,6 +221,7 @@ fn edge_crossings(
     };
     let first = (s0 - 0.5).ceil() as i64;
     let last = (s1 - 0.5).floor() as i64;
+    const HALF: f64 = 2.5;
     for k in first..=last {
         let centre = k as f64 + 0.5;
         // Predicted crossing on this scan line, and the direction values fall along it.
@@ -253,13 +255,29 @@ fn edge_crossings(
                 best = Some((d, pos));
             }
         }
-        if let Some((_, pos)) = best {
-            out.push(if horizontal {
-                PointPx { x: centre, y: pos }
+        let Some((_, pos)) = best else {
+            continue;
+        };
+        // Mass estimate over pixels [w0, w0 + 5) centred on the crossing.
+        let w0 = (pos - HALF).round() as i64;
+        let mut mass = 0.0;
+        for j in w0..w0 + 5 {
+            let v = sample(j);
+            mass += if falls_forward {
+                (v - black) / (white - black)
             } else {
-                PointPx { x: pos, y: centre }
-            });
+                (white - v) / (white - black)
+            };
         }
+        let e = w0 as f64 + mass;
+        if (e - pos).abs() > 1.0 {
+            continue;
+        }
+        out.push(if horizontal {
+            PointPx { x: centre, y: e }
+        } else {
+            PointPx { x: e, y: centre }
+        });
     }
     out
 }
@@ -283,14 +301,14 @@ mod tests {
         ];
         // Supersampled coverage of the square.
         let img = GrayImage::from_fn(120, 120, |x, y| {
-            let mut ink = 0.0;
-            for sy in 0..4 {
-                for sx in 0..4 {
-                    let px = x as f64 + (sx as f64 + 0.5) / 4.0 - cx;
-                    let py = y as f64 + (sy as f64 + 0.5) / 4.0 - cy;
+            let mut ink = 0.0f64;
+            for sy in 0..16 {
+                for sx in 0..16 {
+                    let px = x as f64 + (sx as f64 + 0.5) / 16.0 - cx;
+                    let py = y as f64 + (sy as f64 + 0.5) / 16.0 - cy;
                     let (u, v) = (c * px + s * py, -s * px + c * py);
                     if u.abs() <= half && v.abs() <= half {
-                        ink += 1.0 / 16.0;
+                        ink += 1.0 / 256.0;
                     }
                 }
             }

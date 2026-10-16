@@ -126,7 +126,10 @@ fn check_rows(conn: &Connection, sql: &str, what: &str) -> Result<()> {
     if rows.len() == 1 && rows[0] == "ok" {
         Ok(())
     } else {
-        Err(StoreError::Integrity(format!("{what}: {}", rows.join("; "))))
+        Err(StoreError::Integrity(format!(
+            "{what}: {}",
+            rows.join("; ")
+        )))
     }
 }
 

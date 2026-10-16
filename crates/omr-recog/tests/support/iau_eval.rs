@@ -179,6 +179,9 @@ pub fn score(runs: &[PageRun], results: &[LegacyPageResult], reference: &Value) 
         FieldTally::default(),
     );
     let mut levels = Vec::new();
+    // Identity contract: an ID grid that is not confident never yields exact digits.
+    let mut exact_while_flagged = 0u32;
+    let mut unconfident_proposals = 0u32;
     let mut missing = 0;
     for (run, res) in runs.iter().zip(results) {
         let Some(r) = refs.get(&(run.tag.clone(), u64::from(run.page))) else {
@@ -227,6 +230,20 @@ pub fn score(runs: &[PageRun], results: &[LegacyPageResult], reference: &Value) 
                 };
                 *review_truth.entry(kind.into()).or_default() += 1;
             }
+        }
+        for g in [&res.student_number, &res.section] {
+            if !g.confident() && g.read.exact_digits().is_some() {
+                exact_while_flagged += 1;
+            }
+            unconfident_proposals += g
+                .read
+                .columns
+                .iter()
+                .zip(&g.review)
+                .filter(|(c, r)| {
+                    **r && c.state == omr_model::ColumnState::Multi && c.marked.len() == 1
+                })
+                .count() as u32;
         }
         let grid_text = |g: &omr_recog::GridField| {
             let t = g.text();
@@ -280,6 +297,8 @@ pub fn score(runs: &[PageRun], results: &[LegacyPageResult], reference: &Value) 
         "section": sec.json(),
         "version": ver.json(),
         "exam": exam.json(),
+        "id_exact_digits_while_flagged": exact_while_flagged,
+        "id_unconfident_single_proposals": unconfident_proposals,
         "exception_counts": codes,
         "page_level": quantiles(&mut levels),
     })

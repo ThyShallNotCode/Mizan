@@ -16,6 +16,7 @@ use crate::jcs;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -115,6 +116,11 @@ impl Actor {
     /// The system itself (project creation, checkpoints).
     pub fn system() -> Self {
         Self::engine("store")
+    }
+
+    /// True for an engine or system actor, which never performs decision actions (§14.4).
+    pub fn is_engine(&self) -> bool {
+        self.role == "engine" || self.id.starts_with("engine:")
     }
 }
 
@@ -423,14 +429,31 @@ fn validate_new(ev: &NewEvent) -> Result<()> {
         return Err(StoreError::Invalid("payload must be a JSON object".into()));
     };
     check_no_pii(map)?;
+    check_no_floats(&ev.payload)?;
     Ok(())
 }
 
+/// Refuses non-integer numbers anywhere in a payload: decimals travel as strings, because JCS
+/// serialises numbers as doubles (§14.4) and a float would make the chain depend on the
+/// float parser that reads it back.
+fn check_no_floats(v: &Value) -> Result<()> {
+    match v {
+        Value::Number(n) if n.is_f64() => Err(StoreError::Invalid(format!(
+            "non-integer number {n} in an event payload; encode decimals as strings (§14.4)"
+        ))),
+        Value::Array(a) => a.iter().try_for_each(check_no_floats),
+        Value::Object(m) => m.values().try_for_each(check_no_floats),
+        _ => Ok(()),
+    }
+}
+
 fn check_no_pii(map: &Map<String, Value>) -> Result<()> {
+    let scalar = |v: &Value| matches!(v, Value::String(_) | Value::Number(_));
     for (k, v) in map {
-        // A PII-named member may hold a `{ref, sha384}` commitment object, never a scalar.
+        // A PII-named member may hold a `{ref, sha384}` commitment object, never a scalar or
+        // a list of scalars.
         if PII_KEYS.contains(&k.to_ascii_lowercase().as_str())
-            && matches!(v, Value::String(_) | Value::Number(_))
+            && (scalar(v) || matches!(v, Value::Array(a) if a.iter().any(scalar)))
         {
             return Err(StoreError::Invalid(format!(
                 "payload member {k:?} looks like plaintext PII; use a {{ref, sha384}} commitment"
@@ -607,12 +630,14 @@ pub fn verify_chain(
     external: &[Checkpoint],
 ) -> Result<ChainReport> {
     let genesis = genesis_hash(project);
+    let stored = read_checkpoints(conn)?;
+    // Only the hashes at checkpointed positions are kept (memory stays flat for long chains).
+    let wanted: BTreeSet<i64> = stored.iter().chain(external).map(|c| c.seq).collect();
+    let mut at_seq: BTreeMap<i64, String> = BTreeMap::new();
     let mut stmt = conn.prepare(&format!("{SELECT_EVENTS} ORDER BY seq"))?;
     let mut rows = stmt.query([])?;
     let mut expected = 1i64;
     let mut prev = genesis.clone();
-    // Only (seq → hash) is kept to check checkpoints afterwards.
-    let mut hashes: Vec<String> = Vec::new();
     while let Some(row) = rows.next()? {
         let (mut rec, text) = read_row(row)?;
         if rec.seq != expected {
@@ -641,14 +666,15 @@ pub fn verify_chain(
         if jcs::value_to_jcs(&rec.payload).ok().as_deref() != Some(text.as_str()) {
             return Err(ChainError::HashMismatch { seq: rec.seq }.into());
         }
-        prev = rec.hash.clone();
-        hashes.push(rec.hash);
+        if wanted.contains(&rec.seq) {
+            at_seq.insert(rec.seq, rec.hash.clone());
+        }
+        prev = rec.hash;
         expected += 1;
     }
     let head_seq = expected - 1;
     let project_s = project.to_string();
     let mut checked = 0;
-    let stored = read_checkpoints(conn)?;
     for cp in stored.iter().chain(external.iter()) {
         if cp.project != project_s {
             return Err(ChainError::WrongProject { seq: cp.seq }.into());
@@ -660,9 +686,8 @@ pub fn verify_chain(
             }
             .into());
         }
-        let at = usize::try_from(cp.seq - 1)
-            .ok()
-            .and_then(|i| hashes.get(i))
+        let at = at_seq
+            .get(&cp.seq)
             .ok_or(ChainError::CheckpointMismatch { seq: cp.seq })?;
         if *at != cp.head_hash {
             return Err(ChainError::CheckpointMismatch { seq: cp.seq }.into());
@@ -673,7 +698,7 @@ pub fn verify_chain(
         checked += 1;
     }
     Ok(ChainReport {
-        events: hashes.len() as u64,
+        events: u64::try_from(head_seq).unwrap_or(0),
         head_seq,
         head_hash: prev,
         checkpoints: checked,
@@ -703,6 +728,14 @@ mod tests {
             json!({"position": 3, "who": {"Name": "x"}}),
         );
         assert!(validate_new(&ev).is_err());
+        let listed = NewEvent::new(
+            "IdentityDecided",
+            "booklet",
+            "b1",
+            Actor::user("u1", "Reviewer"),
+            json!({"candidates": {"student_id": ["s-1", "s-2"]}}),
+        );
+        assert!(validate_new(&listed).is_err());
         let ok = NewEvent::new(
             "ResponseCorrected",
             "booklet",
@@ -711,7 +744,20 @@ mod tests {
             json!({"position": 3}),
         );
         validate_new(&ok).unwrap();
-        let bad_type = NewEvent { event_type: "page_spooled".into(), ..ok };
+        let float = NewEvent {
+            payload: json!({"points": [1, 2.5]}),
+            ..ok.clone()
+        };
+        assert!(validate_new(&float).is_err());
+        let decimal_string = NewEvent {
+            payload: json!({"points": [1, "2.5"]}),
+            ..ok.clone()
+        };
+        validate_new(&decimal_string).unwrap();
+        let bad_type = NewEvent {
+            event_type: "page_spooled".into(),
+            ..ok
+        };
         assert!(validate_new(&bad_type).is_err());
     }
 

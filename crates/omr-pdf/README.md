@@ -57,12 +57,12 @@ reduce_gray(&gray, f)                 // box average of an 8-bit image
 |---|---|
 | `CCITTFaxDecode` | Native decode with `hayro-ccitt` 0.4 into a packed bitmap: G4 (`/K < 0`), G3 1-D (`/K = 0`), G3 mixed 2-D (`/K > 0`), `/EndOfLine`, `/EncodedByteAlign`, `/EndOfBlock`, `/Rows`, `/Columns` (absent → `/Width`, noted). `/BlackIs1` and `/Decode` set the polarity; image masks paint 0 samples. A stream that breaks before the last row is CAP-001 ("rescan needed"); an early end-of-block pads white and is noted. |
 | `DCTDecode` | Passed through byte-identical with SOF size, components, progressive flag, `/Decode` inversion and Adobe APP14 transform; a JPEG without EOI is CAP-001. Decoding is `omr-imaging`'s job. |
-| `FlateDecode` / none | Bounded inflate (`miniz_oxide`, output ≤ declared size + one row: decompression bombs cost nothing), PNG predictors 10–15 and TIFF predictor 2; 1-bit gray and masks → `Bilevel`; 2/4/8/16-bit gray, RGB (BT.601 luma), CMYK (naive), Indexed → `Gray`; `/Decode` honoured. ASCIIHex/ASCII85/RunLength chains are accepted with a size cap. |
+| `FlateDecode` / none | Bounded inflate (`miniz_oxide`, output ≤ declared size + one row: decompression bombs cost nothing), PNG predictors 10–15 and TIFF predictor 2 (degenerate predictor geometry is a typed CAP-001, never a panic); 1-bit gray and masks → `Bilevel`; 2/4/8/16-bit gray, RGB (BT.601 luma), CMYK (naive), Indexed → `Gray`; `/Decode` honoured. ASCIIHex/ASCII85/RunLength/Flate chains (also in front of CCITT and DCT) are decoded by the crate's own bounded chain decoder (`src/stream.rs`). |
 | `JBIG2Decode` | Refused, CAP-004 (lossy symbol substitution; detail notes `/JBIG2Globals`). |
 | Mask + layers (MRC) | `/SMask` or stencil `/Mask` on the page image, a stencil-mask page image over other images, or two large overlapping images: CAP-004. |
 | `JPXDecode`, `LZWDecode`, `Crypt`, Separation/DeviceN/Lab | CAP-001 (unsupported in the MVP). |
 | Vector page, image < 50 % of the page | CAP-001 (needs the rasterising worker, not in the MVP). |
-| Limits | ≤ 5,000 pages, ≤ 20,000 px per side, ≤ 100 MP, ≤ 2 GB file, checked from headers before allocation; allocations use `try_reserve`. |
+| Limits | ≤ 5,000 pages, ≤ 20,000 px per side, ≤ 100 MP, ≤ 2 GB file, checked from headers before allocation; allocations use `try_reserve`. Every stream the crate decodes (page content, Form XObjects, Indexed palettes, image filter chains) goes through a bounded filter-chain decoder: content plus forms ≤ `Limits::max_stream_bytes` (64 MiB) per page, images ≤ 1.5 × their declared size; a decompression bomb refuses the page with CAP-001 (§8.12 row 31) instead of exhausting memory. `hayro-syntax`'s unbounded `Stream::decoded()` is never called. |
 
 **Placement.** The content stream is walked (`q`/`Q`, `cm`, `Do`, nested Form XObjects with
 `/Matrix`, up to depth 8, cycle-safe). The page image is the largest image drawn; smaller ones
@@ -103,7 +103,7 @@ Results on the 5 IAU PDFs (143 pages, 600-dpi G4, ≈ 35.5 MP each), release bui
 | `fax` crate decode vs `hayro-ccitt` | 143/143 bit-identical |
 | 200-dpi reduction vs `pages/*.png` | max \|diff\| = 1; 124/143 byte-identical; all 106 differing pixels are in partial right/bottom edge blocks (Pillow's fixed-point corner rounding), interior 3×3 blocks exact |
 | Effective dpi | 600 on every page (CTM and page box agree) |
-| Decode + reduce per page | median 19 ms, p95 30 ms, max 31 ms (target ≤ 60 ms); decode median 12.8 ms, reduce median 6.2 ms |
+| Decode + reduce per page | median 19 ms, p95 30 ms, max 31 ms (target ≤ 60 ms); decode median 12.8 ms, reduce median 6.2 ms. Independent review re-run (after the bounded-decoding fix): median 17.9 ms, p95 23.9 ms, max 27.0 ms; decode median 11.9 ms, reduce median 6.2 ms |
 
 `omr_imaging::reduce_bitmap` (added in parallel) gives identical output on the real pages
 (20/20 checked) but takes ≈ 26 ms per page against ≈ 7.6 ms here, so the SWAR kernel stays local;
@@ -118,7 +118,9 @@ Results on the 5 IAU PDFs (143 pages, 600-dpi G4, ≈ 35.5 MP each), release bui
   and CTM orientation, Form XObjects and xref streams, scaled placements, skew, invisible text
   and logos, Flate gray/RGB/1-bit/raw/4-bit/Indexed, DCT pass-through and truncation, JBIG2 and
   MRC → CAP-004, JPX/oversize/vector/composite → CAP-001, page isolation, document errors, byte
-  corruption never panics; proptest G4 round trip + reduction.
+  corruption never panics; proptest G4 round trip + reduction; decompression bombs in content
+  streams, Form XObjects (including repeated draws) and image filter chains → CAP-001; ASCIIHex
+  + Flate image chains decode; degenerate predictor geometry is a typed refusal.
 
 ## Deviations
 
@@ -129,3 +131,21 @@ Results on the 5 IAU PDFs (143 pages, 600-dpi G4, ≈ 35.5 MP each), release bui
 - Colour images are reduced to luma (BT.601) without ICC (`moxcms`, §7.3); CMYK uses a naive
   formula. Dropout-channel selection (§8.2) therefore needs the JPEG path or a later change.
 - The coverage reduction lives here (see above) rather than in `omr-imaging`.
+- `reduced()` / `working_gray()` reduce 8-bit gray pages only by integer ratios; other ratios
+  (e.g. 300 → 200 dpi) return the image at its native resolution (compare its size with the
+  page's `nominal_dpi()`). Bilevel pages use exact area weights at any ratio.
+- `hayro-syntax` decodes cross-reference and object streams inside its parser without an output
+  bound; that cannot be limited from this crate. `omr-app` should parse untrusted PDFs in a
+  memory-capped worker (§4.4) until the parser offers a limit. LZW-compressed content streams
+  are skipped (not decoded by the bounded decoder).
+
+## Review fixes (independent review)
+
+- Decompression bombs: page content streams, Form XObjects, Indexed palettes and image filter
+  chains were decoded with `hayro-syntax`'s unbounded `Stream::decoded()`, so a few KiB of Flate
+  could allocate gigabytes and abort the process (not catchable per page). They now use the
+  bounded chain decoder (`src/stream.rs`) and refuse the page with CAP-001.
+- A TIFF predictor with `/Columns 0` (zero-byte rows) panicked in `chunks_mut(0)` (caught as a
+  "decoder panic"); predictor geometry is now validated (`flate::validate_predictor`).
+- The ASCIIHex image-chain path no longer refuses large legitimate images (the old "encoded
+  larger than 2 × pixels" pre-check rejected ASCIIHex, which is 2 × by construction).

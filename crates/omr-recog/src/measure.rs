@@ -5,8 +5,9 @@
 //! (the length of the warp's x-derivative), `inner` is the mean darkness `1 − v/255` over the
 //! disk `r ≤ 0.72 R_local` and `core` over `r ≤ 0.45 R_local`, both quantised to
 //! [`Darkness`] (1/1024). A bubble is UNREADABLE — never empty — when registration failed, its
-//! disk leaves the image (CAP-009), it is smaller than 20 px (CAP-002), or too few matched
-//! bubbles support its local warp (REG-003, Region).
+//! disk leaves the image (CAP-009), it is smaller than 20 px (CAP-002), or its local warp is not
+//! trustworthy — too few matched bubbles nearby, or a local scale outside the 0.80–1.10 page
+//! band (REG-003, Region).
 
 use crate::config::{MeasureConfig, RegistrationConfig};
 use crate::register::{RefModel, Registration};
@@ -19,7 +20,8 @@ use serde::{Deserialize, Serialize};
 pub enum Unreadable {
     /// Page registration failed (REG-001/003/004 on the page).
     Registration,
-    /// Too few matched bubbles nearby to trust the local warp (REG-003, Region).
+    /// The local warp is not trustworthy: too few matched bubbles nearby, or a non-finite or
+    /// implausible local scale (REG-003, Region).
     NoSupport,
     /// The measurement disk leaves the image: cut-off scan or torn corner (CAP-009).
     OutsideImage,
@@ -109,8 +111,18 @@ pub(crate) fn measure(
             });
             let s = ((px.x - p.x).powi(2) + (px.y - p.y).powi(2)).sqrt();
             let r_local = rm.radius * s;
+            if !(p.x.is_finite() && p.y.is_finite() && s.is_finite()) {
+                return unread(PointPx::default(), Unreadable::NoSupport);
+            }
             if 2.0 * r_local < min_d {
                 return unread(p, Unreadable::TooSmall);
+            }
+            // A local scale outside the band a page may have at all means the warp is
+            // extrapolating, not measuring: UNREADABLE (REG-003), never a reading.
+            if s * 1000.0 < f64::from(rcfg.scale_warn_permille[0])
+                || s * 1000.0 > f64::from(rcfg.scale_warn_permille[1])
+            {
+                return unread(p, Unreadable::NoSupport);
             }
             let mut n_support = 0u32;
             support.for_each_within(*t, support_r, |_, _| n_support += 1);

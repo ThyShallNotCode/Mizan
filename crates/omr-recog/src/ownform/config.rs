@@ -32,8 +32,15 @@ pub struct OwnFormConfig {
     pub measure: OwnMeasureConfig,
     /// Per-position baseline β_p (§8.6), shared core.
     pub baseline: BaselineConfig,
-    /// Group decisions (§8.8), shared core.
+    /// Group decisions (§8.8), shared core, for 8-bit gray captures.
     pub decision: DecisionConfig,
+    /// Group decisions for bitonal captures (CAP-003 `bitonal`; §8.5 bitonal mode is its own
+    /// calibration slice): the shared core's thresholds validated on the 143 real bitonal IAU
+    /// sheets (θ_sel at 0.55 · level). The gray thresholds must not be used there: on those
+    /// sheets they auto-accept an erasure residue as an answer (1 silent error in 4,096).
+    pub decision_bitonal: DecisionConfig,
+    /// Classical review triggers standing in for the deferred CNN router (§8.7 step 3).
+    pub triggers: TriggerConfig,
 }
 
 impl Default for OwnFormConfig {
@@ -57,6 +64,8 @@ impl OwnFormConfig {
                 ..BaselineConfig::default()
             },
             decision: gray_decision(),
+            decision_bitonal: DecisionConfig::default(),
+            triggers: TriggerConfig::default(),
         }
     }
 
@@ -92,6 +101,41 @@ pub fn gray_decision() -> DecisionConfig {
         bitonal_hysteresis_factor: 2,
         multi_review: MultiReview::Never,
         erasure_rule: true,
+    }
+}
+
+/// Review triggers on top of the shared decision rule. They only ever turn an auto-accepted
+/// decision into a review (the proposed response is unchanged), like the §8.7 router does
+/// when a bubble needs the CNN that the MVP defers (*initial*, chosen on calibration corpora).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggerConfig {
+    /// A marked bubble (δ ≥ the blank threshold) with at least this per-mille of annulus
+    /// pixels at D > 0.35 has ink outside its outline, as a cross-out leaves: MRK-004 review
+    /// (F6 > a_min).
+    pub cross_annulus_permille: u16,
+    /// A selected bubble at most this dark (δ, 1/1024) …
+    pub tick_max_delta: u16,
+    /// … whose dark fraction (D > 0.5) lies in this per-mille range …
+    pub tick_dark_permille: [u16; 2],
+    /// … and exceeds its mean darkness by at least the first and at most the second value
+    /// (per-mille; a stroke is either black or paper, a light fill uniformly gray) is a tick
+    /// or X: MRK-005 review.
+    pub tick_dark_minus_inner_permille: [i16; 2],
+    /// An erasure the shared rule resolved (MRK-003 `resolved_erasure`) whose runner-up is at
+    /// least this dark (δ, 1/1024) could be a light fill, which §8.8 never treats as a residue:
+    /// MRK-003 review.
+    pub erasure_residue_max: u16,
+}
+
+impl Default for TriggerConfig {
+    fn default() -> Self {
+        Self {
+            cross_annulus_permille: 45,
+            tick_max_delta: 390,
+            tick_dark_permille: [60, 450],
+            tick_dark_minus_inner_permille: [-80, 60],
+            erasure_residue_max: 175,
+        }
     }
 }
 
@@ -248,6 +292,13 @@ pub struct OwnMeasureConfig {
     pub contrast_error: u8,
     /// Prior β_p⁰ used when no blank render was supplied (1/1024) (*initial*).
     pub default_prior: u16,
+    /// Streak detection: a column band whose median offset from its ±4 px neighbours is at
+    /// least this many gray levels (CAP-006) (*initial*).
+    pub streak_min_delta: u8,
+    /// Streak detection: widest band (px; §8.9: 1–4 px).
+    pub streak_max_width: u32,
+    /// Streak detection: row sampling step.
+    pub streak_row_step: u32,
 }
 
 impl Default for OwnMeasureConfig {
@@ -255,11 +306,14 @@ impl Default for OwnMeasureConfig {
         Self {
             inner_permille: 800,
             core_permille: 450,
-            annulus_permille: [1_250, 1_550],
+            annulus_permille: [1_200, 1_450],
             min_diameter_mpx: 20_000,
             contrast_warn: 80,
             contrast_error: 50,
             default_prior: 60,
+            streak_min_delta: 12,
+            streak_max_width: 4,
+            streak_row_step: 8,
         }
     }
 }

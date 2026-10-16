@@ -100,7 +100,10 @@ mod tests {
     #[test]
     fn errors_map_to_catalogue_codes() {
         let e = StoreError::Integrity("page 3".into()).exception().unwrap();
-        assert_eq!((e.code.as_str(), e.severity), ("SYS-010", Severity::Blocker));
+        assert_eq!(
+            (e.code.as_str(), e.severity),
+            ("SYS-010", Severity::Blocker)
+        );
         let e = StoreError::SchemaTooNew {
             found: 9,
             supported: 2,
@@ -108,7 +111,9 @@ mod tests {
         .exception()
         .unwrap();
         assert_eq!((e.code.as_str(), e.severity), ("SYS-016", Severity::Warn));
-        let e = StoreError::UnsafeLocation("nfs".into()).exception().unwrap();
+        let e = StoreError::UnsafeLocation("nfs".into())
+            .exception()
+            .unwrap();
         assert_eq!(e.code, "SYS-015");
         assert!(StoreError::NotFound("x".into()).exception().is_none());
     }

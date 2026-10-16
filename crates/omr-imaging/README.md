@@ -34,6 +34,7 @@ circle_offsets(r), parabolic_offset(l, c, r)
 // Sampling (§8.6): 1/256-px coordinates, 8-bit integer bilinear weights → identical on every ISA.
 bilinear(&img, x, y, outside), resample_affine(_offset)(&src, w, h, &map, …)
 disk_sum(&img, cx, cy, r) -> DiskSum { ink, count, expected }   // .clipped(), .darkness_q10()
+// (non-finite / far-away centre or bad radius → empty and clipped, never a reading)
 
 // Warps and fits (§8.4).
 trait Warp { map, jacobian, local_scale }

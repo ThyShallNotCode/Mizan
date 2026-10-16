@@ -170,8 +170,14 @@ pub fn assign_batch(
     let mut fixed: BTreeMap<usize, Vec<usize>> = BTreeMap::new(); // student → fixed rows
     let mut unfixed: Vec<usize> = Vec::new();
     for &r in &order {
-        match items[r].confirmed.as_ref().and_then(student_idx) {
-            Some(s) => fixed.entry(s).or_default().push(r),
+        match &items[r].confirmed {
+            Some(k) => {
+                // A confirmed pair is never re-solved; one whose student is missing from this
+                // snapshot stays out of the solve and is flagged `roster_diff` below.
+                if let Some(s) = student_idx(k) {
+                    fixed.entry(s).or_default().push(r);
+                }
+            }
             None => unfixed.push(r),
         }
     }
@@ -320,7 +326,10 @@ pub fn assign_batch(
             let dec = &items[r].decision;
             if let Some(best) = &dec.student
                 && let Some(s) = student_idx(best)
-                && dec.candidates.first().is_some_and(|c| c.posterior >= 0.5)
+                && dec
+                    .candidates
+                    .first()
+                    .is_some_and(|c| c.log_posterior_q >= q(0.5f64.ln()))
                 && claims.get(&s).is_some_and(|v| !v.is_empty())
             {
                 claims.entry(s).or_default().push(items[r].booklet.clone());
@@ -345,9 +354,10 @@ pub fn assign_batch(
         })
         .collect();
 
+    let absent_keys = prior.absent_keys();
     let absent_like = |s: usize| {
         let r = &roster.rows()[s];
-        prior.absent.contains(&r.key)
+        absent_keys.contains(&r.key.0)
             || matches!(
                 r.record.sis_status,
                 Some(SisStatus::DeniedEntry | SisStatus::Withdrawn)
@@ -358,12 +368,33 @@ pub fn assign_batch(
     for &r in &order {
         let item = &items[r];
         let mut dec = item.decision.clone();
-        if let Some(s) = item.confirmed.as_ref().and_then(student_idx) {
-            // Fixed pair: never moved, never re-flagged as assignment_changed.
+        if let Some(k) = &item.confirmed {
+            // Fixed pair: never moved, never re-flagged as assignment_changed. When its student
+            // is missing from this snapshot it keeps the student and goes to review with
+            // `roster_diff` (§9.2 "confirmed pairs never move silently", §9.9 row 19).
+            let (assigned, status) = match student_idx(k) {
+                Some(s) => (Assigned::Student(roster.rows()[s].key.clone()), dec.status),
+                None => {
+                    if !dec.has(SubReason::RosterDiff) {
+                        dec.findings.push(crate::decode::Finding {
+                            sub_reason: SubReason::RosterDiff,
+                            detail: format!(
+                                "confirmed student {k} is not on the current roster snapshot; kept, not re-assigned"
+                            ),
+                        });
+                    }
+                    dec.status = IdentityStatus::Review;
+                    dec.render_exceptions();
+                    (
+                        Assigned::Student(StudentKey(normalize_id(&k.0))),
+                        IdentityStatus::Review,
+                    )
+                }
+            };
             out.push(BookletAssignment {
                 booklet: item.booklet.clone(),
-                assigned: Assigned::Student(roster.rows()[s].key.clone()),
-                status: dec.status,
+                assigned,
+                status,
                 margin_q: None,
                 decision: dec,
             });
@@ -454,6 +485,10 @@ pub fn assign_batch(
         .collect();
     let (mut absent, mut dn, mut w) = (Vec::new(), Vec::new(), Vec::new());
     for (s, row) in roster.rows().iter().enumerate() {
+        // Students of sections not sitting this session are not expected here: never absent.
+        if !taken.contains(&s) && !prior.expects(row.record.section.as_ref()) {
+            continue;
+        }
         match row.record.sis_status {
             Some(SisStatus::DeniedEntry) => dn.push(row.key.clone()),
             Some(SisStatus::Withdrawn) if !taken.contains(&s) => w.push(row.key.clone()),

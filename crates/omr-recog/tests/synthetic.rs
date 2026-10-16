@@ -259,6 +259,53 @@ fn req_a1_synthetic_decisions_follow_the_brief() {
 }
 
 #[test]
+fn unconfident_id_digits_and_double_choices_are_never_confident() {
+    let engine = LegacyEngine::iau_ccsit_v1().unwrap();
+    let t = engine.template();
+    let mut img = render(engine.blank());
+    let mut p = Painter::new(t);
+    for k in 0..20u16 {
+        p.paint(
+            &mut img,
+            index(t, LegacyField::Answers, k, (k % 5) as u8),
+            Mark::Solid,
+        );
+    }
+    // Student number 12?4567890: column 2 holds only a light stipple on a solid-fill page.
+    for (c, d) in [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 0].iter().enumerate() {
+        let mark = if c == 2 {
+            Mark::Stipple(0.40)
+        } else {
+            Mark::Solid
+        };
+        p.paint(
+            &mut img,
+            index(t, LegacyField::StudentNumber, c as u16, *d),
+            mark,
+        );
+    }
+    // Two version bubbles filled.
+    p.paint(&mut img, index(t, LegacyField::Version, 0, 0), Mark::Solid);
+    p.paint(&mut img, index(t, LegacyField::Version, 0, 1), Mark::Solid);
+    let res = engine.recognize_single(&img, &request(20, &img));
+    let sn = &res.student_number;
+    let col = &sn.read.columns[2];
+    assert_ne!(col.state, ColumnState::Single, "{col:?}");
+    assert!(sn.review[2] && !sn.confident());
+    assert_eq!(
+        sn.read.exact_digits(),
+        None,
+        "a proposed digit is never exact"
+    );
+    assert_eq!(sn.text(), "12?4567890");
+    assert!(sn.review.iter().enumerate().all(|(c, &r)| r == (c == 2)));
+    assert_eq!(res.version.response, Response::Multi(vec![0, 1]));
+    assert!(!res.version.confident);
+    assert_eq!(res.version.value(), None);
+    assert_eq!(res.version.text(), None);
+}
+
+#[test]
 fn light_pencil_page_accepts_stippled_marks() {
     let engine = LegacyEngine::iau_ccsit_v1().unwrap();
     let t = engine.template();

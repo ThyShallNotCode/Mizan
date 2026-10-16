@@ -29,6 +29,7 @@ pub mod extract;
 pub mod flate;
 pub mod raster;
 pub mod reduce;
+mod stream;
 
 pub use extract::{
     ColorSpaceKind, ExtractOptions, ExtractedPage, ImageEncoding, ImageSource, Limits, PageNote,

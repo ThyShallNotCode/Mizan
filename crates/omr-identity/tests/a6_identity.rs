@@ -731,3 +731,239 @@ proptest! {
         }
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Review regressions (independent review of the ingest-identity package).
+// ---------------------------------------------------------------------------------------------
+
+/// National-ID digits never appear unmasked (§9.2, §9.10), even when only one channel is
+/// complete enough to be recognised as a national ID and the other shows most of its digits.
+#[test]
+fn req_a6_national_id_digits_are_masked_across_channels() {
+    let keys = ids();
+    let r = roster_of(&keys);
+    let nid = with_national_check_digit("110203040").unwrap();
+    let windows: Vec<String> = (0..=nid.len() - 5)
+        .map(|i| nid[i..i + 5].to_owned())
+        .collect();
+    let leaks = |s: &str| windows.iter().any(|w| s.contains(w.as_str()));
+    let mut partly_unreadable = nid.clone();
+    partly_unreadable.replace_range(5..6, "?");
+    let mut one_blank = nid.clone();
+    one_blank.replace_range(5..6, "_");
+    for (g, t) in [
+        (nid.clone(), partly_unreadable.clone()), // grid complete, written line partly unreadable
+        (one_blank.clone(), nid.clone()),         // grid incomplete, written line complete
+    ] {
+        let ev = BookletEvidence {
+            grid: Some(grid(&g)),
+            typed: Some(TypedId {
+                text: t,
+                source: TypedSource::Ocr,
+            }),
+            ..Default::default()
+        };
+        let d = decode(&ev, &r);
+        assert!(d.has(SubReason::WrongIdentifier));
+        let shown = format!(
+            "{:?}{:?}{:?}{:?}",
+            d.read, d.findings, d.notes, d.exceptions
+        );
+        assert!(!leaks(&shown), "national-ID digits shown in roster mode");
+        let rl = decode_rosterless(&ev, &StudentIdScheme::iau(), &IdentityPolicy::default());
+        assert!(rl.student.is_none());
+        let shown = format!(
+            "{:?}{:?}{:?}{:?}",
+            rl.read, rl.findings, rl.notes, rl.exceptions
+        );
+        assert!(
+            !leaks(&shown),
+            "national-ID digits shown in rosterless mode"
+        );
+    }
+}
+
+/// `id_only_auto_accept` needs the matched ID to pass its scheme's check digit (§9.7), not
+/// only a scheme that defines one: a roster row failing it (an import warning) never
+/// auto-accepts on the ID channel alone.
+#[test]
+fn req_a6_id_only_auto_accept_needs_an_id_passing_the_check_digit() {
+    let scheme = StudentIdScheme::digits(10, Some(CheckDigit::Luhn));
+    let luhn = |p: &str| {
+        (0..10)
+            .map(|c| format!("{p}{c}"))
+            .find(|s| CheckDigit::Luhn.verify(s))
+            .unwrap()
+    };
+    let mut keys: Vec<String> = (0..20u64)
+        .map(|i| luhn(&format!("3{:08}", i * 7919 + 17)))
+        .collect();
+    let mut bad = keys[0].clone();
+    let last = bad.pop().unwrap();
+    bad.push(char::from(b'0' + (last as u8 - b'0' + 5) % 10));
+    assert!(!CheckDigit::Luhn.verify(&bad));
+    keys.push(bad.clone());
+    let (r, report) = RosterSnapshot::build(
+        keys.iter().map(|k| rec(k)).collect(),
+        &scheme,
+        &ImportOptions::default(),
+    )
+    .unwrap();
+    assert!(
+        report
+            .issues
+            .iter()
+            .any(|i| matches!(i, ImportIssue::SchemeMismatch { .. })),
+        "a failing check digit is an import warning"
+    );
+    let policy = IdentityPolicy {
+        id_only_auto_accept: true,
+        ..Default::default()
+    };
+    let run = |k: &str| decode_booklet(&ev_grid(k), &r, &scheme, &PriorContext::default(), &policy);
+    let ok = run(&keys[3]);
+    assert_eq!(ok.status, IdentityStatus::AutoAccepted);
+    assert!(ok.notes.contains(&IdentityNote::IdOnly));
+    let d = run(&bad);
+    assert_eq!(d.student.as_ref().map(|s| s.0.as_str()), Some(bad.as_str()));
+    assert_ne!(
+        d.status,
+        IdentityStatus::AutoAccepted,
+        "ID-only acceptance of an ID failing its check digit"
+    );
+}
+
+/// A gap within h of G_∅ is never auto-decided (§9.5 gap test with the §9.7 hysteresis), even
+/// when the page code supports the candidate.
+#[test]
+fn req_a6_gap_within_hysteresis_of_g_null_never_auto_accepts() {
+    let keys = ids();
+    let r = roster_of(&keys);
+    let k = keys[3].clone();
+    let policy = IdentityPolicy::default();
+    let (lo, hi) = (
+        policy.g_null - policy.hysteresis,
+        policy.g_null + policy.hysteresis,
+    );
+    fn set(c: &mut IdColumnRead, marked: u8, logit: impl Fn(u8) -> i32) {
+        c.state = ColumnState::Single;
+        c.marked = vec![marked];
+        c.logits = (0..10u8).map(|d| LogitMilli(logit(d))).collect();
+    }
+    let mut in_band = 0;
+    for step in 0..400 {
+        let mut g = grid(&k);
+        // Column 8: a confident writer error (one substitution).
+        let x8 = g.columns[8].marked[0];
+        let y8 = (x8 + 1) % 10;
+        set(
+            &mut g.columns[8],
+            y8,
+            |d| if d == y8 { 9000 } else { -9000 },
+        );
+        // Column 5 (a serial digit): another digit marked, the roster digit progressively fainter.
+        let x5 = g.columns[5].marked[0];
+        let y5 = (x5 + 1) % 10;
+        let b = 9000 - 50 * step;
+        set(&mut g.columns[5], y5, |d| {
+            if d == y5 {
+                9000
+            } else if d == x5 {
+                b
+            } else {
+                -9000
+            }
+        });
+        let ev = BookletEvidence {
+            grid: Some(g),
+            bound_student: Some(StudentKey(k.clone())),
+            ..Default::default()
+        };
+        let d = decode(&ev, &r);
+        let gap = nats(d.gap_q.unwrap());
+        if (lo..hi).contains(&gap) {
+            in_band += 1;
+            assert_ne!(
+                d.status,
+                IdentityStatus::AutoAccepted,
+                "gap {gap:.2} nat within h of G_∅ was auto-accepted"
+            );
+        }
+    }
+    assert!(in_band > 0, "the sweep never reached the hysteresis band");
+}
+
+/// The absent list holds only students expected in this session (§9.6 batch close): students of
+/// sections not sitting this session are neither absent nor taken.
+#[test]
+fn req_a6_absent_list_holds_only_students_expected_this_session() {
+    let keys = ids();
+    let recs: Vec<RosterRecord> = keys
+        .iter()
+        .enumerate()
+        .map(|(i, k)| RosterRecord {
+            section: Some(if i < 30 { "001" } else { "002" }.into()),
+            ..rec(k)
+        })
+        .collect();
+    let (r, _) =
+        RosterSnapshot::build(recs, &StudentIdScheme::iau(), &ImportOptions::default()).unwrap();
+    let prior = PriorContext {
+        session_sections: Some(BTreeSet::from(["001".to_owned()])),
+        ..Default::default()
+    };
+    let policy = IdentityPolicy::default();
+    let d = decode_booklet(
+        &ev_grid(&keys[0]),
+        &r,
+        &StudentIdScheme::iau(),
+        &prior,
+        &policy,
+    );
+    let items = vec![BookletIdentity {
+        booklet: "01".into(),
+        decision: d,
+        confirmed: None,
+    }];
+    let out = assign_batch(&items, &r, &prior, &policy);
+    assert_eq!(out.absent.len(), 29);
+    let section_two: BTreeSet<StudentKey> =
+        keys[30..].iter().map(|k| StudentKey(k.clone())).collect();
+    assert!(out.absent.iter().all(|k| !section_two.contains(k)));
+}
+
+/// A confirmed pair never moves (§9.6), even when its student is missing from a newer roster
+/// snapshot and the grid now matches someone else: it keeps its student and is flagged
+/// `roster_diff` for review.
+#[test]
+fn req_a6_confirmed_pair_is_never_moved_by_a_roster_change() {
+    let keys = ids();
+    let newer = roster_of(&keys[1..20]); // keys[0] left the roster
+    // A human corrected this booklet to keys[0] although the grid reads keys[1].
+    let first = BookletIdentity {
+        booklet: "01".into(),
+        decision: decode(&ev_grid(&keys[1]), &newer),
+        confirmed: Some(StudentKey(keys[0].clone())),
+    };
+    let items = vec![first, booklet("02", &ev_grid(&keys[2]), &newer)];
+    let out = assign_batch(
+        &items,
+        &newer,
+        &PriorContext::default(),
+        &IdentityPolicy::default(),
+    );
+    assert_eq!(
+        out.booklets[0].assigned,
+        Assigned::Student(StudentKey(keys[0].clone()))
+    );
+    assert_eq!(out.booklets[0].status, IdentityStatus::Review);
+    assert!(
+        out.booklets[0]
+            .decision
+            .exceptions
+            .iter()
+            .any(
+                |e| e.sub_reason.as_deref() == Some("roster_diff") && e.severity == Severity::Error
+            )
+    );
+}

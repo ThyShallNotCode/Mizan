@@ -72,15 +72,18 @@ BatchOutcome { booklets: Vec<BookletAssignment { booklet, assigned: Student | Du
 - **Channel E**: `1−ε_qr` for the bound student, `ε_qr/(|R|−1)` otherwise; a binding that
   contradicts the handwriting is IDN-006.
 - **∅** = `π(∅)·P_fmt(ŷ)·ℓ_AB(ŷ)`; **gap test** `G = log ℓ(ŷ) − max_s log ℓ(s)`: below `G_w − 2` no
-  concern; up to `G_∅` (12 nat) `not_on_roster` + `writer_error` unless E supports; beyond,
-  `not_on_roster`. **The resolver never snaps a read to the nearest roster entry.**
+  concern; up to `G_∅` (12 nat) `not_on_roster` + `writer_error` unless E supports (and never
+  within h of `G_∅`, where the hysteresis band sends it to review); beyond, `not_on_roster`.
+  **The resolver never snaps a read to the nearest roster entry.**
 - **Normaliser.** Without channel B every roster row is scored exactly (channel A's neighbourhood
   sums are computed implicitly in O(n²) per row). With channel B, `block_k` rows plus every roster
   ID within one edit of ŷ or of the written string are scored exactly and the rest is bounded
   (exact A sums × B's maximum), so posteriors can only be understated.
 - **Decision** (§9.7): logit ≥ L_id (6.9) and margin ≥ τ_m (4.6) and AB support ≥ θ_f (4.6), each
-  with hysteresis h = 0.5 on quantised values; plus a second channel (E) or
-  `id_only_auto_accept` with a check-digit scheme. A clean single-channel match is
+  with hysteresis h = 0.5, all compared on 1/1024-nat quanta (as are the gap test and the
+  candidate ranking, ties broken by roster order); plus a second channel (E) or
+  `id_only_auto_accept` with a check-digit scheme and a best ID that passes it. The margin's
+  runner-up includes the tail bound of unscored students, so it is never overstated. A clean single-channel match is
   `NeedsConfirmation` (contact-sheet confirmation, shadow mode) with no exception. INFO-eligible
   sub-reasons (`id_blank`, `id_ambiguous`, `writer_error`, `channel_conflict`, `wrong_field`,
   `cross_section`) are INFO only on an auto-accepted booklet, otherwise ERROR.
@@ -89,9 +92,14 @@ BatchOutcome { booklets: Vec<BookletAssignment { booklet, assigned: Student | Du
 - **Batch**: costs `−log P(s|O)` in 1/1024 nat, a private ∅ column per booklet (+λ_new 2 nat), a
   dup column per student (+λ_dup 5 nat), exact pruning, union-find components, an exact integer
   Hungarian solve per component (rows by booklet ID, columns by key), margins by re-solving.
-  Confirmed pairs are fixed. Dup columns and strong competing claims raise IDN-005 (Student);
-  `assignment_changed`, `assigned_to_absent` (absent, DN, W) and batch-margin `low_margin` are
-  added; DN students are listed apart, never absent.
+  Confirmed pairs are fixed, also when their student is missing from the current snapshot (kept
+  out of the solve, flagged `roster_diff`, review). Dup columns and strong competing claims raise
+  IDN-005 (Student); `assignment_changed`, `assigned_to_absent` (absent, DN, W; absent keys are
+  normalised) and batch-margin `low_margin` are added; DN students are listed apart, never
+  absent; students of sections not sitting this session (`PriorContext::session_sections`) are
+  not expected, so never on the absent list.
+- **Masking**: a national ID/Iqama (or national-ID-shaped number) or phone number recognised in
+  either channel masks the displayed reads of both channels and every detail built from them.
 
 ## IAU real-data check (`tests/real_iau_identity.rs`)
 
@@ -120,8 +128,30 @@ auto-accept and IDN-006, blank/double/unreadable wildcards (ERROR vs INFO), neve
 substitutions/transpositions/far reads, national ID/Iqama/phone detection and masking, typed
 agreement and conflict, typed resolution of a blank column, rosterless mode, batch duplicates
 and not-on-roster, fixed pairs, DN/W lists, `assignment_changed`, batch-order invariance,
-blocked-scoring conservativeness, `roster_diff`, catalogue conformance, and a never-nearest-
-neighbour property; `tests/perf_identity.rs` (ignored timing).
+blocked-scoring conservativeness, `roster_diff`, catalogue conformance, a never-nearest-
+neighbour property, and the review regressions (cross-channel masking, ID-only check digit,
+G_∅ hysteresis band, session-scoped absent list, confirmed pair kept across a roster change);
+`tests/perf_identity.rs` (ignored timing).
+
+## Review fixes (independent review)
+
+Each has a regression test in `tests/a6_identity.rs`; all failed before the fix.
+
+- National-ID digits leaked across channels: a complete national ID in one channel masked only
+  that channel, so a partly unreadable copy in the other (9 of 10 digits) was shown in
+  `ReadSummary` and finding details (roster and rosterless modes). Rosterless mode also compared a
+  written national ID with the grid as a plain `channel_conflict`; it is now `wrong_identifier`.
+- `id_only_auto_accept` accepted an ID that fails the scheme's check digit (roster rows failing the
+  scheme are only an import warning); §9.7 requires the ID to pass it.
+- A gap within h of `G_∅` with page-code support proceeded and could auto-accept; the §9.7
+  hysteresis band now sends it to review (`not_on_roster` + `writer_error`).
+- Decision thresholds (logit, margin, LLRs, gap) compared raw `f64` values; they now compare
+  1/1024-nat quanta, and candidate ranking sorts on quanta with a fixed tie-break.
+- A confirmed pair whose student was missing from a newer snapshot was re-solved and could move
+  to another student without a flag; it now stays fixed with `roster_diff`.
+- The absent list included students of sections not sitting this session.
+- The single-booklet margin ignored the tail bound of unscored students (typed channel), so it
+  could be overstated.
 
 ## Deviations and open points
 
@@ -139,5 +169,10 @@ neighbour property; `tests/perf_identity.rs` (ignored timing).
 - Execution error is applied to the direct intent only, not inside the writer-error sum.
 - LAP ties (two booklets equally certain of one student) are broken by booklet order; both
   booklets still carry IDN-005 and go to review.
+- With channel B only (no grid) and a partly unreadable string, ŷ is undefined and ∅ is scored
+  with likelihood 1: such booklets always go to review as `not_on_roster` (conservative).
+- Two confirmed booklets whose (shared) student is missing from the snapshot are not reported as
+  IDN-005 (duplicates are counted over roster students only); both are in review via
+  `roster_diff`.
 - Calibration (β, μ, ε, T) and LTT certification (§9.7) are not part of this crate; all
   thresholds are the spec's initial values.

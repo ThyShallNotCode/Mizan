@@ -64,8 +64,11 @@ pub struct PageRequest {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GridField {
     /// The per-column reads (never auto-accepted here; identity decodes them, §8.8, §9.5).
+    /// `ColumnState::Single` only for a confident digit; an unconfident single proposal is
+    /// `Multi` with the candidate in `marked` (see `column_state`).
     pub read: IdGridRead,
-    /// Per column: true if the column decision is not confident (review / roster decoding).
+    /// Per column: true if the column is not a confident single digit or confident blank
+    /// (review / roster decoding): unconfident, multi-marked or unreadable.
     pub review: Vec<bool>,
     /// Unreadable causes (CAP-009, CAP-002, REG-003; Region).
     pub exceptions: Vec<Exception>,
@@ -99,7 +102,7 @@ pub struct ChoiceRead {
     pub labels: Vec<String>,
     /// Decided or proposed response.
     pub response: Response,
-    /// True if decided confidently.
+    /// True if decided confidently as a single label or blank (several marks never are).
     pub confident: bool,
     /// Margin score of the response.
     pub logit: LogitMilli,
@@ -342,7 +345,7 @@ impl LegacyEngine {
             .collect()
     }
 
-    fn unreadable_exceptions(
+    pub(crate) fn unreadable_exceptions(
         cause: &[(u8, Unreadable)],
         page: Option<&str>,
         q: Option<u16>,
@@ -451,18 +454,14 @@ impl LegacyEngine {
                 }
                 let d = self.deltas(m, baseline, r.clone());
                 let dec = decide_group(&d, level, cfg, req.high_stakes);
-                let (state, marked) = match &dec.kind {
-                    GroupKind::Blank => (ColumnState::Blank, vec![]),
-                    GroupKind::Single(i) => (ColumnState::Single, vec![*i]),
-                    GroupKind::Multi(v) => (ColumnState::Multi, v.clone()),
-                };
+                let (state, marked) = column_state(&dec);
                 columns.push(IdColumnRead {
                     column: c as u8,
                     state,
                     marked,
                     logits: option_logits(&d, &dec, lq, cfg),
                 });
-                review.push(!dec.accepted);
+                review.push(!dec.accepted || state == ColumnState::Multi);
             }
             GridField {
                 read: IdGridRead { columns },
@@ -493,11 +492,17 @@ impl LegacyEngine {
             }
             let d = self.deltas(m, baseline, r);
             let dec = decide_group(&d, level, cfg, req.high_stakes);
+            // A single-choice field with several marks is never a confident value.
+            let confident = dec.accepted && !matches!(dec.kind, GroupKind::Multi(_));
             ChoiceRead {
                 labels,
                 response: response_of(&dec.kind),
-                confident: dec.accepted,
-                logit: decision_logit(&dec, lq),
+                confident,
+                logit: if confident {
+                    decision_logit(&dec, lq)
+                } else {
+                    LogitMilli(0)
+                },
                 exceptions: vec![],
             }
         };
@@ -536,7 +541,22 @@ impl LegacyEngine {
     }
 }
 
-fn response_of(kind: &GroupKind) -> Response {
+/// The `omr_model::IdColumnRead` state of an ID-grid column decision. The contract
+/// (`ColumnState::Single` = "exactly one digit **confidently** marked", which
+/// `IdGridRead::exact_digits` and rosterless identity rely on) forbids reporting an unconfident
+/// proposal as `Single`: a single digit proposed for review is reported as `Multi` with that
+/// candidate in `marked` (an ambiguous column; its per-digit logits stay inside (−L_q, L_q)).
+/// Blank proposals stay `Blank` (a wildcard column, never an exact digit).
+pub(crate) fn column_state(dec: &GroupDecision) -> (ColumnState, Vec<u8>) {
+    match &dec.kind {
+        GroupKind::Blank => (ColumnState::Blank, vec![]),
+        GroupKind::Single(i) if dec.accepted => (ColumnState::Single, vec![*i]),
+        GroupKind::Single(i) => (ColumnState::Multi, vec![*i]),
+        GroupKind::Multi(v) => (ColumnState::Multi, v.clone()),
+    }
+}
+
+pub(crate) fn response_of(kind: &GroupKind) -> Response {
     match kind {
         GroupKind::Blank => Response::Blank,
         GroupKind::Single(i) => Response::Single(*i),
@@ -544,7 +564,7 @@ fn response_of(kind: &GroupKind) -> Response {
     }
 }
 
-fn question_outcome(
+pub(crate) fn question_outcome(
     q: u16,
     dec: &GroupDecision,
     lq: LogitMilli,
@@ -579,5 +599,44 @@ fn question_outcome(
         auto_accepted: dec.accepted,
         logit: decision_logit(dec, lq),
         exceptions,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::DecisionConfig;
+
+    /// The `IdColumnRead` contract: `Single` only for a confident digit, so
+    /// `IdGridRead::exact_digits` never returns a digit that was only proposed for review.
+    #[test]
+    fn unconfident_id_digit_is_never_reported_as_single() {
+        let cfg = DecisionConfig::default();
+        // Confident fill of digit 3.
+        let d = [0, 0, 0, 900, 0, 0, 0, 0, 0, 0];
+        let ok = decide_group(&d, 900, &cfg, false);
+        assert!(ok.accepted);
+        assert_eq!(column_state(&ok), (ColumnState::Single, vec![3]));
+        // A lone weak mark on digit 7 (review, proposed Single(7)).
+        let d = [0, 0, 0, 0, 0, 0, 0, 300, 0, 0];
+        let weak = decide_group(&d, 900, &cfg, false);
+        assert!(!weak.accepted);
+        assert_eq!(weak.kind, GroupKind::Single(7));
+        let (state, marked) = column_state(&weak);
+        assert_eq!((state, marked.as_slice()), (ColumnState::Multi, &[7u8][..]));
+        let grid = IdGridRead {
+            columns: vec![IdColumnRead {
+                column: 0,
+                state,
+                marked,
+                logits: option_logits(&d, &weak, LogitMilli::STANDARD_LQ, &cfg),
+            }],
+        };
+        assert_eq!(grid.exact_digits(), None);
+        assert!(grid.columns[0].logits[7].0.abs() < LogitMilli::STANDARD_LQ.0);
+        // A review blank stays a (wildcard) blank, never a digit.
+        let near = decide_group(&[78, 0, 0, 0, 0, 0, 0, 0, 0, 0], 900, &cfg, false);
+        assert!(!near.accepted);
+        assert_eq!(column_state(&near), (ColumnState::Blank, vec![]));
     }
 }

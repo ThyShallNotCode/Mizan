@@ -1093,3 +1093,182 @@ proptest! {
         }
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Decompression bombs (§7.4 limits, §8.12 row 31): bounded before allocation, page refused.
+// ---------------------------------------------------------------------------------------------
+
+/// One 4.8 × 4.8 pt page with the given content stream and XObjects (streams added as is).
+fn doc_with(content: Stream, xobjects: Vec<(&str, Stream)>) -> Vec<u8> {
+    let mut d = Document::with_version("1.5");
+    let pages_id = d.new_object_id();
+    let mut xo = Dictionary::new();
+    for (name, s) in xobjects {
+        let id = d.add_object(s);
+        xo.set(name.as_bytes().to_vec(), Object::Reference(id));
+    }
+    let content = d.add_object(content);
+    let pg = d.add_object(dictionary! {
+        "Type" => "Page", "Parent" => pages_id,
+        "MediaBox" => vec![0.into(), 0.into(), Object::Real(4.8), Object::Real(4.8)],
+        "Contents" => content,
+        "Resources" => dictionary! { "XObject" => xo },
+    });
+    d.objects.insert(
+        pages_id,
+        Object::Dictionary(
+            dictionary! { "Type" => "Pages", "Kids" => vec![pg.into()], "Count" => 1 },
+        ),
+    );
+    let cat = d.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    d.trailer.set("Root", cat);
+    let mut bytes = Vec::new();
+    d.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+fn with_stream_bound(n: usize) -> ExtractOptions {
+    ExtractOptions {
+        limits: omr_pdf::Limits {
+            max_stream_bytes: n,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn flate_stream(dict: Dictionary, data: &[u8]) -> Stream {
+    let mut dict = dict;
+    dict.set("Filter", "FlateDecode");
+    Stream::new(dict, zlib(data))
+}
+
+fn padded(text: &str, extra: usize) -> Vec<u8> {
+    let mut v = text.as_bytes().to_vec();
+    v.resize(v.len() + extra, b' ');
+    v
+}
+
+fn g4_stream(img: &BitImage) -> Stream {
+    let x = g4_xobject(img);
+    Stream::new(x.dict, x.data)
+}
+
+fn is_bound_refusal(o: &PageOutcome) -> bool {
+    o.refused().is_some_and(|r| {
+        r.exception.code == "CAP-001"
+            && matches!(&r.reason, Refusal::Error(PdfError::Corrupt(m)) if m.contains("bound"))
+    })
+}
+
+#[test]
+fn decompression_bombs_in_content_and_forms_refuse_the_page() {
+    let img = sheet(40, 40);
+    // Content stream: the image draw followed by 4 MiB of spaces (about 4 KiB compressed).
+    let content = flate_stream(
+        Dictionary::new(),
+        &padded(&full_page_content(4.8, 4.8), 4 << 20),
+    );
+    let pdf = doc_with(content, vec![("Im0", g4_stream(&img))]);
+    let out = PdfDocument::open(pdf.clone(), with_stream_bound(1 << 20))
+        .unwrap()
+        .extract_page(0);
+    assert!(is_bound_refusal(&out), "{:?}", out.refused());
+    // Within the (default 64 MiB) bound the same page extracts.
+    assert_eq!(bilevel(&open(pdf).extract_page(0)), &img);
+
+    // A Form XObject whose content inflates past the bound.
+    let form = flate_stream(
+        dictionary! {
+            "Type" => "XObject", "Subtype" => "Form",
+            "BBox" => vec![0.into(), 0.into(), 1.into(), 1.into()],
+        },
+        &padded(&full_page_content(4.8, 4.8), 4 << 20),
+    );
+    let pdf = doc_with(
+        Stream::new(Dictionary::new(), b"/Fm0 Do".to_vec()),
+        vec![("Im0", g4_stream(&img)), ("Fm0", form)],
+    );
+    let out = PdfDocument::open(pdf.clone(), with_stream_bound(1 << 20))
+        .unwrap()
+        .extract_page(0);
+    assert!(is_bound_refusal(&out), "{:?}", out.refused());
+    assert_eq!(bilevel(&open(pdf).extract_page(0)), &img);
+
+    // Many draws of one form share the page's budget.
+    let form = flate_stream(
+        dictionary! {
+            "Type" => "XObject", "Subtype" => "Form",
+            "BBox" => vec![0.into(), 0.into(), 1.into(), 1.into()],
+        },
+        &padded(&full_page_content(4.8, 4.8), 300 << 10),
+    );
+    let pdf = doc_with(
+        Stream::new(
+            Dictionary::new(),
+            b"/Fm0 Do /Fm0 Do /Fm0 Do /Fm0 Do".to_vec(),
+        ),
+        vec![("Im0", g4_stream(&img)), ("Fm0", form)],
+    );
+    let out = PdfDocument::open(pdf, with_stream_bound(1 << 20))
+        .unwrap()
+        .extract_page(0);
+    assert!(is_bound_refusal(&out), "{:?}", out.refused());
+}
+
+#[test]
+fn image_filter_chains_are_bounded_and_decoded() {
+    let (w, h) = (8u32, 8u32);
+    let gray = gray_pattern(w, h);
+    let image = |data: Vec<u8>, filters: Vec<&str>| {
+        Stream::new(
+            dictionary! {
+                "Type" => "XObject", "Subtype" => "Image", "Width" => w as i64,
+                "Height" => h as i64, "BitsPerComponent" => 8, "ColorSpace" => "DeviceGray",
+                "Filter" => filters.into_iter().map(|f| Object::Name(f.as_bytes().to_vec())).collect::<Vec<_>>(),
+            },
+            data,
+        )
+    };
+    let hex = |b: &[u8]| -> Vec<u8> {
+        b.iter()
+            .flat_map(|x| format!("{x:02X}").into_bytes())
+            .collect()
+    };
+    let content = || Stream::new(Dictionary::new(), full_page_content(4.8, 4.8).into_bytes());
+    // A legitimate ASCIIHex + Flate chain decodes.
+    let ok = doc_with(
+        content(),
+        vec![(
+            "Im0",
+            image(hex(&zlib(&gray)), vec!["ASCIIHexDecode", "FlateDecode"]),
+        )],
+    );
+    let out = open(ok).extract_page(0);
+    match &out.extracted().expect("hex+flate chain").raster {
+        PageRaster::Gray(g) => assert_eq!(g.as_raw(), &gray[..]),
+        other => panic!("expected gray, got {other:?}"),
+    }
+    // An 8 × 8 image whose Flate stage inflates to 16 MiB: refused before allocating it.
+    let bomb = hex(&zlib(&vec![0u8; 16 << 20]));
+    let out = open(doc_with(
+        content(),
+        vec![("Im0", image(bomb, vec!["ASCIIHexDecode", "FlateDecode"]))],
+    ))
+    .extract_page(0);
+    assert!(is_bound_refusal(&out), "{:?}", out.refused());
+    // Degenerate predictor geometry is a typed refusal, never a (caught) decoder panic.
+    let mut s = image(zlib(&gray), vec!["FlateDecode"]);
+    s.dict.set(
+        "DecodeParms",
+        dictionary! { "Predictor" => 2, "Columns" => 0 },
+    );
+    let out = open(doc_with(content(), vec![("Im0", s)])).extract_page(0);
+    let r = out.refused().expect("refused");
+    assert_eq!(r.exception.code, "CAP-001");
+    assert!(
+        matches!(&r.reason, Refusal::Error(PdfError::Unsupported(m)) if m.contains("predictor")),
+        "{:?}",
+        r.reason
+    );
+}

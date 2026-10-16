@@ -129,7 +129,9 @@ fn sync_dir(dir: &Path) -> io::Result<()> {
 }
 
 fn is_hex_address(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 impl ObjectStore {
@@ -357,5 +359,9 @@ fn hash_file(path: &Path) -> Result<(String, String, u64)> {
         s.update(&buf[..n]);
         len += n as u64;
     }
-    Ok((b3.finalize().to_hex().to_string(), hex::encode(s.finalize()), len))
+    Ok((
+        b3.finalize().to_hex().to_string(),
+        hex::encode(s.finalize()),
+        len,
+    ))
 }

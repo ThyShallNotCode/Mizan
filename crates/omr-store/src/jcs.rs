@@ -181,13 +181,19 @@ mod tests {
         // UTF-16 and UTF-8 orders differ for U+E000..U+FFFF against supplementary characters:
         // 😀 is the surrogate pair D83D DE00 < FB01 in UTF-16, but F0… > EF… in UTF-8.
         let v = json!({"\u{1F600}": 1, "\u{FB01}": 2});
-        assert_eq!(value_to_jcs(&v).unwrap(), "{\"\u{1F600}\":1,\"\u{FB01}\":2}");
+        assert_eq!(
+            value_to_jcs(&v).unwrap(),
+            "{\"\u{1F600}\":1,\"\u{FB01}\":2}"
+        );
     }
 
     #[test]
     fn string_escapes() {
         let v = json!("a\"b\\c\n\u{01}\u{7f}é/");
-        assert_eq!(value_to_jcs(&v).unwrap(), "\"a\\\"b\\\\c\\n\\u0001\u{7f}é/\"");
+        assert_eq!(
+            value_to_jcs(&v).unwrap(),
+            "\"a\\\"b\\\\c\\n\\u0001\u{7f}é/\""
+        );
     }
 
     #[test]
@@ -201,10 +207,22 @@ mod tests {
         assert_eq!(es_number(0.000001).unwrap(), "0.000001");
         assert!(es_number(f64::NAN).is_err());
         // RFC 8785 Appendix B samples.
-        assert_eq!(es_number(f64::from_bits(0x4340000000000000)).unwrap(), "9007199254740992");
-        assert_eq!(es_number(f64::from_bits(0x44b52d02c7e14af6)).unwrap(), "1e+23");
-        assert_eq!(es_number(f64::from_bits(0x3eb0c6f7a0b5ed8d)).unwrap(), "0.000001");
-        assert_eq!(es_number(f64::from_bits(0x3eb0c6f7a0b5ed8c)).unwrap(), "9.999999999999997e-7");
+        assert_eq!(
+            es_number(f64::from_bits(0x4340000000000000)).unwrap(),
+            "9007199254740992"
+        );
+        assert_eq!(
+            es_number(f64::from_bits(0x44b52d02c7e14af6)).unwrap(),
+            "1e+23"
+        );
+        assert_eq!(
+            es_number(f64::from_bits(0x3eb0c6f7a0b5ed8d)).unwrap(),
+            "0.000001"
+        );
+        assert_eq!(
+            es_number(f64::from_bits(0x3eb0c6f7a0b5ed8c)).unwrap(),
+            "9.999999999999997e-7"
+        );
     }
 
     #[test]
@@ -216,8 +234,6 @@ mod tests {
     #[test]
     fn sha384_is_hex() {
         assert_eq!(sha384_hex(b"").len(), 96);
-        assert!(
-            sha384_hex(b"abc").starts_with("cb00753f45a35e8bb5a03d699ac65007272c32ab0eded163")
-        );
+        assert!(sha384_hex(b"abc").starts_with("cb00753f45a35e8bb5a03d699ac65007272c32ab0eded163"));
     }
 }

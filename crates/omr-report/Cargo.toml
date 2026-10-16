@@ -15,5 +15,9 @@ omr-analytics.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-csv.workspace = true
 rust_xlsxwriter.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+csv.workspace = true
+miniz_oxide.workspace = true

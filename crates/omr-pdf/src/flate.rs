@@ -54,8 +54,28 @@ pub struct Inflated {
     pub damaged: bool,
 }
 
+/// Rejects predictor geometry that cannot describe an image row (zero or absurd `/Colors`,
+/// `/BitsPerComponent` or `/Columns`), so row arithmetic never overflows or divides by zero.
+pub fn validate_predictor(p: &PredictorParams) -> Result<(), PdfError> {
+    if p.predictor <= 1 {
+        return Ok(());
+    }
+    let ok = (1..=32).contains(&p.colors)
+        && matches!(p.bits_per_component, 1 | 2 | 4 | 8 | 16)
+        && (1..=1_000_000).contains(&p.columns);
+    if ok {
+        Ok(())
+    } else {
+        Err(PdfError::Unsupported(format!(
+            "predictor geometry /Colors {} /BitsPerComponent {} /Columns {}",
+            p.colors, p.bits_per_component, p.columns
+        )))
+    }
+}
+
 /// Inflates `input` expecting `expected` bytes of *unpredicted* output (`rows × row_bytes`).
 pub fn inflate(input: &[u8], expected: usize, p: &PredictorParams) -> Result<Inflated, PdfError> {
+    validate_predictor(p)?;
     let png = p.predictor >= 10;
     let rows = if p.row_bytes() == 0 {
         0
@@ -100,6 +120,7 @@ pub fn inflate(input: &[u8], expected: usize, p: &PredictorParams) -> Result<Inf
 
 /// Undoes the predictor in place (PNG) or into a new buffer.
 pub fn unpredict(mut raw: Vec<u8>, p: &PredictorParams) -> Result<Vec<u8>, PdfError> {
+    validate_predictor(p)?;
     match p.predictor {
         0 | 1 => Ok(raw),
         2 => {
@@ -238,5 +259,19 @@ mod tests {
             unpredict(vec![5, 1, 1, 7, 0, 1], &tiff).unwrap(),
             vec![5, 6, 7, 7, 7, 8]
         );
+        // Degenerate geometry is an error, never a panic (zero-byte rows, overflow).
+        for bad in [
+            PredictorParams { columns: 0, ..tiff },
+            PredictorParams { colors: 0, ..p },
+            PredictorParams {
+                colors: u32::MAX,
+                bits_per_component: 16,
+                columns: u32::MAX,
+                predictor: 12,
+            },
+        ] {
+            assert!(unpredict(vec![1, 2, 3], &bad).is_err());
+            assert!(inflate(&compress_to_vec_zlib(&[1, 2, 3], 6), 3, &bad).is_err());
+        }
     }
 }
