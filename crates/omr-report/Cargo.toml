@@ -1,0 +1,19 @@
+[package]
+name = "omr-report"
+description = "Exports and reports: CSV, XLSX, HTML and the NCAAA/ABET report tables (spec §16.3, §17)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+omr-model.workspace = true
+omr-scoring.workspace = true
+omr-outcomes.workspace = true
+omr-analytics.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+csv.workspace = true
+rust_xlsxwriter.workspace = true

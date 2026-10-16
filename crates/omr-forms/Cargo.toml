@@ -1,0 +1,26 @@
+[package]
+name = "omr-forms"
+description = "Template model, sheet geometry, page code and sheet rendering (spec §6)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+omr-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+data-encoding.workspace = true
+qrcode.workspace = true
+usvg = { workspace = true, optional = true }
+resvg = { workspace = true, optional = true }
+svg2pdf = { workspace = true, optional = true }
+tiny-skia = { workspace = true, optional = true }
+
+[features]
+default = []
+render = ["dep:usvg", "dep:resvg", "dep:svg2pdf", "dep:tiny-skia"]

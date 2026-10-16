@@ -1,0 +1,19 @@
+[package]
+name = "shell-slint"
+description = "Slint desktop shell: widget binding and pixel blitting only (spec §5.2, ADR-001)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "omr-desktop"
+path = "src/main.rs"
+
+[dependencies]
+omr-app.workspace = true
+slint.workspace = true
+
+[build-dependencies]
+slint-build.workspace = true

@@ -1,0 +1,102 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/omr-model",
+    "crates/omr-imaging",
+    "crates/omr-forms",
+    "crates/omr-recog",
+    "crates/omr-identity",
+    "crates/omr-pdf",
+    "crates/omr-scoring",
+    "crates/omr-outcomes",
+    "crates/omr-analytics",
+    "crates/omr-store",
+    "crates/omr-report",
+    "crates/omr-app",
+    "crates/omr-cli",
+    "crates/omr-sim",
+    "crates/shell-slint",
+    "crates/omr-archtest",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "Apache-2.0"
+repository = "https://github.com/thyshallnotcode/omr-correction-"
+publish = false
+
+[workspace.dependencies]
+# internal
+omr-model = { path = "crates/omr-model" }
+omr-imaging = { path = "crates/omr-imaging" }
+omr-forms = { path = "crates/omr-forms", default-features = false }
+omr-recog = { path = "crates/omr-recog" }
+omr-identity = { path = "crates/omr-identity" }
+omr-pdf = { path = "crates/omr-pdf" }
+omr-scoring = { path = "crates/omr-scoring" }
+omr-outcomes = { path = "crates/omr-outcomes" }
+omr-analytics = { path = "crates/omr-analytics" }
+omr-store = { path = "crates/omr-store" }
+omr-report = { path = "crates/omr-report" }
+omr-app = { path = "crates/omr-app" }
+omr-sim = { path = "crates/omr-sim" }
+# serialization and errors
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+anyhow = "1.0.104"
+uuid = { version = "1.28.0", features = ["v7", "serde"] }
+# imaging
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff"] }
+zune-jpeg = "0.5.16-rc2"
+fast_image_resize = "6.1.0"
+kornia-apriltag = "0.2.0"
+rxing = { version = "0.9.3", default-features = false }
+qrcode = { version = "0.14.1", default-features = false }
+# rendering
+tiny-skia = "0.12.0"
+resvg = "0.48.1"
+usvg = "0.48.1"
+svg2pdf = "0.13.0"
+# crypto (NCS profile, §19.2)
+sha2 = "0.11.1"
+hmac = "0.13.0"
+blake3 = "1.8.7"
+data-encoding = "2.11.1"
+hex = "0.4.3"
+# numerics
+num-rational = { version = "0.4.2", features = ["serde"] }
+num-traits = "0.2.19"
+rust_decimal = { version = "1.43.0", features = ["serde"] }
+rand = "0.10.3"
+rand_chacha = "0.10.0"
+rand_distr = "0.6.0"
+# data and io
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+csv = "1.4.0"
+rust_xlsxwriter = "0.99.1"
+lopdf = "0.45.0"
+walkdir = "2.5.0"
+tempfile = "3.27.0"
+# app and cli
+rayon = "1.12.0"
+clap = { version = "4.6.7", features = ["derive"] }
+# gui
+slint = "1.18.1"
+slint-build = "1.18.1"
+i-slint-backend-testing = "=1.18.1"
+# testing
+proptest = "1.12.0"
+
+[profile.release]
+debug = 1
+lto = "thin"
+codegen-units = 4
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.test]
+opt-level = 1

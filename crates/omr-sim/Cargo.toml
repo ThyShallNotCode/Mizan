@@ -1,0 +1,19 @@
+[package]
+name = "omr-sim"
+description = "Semi-synthetic generator: filled and scanned sheets with ground truth by construction (spec §23.3). Test and bench only."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+omr-model.workspace = true
+omr-forms = { workspace = true, features = ["render"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+rand_distr.workspace = true
+image.workspace = true

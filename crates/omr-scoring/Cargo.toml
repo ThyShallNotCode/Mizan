@@ -1,0 +1,15 @@
+[package]
+name = "omr-scoring"
+description = "Answer keys, scoring policies and the L0-L6 scoring pipeline (spec §10)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+omr-model.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+num-rational.workspace = true
+num-traits.workspace = true

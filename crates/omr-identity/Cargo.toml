@@ -1,0 +1,13 @@
+[package]
+name = "omr-identity"
+description = "Student identity: ID-grid decoding, roster reconciliation and assignment (spec §9)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+omr-model.workspace = true
+serde.workspace = true
+thiserror.workspace = true

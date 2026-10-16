@@ -1,0 +1,26 @@
+[package]
+name = "omr-app"
+description = "Application services: the end-to-end grading pipeline, scheduler and view-models (spec §4.3)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+omr-model.workspace = true
+omr-imaging.workspace = true
+omr-forms.workspace = true
+omr-recog.workspace = true
+omr-identity.workspace = true
+omr-pdf.workspace = true
+omr-scoring.workspace = true
+omr-outcomes.workspace = true
+omr-analytics.workspace = true
+omr-store.workspace = true
+omr-report.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+rayon.workspace = true
+walkdir.workspace = true
