@@ -425,12 +425,24 @@ mod tests {
         // Reference values from scipy 1.18 (scipy.stats).
         assert!(close(normal_quantile(0.975), 1.959_963_984_540_054, 1e-12));
         assert!(close(normal_cdf(1.0), 0.841_344_746_068_542_9, 1e-12));
-        assert!(close(t_quantile(0.975, 24.0), 2.063_898_561_628_024_5, 1e-9));
+        assert!(close(
+            t_quantile(0.975, 24.0),
+            2.063_898_561_628_024_5,
+            1e-9
+        ));
         assert!(close(t_quantile(0.975, 9.0), 2.262_157_162_798_205, 1e-9));
         assert!(close(chi2_sf(3.84, 1.0), 0.050_043_521_248_705_19, 1e-10));
         assert!(close(chi2_sf(10.0, 4.0), 0.040_427_681_994_512_8, 1e-10));
-        assert!(close(f_quantile(0.975, 9.0, 18.0), 2.929_112_493_123_264, 1e-8));
-        assert!(close(f_quantile(0.025, 9.0, 18.0), 0.270_162_139_362_321, 1e-8));
+        assert!(close(
+            f_quantile(0.975, 9.0, 18.0),
+            2.929_112_493_123_264,
+            1e-8
+        ));
+        assert!(close(
+            f_quantile(0.025, 9.0, 18.0),
+            0.270_162_139_362_321,
+            1e-8
+        ));
         assert!(close(ln_gamma(10.0), 12.801_827_480_081_469, 1e-11));
     }
 

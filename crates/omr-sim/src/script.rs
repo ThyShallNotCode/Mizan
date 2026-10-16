@@ -146,8 +146,13 @@ pub struct QuestionScript {
 }
 
 /// Selection state S(c) of a class (§8.8 table): `Some(true)` = Y, `Some(false)` = N,
-/// `None` = R. `other_selected` is whether another bubble of the question is Y.
-pub fn selection_state(class: MarkClass, mode: CancelMode, other_selected: bool) -> Option<bool> {
+/// `None` = R.
+///
+/// `other` is the context the class depends on: for `partial_or_dot` and `stray_or_damage`,
+/// whether another bubble of the question is Y; for `whiteout` ("N; R if it is the only mark"),
+/// whether another bubble of the question carries any mark. Other classes ignore it.
+/// [`expected_outcome`] passes the right one per class.
+pub fn selection_state(class: MarkClass, mode: CancelMode, other: bool) -> Option<bool> {
     use CancelMode::*;
     use MarkClass::*;
     match (class, mode) {
@@ -161,8 +166,8 @@ pub fn selection_state(class: MarkClass, mode: CancelMode, other_selected: bool)
         (CheckOrX, FillCancelsCheck) => Some(true),
         (CheckOrX, _) => None,
         (CircledLabel, _) => None,
-        (PartialOrDot | StrayOrDamage, _) => other_selected.then_some(false),
-        (Whiteout, _) => other_selected.then_some(false),
+        (PartialOrDot | StrayOrDamage, _) => other.then_some(false),
+        (Whiteout, _) => other.then_some(false),
     }
 }
 
@@ -175,7 +180,14 @@ pub fn expected_outcome(classes: &[MarkClass], mode: CancelMode) -> Expected {
         .collect();
     let mut selected = Vec::new();
     for (i, c) in classes.iter().enumerate() {
-        let other = firm_y.iter().enumerate().any(|(j, y)| j != i && *y);
+        let other = if *c == MarkClass::Whiteout {
+            classes
+                .iter()
+                .enumerate()
+                .any(|(j, k)| j != i && *k != MarkClass::Empty)
+        } else {
+            firm_y.iter().enumerate().any(|(j, y)| j != i && *y)
+        };
         match selection_state(*c, mode, other) {
             Some(true) => selected.push(i as u8),
             Some(false) => {}
@@ -239,8 +251,33 @@ pub struct Style {
     pub base_darkness: f32,
 }
 
-/// Builds the marks of one question for an intended response. Rates add erasures, light fills,
-/// dots, ticks and cross-outs around the intent.
+/// Brings an intended response into the space a student can mark on a single-answer item with
+/// `options` bubbles: options that do not exist and duplicates are dropped, `Set` is marked like
+/// `Multi`, and `Unreadable` (not something a student can intend) becomes `Blank`.
+pub fn normalise_intent(intended: Response, options: u8) -> Response {
+    let chosen = |v: &[u8]| {
+        let mut v: Vec<u8> = v.iter().copied().filter(|o| *o < options).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let v = match intended {
+        Response::Single(o) => chosen(&[o]),
+        Response::Multi(v) | Response::Set(v) => chosen(&v),
+        Response::Blank | Response::Unreadable { .. } => Vec::new(),
+    };
+    match v.len() {
+        0 => Response::Blank,
+        1 => Response::Single(v[0]),
+        _ => Response::Multi(v),
+    }
+}
+
+/// Builds the marks of one question for an intended response (normalised first, see
+/// [`normalise_intent`]). Rates add erasures, light fills, dots, ticks and cancellations around
+/// the intent. The student follows the exam's marking convention (§6.5): under
+/// `fill_cancels_check` a selection is a tick and a cancellation is a full fill; otherwise a
+/// selection is a fill and a cancellation is a cross-out.
 pub fn script_question(
     rng: &mut ChaCha8Rng,
     question: u16,
@@ -250,6 +287,8 @@ pub fn script_question(
     rates: &MarkRates,
 ) -> QuestionScript {
     let (mode, inst, base) = (style.mode, style.instrument, style.base_darkness);
+    let fcc = mode == CancelMode::FillCancelsCheck;
+    let intended = normalise_intent(intended, options);
     let mut marks = Vec::new();
     let chosen: Vec<u8> = match &intended {
         Response::Single(o) => vec![*o],
@@ -274,15 +313,26 @@ pub fn script_question(
         && let Some(o) = pick_other(rng, options, &chosen)
         && !marks.iter().any(|m| m.option == o)
     {
-        marks.push(BubbleMark {
-            option: o,
-            class: MarkClass::CrossedOut,
-            darkness: rng.random_range(0.6f32..=0.95),
-            coverage: rng.random_range(0.8f32..=1.0),
-            instrument: inst,
-        });
+        if fcc {
+            // Under fill_cancels_check a complete fill is the cancellation (§6.5, §8.8).
+            marks.push(fill(rng, o, inst, base, false));
+        } else {
+            marks.push(BubbleMark {
+                option: o,
+                class: MarkClass::CrossedOut,
+                darkness: rng.random_range(0.6f32..=0.95),
+                coverage: rng.random_range(0.8f32..=1.0),
+                instrument: inst,
+            });
+        }
     }
-    let tick = chosen.len() == 1 && rng.random_bool(rates.check_or_x);
+    // Under fill_cancels_check every selection is a tick or X; otherwise a tick is an
+    // occasional deviation from the instructions (review under §8.8).
+    let tick = if fcc {
+        !chosen.is_empty()
+    } else {
+        chosen.len() == 1 && rng.random_bool(rates.check_or_x)
+    };
     for &o in &chosen {
         if tick {
             marks.push(BubbleMark {
@@ -314,11 +364,12 @@ pub fn script_question(
     for m in &marks {
         classes[usize::from(m.option)] = m.class;
     }
-    let difficulty = if marks.iter().any(|m| {
-        matches!(
-            m.class,
-            MarkClass::PartialOrDot | MarkClass::CheckOrX | MarkClass::CrossedOut
-        )
+    // A tick is the normal selection under fill_cancels_check, and a fill its cancellation.
+    let difficulty = if marks.iter().any(|m| match m.class {
+        MarkClass::PartialOrDot | MarkClass::CrossedOut => true,
+        MarkClass::CheckOrX => !fcc,
+        MarkClass::Filled => fcc,
+        _ => false,
     }) {
         Difficulty::Ambiguous
     } else if chosen.len() > 1 {
@@ -512,6 +563,74 @@ mod tests {
             Expected::Auto(Response::Single(1))
         );
         assert_eq!(expected_outcome(&[CrossedOut, Filled], e), Expected::Review);
+        // White-out: "N; R if it is the only mark" (§8.8), whatever the other mark is.
+        assert_eq!(expected_outcome(&[Whiteout, Empty], e), Expected::Review);
+        assert_eq!(
+            expected_outcome(&[Whiteout, Filled], e),
+            Expected::Auto(Response::Single(1))
+        );
+        assert_eq!(
+            expected_outcome(&[Whiteout, CrossedOut], CancelMode::CrossCancels),
+            Expected::Auto(Response::Blank)
+        );
+    }
+
+    #[test]
+    fn intents_are_normalised_to_markable_responses() {
+        assert_eq!(normalise_intent(Response::Single(7), 4), Response::Blank);
+        assert_eq!(
+            normalise_intent(Response::Multi(vec![3, 1, 3, 9]), 4),
+            Response::Multi(vec![1, 3])
+        );
+        assert_eq!(
+            normalise_intent(Response::Multi(vec![2, 2]), 4),
+            Response::Single(2)
+        );
+        assert_eq!(
+            normalise_intent(Response::Set(vec![0, 2]), 4),
+            Response::Multi(vec![0, 2])
+        );
+        assert_eq!(
+            normalise_intent(Response::Unreadable { bubbles: vec![1] }, 4),
+            Response::Blank
+        );
+        // Out-of-range options never panic and never reach the painted marks.
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        let s = script_question(
+            &mut rng,
+            0,
+            4,
+            Response::Multi(vec![1, 200]),
+            Style {
+                mode: CancelMode::EraseOnly,
+                instrument: Instrument::Pencil,
+                base_darkness: 0.8,
+            },
+            &MarkRates::clean(),
+        );
+        assert_eq!(s.intended, Response::Single(1));
+        assert!(s.marks.iter().all(|m| m.option < 4));
+    }
+
+    #[test]
+    fn fill_cancels_check_students_tick_to_select_and_fill_to_cancel() {
+        let mut rng = ChaCha8Rng::seed_from_u64(5);
+        let mut rates = MarkRates::hard();
+        rates.crossed_out = 0.5;
+        let style = Style {
+            mode: CancelMode::FillCancelsCheck,
+            instrument: Instrument::Pencil,
+            base_darkness: 0.8,
+        };
+        let mut cancels = 0;
+        for q in 0..500u16 {
+            let s = script_question(&mut rng, q, 5, Response::Single(2), style, &rates);
+            assert_eq!(s.classes[2], CheckOrX, "{s:?}");
+            assert!(!s.classes.contains(&CrossedOut));
+            cancels += usize::from(s.classes.contains(&Filled));
+            assert_eq!(s.expected, Expected::Auto(Response::Single(2)), "{s:?}");
+        }
+        assert!(cancels > 100, "cancellations are fills: {cancels}");
     }
 
     #[test]
@@ -530,30 +649,40 @@ mod tests {
     fn scripted_questions_are_consistent() {
         let mut rng = ChaCha8Rng::seed_from_u64(11);
         let r = MarkRates::hard();
-        for q in 0..2_000u16 {
-            let intended = draw_response(&mut rng, 5, &r);
-            let s = script_question(
-                &mut rng,
-                q,
-                5,
-                intended.clone(),
-                Style {
-                    mode: CancelMode::EraseOnly,
-                    instrument: Instrument::Pencil,
-                    base_darkness: 0.8,
-                },
-                &r,
-            );
-            assert_eq!(s.classes.len(), 5);
-            // Under erase_only, an auto outcome always equals the intent.
-            if let Expected::Auto(resp) = &s.expected {
-                assert_eq!(resp, &s.intended, "{s:?}");
+        for mode in [
+            CancelMode::EraseOnly,
+            CancelMode::CrossCancels,
+            CancelMode::FillCancelsCheck,
+        ] {
+            let mut auto = 0;
+            for q in 0..2_000u16 {
+                let intended = draw_response(&mut rng, 5, &r);
+                let s = script_question(
+                    &mut rng,
+                    q,
+                    5,
+                    intended.clone(),
+                    Style {
+                        mode,
+                        instrument: Instrument::Pencil,
+                        base_darkness: 0.8,
+                    },
+                    &r,
+                );
+                assert_eq!(s.classes.len(), 5);
+                assert_eq!(s.intended, intended);
+                // Under every cancel mode, an auto outcome always equals the intent.
+                if let Expected::Auto(resp) = &s.expected {
+                    assert_eq!(resp, &s.intended, "{mode:?} {s:?}");
+                    auto += 1;
+                }
+                // Options are marked at most once.
+                let mut opts: Vec<u8> = s.marks.iter().map(|m| m.option).collect();
+                opts.sort_unstable();
+                opts.dedup();
+                assert_eq!(opts.len(), s.marks.len());
             }
-            // Options are marked at most once.
-            let mut opts: Vec<u8> = s.marks.iter().map(|m| m.option).collect();
-            opts.sort_unstable();
-            opts.dedup();
-            assert_eq!(opts.len(), s.marks.len());
+            assert!(auto > 1_800, "{mode:?}: only {auto} auto-acceptable");
         }
     }
 }

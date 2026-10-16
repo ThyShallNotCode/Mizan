@@ -154,7 +154,11 @@ pub fn sheet_script(
                 .collect(),
         )
     } else {
-        let id = cfg.roster[order[index as usize % order.len()]].clone();
+        let id = order
+            .get(index as usize % order.len().max(1))
+            .and_then(|&i| cfg.roster.get(i))
+            .cloned()
+            .ok_or_else(|| SimError::Roster(format!("no roster entry for sheet {index}")))?;
         if id.chars().count() != digits || !id.chars().all(|c| c.is_ascii_digit()) {
             return Err(SimError::Roster(id));
         }

@@ -36,7 +36,8 @@ pagecode::decode_verified(&s, &key)?, short_form(&s), echo_code(&s), echo_line(p
 pagecode::check_echo_code(ocr_text, &key)            // misread checksum only (IDN-001 echo_line_recovered)
 PageCodeError::exception() -> omr_model::Exception   // IDN-002, BLOCKER, Page
 
-// Lint (§6.9): lint::lint_layout(manifest, arts, dpi) -> Vec<LintFinding>; rules L01–L05, L14.
+// Lint (§6.9): lint::lint_layout(manifest, arts, dpi) -> Vec<LintFinding>; rules L01–L05, L14
+// (L05 includes text touching a row tick).
 
 // Instances (one printed side of one booklet).
 SheetInstance::new(&t, &key, FormCode(1), PageNo(1)).with_serial(BookletSerial(42))
@@ -131,9 +132,43 @@ compiled in (`include_bytes!`), so rendering does no font I/O and is identical o
 - **PDF:** one svg2pdf XObject per page; no PDF/A-2b archival copy, no shared Form XObject for
   per-booklet overlays, no duplex padding pages.
 - **Manifest hash** also covers `cancel_mode` and the generator version (both change decisions).
-- **Personalisation guard** refuses any 10-digit, Luhn-valid number starting with 1 or 2 (the
+- **Personalisation guard** refuses any student-ID text whose digits (ASCII, ٠–٩ or ۰–۹, with
+  separators and prefixes ignored) form a 10-digit, Luhn-valid number starting with 1 or 2 (the
   national ID / Iqama shape); a real student ID of that exact shape would also be refused.
+- **Personalised text** is fitted to its write-in line with the estimated metrics (8 % margin):
+  it shrinks to at most 60 % of 8 pt, then is cut with an ellipsis, so a long roster name can
+  never run into the top-right page code's quiet zone (render test
+  `long_personal_names_never_reach_the_page_code`).
+- **Echo-line prefix** keeps at most 18 characters of the course and cuts it further so the line
+  fits the 36.5 mm echo box. Question numbers wider than the 5 mm number box (4 digits) are
+  set smaller so they never touch the row tick; lint L05 also checks text against row ticks.
 - **Bubble Ø** is measured on the outline's centre line (r = 2.1 mm).
 - **Text metrics** used for layout and lint are estimates; the renderer uses real shaping.
   usvg lays paragraphs out left to right, so Arabic-first lines are wrapped in an RLE … PDF
   embedding.
+
+## Legacy templates (`legacy` module, §6.10)
+
+Forms without fiducials (the IAU CCSIT sheet) are described by a bubble lattice in the pixel
+frame of a blank reference image, not by the generated layout above. The committed revision
+lives in `templates/iau-ccsit-v1/` (layout only, no student data): `template.json` (687
+bubbles at 200 dpi: 100 × A–E answers, 10-column student number, 3-column section, date grid,
+gender, version A–D, exam type) and `blank-200dpi.png` (the median-reconstructed blank form,
+the reference frame).
+
+```rust
+let t = LegacyTemplate::iau_ccsit_v1();               // embedded JSON (include_bytes!, no I/O)
+let t = LegacyTemplate::from_json(&bytes)?;           // LegacyError::{Json, Invalid}
+legacy::IAU_CCSIT_V1_JSON, legacy::IAU_CCSIT_V1_BLANK_PNG   // embedded bytes
+t.bubbles() -> &[LegacyBubble { field, group, option, centre }]  // fixed order: answers,
+    // student number, section, date, gender, version, exam
+t.field_range(LegacyField::Section), t.groups(field) -> &[Range<usize>]   // questions / columns
+t.question(q) (0-based, option order), t.question_count(), t.option_labels()
+t.choice_labels(LegacyField::Version), t.date_columns(), t.frame_size(), t.dpi(),
+t.bubble_radius_px(), t.spec() -> &LegacyTemplateSpec (the JSON model)
+t.json_sha384_hex(), t.revision_sha384_hex(&blank_png)   // EngineManifest::template_sha384
+```
+
+Validation rejects unknown options/labels/columns, gaps or repeats in a group (digit columns
+must be 0–9; date columns 0..n), centres outside the frame and non-positive radius/dpi. The
+recognition engine for these templates is `omr_recog::LegacyEngine`.

@@ -322,4 +322,22 @@ fn hard_profile_and_multi_page_booklets() {
             assert_eq!(r, &q.intended);
         }
     }
+    assert!(
+        qs.iter().any(|q| q.expected == Expected::Review),
+        "the hard mix routes some questions to review"
+    );
+}
+
+#[test]
+fn sheet_script_rejects_a_bad_roster_order_instead_of_panicking() {
+    let t = template(10);
+    let c = cfg(1, 1, Profile::Clean);
+    assert!(matches!(
+        sheet_script(&t, &c, &[], 0),
+        Err(omr_sim::SimError::Roster(_))
+    ));
+    assert!(matches!(
+        sheet_script(&t, &c, &[999], 0),
+        Err(omr_sim::SimError::Roster(_))
+    ));
 }

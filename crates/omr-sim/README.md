@@ -11,7 +11,8 @@ file I/O and spawn threads (corpus writer).
 let rates = MarkRates::standard();                          // ::clean(), ::hard(), or set fields
 let script = SheetScript::random(&t, form, serial, Some(student_id), &rates, &mut rng);
 let script = SheetScript::from_responses(&t, form, serial, id, &responses, &rates, &mut rng);
-script::selection_state(class, cancel_mode, other_selected) // §8.8 S(c): Some(true)=Y, Some(false)=N, None=R
+script::selection_state(class, cancel_mode, other)          // §8.8 S(c): Some(true)=Y, Some(false)=N, None=R
+script::normalise_intent(response, options)                // the response a student can mark
 script::expected_outcome(&classes, cancel_mode) -> Expected // Auto(Response) | Review
 
 // Render, mark and capture.
@@ -55,6 +56,14 @@ the corpus is byte-identical for a given seed at any thread count.
   per-axis scale (print and feed), shear, slight perspective, Gaussian blur σ 0.4–1.2 px, noise,
   linear illumination gradient, gamma, paper and toner levels, scan margin with light or dark
   backing, JPEG quality 70–95, optional dirty-glass streak (hard).
+- **Marking convention:** the simulated student follows the exam's `cancel_mode` (§6.5): under
+  `erase_only` and `cross_cancels` a selection is a fill and a cancellation a cross-out; under
+  `fill_cancels_check` every selection is a tick or X and a cancellation is a full fill, so
+  `intended` and an auto `expected` agree in every mode. Intended responses passed to
+  `from_responses` are normalised first (`script::normalise_intent`: options that do not exist
+  and duplicates dropped, `Set` marked like `Multi`, `Unreadable` → `Blank`), so no input panics.
+- **§8.8 oracle:** white-out is N when any other bubble carries a mark and R when it is the only
+  mark; partial/dot and stray marks are N only beside a Y bubble.
 - **Determinism:** ChaCha8, one stream per sheet (`set_stream(index + 1)`), roster order from a
   separate stream; no `HashMap` iteration in outputs.
 

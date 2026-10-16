@@ -11,6 +11,7 @@ This is the visual and interaction system for the OMR Correction desktop app (Ru
 | Fonts (OFL 1.1), app icon, icon set, girih tiles | `crates/shell-slint/ui/assets/` |
 | Design concepts (HTML + 1440×900 PNG) | `docs/design/concepts/` |
 | Slint proof gallery and headless renders | `docs/design/slint/` (`gallery.slint`, `harness/`, `renders/`) |
+| Accessibility check of the components (Slint testing backend) | `docs/design/slint/a11y-check/` |
 
 ---
 
@@ -99,10 +100,11 @@ All tokens live in the `Theme` global. `Theme.dark` selects the column. "Contras
 | `primary-hover` / `primary-pressed` | `#0B4A45` / `#083A36` | `#7AD0C1` / `#46A999` | States |
 | `on-primary` | `#FFFFFF` | `#06231F` | Text and icons on `primary` |
 | `primary-soft` | `#DCEBE6` | `#173A35` | Selected rows, suggestion card, active tab |
-| `accent` | `#B0832A` | `#D9AE55` | Gold marks: active-nav bar, suggestion underline, nav badge |
+| `accent` | `#B0832A` | `#D9AE55` | Gold marks on surfaces: suggestion underline, proposed tag (the rail uses `nav-accent`) |
 | `accent-ink` / `accent-soft` | `#7A5815` / `#F6EBD3` | `#E2BD6E` / `#3A2F17` | Gold as text / tint |
 | `focus` | `#8A6414` | `#E2BD6E` | Focus ring on surfaces |
 | `nav-focus` | `#E2BD6E` | `#E2BD6E` | Focus ring on `nav-bg` |
+| `nav-accent` | `#D9AE55` | `#D9AE55` | Gold on the rail: active-item marker and count badge |
 | `nav-bg` | `#0B3B37` | `#08201E` | Nav rail |
 | `nav-fg` / `nav-fg-2` | `#FFFFFF` / `#A8C3BE` | `#FFFFFF` / `#9FB8B3` | Active / idle nav label and icon |
 | `nav-active-bg` / `nav-hover-bg` | `#FFFFFF17` / `#FFFFFF0D` | same | Nav item fills |
@@ -146,11 +148,16 @@ All tokens live in the `Theme` global. `Theme.dark` selects the column. "Contras
 | focus on surface | 3:1 | 5.28 PASS | 9.23 PASS |
 | focus on canvas | 3:1 | 4.72 PASS | 10.17 PASS |
 | nav-focus on nav-bg | 3:1 | 6.93 PASS | 9.50 PASS |
-| accent (nav marker) on nav-bg | 3:1 | 3.61 PASS | 8.20 PASS |
+| nav-accent (nav marker) on the active nav fill (`nav-active-bg` over `nav-bg`) | 3:1 | 4.56 PASS | 6.36 PASS |
+| ink `#1C2430` badge text on nav-accent | 4.5:1 | 7.54 PASS | 7.54 PASS |
+| accent (suggestion border) on surface-raised | 3:1 | 3.43 PASS | 7.17 PASS |
 | primary (progress fill) on track | 3:1 | 5.85 PASS | 5.65 PASS |
 | chart-target on surface | 3:1 | 15.37 PASS | 13.29 PASS |
+| series-2 (MeterBar π fill) on track | 3:1 | 2.62 relief | 3.83 PASS |
 
-`focus` (`#8A6414`) on `nav-bg` is only 2.31:1 in light mode, which is why `nav-focus` exists. The gold `accent` reaches only 3.02–3.37:1 on light surfaces, so it is never used for text. Text in gold uses `accent-ink`.
+`focus` (`#8A6414`) on `nav-bg` is only 2.31:1 in light mode, which is why `nav-focus` exists. The light `accent` (`#B0832A`) is 3.61:1 on `nav-bg` but only 2.76:1 on the active item's fill, where the marker actually sits, which is why the rail uses `nav-accent`. The gold `accent` reaches only 3.02–3.43:1 on light surfaces, so it is never used for text. Text in gold uses `accent-ink`.
+
+`series-2` on `track` (2.62:1 in light) is the one sub-3:1 pair in use. It is legal under 1.4.11 because a `MeterBar` always prints its value as text beside the bar; never use a `MeterBar` without `value-text`.
 
 ### 3.4 Data-visualisation palette
 
@@ -195,16 +202,17 @@ Overlays do not change with the theme because they sit on paper, which is light 
 | State | Token | Colour | Shape | Badge | Contrast on paper `#F4F1EA` / scan grey `#E9E9E9` |
 |---|---|---|---|---|---|
 | Filled / selected | `mark-selected` | `#007F68` | Solid ring, 3 px | Check | 4.40 / 4.08 |
-| Ambiguous (MRK-001 band, multi-candidate) | `mark-ambiguous` | `#B06C00` | Dashed ring (12 dashes) | `?` | 3.73 / 3.47 |
+| Ambiguous (MRK-001 band, multi-candidate) | `mark-ambiguous` | `#B06C00` | Dashed ring (12 dashes) | `?` in black (white is only 4.21:1 on the amber, black 4.99:1) | 3.73 / 3.47 |
 | Unreadable (`UNREADABLE`, never `EMPTY`) | `mark-unreadable` | `#9E1B32` | Hatched square, 2 px | `!` | 7.01 / 6.51 |
 | Blank | `mark-blank` | `#6E6A62` | Dotted ring (24 dots) | `–` | 4.77 / 4.43 |
 
-**CVD validation.** The three hued states were checked all-pairs on paper and on scan grey, since any two can be neighbours. The worst pair is deep crimson against teal: deuteranopia ΔE 8.7 (target ≥ 8), normal-vision ΔE 18.5. Even before colour, the four shapes differ in kind: closed, dashed, square and dotted.
+**CVD validation.** The three hued states were checked all-pairs on paper and on scan grey, since any two can be neighbours. The worst CVD pair is deep crimson against teal: deuteranopia ΔE 8.7 (target ≥ 8). The worst normal-vision pair is crimson against amber, ΔE 18.5 (floor 15). Badge glyphs use `Theme.mark-badge-fg()`: white on the teal, crimson and grey badges (4.96, 7.90, 5.38:1), black on the amber. Even before colour, the four shapes differ in kind: closed, dashed, square and dotted.
 
 **Behaviour.**
 - `Space` toggles all overlays. `F2` switches between the original and the registered image.
 - Blank overlays draw only when "show all" is on. By default, only the selected and ambiguous bubbles in the current question get overlays.
-- Blind verify items (§13.4) show **no** overlays, fill bars or suggestion. The canvas shows only the crop and the zoom.
+- Blind verify items (§13.4) show **no** overlays, suggestion, fill bars, threshold line or "other answers" strip. The canvas shows only the registered crop with the zoom and the `F2`/`Space` toggles. A second resolution under the two-person rule (`awaiting_second`) is shown the same way: no suggestion and never the first resolution.
+- Off the paper (option chips, legends), `MarkGlyph` keeps the paper colours. In dark mode the crimson and grey glyphs are only 1.9–2.8:1 on `surface-raised`; that is legal because the chip's text label ("Unreadable", "Blank") carries the meaning, but never use a `MarkGlyph` without its word.
 - The fill-bar chart uses the same state colours, with a `warning` threshold line and a `warning-soft` hysteresis band.
 
 ---
@@ -299,29 +307,30 @@ The behaviour shared by all components:
 - `Enter` or `Space` activates the component, and so does `accessible-action-default`.
 - Focus shows as an outside `FocusRing`.
 - Accessible names carry the visible text plus state, e.g. "B, suggested" or "Review, 38 open".
+- Each control is exactly one AT node: its inner texts and keycaps set `accessible-role: none`, so a test or screen reader finds the control, not its label text, by name.
 
 | Component | Anatomy and sizes | States | Accessibility |
 |---|---|---|---|
 | `NavRail` | 72 px column, `nav-bg` + girih tile at `pattern-opacity` (7 % light / 5 % dark); logo 36 px; items top-aligned; Settings pinned at the bottom with a stretch spacer | — | Container |
-| `NavItem` | 72×60, 24 px icon over an 11 px label; gold 3×28 bar on the left when active; gold count badge (mono 10 px, ink text) at the top right | idle `nav-fg-2`; hover `nav-hover-bg`; active `nav-active-bg` + `nav-fg` + semibold; focus `nav-focus` ring | role tab, checked = active, label "Review, 38 open" |
+| `NavItem` | 72×60, 24 px icon over an 11 px label; `nav-accent` 3×28 bar on the left when active; `nav-accent` count badge (mono 10 px, ink text) at the top right | idle `nav-fg-2`; hover `nav-hover-bg`; active `nav-active-bg` + `nav-fg` + semibold; focus `nav-focus` ring | role tab, item-selected = active (as Slint's TabWidget), label "Review, 38 open" |
 | `TopBar` | 56 px, `surface`, bottom hairline; `Breadcrumb` (last part semibold), lane or view chips, progress, `SearchField` (`/`), theme `IconButton` | — | — |
 | `StatusBar` | 28 px, `surface-sunken`, top hairline; save `StatusPill`, audit-chain head (mono), policy notes, engine version | — | Polite announcements ≤ 1 per 5 s (4.1.3) |
 | `Card` | `surface`, 1 px `border`, `radius-lg`, `shadow-1`; title 16/600 + subtitle 12 `ink-2` with 16 px padding; content padding `inset` (0 for edge-to-edge tables) | `elevated: false` for nested cards | Title exposed as text |
-| `StatTile` | min 160 wide; small-caps label 11/600 `ink-2`; value 24/600 `ink`; unit 12; caption 12 tinted by tone | — | One label "Open exceptions: 147, 38 ERROR" |
-| Data table (`TableRow`, `TableHeaderCell`, `TableCell`) | header 32 px `surface-sunken`, 12/500 `ink-2`; rows 44 px (36 compact), 1 px `border` divider; numeric columns mono, right-aligned; second line 12 px `ink-2` (Arabic → `font-arabic`) | hover `surface-hover`; selected `primary-soft` + 3 px `primary` left bar | Row role list-item, checked = selected. Virtualise long tables with `ListView` in the shell |
+| `StatTile` | min 160 wide; small-caps label 11/600 `ink-2`; value 24/600 `ink`; unit 12; caption 12 tinted by tone | — | One label "Open exceptions: 147, 38 ERROR"; child texts hidden |
+| Data table (`TableRow`, `TableHeaderCell`, `TableCell`) | header 32 px `surface-sunken`, 12/500 `ink-2`; rows 44 px (36 compact), 1 px `border` divider; numeric columns mono, right-aligned; second line 12 px `ink-2` (Arabic → `font-arabic`) | hover `surface-hover`; selected `primary-soft` + 3 px `primary` left bar | Row role list-item, item-selectable + item-selected (not "checked"), default action = `clicked`; the shell sets the row label. Virtualise long tables with `ListView` in the shell |
 | `Chip` (filter / segment) | 28 px pill, 12/500 text + mono count; hugs content | idle `surface` + `border-strong`; hover; selected = `ink` fill + `ink-inverse` text | role button, checkable |
-| `StatusPill` | 22 px pill, `tone-soft` fill, tone text 12/500, 10 px shape glyph | tones: success, warning, error, info, neutral, primary, accent | Text role with the word |
+| `StatusPill` | 22 px pill, `tone-soft` fill, tone text 12/500, 10 px shape glyph | tones: success, warning, error, info, neutral, primary, accent | Text role with the word (one node) |
 | `Tag` | 18 px, `radius-xs`, mono 11/500; neutral = sunken + border | tone variants | — |
 | `Keycap` | 18 px tall, ≥ 18 wide, mono 11/500, `border-strong` + 1 px bottom shadow; `inverse` on primary fills uses `on-primary` | — | Hidden (the key is in the parent's description) |
-| `Button` (`Primary`, `Secondary`, `Ghost`, `Danger`) | height 32 (`large` 40), radius 6, padding 12/12 (16/12 large); optional 16 px icon; trailing `Keycap`; label 13 (14 large); 600 on filled, 500 otherwise | hover, pressed, disabled (`surface-sunken` + `ink-disabled`), focus ring | role button, description = key hint |
-| `IconButton` | 32×32, 20 px icon | hover; `active` = `primary-soft` + primary icon | Label required |
+| `Button` (`Primary`, `Secondary`, `Ghost`, `Danger`) | height 32 (`large` 40), radius 6, padding 12/12 (16/12 large); optional 16 px icon; trailing `Keycap`; label 13 (14 large); 600 on filled, 500 otherwise | hover, pressed, disabled (`surface-sunken` + `ink-disabled`), focus ring | role button, enabled state exposed, description = key hint |
+| `IconButton` | 32×32, 20 px icon | hover; `active` = `primary-soft` + primary icon; disabled | Label required; enabled state exposed; the default action does nothing while disabled |
 | `OptionChip` (review decision) | A–E: ≥ 52×60, letter 20/600 over keycap. Specials (Blank, Multi, Unreadable): ≥ 92×52 with `MarkGlyph` | idle `surface-raised` + `border-strong`; **suggested**: gold border + 3 px gold underline; **selected**: `primary` fill, `on-primary` text, check badge at top right | role button, checkable, "B, suggested", description = key |
 | `ProgressBar` | 6 px track, rounded; fill by tone | animated width (`duration-slow`) | progress-indicator, value % |
 | `MeterBar` (CLO, attainment) | 8 px bar on a track; target = 2 px `ink` line with diamond cap; optional Wilson 95% CI whisker (1 px `ink-2` with end ticks); mono value right | — | progress-indicator, value text |
 | `Gauge` | 180×120 semicircle, 12 px round-capped arc on `track`; floor tick (`ink`, e.g. 40 pages/s); value 32/600 + unit 12 | — | label "Throughput", value "62 pages / s" |
-| `BubbleOverlay` | Size about 1.6× bubble diameter; ring or square path + halo; badge 36 % of size, top right | four `MarkState`s (§4) | image role, "B: filled" |
-| `GroupHeader` | 32 px `surface-sunken`; severity glyph, mono code, title, count `Tag` | expanded / collapsed | button, "MRK-001 Low-confidence mark, 41 items" |
-| `SearchField` | 32 px, `surface-raised`, `border-strong` (primary when focused), search icon, placeholder `ink-3`, key hint `/` | focus | text-input with label = placeholder |
+| `BubbleOverlay` | Size about 1.6× bubble diameter; ring or square path + halo; badge 36 % of size, top right, glyph colour from `mark-badge-fg` | four `MarkState`s (§4) | image role, "B: filled" |
+| `GroupHeader` | 32 px `surface-sunken`; severity glyph, mono code, title, count `Tag`, chevron (down = expanded, right = collapsed) | expanded / collapsed; focusable, `Enter`/`Space` toggle; inset focus ring | button, expandable + expanded, "MRK-001 Low-confidence mark, 41 items" |
+| `SearchField` | 32 px, `surface-raised`, `border-strong` (primary when focused), search icon, placeholder `ink-3`, key hint `/` | focus: primary border + gold `FocusRing` | One text-input node (inner `TextInput` and placeholder hidden, focus forwarded, as Slint's `LineEdit`): label and placeholder-text = placeholder, value = text, set-value action |
 | `SeverityGlyph`, `MarkGlyph` | 10–14 px vector shapes (§7) | — | image role with the severity word |
 | `GirihDivider` | 10 px tiled strip in `border` colour under page titles | — | Hidden |
 | `FocusRing` | 2 px ring, 2 px outside the parent, radius + 4 | `ring-color` defaults to `focus` | — |
@@ -375,7 +384,7 @@ Nav order: **Exams, Setup, Scan, Review, Results, Outcomes, Export**, then Setti
   - configuration: Answer key "v2 published" and a CLO mapping coverage ring "18/20 items";
   - logistics: roster count, sections, last scan, batch ID;
   - **Open results**.
-- **Keyboard.** `↑`/`↓` move rows, `Enter` opens the drawer, `Esc` closes it, `N` starts a new exam (when the table has focus).
+- **Keyboard.** `↑`/`↓` move rows, `Enter` opens the drawer, `Esc` closes it, `Ctrl+N` starts a new exam. Single-character keys are reserved for the review canvas (§10, 2.1.4).
 - **Empty state.** The girih line art, "No exams this term", and **New exam** / **Import from Remark**.
 
 ### 9.2 Exam setup: template, key and CLO mapping (no concept; spec §6, §10.3, §11.2)
@@ -421,11 +430,12 @@ Nav order: **Exams, Setup, Scan, Review, Results, Outcomes, Export**, then Setti
 | Thumbnail state | Appearance |
 |---|---|
 | auto | success ring-check + serial |
-| review | warning triangle + code |
-| identity | error diamond + `IDN-004` |
-| rejected | blocker diamond + `CAP-002`, desaturated |
+| needs review | the **severity glyph of its worst open code** + the code, e.g. error diamond + `MRK-001`, error diamond + `IDN-004`, warning triangle + `REG-003`. A code always carries the same glyph as in "Exceptions by code" and the review queue |
+| rejected | severity glyph + code (e.g. error diamond + `CAP-002` below 100 dpi), desaturated |
 | reading | info ring + scan-line sweep (static when `reduce-motion`) |
 | queued | 45 % opacity |
+
+Codes whose Appendix A severity varies by instance (e.g. MRK-003 INFO/ERROR, REG-003 WARN/ERROR) show the worst open instance.
 
   Arrows move through the grid, `Enter` opens the sheet, and the focus ring is gold. A filter-pill row sits in the card header.
 - **Right column.**
@@ -442,7 +452,7 @@ Nav order: **Exams, Setup, Scan, Review, Results, Outcomes, Export**, then Setti
   - "128 of 412 resolved" + `ProgressBar`;
   - `SearchField` "Roster search" (`/`);
   - theme and help (`F1` opens help for the current code).
-- **Left pane, 300 px: queue.** A header "Exception queue" with a filter `IconButton`, then a `GroupHeader` per code in lane order (severity glyph, mono code, title, count). Each item row is 62 px:
+- **Left pane, 300 px: queue.** A header "Exception queue" with a filter `IconButton`, then a `GroupHeader` per code of the selected lane only, ordered by severity (highest first) and then code (§13.2) (severity glyph, mono code, title, count, chevron). Each item row is 62 px:
   - Q number (14/600, primary when selected) and "Form B";
   - severity glyph at the right;
   - booklet serial (mono 12);
@@ -456,7 +466,7 @@ Nav order: **Exams, Setup, Scan, Review, Results, Outcomes, Export**, then Setti
   - **No key is ever shown.**
 - **Right pane, 340 px: decision.**
   - Suggestion card (`primary-soft`): the letter at `text-display` in primary, "Engine suggestion", mono "Filled 0.82 · margin 0.51", code `Tag`.
-  - "What is marked?" followed by `OptionChip` A–E (suggested = gold underline; current choice = filled).
+  - "What is marked?" followed by `OptionChip` A–E (suggested = gold underline; current choice = filled). Chip labels follow the template's label set (A–E, 1–n or أ ب ج د …, §6.5, §20.2); keys bind to physical key positions and also accept typed Arabic option letters (§13.3; physical-key events in Slint are unverified, ADR-001 S4).
   - The special chips Blank (Backspace), Multi (`Ctrl+M`) and Unreadable (`Ctrl+U`).
   - Large primary **Accept suggestion** (`Enter`), then secondary **Apply to group · 40** (`Shift+Enter`, disabled with the reason when §13.2 conditions fail).
   - Ghost rows: Defer (`Ctrl+D`), Escalate to instructor (`Ctrl+E`), Add to rescan list (`Ctrl+R`).
@@ -464,9 +474,10 @@ Nav order: **Exams, Setup, Scan, Review, Results, Outcomes, Export**, then Setti
   - Keyboard legend grid with keycaps and a "median 1.4 s / item" tag.
 - **Identity items** reuse the frame:
   - the centre shows name, ID-box and ID-grid crops at 2×;
-  - the right pane shows the top 3 candidates as option rows (keys `1`–`3`), each with per-channel agree/disagree glyphs (check-ring vs cross-diamond), masked national ID, section, seat;
+  - the right pane shows the top 3 candidates as option rows (keys `1`–`3`), each with per-channel agree/disagree glyphs (check-ring vs cross-diamond), the writer-error hypothesis in words, masked national ID, section, campus, track and seat, plus seat-map neighbours (§13.3);
   - actions: `N` not on roster, `D` duplicate.
-- **Blind verify items** hide the suggestion card, fill chart and overlays; a `Tag` reads "Verify (blind)".
+- **Blind verify items** hide the suggestion card, fill chart (bars and threshold line), the "other answers" strip and the overlays; a `Tag` reads "Verify (blind)". The `Accept suggestion` button is absent; the reviewer enters the state with the mark keys (§13.4).
+- **Second resolutions** (`awaiting_second`, two-person rule) use the same blind layout: no suggestion and never the first resolution (§13.4).
 - **Status bar.** Save state, audit head, "Two-person rule: on", engine version.
 
 ### 9.5 Results and outcomes (concept: `results-outcomes.png`, `results-outcomes-dark.png`)
@@ -481,7 +492,7 @@ Nav order: **Exams, Setup, Scan, Review, Results, Outcomes, Export**, then Setti
   - **Grade distribution** (Saudi scale): 9 bars A+…F, counts above in mono, Latin letter + Arabic letter below, F hatched in `error` with the word "Fail". The footnote reads "CUA 1444/9/1 · GPA basis 5.00", and there is a **Table** toggle.
   - **Release readiness**: a checklist (glyph + sentence + action keycap) covering open ERRORs by lane, mis-key flags, blind-verify disagreement, batch reconciliation and the two-person rule. The overall `StatusPill` is Blocked or Ready.
 - **Right column.**
-  - **CLO attainment**: one row per CLO, made of the mono id + short title, two `MeterBar`s, mono values and a verdict `StatusPill`. The bars are average μ (`series-1`) and threshold-proportion π (`series-2`) with a Wilson 95% CI whisker. Both share a 70 % target marker. The verdicts are Attained (success check), Not attained (error diamond), or **Within CI** (warning ±) when the CI contains T (§11.3). The legend is at the top right.
+  - **CLO attainment**: one row per CLO, made of the mono id + short title, two `MeterBar`s, mono values and a verdict `StatusPill`. The bars are average μ (`series-1`) and threshold-proportion π (`series-2`) with a Wilson 95% CI whisker. Both share a 70 % target marker. The verdict pill follows the policy's `class_method` and `verdict_basis` (§11.3, §11.4) and the subtitle names them (e.g. "verdict on π, point basis"): Attained (success check) or Not attained (error diamond). When the 95 % CI contains T, a separate warning `±` badge "≈ target (95 % CI)" ("statistically indistinguishable from target", §11.3) appears **under** the verdict; it never replaces it. The legend is at the top right.
   - **Item analysis**: table columns Q, p, r<sub>ir</sub> (negative in `error`), a 5-step discrimination meter + band word, an options A–E distribution sparkline (keyed option in `series-1`), and flag `StatusPill`s: "Probable mis-key: D · SCO-001", "Top group prefers C · SCO-002", "Too easy", "Too hard or guessed". The key is hidden by default.
   - Gold note: "NCAAA TP-154 tables ready → Export".
 
@@ -506,7 +517,7 @@ Nav order: **Exams, Setup, Scan, Review, Results, Outcomes, Export**, then Setti
 | 2.5.7 Dragging | Template zones nudge by arrows; no drag-only action |
 | 2.5.8 Target size | All targets ≥ 24 × 24 (`target-min`); option chips ≥ 52 × 60 |
 | 2.3.3 / motion | `reduce-motion` sets durations to 0; no auto-playing motion |
-| 4.1.2 Name, role, value | Components set `accessible-role`, `-label`, `-checked`, `-value`, `-description` (key hint) |
+| 4.1.2 Name, role, value | Components set `accessible-role`, `-label`, `-value`, `-description` (key hint) and their state: `-enabled`, `-checked` (toggle chips), `-item-selected` (nav tabs, table rows), `-expanded` (group headers) |
 | 4.1.3 Status | Batch progress announced politely, at most once per 5 s |
 
 ---
@@ -523,6 +534,7 @@ Nav order: **Exams, Setup, Scan, Review, Results, Outcomes, Export**, then Setti
 2. **Contrast** was checked by script for every token pair in §3.3 and every overlay colour in §4.
 3. **The categorical and overlay palettes** were run through the dataviz skill's `validate_palette.js` (§3.4, §4).
 4. **Concept screenshots** were taken with Playwright + Chromium at 1440×900. `results-outcomes-dark.png` shows the dark tokens.
+5. **Accessibility of the components.** `docs/design/slint/a11y-check` (stand-alone, like the harness) compiles a test window from the theme with the default `slint` features (the shell's configuration) and drives it through `i-slint-backend-testing`, as the A11 review-flow test will. It checks that each control is exactly one AT node findable by its label (inner texts, keycaps and the inner `TextInput` are hidden), that state is exposed (`enabled`, `item-selected` on nav tabs and rows, `expandable`/`expanded` on group headers, placeholder and value on the search field), and that accessible actions respect `enabled` (a disabled button or icon button ignores the default action). Run `cd docs/design/slint/a11y-check && cargo test --offline`.
 
 ### Slint implementation notes (for the shell owner)
 
@@ -534,13 +546,10 @@ Nav order: **Exams, Setup, Scan, Review, Results, Outcomes, Export**, then Setti
 - **`accessible-role` naming.** Inside a component that has a property called `text`, `accessible-role: text;` resolves to the property. The theme always writes `AccessibleRole.text`, etc.
 - **No `parent` in a component root.** A component's root bindings cannot use `parent`. That is why `FocusRing` fills its parent and draws an inner rectangle.
 - **SVG assets** need Slint's SVG support. The default `slint` features have it. With `EmbedForSoftwareRenderer`, they are rasterised at build time.
-- **`forbid(unsafe_code)` conflicts with Slint codegen.** Slint 1.18.1 generated code expands `ItemTreeVTable_static!`, which carries `#[allow(unsafe_code)]`. Under a crate-level `#![forbid(unsafe_code)]`, rustc rejects it with E0453.
-  - **Reproduced on the scaffold:** `cargo check -p shell-slint` fails today at `out/app.rs` (`ItemTreeVTable_static! (static VT for self::InnerAppWindow)`), against `crates/shell-slint/src/main.rs:2`. The same thing happened in the render harness, which therefore omits `forbid`.
-  - **Fix options for the shell owner:**
-    - an audited R6 exception for `shell-slint` (crate-level `#![deny(unsafe_code)]`, with the generated module included under `#[allow(unsafe_code)] mod ui { slint::include_modules!(); }`);
-    - or keeping `forbid` and moving generated code into a tiny generated-UI crate with a documented exception.
-
-  `omr-archtest` R6 currently says "no audited exceptions yet", so this needs a decision.
+- **`accessible-role` must be a constant.** A binding such as `header ? none : list-item` compiles only while every instance sets the condition to a literal, and breaks as soon as one binds it. `TableRow` therefore always has role `list-item` (header rows are never selectable).
+- **Headless A11 tests.** The `ElementHandle` API needs the compiler's debug info: `CompilerConfiguration::with_debug_info(true)` in `build.rs` (or `SLINT_EMIT_DEBUG_INFO=1`). Use `i-slint-backend-testing = "=1.18.1"` **without** the `internal` feature: with it, the crates.io package fails to build (it `include_bytes!`s test fonts from Slint's repository). An item can be reported once per element of its inheritance chain by `ElementQuery::find_all`; compare by label or type, not by count.
+- **`forbid(unsafe_code)` conflicts with Slint codegen.** Slint 1.18.1 generated code expands `ItemTreeVTable_static!`, which carries `#[allow(unsafe_code)]`. Under a crate-level `#![forbid(unsafe_code)]`, rustc rejects it with E0453. The render harness hit this and therefore omits `forbid`.
+  - **Resolved in the shell:** `crates/shell-slint/src/main.rs` now uses the audited R6 exception (crate-level `#![deny(unsafe_code)]`, generated code only under `#[allow(unsafe_code)] mod ui { slint::include_modules!(); }`), and `cargo check -p shell-slint` passes.
 
 ---
 

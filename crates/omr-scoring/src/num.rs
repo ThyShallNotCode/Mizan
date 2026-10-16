@@ -71,6 +71,15 @@ pub fn parse_points(s: &str) -> Result<Points, ParseNumberError> {
         if d == 0 {
             return Err(bad());
         }
+        // Normalize the sign ourselves: `Ratio::new` would negate i64::MIN and overflow.
+        let (n, d) = if d < 0 {
+            (
+                n.checked_neg().ok_or_else(over)?,
+                d.checked_neg().ok_or_else(over)?,
+            )
+        } else {
+            (n, d)
+        };
         return Ok(Ratio::new(n, d));
     }
     let (neg, body) = match t.strip_prefix('-') {
@@ -393,6 +402,13 @@ mod tests {
         assert_eq!(parse_points("-2.25").unwrap(), pts(-9, 4));
         assert_eq!(parse_points("1/3").unwrap(), pts(1, 3));
         assert!(parse_points("1/0").is_err());
+        assert_eq!(parse_points("1/-2").unwrap(), pts(-1, 2));
+        // i64::MIN over a negative denominator cannot be normalized in i64: an error, never
+        // an overflow panic on an input path.
+        assert!(matches!(
+            parse_points("-9223372036854775808/-1"),
+            Err(ParseNumberError::Overflow(_))
+        ));
         assert!(parse_points("abc").is_err());
         assert!(parse_points(".").is_err());
     }
@@ -420,8 +436,14 @@ mod tests {
             "90.00"
         );
         // 1/3 at 4 dp
-        assert_eq!(decimal_string(&exact(1, 3), 4, MidpointAwayFromZero), "0.3333");
-        assert_eq!(decimal_string(&exact(-1, 8), 2, MidpointAwayFromZero), "-0.13");
+        assert_eq!(
+            decimal_string(&exact(1, 3), 4, MidpointAwayFromZero),
+            "0.3333"
+        );
+        assert_eq!(
+            decimal_string(&exact(-1, 8), 2, MidpointAwayFromZero),
+            "-0.13"
+        );
     }
 
     #[test]
@@ -435,7 +457,10 @@ mod tests {
     fn reduce_and_compare() {
         assert_eq!(reduce(6, -4), exact(-3, 2));
         assert_eq!(reduce(0, 7), exact(0, 1));
-        assert_eq!(reduce(i128::from(u64::MAX) * 4, 8), exact(i128::from(u64::MAX), 2));
+        assert_eq!(
+            reduce(i128::from(u64::MAX) * 4, 8),
+            exact(i128::from(u64::MAX), 2)
+        );
         use std::cmp::Ordering::*;
         assert_eq!(cmp_exact(&exact(1, 3), &exact(33, 100)), Greater);
         assert_eq!(cmp_exact(&exact(-1, 3), &exact(-33, 100)), Less);

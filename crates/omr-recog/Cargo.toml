@@ -13,3 +13,22 @@ omr-imaging.workspace = true
 omr-forms.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+kornia-apriltag.workspace = true
+kornia-image.workspace = true
+rxing = { workspace = true, features = ["decoders", "qrcode", "encoding_rs"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+omr-sim.workspace = true
+omr-forms = { workspace = true, features = ["render"] }
+image.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+rayon.workspace = true
+uuid.workspace = true
+
+[[example]]
+name = "eval_iau"
+
+[[example]]
+name = "eval_ownform"

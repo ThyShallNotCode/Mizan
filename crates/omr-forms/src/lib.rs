@@ -23,6 +23,7 @@ pub mod geometry;
 pub mod hash;
 pub mod instance;
 pub mod layout;
+pub mod legacy;
 pub mod lint;
 pub mod pagecode;
 pub mod spec;

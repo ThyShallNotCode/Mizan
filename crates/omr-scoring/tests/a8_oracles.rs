@@ -74,8 +74,14 @@ fn req_a8_multi_form_mapping_oracle() {
             BookletL1::present(3, Some("S3"), B, single(&[0, 0, 0, 0])),
         ],
     };
-    let run = score(&l1, &forms, &key, &PolicyVersion::default(), &Adjustments::default())
-        .unwrap();
+    let run = score(
+        &l1,
+        &forms,
+        &key,
+        &PolicyVersion::default(),
+        &Adjustments::default(),
+    )
+    .unwrap();
     let prep = prepare(&l1, &forms).unwrap();
     for i in 0..4 {
         assert_eq!(prep.matrix.raw(0, i), prep.matrix.raw(1, i), "item {i}");
@@ -129,7 +135,12 @@ fn rule_snapshot() -> ResponseSnapshot {
                 4,
                 Some("S4"),
                 A,
-                vec![Multi(vec![2, 3]), Set(vec![0, 1, 2]), Set(vec![3, 4]), Single(0)],
+                vec![
+                    Multi(vec![2, 3]),
+                    Set(vec![0, 1, 2]),
+                    Set(vec![3, 4]),
+                    Single(0),
+                ],
             ),
         ],
     }
@@ -176,7 +187,14 @@ fn req_a8_item_rules_oracle_formula_scoring() {
         multi_on_sba: MultiOnSba::PartialMaxOverCount,
         ..PolicyVersion::default()
     };
-    let run = score(&rule_snapshot(), &forms, &key, &policy, &Adjustments::default()).unwrap();
+    let run = score(
+        &rule_snapshot(),
+        &forms,
+        &key,
+        &policy,
+        &Adjustments::default(),
+    )
+    .unwrap();
     // Formula scoring: Q1 (a = 1, m = 5) wrong = −1/4 · M = −½; Q4 (a = 2, m = 4)
     // wrong = −2/2 · M = −1. Partial options keep their credit (Q1 D = ½ -> 1).
     // S1 unchanged: 4/9.
@@ -194,11 +212,19 @@ fn req_a8_item_rules_oracle_formula_scoring() {
     // Blind guessing gains 0 in expectation: Σ_o credit over Q1's options =
     // 1 + ½ + 3·(−¼) ... the formula rule is defined for a = #full-credit options:
     // a·1 + (m − a)·(−a/(m − a)) = 0 on an unpartialled item (Q4: 2·1 + 2·(−1) = 0).
-    let q4: Points = (0..4).map(|o| run_single(&forms, &key, &policy, 3, o)).sum();
+    let q4: Points = (0..4)
+        .map(|o| run_single(&forms, &key, &policy, 3, o))
+        .sum();
     assert_eq!(q4, pts(0, 1));
 }
 
-fn run_single(forms: &FormMap, key: &KeyVersion, policy: &PolicyVersion, item: usize, o: u8) -> Points {
+fn run_single(
+    forms: &FormMap,
+    key: &KeyVersion,
+    policy: &PolicyVersion,
+    item: usize,
+    o: u8,
+) -> Points {
     use L1Response::*;
     let mut r = vec![Blank; forms.items.len()];
     r[item] = Single(o);
@@ -225,8 +251,14 @@ fn req_a8_exact_rationals_point_three() {
     let l1 = ResponseSnapshot {
         booklets: vec![BookletL1::present(1, None, A, single(&[0, 0, 0, 1]))],
     };
-    let run = score(&l1, &forms, &key, &PolicyVersion::default(), &Adjustments::default())
-        .unwrap();
+    let run = score(
+        &l1,
+        &forms,
+        &key,
+        &PolicyVersion::default(),
+        &Adjustments::default(),
+    )
+    .unwrap();
     assert_eq!(run.students[0].final_pct, Some(e(90)));
     let unrounded = RoundingPolicy {
         letter_basis: LetterBasis::Unrounded,
@@ -235,7 +267,10 @@ fn req_a8_exact_rationals_point_three() {
     let g = run.grades(&GradeScale::saudi(), &unrounded);
     assert_eq!(g[0].as_ref().unwrap().code(), "A");
     let f64_sum: f64 = 0.3 + 0.3 + 0.3;
-    assert!(f64_sum < 0.9, "the f64 path would have mis-graded this student");
+    assert!(
+        f64_sum < 0.9,
+        "the f64 path would have mis-graded this student"
+    );
 }
 
 #[test]
@@ -258,7 +293,10 @@ fn req_a8_saudi_grade_scale() {
     ];
     for (x, l, ar, g5, g4) in cases {
         let b = s.band_for(&x).unwrap();
-        assert_eq!((b.letter.as_str(), b.arabic.as_str(), b.gpa5, b.gpa4), (l, ar, g5, g4));
+        assert_eq!(
+            (b.letter.as_str(), b.arabic.as_str(), b.gpa5, b.gpa4),
+            (l, ar, g5, g4)
+        );
     }
     // Rounding before the letter (default letter_basis = Rounded, 2 dp, half away from
     // zero): 89.995 -> 90.00 -> A; unrounded it is B+.
@@ -274,10 +312,7 @@ fn req_a8_saudi_grade_scale() {
     overlap.bands[1].lo = Some(e(59));
     assert_eq!(overlap.validate()[0].code, "SCO-029");
     // DN counts as F on both GPA scales.
-    assert_eq!(
-        GradeOutcome::Status(StatusCode::DN).gpa5(),
-        Some(pts(1, 1))
-    );
+    assert_eq!(GradeOutcome::Status(StatusCode::DN).gpa5(), Some(pts(1, 1)));
     assert_eq!(GradeOutcome::Status(StatusCode::DN).gpa4(), Some(pts(0, 1)));
     assert_eq!(StatusCode::DN.a1_column(), Some(A1Column::DeniedEntry));
     assert_eq!(StatusCode::E.a1_column(), None);
@@ -330,7 +365,11 @@ fn req_a8_course_split_and_status_codes() {
         student(
             "S1",
             RosterStatus::Enrolled,
-            &[("quiz", Scored(e(75))), ("mid", Scored(e(65))), ("final", Scored(e(64)))],
+            &[
+                ("quiz", Scored(e(75))),
+                ("mid", Scored(e(65))),
+                ("final", Scored(e(64))),
+            ],
         ),
         // S2 denied entry: coursework as recorded 0.1·80 + 0.3·70 = 29; no final; DN = F.
         student(
@@ -409,8 +448,14 @@ fn req_a8_course_split_and_status_codes() {
         .iter()
         .map(|x| x.detail.split(':').next().unwrap())
         .collect();
-    assert_eq!(listed, BTreeSet::from(["student S1", "student S4", "student S6"]));
-    assert!(bl.iter().all(|x| x.code == "SCO-017" && x.severity == Severity::Info));
+    assert_eq!(
+        listed,
+        BTreeSet::from(["student S1", "student S4", "student S6"])
+    );
+    assert!(
+        bl.iter()
+            .all(|x| x.code == "SCO-017" && x.severity == Severity::Info)
+    );
 
     // Σ W_a = 99 -> SCO-010 (BLOCKER, Course scope): L5 refused.
     let mut bad = course_policy();
@@ -428,12 +473,39 @@ fn req_a8_course_split_and_status_codes() {
     let s = student(
         "S8",
         RosterStatus::Enrolled,
-        &[("quiz", Scored(e(100))), ("mid", Scored(e(100))), ("final", Scored(e(45)))],
+        &[
+            ("quiz", Scored(e(100))),
+            ("mid", Scored(e(100))),
+            ("final", Scored(e(45))),
+        ],
     );
-    let r = aggregate_course(&req, &[s.clone()], &scale).unwrap();
+    let r = aggregate_course(&req, std::slice::from_ref(&s), &scale).unwrap();
     assert_eq!(r[0].total, Some(e(67)));
     assert!(r[0].requirement_not_met);
     assert_eq!(r[0].grade.code(), "D");
+    // `incomplete_rule`: a required component still outstanding is IC. Here the quiz (10 %,
+    // required) is excused: its share 10 % is below ⅓, so without the rule it would be
+    // renormalized away (mid 100 and final 100 -> 100 -> A+).
+    let mut req_quiz = course_policy();
+    req_quiz.components[0].required = Some(Requirement {
+        min_pct: e(50),
+        letter_cap: "D".into(),
+    });
+    let outstanding = student(
+        "S9",
+        RosterStatus::Enrolled,
+        &[
+            ("quiz", Absent { excused: true }),
+            ("mid", Scored(e(100))),
+            ("final", Scored(e(100))),
+        ],
+    );
+    let r = aggregate_course(&req_quiz, std::slice::from_ref(&outstanding), &scale).unwrap();
+    assert_eq!(r[0].grade.code(), "IC");
+    assert_eq!(r[0].total, None);
+    // The same student without the requirement renormalizes: 100 -> A+.
+    let r = aggregate_course(&policy, std::slice::from_ref(&outstanding), &scale).unwrap();
+    assert_eq!(r[0].grade.code(), "A+");
     // Pass/fail course: 67 -> NP; 40 -> NF.
     let mut pf = course_policy();
     pf.pass_fail = true;
@@ -451,12 +523,27 @@ fn req_a8_publish_validation_codes() {
     let l1 = ResponseSnapshot {
         booklets: vec![BookletL1::present(1, None, A, single(&[0, 1, 2, 3]))],
     };
-    match score(&l1, &forms, &missing, &PolicyVersion::default(), &Adjustments::default()) {
+    match score(
+        &l1,
+        &forms,
+        &missing,
+        &PolicyVersion::default(),
+        &Adjustments::default(),
+    ) {
         Err(ScoringError::Refused(ex)) => assert_eq!(ex[0].code, "SCO-003"),
         other => panic!("expected refusal, got {other:?}"),
     }
     // Blank keyed item (no option earns credit) -> SCO-003.
-    let blank = key.revise([(0, KeyEntry::Credits { credits: vec![pts(0, 1); 4], multi_accept: false })], "test");
+    let blank = key.revise(
+        [(
+            0,
+            KeyEntry::Credits {
+                credits: vec![pts(0, 1); 4],
+                multi_accept: false,
+            },
+        )],
+        "test",
+    );
     assert!(blank.validate(&forms).iter().any(|e| e.code == "SCO-003"));
     // Key option >= m_i -> SCO-004.
     let wide = key.revise([(1, KeyEntry::single(0, 5))], "test");
@@ -472,7 +559,10 @@ fn req_a8_publish_validation_codes() {
     let mut unequal = forms.clone();
     unequal.forms[1].positions.pop();
     let ex = unequal.validate();
-    assert!(ex.iter().any(|e| e.code == "SCO-006" && e.severity == Severity::Error));
+    assert!(
+        ex.iter()
+            .any(|e| e.code == "SCO-006" && e.severity == Severity::Error)
+    );
     // Two full-credit options without multi-accept -> SCO-027 WARN.
     let multi = key.revise(
         [(0, KeyEntry::single(0, 4).with_credit(1, pts(1, 1)))],
@@ -513,14 +603,24 @@ fn req_a8_publish_validation_codes() {
 fn req_a8_unreadable_and_absent_exceptions() {
     use L1Response::*;
     let (forms, key) = two_forms();
-    let mut covered = BookletL1::present(2, Some("S2"), A, vec![Single(0), Unreadable, Single(2), Single(3)]);
+    let mut covered = BookletL1::present(
+        2,
+        Some("S2"),
+        A,
+        vec![Single(0), Unreadable, Single(2), Single(3)],
+    );
     covered.open_exceptions.insert(1);
     let mut absent_bubble = BookletL1::present(3, Some("S3"), A, single(&[0, 1, 0, 0]));
     absent_bubble.absent_bubble = true;
     let l1 = ResponseSnapshot {
         booklets: vec![
             // Unreadable with no open exception: SCO-008, item pending, provisional.
-            BookletL1::present(1, Some("S1"), A, vec![Single(0), Unreadable, Single(2), Single(3)]),
+            BookletL1::present(
+                1,
+                Some("S1"),
+                A,
+                vec![Single(0), Unreadable, Single(2), Single(3)],
+            ),
             // Unreadable covered by an open MRK exception: pending, no SCO-008.
             covered,
             // Absent bubble but answers: SCO-031, scored (2/4), never auto-zero.
@@ -530,20 +630,40 @@ fn req_a8_unreadable_and_absent_exceptions() {
             BookletL1::absent(5, Some("S5"), A, false),
         ],
     };
-    let run = score(&l1, &forms, &key, &PolicyVersion::default(), &Adjustments::default())
-        .unwrap();
-    let sco008: Vec<_> = run.exceptions.iter().filter(|e| e.code == "SCO-008").collect();
+    let run = score(
+        &l1,
+        &forms,
+        &key,
+        &PolicyVersion::default(),
+        &Adjustments::default(),
+    )
+    .unwrap();
+    let sco008: Vec<_> = run
+        .exceptions
+        .iter()
+        .filter(|e| e.code == "SCO-008")
+        .collect();
     assert_eq!(sco008.len(), 1);
     assert_eq!(sco008[0].target.booklet, Some(1));
     assert_eq!(sco008[0].target.question, Some(1));
     assert_eq!(run.item_state(0, 1), ItemState::Pending);
     assert_eq!(run.students[0].status, AssessmentStatus::Provisional);
     assert_eq!(run.students[1].status, AssessmentStatus::Provisional);
-    let sco031: Vec<_> = run.exceptions.iter().filter(|e| e.code == "SCO-031").collect();
+    let sco031: Vec<_> = run
+        .exceptions
+        .iter()
+        .filter(|e| e.code == "SCO-031")
+        .collect();
     assert_eq!(sco031.len(), 1);
     assert_eq!(run.students[2].final_pct, Some(e(50)));
-    assert_eq!(run.students[3].status, AssessmentStatus::Absent { excused: true });
-    assert_eq!(run.students[4].status, AssessmentStatus::Absent { excused: false });
+    assert_eq!(
+        run.students[3].status,
+        AssessmentStatus::Absent { excused: true }
+    );
+    assert_eq!(
+        run.students[4].status,
+        AssessmentStatus::Absent { excused: false }
+    );
     assert_eq!(run.students[4].final_pct, None);
     assert!(run.blocks_release());
 }
@@ -573,7 +693,11 @@ fn req_a8_l4_voids_bonus_choice_groups_overrides() {
     // Void Q2 (drop): S1 counted Q1, Q3, Q4, Q5 -> max 4, raw 1 + 0 + 1 + 0 + bonus 1 = 3
     // -> 75 %.
     let drop = Adjustments {
-        voids: vec![Void { item: 1, mode: VoidMode::Drop, reason: "KEY_AMBIGUOUS".into() }],
+        voids: vec![Void {
+            item: 1,
+            mode: VoidMode::Drop,
+            reason: "KEY_AMBIGUOUS".into(),
+        }],
         ..Adjustments::default()
     };
     let run = score(&l1, &forms, &key, &policy, &drop).unwrap();
@@ -581,7 +705,11 @@ fn req_a8_l4_voids_bonus_choice_groups_overrides() {
     assert_eq!(run.counted(0, 1), Counted::Voided);
     // Void Q3 with full credit to all: S1 raw 1 + 1 + 1 + 1 + 0 + 1 = 5 of 5 -> 100 %.
     let full = Adjustments {
-        voids: vec![Void { item: 2, mode: VoidMode::FullCredit, reason: "PRINT_ERROR".into() }],
+        voids: vec![Void {
+            item: 2,
+            mode: VoidMode::FullCredit,
+            reason: "PRINT_ERROR".into(),
+        }],
         ..Adjustments::default()
     };
     let run = score(&l1, &forms, &key, &policy, &full).unwrap();
@@ -608,7 +736,10 @@ fn req_a8_l4_voids_bonus_choice_groups_overrides() {
     // Frozen additive curve +5 pp, an override of −10 pp on S1 and hold-harmless at 90:
     // S1 80 -> 85 (step 5) -> 75 (step 7) -> max(75, 90) = 90 (step 8).
     let adj = Adjustments {
-        curve: Some(Curve::Frozen(FrozenCurve::Linear { slope: e(1), intercept: e(5) })),
+        curve: Some(Curve::Frozen(FrozenCurve::Linear {
+            slope: e(1),
+            intercept: e(5),
+        })),
         overrides: vec![IndividualOverride {
             booklet: omr_model::BookletSerial(1),
             delta_pp: e(-10),
@@ -623,7 +754,10 @@ fn req_a8_l4_voids_bonus_choice_groups_overrides() {
     assert_eq!(run.students[0].final_pct, Some(e(90)));
     // A curve that lowers a score raises SCO-016 (no-decrease, step 6).
     let lower = Adjustments {
-        curve: Some(Curve::Frozen(FrozenCurve::Linear { slope: e(1), intercept: e(-5) })),
+        curve: Some(Curve::Frozen(FrozenCurve::Linear {
+            slope: e(1),
+            intercept: e(-5),
+        })),
         ..Adjustments::default()
     };
     let run = score(&l1, &forms, &key, &policy, &lower).unwrap();
@@ -635,7 +769,13 @@ fn req_a8_l4_voids_bonus_choice_groups_overrides() {
         ..Adjustments::default()
     };
     let run = score(&l1, &forms, &key, &policy, &fit).unwrap();
-    assert_eq!(run.curve, Some(FrozenCurve::Linear { slope: e(1), intercept: e(-5) }));
+    assert_eq!(
+        run.curve,
+        Some(FrozenCurve::Linear {
+            slope: e(1),
+            intercept: e(-5)
+        })
+    );
 }
 
 #[test]
@@ -663,7 +803,10 @@ fn req_a8_floors_and_penalties() {
     assert_eq!(run.students[0].raw, e(0));
     // A fixed penalty of ¼ with no floor: −¼·3 = −¾ -> −25 %, clamped to 0 at step 5.
     let pen = PolicyVersion {
-        negative: NegativeMarking::Penalty { default: pts(1, 4), per_item: BTreeMap::new() },
+        negative: NegativeMarking::Penalty {
+            default: pts(1, 4),
+            per_item: BTreeMap::new(),
+        },
         floors: Floors::NONE,
         ..PolicyVersion::default()
     };
@@ -680,7 +823,11 @@ fn req_a8_not_reached_row_shift_near_chance() {
     let forms = FormMap::single_form(items);
     let key = KeyVersion::new((0..8).map(|i| KeyEntry::single((i % 4) as u8, 4)).collect());
     let policy = PolicyVersion {
-        sections: vec![Section { name: "S".into(), items: (0..8).collect(), speeded: true }],
+        sections: vec![Section {
+            name: "S".into(),
+            items: (0..8).collect(),
+            speeded: true,
+        }],
         ..PolicyVersion::default()
     };
     use L1Response::*;
@@ -691,7 +838,16 @@ fn req_a8_not_reached_row_shift_near_chance() {
                 1,
                 Some("S1"),
                 A,
-                vec![Single(0), Single(1), Single(2), Single(3), Single(0), Blank, Blank, Blank],
+                vec![
+                    Single(0),
+                    Single(1),
+                    Single(2),
+                    Single(3),
+                    Single(0),
+                    Blank,
+                    Blank,
+                    Blank,
+                ],
             ),
             // Every answer is the next item's key (shift +1): B C D A B C D A.
             // h₊₁ = 7 >= 5 and h₀ = 0 -> MRK-012. Score 0/8 -> also near chance.
@@ -707,7 +863,11 @@ fn req_a8_not_reached_row_shift_near_chance() {
     assert_eq!(by("MRK-012"), 1);
     // E₀ = 8·¼ = 2; SD₀ = √(8·¼·¾) = 1.2247; threshold 4.449. S1 scores 5 (not flagged);
     // S2 scores 0 under the only form -> SCO-005 near_chance.
-    let nc: Vec<_> = run.exceptions.iter().filter(|e| e.code == "SCO-005").collect();
+    let nc: Vec<_> = run
+        .exceptions
+        .iter()
+        .filter(|e| e.code == "SCO-005")
+        .collect();
     assert_eq!(nc.len(), 1);
     assert_eq!(nc[0].target.booklet, Some(2));
     assert_eq!(nc[0].sub_reason.as_deref(), Some("near_chance"));
@@ -750,15 +910,129 @@ fn req_a8_score_box_points_and_mrk013() {
     let l1 = ResponseSnapshot {
         booklets: vec![
             // 7.5/10 + 5/5 = 12.5/15 -> 250/3 %.
-            BookletL1::present(1, None, A, vec![Points(parse_points("7.5").unwrap()), Single(0)]),
+            BookletL1::present(
+                1,
+                None,
+                A,
+                vec![Points(parse_points("7.5").unwrap()), Single(0)],
+            ),
             // 11 > M = 10 -> MRK-013, item pending.
             BookletL1::present(2, None, A, vec![Points(pts(11, 1)), Single(0)]),
         ],
     };
-    let run = score(&l1, &forms, &key, &PolicyVersion::default(), &Adjustments::default())
-        .unwrap();
+    let run = score(
+        &l1,
+        &forms,
+        &key,
+        &PolicyVersion::default(),
+        &Adjustments::default(),
+    )
+    .unwrap();
     assert_eq!(run.item_score(0, 0), pts(15, 2));
     assert_eq!(run.students[0].final_pct, Some(exact(250, 3)));
     assert!(run.exceptions.iter().any(|x| x.code == "MRK-013"));
     assert_eq!(run.students[1].status, AssessmentStatus::Provisional);
+}
+
+#[test]
+fn req_a8_malformed_inputs_are_errors_not_panics() {
+    use L1Response::*;
+    let l1 = ResponseSnapshot {
+        booklets: vec![BookletL1::present(1, None, A, vec![Single(3)])],
+    };
+    let key = KeyVersion::new(vec![KeyEntry::single(0, 4)]);
+    let pol = PolicyVersion::default();
+    let adj = Adjustments::default();
+    // A form position naming a master item that does not exist: an error from the L2
+    // projection, never an index panic.
+    let mut unknown = FormMap::single_form(vec![sba4("Q1")]);
+    unknown.forms[0].positions[0].item = 7;
+    assert!(matches!(
+        score(&l1, &unknown, &key, &pol, &adj),
+        Err(ScoringError::InvalidReference(_))
+    ));
+    // σ mapping printed D to master option 40 (not a bijection on A–D): the response hits
+    // the bad entry, yet the run is refused with SCO-004 instead of overflowing a mask.
+    let mut bad_sigma = FormMap::single_form(vec![sba4("Q1")]);
+    bad_sigma.forms[0].positions[0].option_map = vec![0, 1, 2, 40];
+    match score(&l1, &bad_sigma, &key, &pol, &adj) {
+        Err(ScoringError::Refused(ex)) => assert!(ex.iter().any(|e| e.code == "SCO-004")),
+        other => panic!("expected an SCO-004 refusal, got {other:?}"),
+    }
+    let set_key = KeyVersion::new(vec![KeyEntry::set(&[0, 3])]);
+    let mut bad_ms = FormMap::single_form(vec![MasterItem::multi_select(
+        "Q1",
+        4,
+        SelectMode::SelectAll,
+        pts(1, 1),
+    )]);
+    bad_ms.forms[0].positions[0].option_map = vec![0, 1, 2, 40];
+    let l1s = ResponseSnapshot {
+        booklets: vec![BookletL1::present(1, None, A, vec![Set(vec![0, 3])])],
+    };
+    assert!(matches!(
+        score(&l1s, &bad_ms, &set_key, &pol, &adj),
+        Err(ScoringError::Refused(_))
+    ));
+    // A frozen lookup curve with no points (never produced by fitting) is the identity.
+    let forms = FormMap::single_form(vec![sba4("Q1"), sba4("Q2")]);
+    let key2 = KeyVersion::new(vec![KeyEntry::single(0, 4), KeyEntry::single(0, 4)]);
+    let l1b = ResponseSnapshot {
+        booklets: vec![BookletL1::present(1, None, A, vec![Single(0), Single(1)])],
+    };
+    let empty = Adjustments {
+        curve: Some(Curve::Frozen(FrozenCurve::Lookup(Vec::new()))),
+        ..Adjustments::default()
+    };
+    let run = score(&l1b, &forms, &key2, &pol, &empty).unwrap();
+    assert_eq!(run.students[0].final_pct, Some(e(50)));
+}
+
+#[test]
+fn req_a8_choice_groups_never_guess_pending() {
+    use L1Response::*;
+    // Three SBA items (M = 1, key A); "answer 1 of {Q1, Q2}". The student's Q1 mark is
+    // unreadable (covered by an open review exception), Q2 is right, Q3 is right.
+    let items: Vec<MasterItem> = (1..=3).map(|i| sba4(&format!("Q{i}"))).collect();
+    let forms = FormMap::single_form(items);
+    let key = KeyVersion::new((0..3).map(|_| KeyEntry::single(0, 4)).collect());
+    let mut b = BookletL1::present(1, Some("S1"), A, vec![Unreadable, Single(0), Single(0)]);
+    b.open_exceptions.insert(0);
+    let l1 = ResponseSnapshot { booklets: vec![b] };
+    let group = |mode| PolicyVersion {
+        choice_groups: vec![ChoiceGroup {
+            name: "G".into(),
+            items: vec![0, 1],
+            count: 1,
+            mode,
+        }],
+        ..PolicyVersion::default()
+    };
+    // First attempted: the unreadable Q1 is an attempt (never a blank), so Q1 is selected,
+    // Q2 is unselected and the total is provisional (1 of 2 resolved).
+    let run = score(
+        &l1,
+        &forms,
+        &key,
+        &group(ChoiceMode::FirstAttempted),
+        &Adjustments::default(),
+    )
+    .unwrap();
+    assert_eq!(run.counted(0, 0), Counted::Counted);
+    assert_eq!(run.counted(0, 1), Counted::Unselected);
+    assert_eq!(run.students[0].status, AssessmentStatus::Provisional);
+    // Best: Q2 (1 point) outranks the pending Q1 (0 until resolved), but the selection is
+    // not final while Q1 is pending, so the 2/2 total is provisional, never released as is.
+    let run = score(
+        &l1,
+        &forms,
+        &key,
+        &group(ChoiceMode::Best),
+        &Adjustments::default(),
+    )
+    .unwrap();
+    assert_eq!(run.counted(0, 1), Counted::Counted);
+    assert_eq!(run.counted(0, 0), Counted::Unselected);
+    assert_eq!(run.students[0].step3, Some(e(100)));
+    assert_eq!(run.students[0].status, AssessmentStatus::Provisional);
 }

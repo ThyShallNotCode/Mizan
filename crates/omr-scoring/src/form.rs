@@ -58,14 +58,20 @@ impl Form {
     }
 
     /// Maps a printed option mask at position `j` to master space through σ (26-entry table).
+    /// Entries of σ outside A–Z (an invalid form map, refused as SCO-004 at publish) and an
+    /// unknown position map to nothing instead of overflowing the mask.
     pub fn map_mask(&self, j: usize, printed: u32) -> u32 {
-        let map = &self.positions[j].option_map;
+        let Some(p) = self.positions.get(j) else {
+            return 0;
+        };
         let mut out = 0u32;
         let mut m = printed;
         while m != 0 {
             let l = m.trailing_zeros() as usize;
             m &= m - 1;
-            if let Some(&o) = map.get(l) {
+            if let Some(&o) = p.option_map.get(l)
+                && o < MAX_OPTIONS
+            {
                 out |= 1 << o;
             }
         }
@@ -74,10 +80,12 @@ impl Form {
 
     /// Maps a master option mask back to printed space at position `j` (σ⁻¹).
     pub fn unmap_mask(&self, j: usize, master: u32) -> u32 {
-        let map = &self.positions[j].option_map;
+        let Some(p) = self.positions.get(j) else {
+            return 0;
+        };
         let mut out = 0u32;
-        for (l, &o) in map.iter().enumerate() {
-            if master & (1 << o) != 0 {
+        for (l, &o) in p.option_map.iter().enumerate().take(MAX_OPTIONS as usize) {
+            if o < MAX_OPTIONS && master & (1 << o) != 0 {
                 out |= 1 << l;
             }
         }
@@ -209,9 +217,8 @@ impl FormMap {
             }
         }
         if !self.per_form_normalization && self.forms.len() > 1 {
-            let totals: BTreeSet<Points> = (0..self.forms.len())
-                .map(|f| self.form_total(f))
-                .collect();
+            let totals: BTreeSet<Points> =
+                (0..self.forms.len()).map(|f| self.form_total(f)).collect();
             if totals.len() > 1 {
                 ex.push(
                     Exception::must("SCO-006", Severity::Error, Scope::Exam).with_detail(format!(

@@ -47,20 +47,17 @@ pub use item::{ItemKind, MAX_OPTIONS, MasterItem, SelectMode, mask_of, options_o
 pub use key::{KeyEntry, KeyVersion};
 pub use l3::{CompiledKey, ItemScoreMatrix, ItemState};
 pub use l4::{
-    Adjustments, AssessmentStatus, Counted, Curve, IndividualOverride, SectionScore,
-    StudentResult, Void, VoidMode,
+    Adjustments, AssessmentStatus, Counted, Curve, IndividualOverride, SectionScore, StudentResult,
+    Void, VoidMode,
 };
 pub use num::{
     Exact, LetterBasis, Points, RoundingPolicy, RoundingStage, RoundingStrategy, decimal_string,
     exact, parse_points, pts, widen,
 };
 pub use policy::{
-    ChoiceGroup, ChoiceMode, Floors, MultiOnSba, MultiRule, NegativeMarking, PolicyVersion,
-    Section,
+    ChoiceGroup, ChoiceMode, Floors, MultiOnSba, MultiRule, NegativeMarking, PolicyVersion, Section,
 };
 pub use response::{
     Attendance, BookletL1, Cell, L1Response, ResponseMatrix, ResponseSnapshot, RowMeta,
 };
-pub use run::{
-    ItemMeta, Prepared, RowShiftConfig, ScoreRun, prepare, score, score_prepared,
-};
+pub use run::{ItemMeta, Prepared, RowShiftConfig, ScoreRun, prepare, score, score_prepared};

@@ -9,7 +9,6 @@ publish.workspace = true
 
 [dependencies]
 omr-model.workspace = true
-omr-forms.workspace = true
 omr-scoring.workspace = true
 omr-outcomes.workspace = true
 serde.workspace = true
@@ -18,3 +17,10 @@ thiserror.workspace = true
 rusqlite.workspace = true
 sha2.workspace = true
 hex.workspace = true
+blake3.workspace = true
+uuid.workspace = true
+p384.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+proptest.workspace = true

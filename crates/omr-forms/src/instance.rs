@@ -1,7 +1,7 @@
 //! A sheet instance: one printed side of one booklet (template page + form + serial, §6.7).
 
-use crate::geometry::{TAG_SET_ANSWER, TAG_SET_PROOF};
-use crate::layout::{PageGeometry, Template};
+use crate::geometry::{ECHO_FONT, ECHO_W, TAG_SET_ANSWER, TAG_SET_PROOF};
+use crate::layout::{PageGeometry, Template, approx_text_width};
 use crate::pagecode::{ExamKey, PageCode, PageCodeError};
 use omr_model::{BookletSerial, FormCode, PageNo};
 use serde::{Deserialize, Serialize};
@@ -58,10 +58,23 @@ pub enum PersonalisationError {
     TooLong,
 }
 
+/// Value of an ASCII, Arabic-Indic (٠–٩) or Extended Arabic-Indic (۰–۹) digit.
+fn digit_value(c: char) -> Option<u32> {
+    match c {
+        '0'..='9' => c.to_digit(10),
+        '\u{0660}'..='\u{0669}' => Some(u32::from(c) - 0x0660),
+        '\u{06F0}'..='\u{06F9}' => Some(u32::from(c) - 0x06F0),
+        _ => None,
+    }
+}
+
 /// True for a Saudi national ID (starts with 1) or Iqama (starts with 2): 10 digits, Luhn-valid.
+///
+/// Digits are read in any of the three digit scripts and everything else (spaces, hyphens,
+/// prefixes) is ignored, so `1000-000-008` or `١٠٠٠٠٠٠٠٠٨` are caught too.
 pub fn looks_like_national_id(s: &str) -> bool {
-    let d: Vec<u32> = s.chars().filter_map(|c| c.to_digit(10)).collect();
-    if d.len() != 10 || s.trim().chars().count() != 10 || !matches!(d[0], 1 | 2) {
+    let d: Vec<u32> = s.chars().filter_map(digit_value).collect();
+    if d.len() != 10 || !matches!(d[0], 1 | 2) {
         return false;
     }
     let sum: u32 = d
@@ -178,10 +191,30 @@ impl<'a> SheetInstance<'a> {
         )
     }
 
-    /// The echo line's friendly prefix: course, form and page.
+    /// The echo line's friendly prefix: course, form and page. The course is cut (at most 18
+    /// characters) so the line fits the echo box with a 1 mm margin for metric error.
     pub fn echo_prefix(&self) -> String {
-        let course: String = self.template.spec().course.chars().take(18).collect();
-        format!("{} · {}", course.trim(), self.form_page_text())
+        let fp = self.form_page_text();
+        let course = self.template.spec().course.trim();
+        if course.is_empty() {
+            return fp;
+        }
+        let avail =
+            ECHO_W - 1_000 - approx_text_width(&format!(" · {fp}"), ECHO_FONT, false, false);
+        let mut c = String::new();
+        for ch in course.chars().take(18) {
+            c.push(ch);
+            if approx_text_width(&c, ECHO_FONT, false, false) > avail {
+                c.pop();
+                break;
+            }
+        }
+        let c = c.trim();
+        if c.is_empty() {
+            fp
+        } else {
+            format!("{c} · {fp}")
+        }
     }
 
     /// AprilTag set printed on this side (0 = answer page, 3 = proof).
@@ -208,6 +241,16 @@ mod tests {
         assert!(!looks_like_national_id("1000000009"), "bad check digit");
         assert!(!looks_like_national_id("441234567"), "9-digit student ID");
         assert!(!looks_like_national_id("4412345678"), "starts with 4");
+        // Separators, prefixes and Arabic-Indic digits do not hide one.
+        assert!(looks_like_national_id("1000-000-008"));
+        assert!(looks_like_national_id(" 1000 000 008 "));
+        assert!(looks_like_national_id("ID 1000000008"));
+        assert!(looks_like_national_id("١٠٠٠٠٠٠٠٠٨"));
+        assert!(looks_like_national_id("۲۰۰۰۰۰۰۰۰۶"));
+        assert_eq!(
+            Personalisation::new("Sara", "١٠٠٠-٠٠٠-٠٠٨"),
+            Err(PersonalisationError::NationalIdRefused)
+        );
         assert_eq!(
             Personalisation::new("Sara", "1000000008"),
             Err(PersonalisationError::NationalIdRefused)
@@ -235,5 +278,34 @@ mod tests {
         );
         let bad = SheetInstance::new(&t, &k, FormCode(3), PageNo(1));
         assert_eq!(bad.payload(), Err(InstanceError::NoSuchForm(3)));
+    }
+
+    #[test]
+    fn echo_prefix_fits_the_echo_box() {
+        let mut s = TemplateSpec::standard(
+            ExamId(uuid::Uuid::from_u128(5)),
+            20,
+            4,
+            CancelMode::EraseOnly,
+        );
+        s.course = "CHEMISTRY 101 SECTION 7 GENERAL".into();
+        s.forms = 26;
+        let t = Template::build(s).unwrap();
+        let k = ExamKey::from_bytes([3; 32]);
+        let i = SheetInstance::new(&t, &k, FormCode(23), PageNo(1));
+        let p = i.echo_prefix();
+        assert!(p.starts_with("CHEMISTRY"), "{p}");
+        assert!(p.ends_with("Form W · Page 1/1"), "{p}");
+        assert!(approx_text_width(&p, ECHO_FONT, false, false) <= ECHO_W - 1_000);
+        // A short course is kept whole.
+        let t2 = Template::build(TemplateSpec::standard(
+            ExamId(uuid::Uuid::from_u128(5)),
+            20,
+            4,
+            CancelMode::EraseOnly,
+        ))
+        .unwrap();
+        let i2 = SheetInstance::new(&t2, &k, FormCode(1), PageNo(1));
+        assert_eq!(i2.echo_prefix(), "COURSE 101 · Form A · Page 1/1");
     }
 }

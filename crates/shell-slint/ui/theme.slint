@@ -157,6 +157,9 @@ export global Theme {
     out property <color> nav-active-bg: #FFFFFF17;
     out property <color> nav-hover-bg: #FFFFFF0D;
     out property <color> nav-focus: #E2BD6E;                            // focus ring on nav-bg (Theme.focus fails there in light)
+    // Gold on the rail: active marker and count badge. Theme.accent is only 2.76:1 on the
+    // light active fill (nav-active-bg over nav-bg); this lighter gold is >= 4.5:1 there.
+    out property <color> nav-accent: #D9AE55;
     out property <float> pattern-opacity: self.dark ? 0.05 : 0.07;       // girih tile over nav-bg
 
     // ---- status (text-safe on surface and on their soft fills)
@@ -226,6 +229,12 @@ export global Theme {
             : mark == MarkState.ambiguous ? self.mark-ambiguous
             : mark == MarkState.unreadable ? self.mark-unreadable
             : self.mark-blank;
+    }
+
+    // Glyph colour on a filled mark badge: white is only 4.21:1 on the ambiguous amber,
+    // black is 4.99:1; white passes 4.5:1 on the other three.
+    public pure function mark-badge-fg(mark: MarkState) -> color {
+        return mark == MarkState.ambiguous ? #000000 : #FFFFFF;
     }
 
     // Categorical series colour by 1-based slot; slots are assigned in order, never cycled.
@@ -314,6 +323,7 @@ export component Keycap inherits Rectangle {
             color: root.inverse ? Theme.on-primary : Theme.ink-2;
             vertical-alignment: center;
             horizontal-alignment: center;
+            accessible-role: AccessibleRole.none; // the key is in the parent's description
         }
     }
 }
@@ -351,6 +361,7 @@ export component Button inherits Rectangle {
     animate background { duration: Theme.duration-fast; }
 
     accessible-role: AccessibleRole.button;
+    accessible-enabled: root.enabled;
     accessible-label: root.text;
     accessible-description: root.key-hint;
     accessible-action-default => {
@@ -401,6 +412,7 @@ export component Button inherits Rectangle {
                 font-weight: root.filled ? Theme.weight-semibold : Theme.weight-medium;
                 vertical-alignment: center;
                 overflow: elide;
+                accessible-role: AccessibleRole.none; // the button carries the label
             }
         }
         if root.key-hint != "": VerticalLayout {
@@ -447,9 +459,12 @@ export component IconButton inherits Rectangle {
     background: self.active ? Theme.primary-soft : ta.has-hover ? Theme.surface-hover : transparent;
     animate background { duration: Theme.duration-fast; }
     accessible-role: AccessibleRole.button;
+    accessible-enabled: root.enabled;
     accessible-label: root.label;
     accessible-action-default => {
-        root.clicked();
+        if (root.enabled) {
+            root.clicked();
+        }
     }
     ta := TouchArea {
         enabled: root.enabled;
@@ -526,6 +541,7 @@ export component Chip inherits Rectangle {
             font-weight: Theme.weight-medium;
             color: root.selected ? Theme.ink-inverse : Theme.ink;
             vertical-alignment: center;
+            accessible-role: AccessibleRole.none; // the chip carries "text, count"
         }
         if root.count != "": Text {
             text: root.count;
@@ -533,6 +549,7 @@ export component Chip inherits Rectangle {
             font-size: Theme.text-xs;
             color: root.selected ? Theme.ink-inverse : Theme.ink-2;
             vertical-alignment: center;
+            accessible-role: AccessibleRole.none;
         }
     }
     FocusRing {
@@ -579,6 +596,7 @@ export component StatusPill inherits Rectangle {
             font-weight: Theme.weight-medium;
             color: Theme.tone-fg(root.tone);
             vertical-alignment: center;
+            accessible-role: AccessibleRole.none; // the pill itself carries the label
         }
     }
 }
@@ -697,6 +715,7 @@ export component OptionChip inherits Rectangle {
                 color: root.selected ? Theme.on-primary : Theme.ink;
                 horizontal-alignment: center;
                 vertical-alignment: center;
+                accessible-role: AccessibleRole.none; // the chip carries the label
             }
         }
         HorizontalLayout {
@@ -812,7 +831,8 @@ export component StatTile inherits Rectangle {
     drop-shadow-offset-y: Theme.shadow-1-offset;
     drop-shadow-color: Theme.shadow-1-color;
     accessible-role: AccessibleRole.text;
-    accessible-label: root.label + ": " + root.value + " " + root.unit + (root.caption == "" ? "" : ", " + root.caption);
+    accessible-label: root.label + ": " + root.value + (root.unit == "" ? "" : " " + root.unit) + (root.caption == "" ? "" : ", " + root.caption);
+    // Child texts are hidden from AT: the tile exposes one combined label.
     VerticalLayout {
         padding: Theme.space-md + Theme.space-2xs;
         spacing: Theme.space-xs;
@@ -824,6 +844,7 @@ export component StatTile inherits Rectangle {
             letter-spacing: 0.6px;
             color: Theme.ink-2;
             overflow: elide;
+            accessible-role: AccessibleRole.none;
         }
         HorizontalLayout {
             spacing: Theme.space-xs;
@@ -834,12 +855,14 @@ export component StatTile inherits Rectangle {
                 font-weight: Theme.weight-semibold;
                 color: Theme.ink;
                 vertical-alignment: bottom;
+                accessible-role: AccessibleRole.none;
             }
             if root.unit != "": Text {
                 text: root.unit;
                 font-size: Theme.text-xs;
                 color: Theme.ink-2;
                 vertical-alignment: bottom;
+                accessible-role: AccessibleRole.none;
             }
         }
         if root.caption != "": Text {
@@ -847,6 +870,7 @@ export component StatTile inherits Rectangle {
             font-size: Theme.text-xs;
             color: Theme.tone-fg(root.caption-tone);
             overflow: elide;
+            accessible-role: AccessibleRole.none;
         }
     }
 }
@@ -898,7 +922,9 @@ export component NavItem inherits Rectangle {
     animate background { duration: Theme.duration-fast; }
     accessible-role: AccessibleRole.tab;
     accessible-label: root.badge == "" ? root.label : root.label + ", " + root.badge + " open";
-    accessible-checked: root.active;
+    // Tabs expose the current page as "selected" (as Slint's own TabWidget does), not "checked".
+    accessible-item-selectable: true;
+    accessible-item-selected: root.active;
     accessible-action-default => {
         root.clicked();
     }
@@ -924,7 +950,7 @@ export component NavItem inherits Rectangle {
         width: 3px;
         height: 28px;
         border-radius: 1.5px;
-        background: Theme.accent;
+        background: Theme.nav-accent;
         visible: root.active;
     }
     VerticalLayout {
@@ -945,6 +971,7 @@ export component NavItem inherits Rectangle {
             font-weight: root.active ? Theme.weight-semibold : Theme.weight-medium;
             color: root.active ? Theme.nav-fg : Theme.nav-fg-2;
             horizontal-alignment: center;
+            accessible-role: AccessibleRole.none; // the tab carries the label
         }
     }
     if root.badge != "": Rectangle {
@@ -953,7 +980,7 @@ export component NavItem inherits Rectangle {
         height: 16px;
         width: max(16px, badge-text.preferred-width + 8px);
         border-radius: 8px;
-        background: Theme.accent;
+        background: Theme.nav-accent;
         badge-text := Text {
             text: root.badge;
             font-family: Theme.font-mono;
@@ -962,6 +989,7 @@ export component NavItem inherits Rectangle {
             color: #1C2430;
             horizontal-alignment: center;
             vertical-alignment: center;
+            accessible-role: AccessibleRole.none; // the count is in the item's label
         }
     }
     FocusRing {
@@ -1026,6 +1054,7 @@ export component Breadcrumb inherits HorizontalLayout {
             font-size: Theme.text-sm;
             color: Theme.ink-3;
             vertical-alignment: center;
+            accessible-role: AccessibleRole.none; // decorative separator
         }
     }
 }
@@ -1043,9 +1072,17 @@ export component SearchField inherits Rectangle {
     background: Theme.surface-raised;
     border-width: 1px;
     border-color: input.has-focus ? Theme.primary : Theme.border-strong;
+    // One text-input node for AT (as Slint's LineEdit does): the inner TextInput and the
+    // placeholder Text are hidden, and focus is forwarded to the TextInput.
+    forward-focus: input;
     accessible-role: AccessibleRole.text-input;
     accessible-label: root.placeholder;
+    accessible-placeholder-text: root.placeholder;
     accessible-value: root.text;
+    accessible-action-set-value(v) => {
+        root.text = v;
+        root.edited(v);
+    }
     HorizontalLayout {
         padding-left: Theme.space-sm + Theme.space-2xs;
         padding-right: Theme.space-sm;
@@ -1071,6 +1108,7 @@ export component SearchField inherits Rectangle {
                 color: Theme.ink-3;
                 vertical-alignment: center;
                 overflow: elide;
+                accessible-role: AccessibleRole.none;
             }
             input := TextInput {
                 text <=> root.text;
@@ -1079,6 +1117,7 @@ export component SearchField inherits Rectangle {
                 vertical-alignment: center;
                 single-line: true;
                 selection-background-color: Theme.primary-soft;
+                accessible-role: AccessibleRole.none;
                 accepted => {
                     root.accepted(self.text);
                 }
@@ -1093,6 +1132,10 @@ export component SearchField inherits Rectangle {
                 text: root.key-hint;
             }
         }
+    }
+    FocusRing {
+        active: input.has-focus;
+        corner: Theme.radius-md;
     }
 }
 
@@ -1283,12 +1326,30 @@ export component GroupHeader inherits Rectangle {
     background: Theme.surface-sunken;
     accessible-role: AccessibleRole.button;
     accessible-label: root.code + " " + root.title + ", " + root.count + " items";
+    accessible-expandable: true;
+    accessible-expanded: root.expanded;
     accessible-action-default => {
         root.toggled();
     }
-    TouchArea {
-        clicked => {
+    accessible-action-expand => {
+        if (!root.expanded) {
             root.toggled();
+        }
+    }
+    ta := TouchArea {
+        clicked => {
+            fs.focus();
+            root.toggled();
+        }
+    }
+    // Keyboard operable like every other interactive component (WCAG 2.1.1).
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.toggled();
+                return accept;
+            }
+            return reject;
         }
     }
     HorizontalLayout {
@@ -1309,6 +1370,7 @@ export component GroupHeader inherits Rectangle {
             font-weight: Theme.weight-medium;
             color: Theme.ink;
             vertical-alignment: center;
+            accessible-role: AccessibleRole.none; // the header carries "code title, n items"
         }
         Text {
             text: root.title;
@@ -1317,6 +1379,7 @@ export component GroupHeader inherits Rectangle {
             vertical-alignment: center;
             overflow: elide;
             horizontal-stretch: 1;
+            accessible-role: AccessibleRole.none;
         }
         VerticalLayout {
             alignment: center;
@@ -1324,11 +1387,30 @@ export component GroupHeader inherits Rectangle {
                 text: root.count;
             }
         }
+        // expanded / collapsed state, visible as well as exposed to AT
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: root.expanded ? @image-url("assets/icons/chevron-down.svg") : @image-url("assets/icons/chevron-right.svg");
+                width: Theme.icon-sm;
+                height: Theme.icon-sm;
+                colorize: Theme.ink-2;
+            }
+        }
     }
     Rectangle {
         y: parent.height - 1px;
         height: 1px;
         background: Theme.border;
+    }
+    // inset ring: the header spans its pane edge to edge, so an outside ring would clip
+    FocusRing {
+        x: Theme.focus-width + Theme.focus-offset;
+        y: Theme.focus-width + Theme.focus-offset;
+        width: parent.width - 2 * (Theme.focus-width + Theme.focus-offset);
+        height: parent.height - 2 * (Theme.focus-width + Theme.focus-offset);
+        active: fs.has-focus;
+        corner: Theme.radius-xs;
     }
 }
 
@@ -1392,8 +1474,18 @@ export component TableRow inherits Rectangle {
     callback clicked();
     min-height: self.header ? Theme.row-height-compact + 4px : self.row-height;
     background: self.header ? Theme.surface-sunken : self.selected ? Theme.primary-soft : ta.has-hover ? Theme.surface-hover : transparent;
-    accessible-role: self.header ? AccessibleRole.none : AccessibleRole.list-item;
-    accessible-checked: self.selected;
+    // Slint requires a constant accessible-role (a `header ? none : list-item` binding fails to
+    // compile unless every instance sets `header` to a literal), so header rows are list items
+    // too; they are never selectable and have no default action.
+    accessible-role: AccessibleRole.list-item;
+    // Row selection is "selected", not "checked" (a row is not a checkbox).
+    accessible-item-selectable: !self.header;
+    accessible-item-selected: self.selected;
+    accessible-action-default => {
+        if (!root.header) {
+            root.clicked();
+        }
+    }
     ta := TouchArea {
         enabled: !root.header;
         clicked => {
@@ -1483,7 +1575,8 @@ export component BubbleOverlay inherits Rectangle {
         }
         if root.mark != MarkState.selected: Text {
             text: root.mark == MarkState.ambiguous ? "?" : root.mark == MarkState.unreadable ? "!" : "–";
-            color: #FFFFFF;
+            color: Theme.mark-badge-fg(root.mark);
+            accessible-role: AccessibleRole.none; // the overlay's label names the state
             font-size: max(10px, root.width * 0.24);
             font-weight: Theme.weight-semibold;
             horizontal-alignment: center;

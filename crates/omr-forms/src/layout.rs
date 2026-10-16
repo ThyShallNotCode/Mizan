@@ -488,9 +488,11 @@ impl Example {
         self.kind == ExampleKind::Fill
     }
 
-    /// Printed extent (bubble, mark and icon).
+    /// Printed extent (bubble, mark and icon), including stroke widths: the circle example's
+    /// ring reaches r₀ + 0.8 mm + half its 0.35 mm stroke, the ✓ icon 0.8 mm + half its stroke.
     pub fn rect(&self) -> RectUm {
-        RectUm::around(self.centre, BUBBLE_RADIUS + 700).union(&RectUm::around(self.icon, 900))
+        RectUm::around(self.centre, BUBBLE_RADIUS + EXAMPLE_REACH)
+            .union(&RectUm::around(self.icon, ICON_REACH))
     }
 }
 
@@ -721,6 +723,12 @@ const COMB_H: Um = 6_000;
 /// Stroke of the comb (write-in) boxes above the ID grid.
 pub const COMB_STROKE: Um = 200;
 const EXAMPLE_PITCH: Um = 8_500;
+/// Reach of a "how to mark" example's ink beyond r₀ (circle example: 0.8 mm + 0.175 mm stroke).
+const EXAMPLE_REACH: Um = 1_000;
+/// Reach of a verdict icon's ink from its centre (✓: 0.8 mm + 0.175 mm stroke).
+const ICON_REACH: Um = 1_000;
+/// Width available to a question number: from 1 mm after the row tick to its inner edge.
+const QNUM_BOX: Um = ROW_QNUM_EDGE - TICK_W - 1_000;
 const FORM_PITCH: Um = 7_000;
 
 /// Approximate advance width of `text` (lint and wrapping only; rendering uses real metrics).
@@ -1169,8 +1177,8 @@ fn build_header(
             ));
             y += INSTR_LINE + 700;
         }
-        let yc = y + BUBBLE_RADIUS + 700;
-        let mut x = zb_x0 + BUBBLE_RADIUS + 700;
+        let yc = y + BUBBLE_RADIUS + EXAMPLE_REACH;
+        let mut x = zb_x0 + BUBBLE_RADIUS + EXAMPLE_REACH;
         if inline {
             let caption = fixed(
                 caption_text,
@@ -1203,7 +1211,7 @@ fn build_header(
             .map(|e| e.rect().right())
             .max()
             .unwrap_or(zb_x0);
-        let mut row_bottom = yc + BUBBLE_RADIUS + 700;
+        let mut row_bottom = yc + BUBBLE_RADIUS + EXAMPLE_REACH;
 
         // Form grid: same row if it fits after a quiet zone, else on rows below.
         if spec.form_grid {
@@ -1467,11 +1475,19 @@ fn layout(
                     Direction::Ltr => Anchor::Right,
                     Direction::Rtl => Anchor::Left,
                 };
-                let at = PtUm::new(phys(ROW_QNUM_EDGE), y + QNUM_FONT * 36 / 100);
+                // Numbers wider than the box between the tick and the first bubble (4 digits)
+                // shrink to fit, so they never touch the row tick.
+                let w = approx_text_width(&label, QNUM_FONT, true, false);
+                let size = if w > QNUM_BOX {
+                    QNUM_FONT * QNUM_BOX / w
+                } else {
+                    QNUM_FONT
+                };
+                let at = PtUm::new(phys(ROW_QNUM_EDGE), y + size * 36 / 100);
                 art.texts.push(fixed(
                     &label,
                     at,
-                    QNUM_FONT,
+                    size,
                     anchor,
                     true,
                     TextRole::QuestionNumber,
@@ -1494,7 +1510,10 @@ fn layout(
         });
         arts.push(art);
     }
-    debug_assert_eq!(u32::from(next_q), q);
+    // Every question must be placed exactly once; never ship a layout that drops one.
+    if u32::from(next_q) != q {
+        return Err(BuildError::NoCapacity);
+    }
 
     let manifest = LayoutManifest {
         generator: GENERATOR.to_owned(),

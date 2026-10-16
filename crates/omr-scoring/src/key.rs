@@ -193,12 +193,10 @@ impl KeyVersion {
     /// a printed letter distribution with χ² p < 0.01, or a run of ≥ 5 identical letters.
     pub fn validate(&self, forms: &FormMap) -> Vec<Exception> {
         let mut ex = Vec::new();
-        let sco003 = |d: String| {
-            Exception::must("SCO-003", Severity::Blocker, Scope::Exam).with_detail(d)
-        };
-        let sco004 = |d: String| {
-            Exception::must("SCO-004", Severity::Blocker, Scope::Exam).with_detail(d)
-        };
+        let sco003 =
+            |d: String| Exception::must("SCO-003", Severity::Blocker, Scope::Exam).with_detail(d);
+        let sco004 =
+            |d: String| Exception::must("SCO-004", Severity::Blocker, Scope::Exam).with_detail(d);
         let sco027 =
             |d: String| Exception::must("SCO-027", Severity::Warn, Scope::Exam).with_detail(d);
         for (i, it) in forms.items.iter().enumerate() {
@@ -241,10 +239,7 @@ impl KeyVersion {
                 }
                 (ItemKind::MultiSelect(_), KeyEntry::Set(m)) => {
                     if *m == 0 {
-                        ex.push(sco003(format!(
-                            "item {}: empty multi-select key",
-                            it.label
-                        )));
+                        ex.push(sco003(format!("item {}: empty multi-select key", it.label)));
                     } else if *m & !it.option_mask() != 0 {
                         ex.push(sco004(format!(
                             "item {}: key option ≥ m_i = {}",

@@ -169,6 +169,45 @@ fn cached_static_raster_plus_overlay_equals_full_render() {
 }
 
 #[test]
+fn long_personal_names_never_reach_the_page_code() {
+    let t = template(40, LabelSet::Latin);
+    let k = key();
+    // 75 characters (the limit is 80): far wider than the name line at 8 pt.
+    let name = "Abdulrahman Mohammed Abdullah Saleh Al-Qahtani Al-Dosari Al-Harbi Al-Otaibi";
+    let person = Personalisation::new(name, "442001234").unwrap();
+    let inst = SheetInstance::new(&t, &k, FormCode(1), PageNo(1))
+        .with_serial(BookletSerial(3))
+        .with_personal(person);
+    let dpi = 200.0;
+    let img = rasterize_sheet(&inst, dpi).unwrap();
+    let ppm = px_per_mm(dpi);
+    let g = t.page(PageNo(1)).unwrap();
+    for c in &g.codes {
+        // The ring 0.3–2.5 mm around each symbol (inside its 3 mm quiet zone) stays paper white.
+        let (outer, inner) = (c.rect.inflate(2_500).to_mm(), c.rect.inflate(300).to_mm());
+        let inside = |r: &omr_model::RectMm, x: f64, y: f64| {
+            x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h
+        };
+        let (x0, y0) = ((outer.x * ppm) as u32, (outer.y * ppm) as u32);
+        let (x1, y1) = (
+            ((outer.x + outer.w) * ppm) as u32,
+            ((outer.y + outer.h) * ppm) as u32,
+        );
+        for py in y0..y1 {
+            for px in x0..x1 {
+                let (x, y) = ((f64::from(px) + 0.5) / ppm, (f64::from(py) + 0.5) / ppm);
+                if inside(&outer, x, y) && !inside(&inner, x, y) {
+                    let v = img.get_pixel(px, py).0[0];
+                    assert!(v > 200, "ink at ({x:.2}, {y:.2}) mm near code {}", c.copy);
+                }
+            }
+        }
+        let text = decode_qr(&img, c.rect, dpi);
+        assert_eq!(text, inst.payload().unwrap());
+    }
+}
+
+#[test]
 fn svg_is_deterministic_and_never_contains_the_key() {
     let t = template(30, LabelSet::Latin);
     let k = key();

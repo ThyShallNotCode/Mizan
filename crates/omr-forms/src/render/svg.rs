@@ -10,6 +10,7 @@ use crate::geometry::*;
 use crate::instance::SheetInstance;
 use crate::layout::{
     Anchor, COMB_STROKE, ExampleKind, HAlign, PageArt, PageGeometry, TextContent, TextItem,
+    approx_text_width, starts_rtl,
 };
 use crate::pagecode;
 use crate::units::{PtUm, RectUm, Um};
@@ -386,23 +387,52 @@ fn write_variable(
     if let Some(p) = &inst.personal {
         for (slot, s) in [(&art.name_slot, p.name()), (&art.id_slot, p.student_id())] {
             if let Some(slot) = slot {
+                // Never let a long name run past its line into the page code's quiet zone.
+                let (size, s) = fit_text(s, slot.size, true, slot.max_w);
                 let t = TextItem {
                     content: TextContent::Fixed(String::new()),
                     at: slot.at,
-                    size: slot.size,
+                    size,
                     anchor: Anchor::Left,
                     bold: true,
                     mono: false,
                     gray: 0,
-                    rtl: false,
+                    rtl: starts_rtl(&s),
                     role: crate::layout::TextRole::Caption,
-                    bbox: RectUm::new(slot.at.x, slot.at.y - slot.size, slot.max_w, slot.size),
+                    bbox: RectUm::new(slot.at.x, slot.at.y - size, slot.max_w, size),
                 };
-                text(out, &t, s, false);
+                text(out, &t, &s, false);
             }
         }
     }
     Ok(())
+}
+
+/// The font size and text that fit `max_w` (estimated metrics, with an 8 % margin): the size
+/// shrinks down to 60 % of `size`, then the text is cut with an ellipsis.
+fn fit_text(s: &str, size: Um, bold: bool, max_w: Um) -> (Um, String) {
+    let budget = max_w * 92 / 100;
+    let w = approx_text_width(s, size, bold, false);
+    if w <= budget {
+        return (size, s.to_owned());
+    }
+    let min = size * 6 / 10;
+    let shrunk = (i64::from(size) * i64::from(budget) / i64::from(w.max(1))) as Um;
+    if shrunk >= min {
+        return (shrunk, s.to_owned());
+    }
+    let mut out = String::new();
+    for c in s.chars() {
+        out.push(c);
+        let mut t = out.clone();
+        t.push('…');
+        if approx_text_width(&t, min, bold, false) > budget {
+            out.pop();
+            break;
+        }
+    }
+    out.push('…');
+    (min, out)
 }
 
 fn fmt_mm(v: Um) -> String {
@@ -472,6 +502,23 @@ mod tests {
         assert_eq!(f(24_600), "24.6");
         assert_eq!(f(212), "0.212");
         assert_eq!(f(-1_050), "-1.05");
+    }
+
+    #[test]
+    fn personal_text_fits_its_slot() {
+        let max_w = 60_000;
+        let (size, s) = fit_text("Sara", 2_822, true, max_w);
+        assert_eq!((size, s.as_str()), (2_822, "Sara"));
+        let long = "Abdulrahman Mohammed Abdullah Saleh Al-Qahtani";
+        let (size, s) = fit_text(long, 2_822, true, max_w);
+        assert!((2_822 * 6 / 10..2_822).contains(&size));
+        assert_eq!(s, long, "shrunk, not cut");
+        assert!(approx_text_width(&s, size, true, false) <= max_w);
+        let very_long = long.repeat(2);
+        let (size, s) = fit_text(&very_long, 2_822, true, max_w);
+        assert_eq!(size, 2_822 * 6 / 10);
+        assert!(s.ends_with('…'));
+        assert!(approx_text_width(&s, size, true, false) <= max_w);
     }
 
     #[test]

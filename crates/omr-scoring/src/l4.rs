@@ -231,15 +231,141 @@ pub fn apply_l4(
         *overrides.entry(o.booklet).or_default() += o.delta_pp;
     }
     let hundred = Exact::from_integer(100);
-    let mut students = Vec::with_capacity(n_rows);
-    let mut adj_scores: Vec<i64> = vec![0; n_items];
     let n_sections = policy.sections.len();
+    // Void-adjusted score of (n, i): full credit or credit-any replace the L3 score.
+    let adjusted = |n: usize, i: usize| -> i64 {
+        match void_mode[i] {
+            Some(VoidMode::FullCredit) if !is_bonus[i] => max_scaled[i],
+            Some(VoidMode::CreditAny) if !is_bonus[i] => {
+                if matches!(l3.state(n, i), ItemState::Scored | ItemState::Pending) {
+                    max_scaled[i]
+                } else {
+                    0
+                }
+            }
+            _ => l3.scaled(n, i),
+        }
+    };
+    // Step 1, column-wise: presented, voided or counted.
+    for i in 0..n_items {
+        let c_void = match void_mode[i] {
+            None => Counted::Counted,
+            Some(_) if is_bonus[i] => Counted::Voided,
+            Some(VoidMode::Drop) => Counted::Voided,
+            Some(_) => Counted::VoidedCredited,
+        } as u8;
+        let col = &mut counted[i * n_rows..(i + 1) * n_rows];
+        for (n, c) in col.iter_mut().enumerate() {
+            *c = if l3.state(n, i).presented() {
+                c_void
+            } else {
+                Counted::NotPresented as u8
+            };
+        }
+    }
+    // Absent rows, excused items (sparse), then choice groups (per row, members only).
+    let row_of: BTreeMap<BookletSerial, usize> = if adj.excused.is_empty() {
+        BTreeMap::new()
+    } else {
+        rm.rows
+            .iter()
+            .enumerate()
+            .map(|(n, r)| (r.booklet, n))
+            .collect()
+    };
+    for (b, items) in &adj.excused {
+        if let Some(&n) = row_of.get(b) {
+            for &i in items {
+                if i < n_items && counted[i * n_rows + n] == Counted::Counted as u8 {
+                    counted[i * n_rows + n] = Counted::Excused as u8;
+                }
+            }
+        }
+    }
+    // A `Pending` member leaves the choice-group selection undetermined (its resolved score
+    // or attempt could change which items count), so the total is provisional even when the
+    // pending item ends up unselected: pending is never guessed (§10.1).
+    let mut group_pending = vec![false; n_rows];
     for (n, row) in rm.rows.iter().enumerate() {
-        let form = forms.forms[row.form].code;
-        if let Some(excused) = row.absent {
+        if row.absent.is_some() {
             for i in 0..n_items {
                 counted[i * n_rows + n] = Counted::Absent as u8;
             }
+            continue;
+        }
+        for g in &policy.choice_groups {
+            let mut members: Vec<usize> = g
+                .items
+                .iter()
+                .copied()
+                .filter(|&i| i < n_items && counted[i * n_rows + n] == Counted::Counted as u8)
+                .collect();
+            if members
+                .iter()
+                .any(|&i| l3.state(n, i) == ItemState::Pending)
+            {
+                group_pending[n] = true;
+            }
+            let q = g.count.min(members.len());
+            match g.mode {
+                ChoiceMode::Best => {
+                    members.sort_by(|&a, &b| adjusted(n, b).cmp(&adjusted(n, a)).then(a.cmp(&b)));
+                }
+                ChoiceMode::FirstAttempted => {
+                    // Attempted = anything but a blank or not-reached cell; an unreadable
+                    // (`Pending`) mark is an attempt, never a blank.
+                    let pos = &printed_pos[row.form];
+                    members.sort_by_key(|&i| {
+                        let blank =
+                            matches!(l3.state(n, i), ItemState::Blank | ItemState::NotReached);
+                        (blank, pos[i].unwrap_or(usize::MAX))
+                    });
+                }
+            }
+            for &i in &members[q..] {
+                counted[i * n_rows + n] = Counted::Unselected as u8;
+            }
+        }
+    }
+    // Steps 2–3, column-wise sums: loose items, per-section sums, maxima, pending flags.
+    let mut loose_raw = vec![0i64; n_rows];
+    let mut max_total = vec![0i64; n_rows];
+    let mut sec_raw = vec![vec![0i64; n_rows]; n_sections];
+    let mut sec_max = vec![vec![0i64; n_rows]; n_sections];
+    let mut pending = group_pending;
+    for i in 0..n_items {
+        let m = if is_bonus[i] { 0 } else { max_scaled[i] };
+        let col_c = &counted[i * n_rows..(i + 1) * n_rows];
+        let plain = void_mode[i].is_none();
+        for (n, &c) in col_c.iter().enumerate() {
+            if c > Counted::VoidedCredited as u8 {
+                continue;
+            }
+            let mut v = if plain {
+                l3.scaled(n, i)
+            } else {
+                adjusted(n, i)
+            };
+            if plain && l3.state(n, i) == ItemState::Pending {
+                pending[n] = true;
+            }
+            if policy.floors.item && v < 0 {
+                v = 0;
+            }
+            match section_of[i] {
+                Some(k) => {
+                    sec_raw[k][n] += v;
+                    sec_max[k][n] += m;
+                }
+                None => loose_raw[n] += v,
+            }
+            max_total[n] += m;
+        }
+    }
+    let mut students = Vec::with_capacity(n_rows);
+    for (n, row) in rm.rows.iter().enumerate() {
+        let form = forms.forms[row.form].code;
+        if let Some(excused) = row.absent {
             students.push(StudentResult {
                 booklet: row.booklet,
                 student: row.student.clone(),
@@ -255,100 +381,10 @@ pub fn apply_l4(
             });
             continue;
         }
-        let excused = adj.excused.get(&row.booklet);
-        // Step 1: counted set and void-adjusted scores.
-        for i in 0..n_items {
-            let st = l3.state(n, i);
-            let mut s = l3.scaled(n, i);
-            let c = if !st.presented() {
-                Counted::NotPresented
-            } else if let Some(mode) = void_mode[i] {
-                if is_bonus[i] {
-                    Counted::Voided
-                } else {
-                    match mode {
-                        VoidMode::Drop => Counted::Voided,
-                        VoidMode::FullCredit => {
-                            s = max_scaled[i];
-                            Counted::VoidedCredited
-                        }
-                        VoidMode::CreditAny => {
-                            s = if matches!(st, ItemState::Scored | ItemState::Pending) {
-                                max_scaled[i]
-                            } else {
-                                0
-                            };
-                            Counted::VoidedCredited
-                        }
-                    }
-                }
-            } else if excused.is_some_and(|e| e.contains(&i)) {
-                Counted::Excused
-            } else {
-                Counted::Counted
-            };
-            adj_scores[i] = s;
-            counted[i * n_rows + n] = c as u8;
-        }
-        for g in &policy.choice_groups {
-            let mut members: Vec<usize> = g
-                .items
-                .iter()
-                .copied()
-                .filter(|&i| i < n_items && counted[i * n_rows + n] == Counted::Counted as u8)
-                .collect();
-            let q = g.count.min(members.len());
-            match g.mode {
-                ChoiceMode::Best => {
-                    members.sort_by(|&a, &b| adj_scores[b].cmp(&adj_scores[a]).then(a.cmp(&b)));
-                }
-                ChoiceMode::FirstAttempted => {
-                    let pos = &printed_pos[row.form];
-                    members.sort_by_key(|&i| {
-                        let blank = !matches!(l3.state(n, i), ItemState::Scored);
-                        (blank, pos[i].unwrap_or(usize::MAX))
-                    });
-                }
-            }
-            for &i in &members[q..] {
-                counted[i * n_rows + n] = Counted::Unselected as u8;
-            }
-        }
-        // Steps 2–3: sums with floors.
-        let mut pending = false;
-        let mut sec_raw = vec![0i128; n_sections];
-        let mut sec_max = vec![0i128; n_sections];
-        let mut loose_raw: i128 = 0;
-        let mut max_total: i128 = 0;
-        for i in 0..n_items {
-            if !Counted::from_u8(counted[i * n_rows + n]).in_grade() {
-                continue;
-            }
-            if l3.state(n, i) == ItemState::Pending && void_mode[i].is_none() {
-                pending = true;
-            }
-            let mut s = i128::from(adj_scores[i]);
-            if policy.floors.item && s < 0 {
-                s = 0;
-            }
-            let m = if is_bonus[i] {
-                0
-            } else {
-                i128::from(max_scaled[i])
-            };
-            max_total += m;
-            match section_of[i] {
-                Some(k) => {
-                    sec_raw[k] += s;
-                    sec_max[k] += m;
-                }
-                None => loose_raw += s,
-            }
-        }
-        let mut raw_total = loose_raw;
+        let mut raw_total = i128::from(loose_raw[n]);
         let mut sections = Vec::with_capacity(n_sections);
         for k in 0..n_sections {
-            let mut r = sec_raw[k];
+            let mut r = i128::from(sec_raw[k][n]);
             if policy.floors.section && r < 0 {
                 r = 0;
             }
@@ -356,23 +392,23 @@ pub fn apply_l4(
             sections.push(SectionScore {
                 name: policy.sections[k].name.clone(),
                 raw: reduce(r, d),
-                max: reduce(sec_max[k], d),
+                max: reduce(i128::from(sec_max[k][n]), d),
             });
         }
         if policy.floors.total && raw_total < 0 {
             raw_total = 0;
         }
-        let (status, step3) = if max_total == 0 {
+        let max_n = i128::from(max_total[n]);
+        let (status, step3) = if max_n == 0 {
             (AssessmentStatus::NotScorable, None)
         } else {
-            let x = reduce(100 * raw_total, max_total);
             (
-                if pending {
+                if pending[n] {
                     AssessmentStatus::Provisional
                 } else {
                     AssessmentStatus::Scored
                 },
-                Some(x),
+                Some(reduce(100 * raw_total, max_n)),
             )
         };
         students.push(StudentResult {
@@ -381,7 +417,7 @@ pub fn apply_l4(
             form,
             status,
             raw: reduce(raw_total, d),
-            max: reduce(max_total, d),
+            max: reduce(max_n, d),
             step3,
             step5: None,
             final_pct: None,

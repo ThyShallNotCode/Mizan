@@ -72,12 +72,15 @@ enum ChoiceMulti {
 }
 
 #[derive(Clone, Debug)]
+struct ChoiceLut {
+    single: [i64; MAX_OPTIONS as usize],
+    raw: [i64; MAX_OPTIONS as usize],
+    multi: ChoiceMulti,
+}
+
+#[derive(Clone, Debug)]
 enum Lut {
-    Choice {
-        single: [i64; MAX_OPTIONS as usize],
-        raw: [i64; MAX_OPTIONS as usize],
-        multi: ChoiceMulti,
-    },
+    Choice(Box<ChoiceLut>),
     Select {
         key: u32,
         opts: u32,
@@ -111,7 +114,9 @@ impl Collect {
 fn scale(v: &Exact, d: i128) -> Result<i64, ScoringError> {
     let den = *v.denom();
     if d % den != 0 {
-        return Err(ScoringError::Overflow(format!("{v} not representable at D = {d}")));
+        return Err(ScoringError::Overflow(format!(
+            "{v} not representable at D = {d}"
+        )));
     }
     v.numer()
         .checked_mul(d / den)
@@ -150,7 +155,10 @@ impl CompiledKey {
                 ScoringError::InvalidReference(format!("item {} has no key entry", it.label))
             })?;
             let e = match (it.kind, entry) {
-                (ItemKind::SingleBestAnswer | ItemKind::TrueFalse, KeyEntry::Credits { credits, .. }) => {
+                (
+                    ItemKind::SingleBestAnswer | ItemKind::TrueFalse,
+                    KeyEntry::Credits { credits, .. },
+                ) => {
                     let a = entry.full_credit_count();
                     let m = u32::from(it.options);
                     let wrong = match &policy.negative {
@@ -223,7 +231,9 @@ impl CompiledKey {
         }
         let d = col.d;
         if d > i128::from(i64::MAX) {
-            return Err(ScoringError::Overflow(format!("common denominator D = {d}")));
+            return Err(ScoringError::Overflow(format!(
+                "common denominator D = {d}"
+            )));
         }
         let mut luts = Vec::with_capacity(exacts.len());
         let mut max_scaled = Vec::with_capacity(exacts.len());
@@ -256,11 +266,11 @@ impl CompiledKey {
                         }
                         None => ChoiceMulti::MaxOverCount,
                     };
-                    Lut::Choice {
+                    Lut::Choice(Box::new(ChoiceLut {
                         single: s,
                         raw: r,
                         multi,
-                    }
+                    }))
                 }
                 Exacts::Select {
                     key,
@@ -352,7 +362,8 @@ impl ItemScoreMatrix {
     }
 }
 
-/// The L3 hot loop: every cell scored by table lookup (§10.1 "Hot loop").
+/// The L3 hot loop: every cell scored by table lookup (§10.1 "Hot loop"). The item kind is
+/// dispatched once per column, so the inner loop is a lookup or two popcounts per cell.
 pub fn score_matrix(rm: &ResponseMatrix, ck: &CompiledKey) -> ItemScoreMatrix {
     let n = rm.n_rows;
     let mut scaled = vec![0i64; n * rm.n_items];
@@ -361,48 +372,58 @@ pub fn score_matrix(rm: &ResponseMatrix, ck: &CompiledKey) -> ItemScoreMatrix {
         let col = rm.column(i);
         let out = &mut scaled[i * n..(i + 1) * n];
         let st = &mut states[i * n..(i + 1) * n];
-        for ((c, o), s) in col.iter().zip(out.iter_mut()).zip(st.iter_mut()) {
-            let state = cell::state(*c);
-            *s = STATE_OF_CELL[(state & 7) as usize];
-            *o = match state {
-                cell::ANSWERED => {
+        for (c, s) in col.iter().zip(st.iter_mut()) {
+            *s = STATE_OF_CELL[(cell::state(*c) & 7) as usize];
+        }
+        match lut {
+            Lut::Choice(cl) => {
+                let ChoiceLut { single, raw, multi } = &**cl;
+                for (c, o) in col.iter().zip(out.iter_mut()) {
+                    if cell::state(*c) != cell::ANSWERED {
+                        continue;
+                    }
                     let mask = cell::payload(*c);
-                    match lut {
-                        Lut::Choice { single, raw, multi } => {
-                            if mask & mask.wrapping_sub(1) == 0 {
-                                single[mask.trailing_zeros() as usize & 31]
-                            } else {
-                                match multi {
-                                    ChoiceMulti::Value(v) => *v,
-                                    ChoiceMulti::MaxOverCount => {
-                                        let mut best = i64::MIN;
-                                        let mut m = mask;
-                                        while m != 0 {
-                                            let o = m.trailing_zeros() as usize;
-                                            m &= m - 1;
-                                            best = best.max(raw[o]);
-                                        }
-                                        best / i64::from(mask.count_ones())
-                                    }
+                    *o = if mask & mask.wrapping_sub(1) == 0 {
+                        single[mask.trailing_zeros() as usize & 31]
+                    } else {
+                        match multi {
+                            ChoiceMulti::Value(v) => *v,
+                            ChoiceMulti::MaxOverCount => {
+                                let mut best = i64::MIN;
+                                let mut m = mask;
+                                while m != 0 {
+                                    best = best.max(raw[m.trailing_zeros() as usize & 31]);
+                                    m &= m - 1;
                                 }
+                                best / i64::from(mask.count_ones())
                             }
                         }
-                        Lut::Select {
-                            key,
-                            opts,
-                            stride,
-                            table,
-                        } => {
-                            let tp = (mask & key).count_ones() as usize;
-                            let fp = (mask & !key & opts).count_ones() as usize;
-                            table[tp * stride + fp]
-                        }
-                        Lut::Open => 0,
+                    };
+                }
+            }
+            Lut::Select {
+                key,
+                opts,
+                stride,
+                table,
+            } => {
+                for (c, o) in col.iter().zip(out.iter_mut()) {
+                    if cell::state(*c) != cell::ANSWERED {
+                        continue;
+                    }
+                    let mask = cell::payload(*c);
+                    let tp = (mask & key).count_ones() as usize;
+                    let fp = (mask & !key & opts).count_ones() as usize;
+                    *o = table[tp * stride + fp];
+                }
+            }
+            Lut::Open => {
+                for (c, o) in col.iter().zip(out.iter_mut()) {
+                    if cell::state(*c) == cell::POINTS {
+                        *o = ck.points_scaled[cell::payload(*c) as usize];
                     }
                 }
-                cell::POINTS => ck.points_scaled[cell::payload(*c) as usize],
-                _ => 0,
-            };
+            }
         }
     }
     ItemScoreMatrix {

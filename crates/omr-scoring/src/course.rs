@@ -227,7 +227,11 @@ pub fn aggregate_student(
     let mut excused_w = Exact::zero();
     for c in &policy.components {
         let w = widen(&c.weight);
-        let mark = s.marks.get(&c.id).cloned().unwrap_or(ComponentMark::Missing);
+        let mark = s
+            .marks
+            .get(&c.id)
+            .cloned()
+            .unwrap_or(ComponentMark::Missing);
         let x = match mark {
             ComponentMark::Scored(x) => Some(x),
             ComponentMark::Provisional(x) => {
@@ -238,6 +242,11 @@ pub fn aggregate_student(
                 match policy.excused {
                     ExcusedRule::Renormalize => excused_w += w,
                     ExcusedRule::MakeupRequired => incomplete = true,
+                }
+                // `incomplete_rule` (§10.5): a required component still outstanding is IC,
+                // never renormalized away.
+                if c.required.is_some() {
+                    incomplete = true;
                 }
                 None
             }
@@ -349,7 +358,11 @@ pub fn aggregate_course(
 
 /// SCO-017 (INFO, Student) boundary list (§10.2): students with |x − b| ≤ δ for a grade
 /// boundary b, or whose rounded and unrounded totals map to different letters.
-pub fn boundary_list(results: &[CourseResult], scale: &GradeScale, delta_pp: &Exact) -> Vec<Exception> {
+pub fn boundary_list(
+    results: &[CourseResult],
+    scale: &GradeScale,
+    delta_pp: &Exact,
+) -> Vec<Exception> {
     let bounds = scale.boundaries();
     let mut ex = Vec::new();
     for r in results {
@@ -360,8 +373,8 @@ pub fn boundary_list(results: &[CourseResult], scale: &GradeScale, delta_pp: &Ex
             let d = x - **b;
             d <= *delta_pp && -d <= *delta_pp
         });
-        let letters_differ = scale.band_for(&x).map(|b| &b.letter)
-            != scale.band_for(&xr).map(|b| &b.letter);
+        let letters_differ =
+            scale.band_for(&x).map(|b| &b.letter) != scale.band_for(&xr).map(|b| &b.letter);
         if near.is_some() || letters_differ {
             let why = match near {
                 Some(b) => format!(

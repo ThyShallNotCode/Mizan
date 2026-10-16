@@ -32,7 +32,14 @@ pub struct GradeScale {
     pub bands: Vec<GradeBand>,
 }
 
-fn band(letter: &str, arabic: &str, lo: Option<i128>, hi: Option<i128>, g5: Points, g4: Points) -> GradeBand {
+fn band(
+    letter: &str,
+    arabic: &str,
+    lo: Option<i128>,
+    hi: Option<i128>,
+    g5: Points,
+    g4: Points,
+) -> GradeBand {
     GradeBand {
         letter: letter.into(),
         arabic: arabic.into(),
@@ -84,14 +91,18 @@ impl GradeScale {
             if let (Some(lo), Some(hi)) = (&b.lo, &b.hi)
                 && lo >= hi
             {
-                ex.push(sco029(format!("band {}: non-increasing boundary", b.letter)));
+                ex.push(sco029(format!(
+                    "band {}: non-increasing boundary",
+                    b.letter
+                )));
             }
         }
         for w in self.bands.windows(2) {
             match (&w[0].hi, &w[1].lo) {
-                (Some(h), Some(l)) if h < l => {
-                    ex.push(sco029(format!("gap between {} and {}", w[0].letter, w[1].letter)))
-                }
+                (Some(h), Some(l)) if h < l => ex.push(sco029(format!(
+                    "gap between {} and {}",
+                    w[0].letter, w[1].letter
+                ))),
                 (Some(h), Some(l)) if h > l => ex.push(sco029(format!(
                     "overlap between {} and {}",
                     w[0].letter, w[1].letter

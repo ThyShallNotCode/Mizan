@@ -140,12 +140,12 @@ impl FrozenCurve {
     pub fn apply(&self, x: &Exact) -> Exact {
         match self {
             FrozenCurve::Linear { slope, intercept } => slope * x + intercept,
-            FrozenCurve::Root => {
-                Exact::from_integer(10) * sqrt_floor(x, FREEZE_DECIMALS)
-            }
+            FrozenCurve::Root => Exact::from_integer(10) * sqrt_floor(x, FREEZE_DECIMALS),
             FrozenCurve::Lookup(t) => {
-                let first = t[0];
-                let last = t[t.len() - 1];
+                // An empty table (never produced by `fit`) is the identity, not a panic.
+                let (Some(&first), Some(&last)) = (t.first(), t.last()) else {
+                    return *x;
+                };
                 if *x <= first.0 {
                     return first.1;
                 }
@@ -210,7 +210,9 @@ mod tests {
         // Cohort 40, 50, 60, 70: μ = 55, max = 70, population σ = √125 ≈ 11.18034.
         let c = [e(40), e(50), e(60), e(70)];
         // Additive to μ_t = 65: shift +10.
-        let f = CurveSpec::AdditiveShift { target_mean: e(65) }.fit(&c).unwrap();
+        let f = CurveSpec::AdditiveShift { target_mean: e(65) }
+            .fit(&c)
+            .unwrap();
         assert_eq!(f.apply(&e(40)), e(50));
         // Proportional to top: ×100/70; 70 -> 100, 35 -> 50.
         let f = CurveSpec::ProportionalToTop.fit(&c).unwrap();
@@ -218,7 +220,9 @@ mod tests {
         assert_eq!(f.apply(&e(35)), e(50));
         // Two-point: (55, 70) -> (65, 100): slope (100 - 65)/(70 - 55) = 7/3,
         // intercept 65 - 7/3 * 55 = -190/3; 60 -> 420/3 - 190/3 = 230/3 (76.67); 70 -> 100.
-        let f = CurveSpec::TwoPointLinear { target_mean: e(65) }.fit(&c).unwrap();
+        let f = CurveSpec::TwoPointLinear { target_mean: e(65) }
+            .fit(&c)
+            .unwrap();
         assert_eq!(f.apply(&e(60)), exact(230, 3));
         assert_eq!(f.apply(&e(70)), e(100));
         assert_eq!(f.apply(&e(55)), e(65));
@@ -254,7 +258,11 @@ mod tests {
             "SCO-016"
         );
         assert!(CurveSpec::ProportionalToTop.fit(&[e(100)]).is_err());
-        assert!(CurveSpec::TwoPointLinear { target_mean: e(60) }.fit(&flat).is_err());
+        assert!(
+            CurveSpec::TwoPointLinear { target_mean: e(60) }
+                .fit(&flat)
+                .is_err()
+        );
         let bad = CurveSpec::Lookup(vec![(e(0), e(10)), (e(50), e(5))]);
         assert!(bad.fit(&flat).is_err());
     }

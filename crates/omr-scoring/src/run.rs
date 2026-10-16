@@ -3,6 +3,7 @@
 //! Pure and deterministic: the same inputs give a byte-identical [`ScoreRun`] and the same
 //! Run ID, so an identical regrade is a no-op for a memoizing caller.
 
+use crate::curve::FrozenCurve;
 use crate::error::ScoringError;
 use crate::form::FormMap;
 use crate::grade::{GradeOutcome, GradeScale};
@@ -10,11 +11,10 @@ use crate::item::ItemKind;
 use crate::key::KeyVersion;
 use crate::l3::{CompiledKey, ItemScoreMatrix, ItemState, mark_not_reached, score_matrix};
 use crate::l4::{Adjustments, Counted, StudentResult, VoidMode, apply_l4};
+use crate::num::LetterBasis;
 use crate::num::{Exact, Points, RoundingPolicy, widen};
 use crate::policy::PolicyVersion;
 use crate::response::{ResponseMatrix, ResponseSnapshot, cell};
-use crate::curve::FrozenCurve;
-use crate::num::LetterBasis;
 use num_traits::{ToPrimitive, Zero};
 use omr_model::exceptions::Target;
 use omr_model::{Exception, Scope, Severity};
@@ -155,7 +155,11 @@ impl ScoreRun {
     /// Assessment-level L6 letters (Remark parity: scale per test). Absent and not-scorable
     /// students get `None`. With `letter_basis = Rounded` the letter maps from the value
     /// rounded under `rounding`.
-    pub fn grades(&self, scale: &GradeScale, rounding: &RoundingPolicy) -> Vec<Option<GradeOutcome>> {
+    pub fn grades(
+        &self,
+        scale: &GradeScale,
+        rounding: &RoundingPolicy,
+    ) -> Vec<Option<GradeOutcome>> {
         self.students
             .iter()
             .map(|s| {
@@ -326,7 +330,10 @@ pub fn row_shift_check(
                     .iter()
                     .zip(&pk)
                     .map(|(p, e)| {
-                        let choice = forms.items.get(p.item).is_some_and(|it| it.kind.is_choice());
+                        let choice = forms
+                            .items
+                            .get(p.item)
+                            .is_some_and(|it| it.kind.is_choice());
                         match e {
                             Some(e) if choice => e.single_key().unwrap_or(NO_KEY),
                             _ => NO_KEY,
@@ -336,7 +343,52 @@ pub fn row_shift_check(
             }
         })
         .collect();
-    let mut resp: Vec<u8> = Vec::new();
+    // Printed response letters, row-major [n][j], filled column by column (sequential reads).
+    let width = tabs.iter().map(|t| t.items.len()).max().unwrap_or(0);
+    if width < cfg.window {
+        return ex;
+    }
+    const NO_POS: u16 = u16::MAX;
+    let pos_of: Vec<u16> = forms
+        .forms
+        .iter()
+        .flat_map(|f| {
+            f.positions_of_items(rm.n_items)
+                .into_iter()
+                .map(|p| p.map_or(NO_POS, |j| j as u16))
+        })
+        .collect();
+    let form_of: Vec<u16> = rm.rows.iter().map(|r| r.form as u16).collect();
+    let mut letters = vec![NO_RESP; rm.n_rows * width];
+    for i in 0..rm.n_items {
+        for (n, (&c, &f)) in rm.column(i).iter().zip(&form_of).enumerate() {
+            let m = cell::payload(c);
+            if cell::state(c) != cell::ANSWERED || !m.is_power_of_two() {
+                continue;
+            }
+            let f = usize::from(f);
+            let j = pos_of[f * rm.n_items + i];
+            if j != NO_POS {
+                let j = usize::from(j);
+                letters[n * width + j] = tabs[f].inv[j][m.trailing_zeros() as usize & 31];
+            }
+        }
+    }
+    // Key letters shifted by +1 and −1 per form.
+    let shifted: Vec<(Vec<u8>, Vec<u8>)> = tabs
+        .iter()
+        .map(|t| {
+            let len = t.kp.len();
+            let plus = (0..len)
+                .map(|j| t.kp.get(j + 1).copied().unwrap_or(NO_KEY))
+                .collect();
+            let minus = (0..len)
+                .map(|j| if j == 0 { NO_KEY } else { t.kp[j - 1] })
+                .collect();
+            (plus, minus)
+        })
+        .collect();
+    let mut codes: Vec<u8> = Vec::with_capacity(width);
     for (n, row) in rm.rows.iter().enumerate() {
         if row.absent.is_some() {
             continue;
@@ -346,40 +398,48 @@ pub fn row_shift_check(
         if len < cfg.window {
             continue;
         }
-        resp.clear();
-        for (j, &i) in t.items.iter().enumerate() {
-            let c = rm.cells[i * rm.n_rows + n];
-            let m = cell::payload(c);
-            resp.push(if cell::state(c) == cell::ANSWERED && m.is_power_of_two() {
-                t.inv[j][m.trailing_zeros() as usize & 31]
+        let resp = &letters[n * width..n * width + len];
+        let (kpp, kpm) = (&shifted[row.form].0, &shifted[row.form].1);
+        // One byte per position: bit 0 = matches key in place, bit 1 = key at j + 1,
+        // bit 2 = key at j − 1. Then a sliding window over the bytes.
+        codes.clear();
+        codes.extend(
+            resp.iter()
+                .zip(&t.kp)
+                .zip(kpp)
+                .zip(kpm)
+                .map(|(((r, a), b), c)| {
+                    u8::from(r == a) | (u8::from(r == b) << 1) | (u8::from(r == c) << 2)
+                }),
+        );
+        let w = cfg.window;
+        let count = |acc: (usize, usize, usize), c: u8| {
+            (
+                acc.0 + usize::from(c & 1),
+                acc.1 + usize::from((c >> 1) & 1),
+                acc.2 + usize::from((c >> 2) & 1),
+            )
+        };
+        let test = |h: (usize, usize, usize)| -> Option<i32> {
+            if h.0 > cfg.max_aligned {
+                None
+            } else if h.1 >= cfg.min_shifted {
+                Some(1)
+            } else if h.2 >= cfg.min_shifted {
+                Some(-1)
             } else {
-                NO_RESP
-            });
-        }
-        let kp = &t.kp;
-        let k_at = |k: usize| kp.get(k).copied().unwrap_or(NO_KEY);
-        let e0 = |j: usize| usize::from(resp[j] == kp[j]);
-        let ep = |j: usize| usize::from(resp[j] == k_at(j + 1));
-        let em = |j: usize| usize::from(j > 0 && resp[j] == kp[j - 1]);
-        let (mut h0, mut hp, mut hm) = (0usize, 0usize, 0usize);
-        let mut hit: Option<(usize, i32)> = None;
-        for j in 0..len {
-            h0 += e0(j);
-            hp += ep(j);
-            hm += em(j);
-            if j >= cfg.window {
-                let o = j - cfg.window;
-                h0 -= e0(o);
-                hp -= ep(o);
-                hm -= em(o);
+                None
             }
-            if j + 1 >= cfg.window && h0 <= cfg.max_aligned {
-                if hp >= cfg.min_shifted {
-                    hit = Some((j + 1 - cfg.window, 1));
-                } else if hm >= cfg.min_shifted {
-                    hit = Some((j + 1 - cfg.window, -1));
-                }
-                if hit.is_some() {
+        };
+        let mut h = codes[..w].iter().fold((0, 0, 0), |a, &c| count(a, c));
+        let mut hit: Option<(usize, i32)> = test(h).map(|s| (0, s));
+        if hit.is_none() {
+            for (k, (&add, &sub)) in codes[w..].iter().zip(&codes[..]).enumerate() {
+                let a = count((0, 0, 0), add);
+                let r = count((0, 0, 0), sub);
+                h = (h.0 + a.0 - r.0, h.1 + a.1 - r.1, h.2 + a.2 - r.2);
+                if let Some(s) = test(h) {
+                    hit = Some((k + 1, s));
                     break;
                 }
             }
@@ -458,7 +518,9 @@ pub fn near_chance_check(
                 continue;
             }
             let printed = dform.unmap_mask(j, m);
-            let Some(fp) = form.positions.get(j) else { continue };
+            let Some(fp) = form.positions.get(j) else {
+                continue;
+            };
             let it = &forms.items[fp.item];
             if !it.kind.is_choice() {
                 continue;
@@ -477,7 +539,9 @@ pub fn near_chance_check(
         if row.absent.is_some() {
             continue;
         }
-        let Some(thr) = thresholds[row.form] else { continue };
+        let Some(thr) = thresholds[row.form] else {
+            continue;
+        };
         let own_score = own[n] as f64 / d;
         if own_score > thr {
             continue;

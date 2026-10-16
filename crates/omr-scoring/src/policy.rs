@@ -237,9 +237,8 @@ impl PolicyVersion {
         let mut ex = Vec::new();
         let sco019 =
             |d: String| Exception::must("SCO-019", Severity::Warn, Scope::Exam).with_detail(d);
-        let sco004 = |d: String| {
-            Exception::must("SCO-004", Severity::Blocker, Scope::Exam).with_detail(d)
-        };
+        let sco004 =
+            |d: String| Exception::must("SCO-004", Severity::Blocker, Scope::Exam).with_detail(d);
         let n = forms.items.len();
         for (i, it) in forms.items.iter().enumerate() {
             if let ItemKind::MultiSelect(mode) = it.kind {
@@ -278,10 +277,7 @@ impl PolicyVersion {
         for s in &self.sections {
             for &i in &s.items {
                 if i >= n {
-                    ex.push(sco004(format!(
-                        "section {}: unknown item {i}",
-                        s.name
-                    )));
+                    ex.push(sco004(format!("section {}: unknown item {i}", s.name)));
                 } else if !sectioned.insert(i) {
                     ex.push(sco004(format!(
                         "item {} is in more than one section",
@@ -299,11 +295,8 @@ impl PolicyVersion {
                 g.items.iter().map(|&i| forms.items[i].max_points).collect();
             if maxima.len() > 1 {
                 ex.push(
-                    sco004(format!(
-                        "choice group {}: members have unequal M_i",
-                        g.name
-                    ))
-                    .with_sub_reason("choice_group"),
+                    sco004(format!("choice group {}: members have unequal M_i", g.name))
+                        .with_sub_reason("choice_group"),
                 );
             }
             if g.count == 0 || g.count > g.items.len() {

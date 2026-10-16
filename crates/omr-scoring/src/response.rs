@@ -255,12 +255,10 @@ impl ResponseMatrix {
         let mut rows = Vec::with_capacity(n_rows);
         let mut ex = Vec::new();
         for (n, b) in snapshot.booklets.iter().enumerate() {
-            let f = forms
-                .form_index(b.form)
-                .ok_or(ScoringError::UnknownForm {
-                    booklet: b.booklet.0,
-                    form: b.form.0,
-                })?;
+            let f = forms.form_index(b.form).ok_or(ScoringError::UnknownForm {
+                booklet: b.booklet.0,
+                form: b.form.0,
+            })?;
             let form = &forms.forms[f];
             let answered = b.responses.iter().any(L1Response::is_answered);
             let absent = if b.attendance != Attendance::Present || b.absent_bubble {
@@ -271,7 +269,9 @@ impl ResponseMatrix {
                                 booklet: Some(b.booklet.0),
                                 ..Target::default()
                             })
-                            .with_detail("absent mark but answers present; scored, never auto-zeroed"),
+                            .with_detail(
+                                "absent mark but answers present; scored, never auto-zeroed",
+                            ),
                     );
                     None
                 } else {
@@ -298,7 +298,12 @@ impl ResponseMatrix {
             }
             for (j, (pos, r)) in form.positions.iter().zip(&b.responses).enumerate() {
                 let i = pos.item;
-                let item = &forms.items[i];
+                let Some(item) = forms.items.get(i) else {
+                    return Err(ScoringError::InvalidReference(format!(
+                        "form {}: position {j} maps to unknown master item {i}",
+                        b.form.0
+                    )));
+                };
                 let target = Target {
                     booklet: Some(b.booklet.0),
                     question: Some(j as u16),

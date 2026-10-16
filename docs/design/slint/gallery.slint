@@ -172,10 +172,10 @@ export component Gallery inherits Window {
                         QueueRow { question: "Q22"; form: "A"; serial: "2901-8A-0105"; fills: [0.3, 0.05, 0.05, 0.05, 0.05]; }
                         GroupHeader { code: "MRK-002"; title: "Multiple marks"; count: "17"; severity: Severity.error; }
                         QueueRow { question: "Q04"; form: "B"; serial: "2901-8B-0288"; fills: [0.9, 0.05, 0.85, 0.05, 0.05]; }
-                        GroupHeader { code: "MRK-003"; title: "Eraser residue"; count: "9"; severity: Severity.warn; }
-                        GroupHeader { code: "IDN-004"; title: "Identity unresolved"; count: "12"; severity: Severity.error; }
-                        GroupHeader { code: "CAP-002"; title: "Effective DPI low"; count: "4"; severity: Severity.warn; }
-                        GroupHeader { code: "REG-001"; title: "No usable fiducials"; count: "1"; severity: Severity.blocker; }
+                        // Marks lane only (spec §13.2), ordered by severity then code; 41+17+30+4+4 = 96.
+                        GroupHeader { code: "MRK-003"; title: "Eraser residue"; count: "30"; severity: Severity.error; expanded: false; }
+                        GroupHeader { code: "REG-003"; title: "High residual (fold, curl)"; count: "4"; severity: Severity.error; expanded: false; }
+                        GroupHeader { code: "CAP-006"; title: "Scanner streaks"; count: "4"; severity: Severity.warn; expanded: false; }
                         Rectangle { vertical-stretch: 1; }
                     }
                     Rectangle { x: parent.width - 1px; width: 1px; background: Theme.border; }
@@ -405,7 +405,15 @@ component CloRow inherits HorizontalLayout {
     VerticalLayout {
         width: 110px;
         alignment: center;
+        spacing: 2px;
+        // Verdict per the policy's class method (here: share >= tau), plus the §11.3 badge
+        // when the 95% CI contains the target; the badge never replaces the verdict.
         StatusPill { text: root.attained ? "Attained" : "Not attained"; tone: root.attained ? Tone.success : Tone.error; }
+        if root.lo >= 0 && root.lo <= 0.70 && root.hi >= 0.70: Text {
+            text: "± ≈ target (95% CI)";
+            font-size: Theme.text-2xs;
+            color: Theme.warning;
+        }
     }
 }
 
@@ -577,7 +585,7 @@ export component Sheet inherits Window {
                 }
                 Card {
                     title: "CLO attainment";
-                    subtitle: "Top bar: average μ · bottom bar: share ≥ 60% with Wilson 95% CI · target 70%";
+                    subtitle: "Top bar: average μ · bottom bar: share ≥ 60% with Wilson 95% CI · target 70% · verdict on share";
                     CloRow { clo: "CLO1"; desc: "Evaluate limits"; avg: 0.74; prop: 0.81; lo: 0.77; hi: 0.85; attained: true; }
                     CloRow { clo: "CLO3"; desc: "Optimisation problems"; avg: 0.71; prop: 0.73; lo: 0.68; hi: 0.77; attained: true; }
                     CloRow { clo: "CLO4"; desc: "Related rates"; avg: 0.62; prop: 0.58; lo: 0.53; hi: 0.63; attained: false; }

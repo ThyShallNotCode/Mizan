@@ -169,7 +169,10 @@ pub fn lint_layout(m: &LayoutManifest, arts: &[PageArt], capture_dpi: u32) -> Ve
     }
     let empty = PageArt::default();
     for page in &m.pages {
-        let art = arts.get(usize::from(page.page) - 1).unwrap_or(&empty);
+        let art = usize::from(page.page)
+            .checked_sub(1)
+            .and_then(|i| arts.get(i))
+            .unwrap_or(&empty);
         lint_page(m, page, art, &mut out);
     }
     out
@@ -293,6 +296,23 @@ fn lint_page(m: &LayoutManifest, page: &PageGeometry, art: &PageArt, out: &mut V
             }
         }
     }
+    // L05: row ticks are registration marks; no text may touch them.
+    for tk in &page.ticks {
+        for t in &art.texts {
+            if t.bbox.intersects(&tk.rect) {
+                out.push(LintFinding {
+                    rule: LintRule::L05,
+                    level: LintLevel::Block,
+                    page: p,
+                    message: format!(
+                        "text {:?} touches the row tick of Q{}. Fix: move or shrink the text.",
+                        t.content,
+                        tk.question + 1
+                    ),
+                });
+            }
+        }
+    }
     // L03: horizontal pitch within a question.
     for w in page.bubbles.windows(2) {
         if w[0].question == w[1].question {
@@ -354,6 +374,36 @@ mod tests {
         .unwrap();
         assert!(t.lint_at_dpi(100).iter().any(|f| f.rule == LintRule::L02));
         assert!(t.lint_at_dpi(150).is_empty());
+    }
+
+    #[test]
+    fn four_digit_question_numbers_clear_the_row_ticks() {
+        use crate::layout::{TextContent, TextRole};
+        let t = Template::build(TemplateSpec::standard(
+            ExamId(uuid::Uuid::from_u128(1)),
+            1_000,
+            4,
+            CancelMode::EraseOnly,
+        ))
+        .unwrap();
+        assert!(t.lint_at_dpi(200).is_empty());
+        // A question number pushed onto its row tick is an L05 collision.
+        let mut arts = t.arts().to_vec();
+        let page = t.question(999).unwrap().page;
+        let qn = arts[usize::from(page) - 1]
+            .texts
+            .iter_mut()
+            .find(|x| {
+                x.role == TextRole::QuestionNumber && x.content == TextContent::Fixed("1000".into())
+            })
+            .unwrap();
+        qn.bbox.x -= 3_000;
+        let f = lint_layout(t.manifest(), &arts, 200);
+        assert!(
+            f.iter()
+                .any(|x| x.rule == LintRule::L05 && x.message.contains("row tick of Q1000")),
+            "{f:#?}"
+        );
     }
 
     #[test]
