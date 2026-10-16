@@ -1,0 +1,572 @@
+// Exam setup: template, answer key per version and the item × CLO mapping matrix with weight and
+// note per cell (DESIGN §9.2, spec §6, §10.3, §11.2).
+
+import {
+    Theme, Tone, Severity, Card, TopBar, StatusBar, PrimaryButton, SecondaryButton, StatusPill, Tag,
+    MeterBar, SeverityGlyph, FocusRing, Breadcrumb, TableRow, TableHeaderCell,
+} from "../theme.slint";
+import { App, SetupVM, MapRow, MapCell } from "../state.slint";
+import {
+    Icons, ThemeToggle, Centered, SectionLabel, StatusText, KVLine, EditCell, StepIndicator,
+    EmptyState, MessageText,
+} from "../widgets.slint";
+import { ListView } from "std-widgets.slint";
+
+// Key letter of one question in one version: click cycles A→B→…, typing a letter sets it.
+component KeyCell inherits Rectangle {
+    in property <string> letter;
+    in property <string> label;
+    callback cycle();
+    callback set(string);
+    width: 28px;
+    height: 24px;
+    border-radius: Theme.radius-sm;
+    background: root.letter == "" ? transparent : ta.has-hover ? Theme.surface-hover : Theme.surface-raised;
+    border-width: 1px;
+    border-color: fs.has-focus ? Theme.primary : Theme.border-strong;
+    accessible-role: AccessibleRole.text-input;
+    accessible-label: root.label;
+    accessible-value: root.letter;
+    accessible-action-set-value(v) => {
+        root.set(v);
+    }
+    accessible-action-default => {
+        root.cycle();
+    }
+    ta := TouchArea {
+        clicked => {
+            fs.focus();
+            root.cycle();
+        }
+    }
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.cycle();
+                return accept;
+            }
+            if (event.text == Key.Delete || event.text == Key.Backspace) {
+                root.set("");
+                return accept;
+            }
+            if (!event.modifiers.control && !event.modifiers.alt && event.text.character-count == 1 && event.text != Key.Tab) {
+                root.set(event.text);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    Text {
+        text: root.letter == "" ? "·" : root.letter;
+        font-family: Theme.font-mono;
+        font-size: Theme.text-sm;
+        font-weight: Theme.weight-semibold;
+        color: root.letter == "" ? Theme.ink-3 : Theme.ink;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+    FocusRing {
+        active: fs.has-focus;
+        corner: Theme.radius-sm;
+    }
+}
+
+component MappingRow inherits Rectangle {
+    in property <MapRow> data;
+    in property <int> index;
+    in property <length> clo-width;
+    height: 34px;
+    background: mod(root.index, 2) == 1 ? Theme.surface-sunken.with-alpha(0.45) : transparent;
+    HorizontalLayout {
+        Text {
+            width: 56px;
+            text: root.data.label;
+            font-family: Theme.font-mono;
+            font-size: Theme.text-sm;
+            font-weight: Theme.weight-medium;
+            color: Theme.ink;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        for k[v] in root.data.keys: HorizontalLayout {
+            width: 52px;
+            alignment: center;
+            Centered {
+                KeyCell {
+                    letter: k;
+                    label: root.data.label + " version " + SetupVM.versions[v] + " key";
+                    cycle => {
+                        SetupVM.cycle-key(root.index, v);
+                    }
+                    set(t) => {
+                        SetupVM.set-key(root.index, v, t);
+                    }
+                }
+            }
+        }
+        Text {
+            width: 44px;
+            text: root.data.points;
+            font-family: Theme.font-mono;
+            font-size: Theme.text-xs;
+            color: Theme.ink-2;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        Rectangle {
+            width: 1px;
+            background: Theme.border;
+        }
+        for c[ci] in root.data.cells: Rectangle {
+            width: root.clo-width;
+            EditCell {
+                x: 6px;
+                y: 4px;
+                width: parent.width - 12px;
+                text: c.text;
+                label: c.label;
+                placeholder: "–";
+                highlighted: c.mapped;
+                align: right;
+                border-width: c.selected ? 1px : 0px;
+                border-color: Theme.primary;
+                committed(v) => {
+                    SetupVM.set-weight(root.index, ci, v);
+                }
+                focused => {
+                    SetupVM.select-cell(root.index, ci);
+                }
+            }
+            // note indicator: a gold corner on cells that carry a note
+            if c.has-note: Path {
+                x: parent.width - 6px - 9px;
+                y: 4px;
+                width: 9px;
+                height: 9px;
+                viewbox-width: 9;
+                viewbox-height: 9;
+                commands: "M 0 0 L 9 0 L 9 9 Z";
+                fill: Theme.accent;
+                accessible-role: none;
+            }
+        }
+        Rectangle {
+            width: 1px;
+            background: Theme.border;
+        }
+        Text {
+            width: 56px;
+            text: root.data.sum;
+            font-family: Theme.font-mono;
+            font-size: Theme.text-xs;
+            font-weight: root.data.sum-ok ? Theme.weight-regular : Theme.weight-semibold;
+            color: root.data.sum-ok ? Theme.ink-2 : Theme.error;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        HorizontalLayout {
+            padding-left: Theme.space-sm;
+            horizontal-stretch: 1;
+            alignment: start;
+            Centered {
+                Tag {
+                    text: root.data.status;
+                    tone: root.data.status-tone;
+                    mono: false;
+                }
+            }
+        }
+    }
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.border;
+    }
+}
+
+component MatrixCard inherits Card {
+    title: "Answer key and CLO mapping";
+    subtitle: SetupVM.mapping-mode + " · digits type a weight, empty = no mapping · the gold corner marks a note";
+    inset: 0;
+    property <length> clo-width: 72px;
+    VerticalLayout {
+        // column-group header
+        Rectangle {
+            height: 24px;
+            background: Theme.surface-sunken;
+            HorizontalLayout {
+                Rectangle {
+                    width: 56px;
+                }
+                SectionLabel {
+                    width: SetupVM.versions.length * 52px + 44px;
+                    text: "KEY · VERSION";
+                    horizontal-alignment: center;
+                }
+                Rectangle {
+                    width: 1px;
+                    background: Theme.border;
+                }
+                SectionLabel {
+                    width: SetupVM.clos.length * root.clo-width;
+                    text: "CLO MAPPING · WEIGHT w";
+                    horizontal-alignment: center;
+                }
+                Rectangle {
+                    width: 1px;
+                    background: Theme.border;
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+        }
+        TableRow {
+            header: true;
+            TableHeaderCell {
+                text: "Q";
+                width: 56px;
+                align: center;
+            }
+            for v in SetupVM.versions: TableHeaderCell {
+                text: v;
+                width: 52px;
+                align: center;
+            }
+            TableHeaderCell {
+                text: "Pts";
+                width: 44px;
+                align: center;
+            }
+            Rectangle {
+                width: 1px;
+                background: Theme.border;
+            }
+            for c in SetupVM.clos: Rectangle {
+                width: root.clo-width;
+                height: 32px;
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: c.code;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.text-xs;
+                        font-weight: Theme.weight-medium;
+                        color: Theme.ink;
+                        horizontal-alignment: center;
+                    }
+                    Text {
+                        text: c.domain;
+                        font-size: Theme.text-2xs;
+                        color: Theme.ink-2;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+            Rectangle {
+                width: 1px;
+                background: Theme.border;
+            }
+            TableHeaderCell {
+                text: "Σw";
+                width: 56px;
+                align: center;
+            }
+            TableHeaderCell {
+                text: "Status";
+                horizontal-stretch: 1;
+            }
+        }
+        ListView {
+            vertical-stretch: 1;
+            for r[i] in SetupVM.rows: MappingRow {
+                data: r;
+                index: i;
+                clo-width: root.clo-width;
+            }
+        }
+    }
+}
+
+component TemplateCard inherits Card {
+    title: "Template";
+    subtitle: SetupVM.template-kind;
+    VerticalLayout {
+        spacing: Theme.space-sm;
+        Rectangle {
+            height: 30px;
+            border-radius: Theme.radius-md;
+            background: Theme.surface-sunken;
+            HorizontalLayout {
+                padding-left: Theme.space-md;
+                padding-right: Theme.space-md;
+                Text {
+                    text: SetupVM.template-id;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.text-sm;
+                    font-weight: Theme.weight-medium;
+                    color: Theme.primary;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+        for kv in SetupVM.template: KVLine {
+            label: kv.label;
+            value: kv.value;
+            wrap-value: true;
+        }
+    }
+}
+
+component LintCard inherits Card {
+    title: "Checks";
+    subtitle: SetupVM.lints.length + " findings before the key is published";
+    vertical-stretch: 1;
+    VerticalLayout {
+        spacing: Theme.space-md;
+        for l in SetupVM.lints: HorizontalLayout {
+            spacing: Theme.space-sm;
+            VerticalLayout {
+                padding-top: 3px;
+                SeverityGlyph {
+                    severity: l.severity;
+                    size: 11px;
+                }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+                HorizontalLayout {
+                    alignment: start;
+                    Tag {
+                        text: l.code;
+                        tone: l.severity == Severity.error ? Tone.error : Tone.warning;
+                    }
+                }
+                Text {
+                    text: l.message;
+                    font-size: Theme.text-xs;
+                    color: Theme.ink;
+                    wrap: word-wrap;
+                }
+            }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+        }
+    }
+}
+
+component CellCard inherits Card {
+    title: SetupVM.sel-title;
+    subtitle: SetupVM.sel-clo;
+    VerticalLayout {
+        spacing: Theme.space-sm;
+        SectionLabel {
+            text: "WEIGHT";
+        }
+        EditCell {
+            label: "Weight of " + SetupVM.sel-title;
+            text: SetupVM.sel-weight;
+            placeholder: "no mapping";
+            align: left;
+            height: 32px;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            background: Theme.surface-raised;
+            committed(v) => {
+                SetupVM.set-weight(SetupVM.sel-row, SetupVM.sel-col, v);
+            }
+        }
+        SectionLabel {
+            text: "NOTE (ARABIC OR ENGLISH)";
+        }
+        EditCell {
+            label: "Note of " + SetupVM.sel-title;
+            text: SetupVM.sel-note;
+            placeholder: "Why this item evidences the CLO";
+            mono: false;
+            arabic: true;
+            align: left;
+            height: 32px;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            background: Theme.surface-raised;
+            committed(v) => {
+                SetupVM.set-note(SetupVM.sel-row, SetupVM.sel-col, v);
+            }
+        }
+        if SetupVM.error != "": Text {
+            text: SetupVM.error;
+            font-size: Theme.text-xs;
+            color: Theme.error;
+            wrap: word-wrap;
+        }
+    }
+}
+
+component CloCard inherits Card {
+    title: "Course learning outcomes";
+    subtitle: "Share of the exam's evidence per CLO";
+    vertical-stretch: 1;
+    VerticalLayout {
+        spacing: Theme.space-md;
+        for c in SetupVM.clos: VerticalLayout {
+            spacing: 2px;
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                Text {
+                    text: c.code;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.text-xs;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                }
+                Centered {
+                    Tag {
+                        text: c.domain;
+                        tone: Tone.primary;
+                    }
+                }
+                Text {
+                    text: "PLO " + c.plo + " · " + c.items + " items";
+                    font-size: Theme.text-2xs;
+                    color: Theme.ink-2;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    horizontal-alignment: right;
+                }
+            }
+            Text {
+                text: c.title;
+                font-size: Theme.text-xs;
+                color: Theme.ink;
+                overflow: elide;
+            }
+            Text {
+                text: c.title-ar;
+                font-family: Theme.font-arabic;
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                horizontal-alignment: left;
+                overflow: elide;
+            }
+            MeterBar {
+                value: c.share;
+                value-text: c.share-text;
+                fill: Theme.series-1;
+                thickness: 6px;
+                height: 16px;
+            }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+        }
+    }
+}
+
+export component SetupScreen inherits VerticalLayout {
+    TopBar {
+        Breadcrumb {
+            parts: [App.course, App.assessment, "Setup"];
+        }
+        HorizontalLayout {
+            spacing: Theme.space-lg;
+            StepIndicator {
+                number: 1;
+                text: "Template";
+                state: 1;
+            }
+            StepIndicator {
+                number: 2;
+                text: "Forms and key";
+                state: SetupVM.key-published ? 1 : 2;
+            }
+            StepIndicator {
+                number: 3;
+                text: "CLO mapping";
+                state: SetupVM.lints.length > 0 ? 2 : 1;
+            }
+            StepIndicator {
+                number: 4;
+                text: "Roster";
+                state: 1;
+            }
+            StepIndicator {
+                number: 5;
+                text: "Policies";
+                state: 1;
+            }
+        }
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+            Centered {
+                Tag {
+                    text: SetupVM.key-status;
+                    tone: SetupVM.key-published ? Tone.success : Tone.accent;
+                }
+            }
+            Centered {
+                PrimaryButton {
+                    text: "Publish key…";
+                    enabled: !SetupVM.key-published;
+                    accessible-description: SetupVM.key-published ? "The current key version is already published" : "Needs four-eyes approval after release";
+                    clicked => {
+                        App.request("Publish key");
+                    }
+                }
+            }
+            Centered {
+                ThemeToggle { }
+            }
+        }
+    }
+    if !SetupVM.available: EmptyState {
+        vertical-stretch: 1;
+        title: "No setup for this exam yet";
+        text: "Choose a template to start.";
+    }
+    if SetupVM.available: HorizontalLayout {
+        vertical-stretch: 1;
+        padding: Theme.space-xl;
+        spacing: Theme.space-lg;
+        VerticalLayout {
+            width: 284px;
+            spacing: Theme.space-lg;
+            TemplateCard { }
+            LintCard { }
+        }
+        MatrixCard {
+            horizontal-stretch: 1;
+        }
+        VerticalLayout {
+            width: 296px;
+            spacing: Theme.space-lg;
+            CellCard { }
+            CloCard { }
+        }
+    }
+    StatusBar {
+        Centered {
+            StatusPill {
+                text: "Saved";
+                tone: Tone.success;
+            }
+        }
+        MessageText {
+            text: App.message;
+            tone: App.message-tone;
+            horizontal-stretch: 1;
+        }
+        StatusText {
+            text: "Mapping edits are draft until approved (SCO-032)";
+        }
+        StatusText {
+            text: App.engine;
+            mono: true;
+        }
+    }
+}

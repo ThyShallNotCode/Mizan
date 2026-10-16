@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lib]
+name = "shell_slint"
+path = "src/lib.rs"
+
 [[bin]]
 name = "omr-desktop"
 path = "src/main.rs"
@@ -14,6 +18,12 @@ path = "src/main.rs"
 [dependencies]
 omr-app.workspace = true
 slint.workspace = true
+# Synthetic review crops (bubble rows drawn at first use) and PNG encoding of headless screenshots.
+tiny-skia.workspace = true
+
+[dev-dependencies]
+# R8: test-only. No features: with `internal`, the crates.io 1.18.1 package fails to build.
+i-slint-backend-testing.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true

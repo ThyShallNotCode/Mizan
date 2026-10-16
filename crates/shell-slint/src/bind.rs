@@ -1,0 +1,2280 @@
+//! Binding: copies [`Backend`] view-models into the Slint globals and turns UI callbacks into
+//! backend calls. Formatting for display lives here; decisions never do (spec §4.7).
+
+use crate::backend::{
+    self as b, Backend, Decision, ExamId, ItemId, Lane, ReviewAction, ReviewKind,
+};
+use crate::crops;
+use crate::keymap::{self, GlobalKey, KeyContext, ReviewKey};
+use crate::ui::{self as s, AppWindow};
+use slint::{
+    ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
+};
+use std::cell::RefCell;
+use std::collections::BTreeSet;
+use std::rc::Rc;
+
+// ------------------------------------------------------------------------------------ helpers
+
+fn model<T: Clone + 'static>(v: Vec<T>) -> ModelRc<T> {
+    ModelRc::new(VecModel::from(v))
+}
+
+fn ss(s: impl AsRef<str>) -> SharedString {
+    SharedString::from(s.as_ref())
+}
+
+/// "1,284".
+pub fn thousands(n: u32) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// Signed decimal with a true minus sign (U+2212), as in typeset tables.
+fn signed(x: f64, places: usize) -> String {
+    let t = format!("{:.*}", places, x.abs());
+    if x < 0.0 && t.chars().any(|c| c.is_ascii_digit() && c != '0') {
+        format!("\u{2212}{t}")
+    } else {
+        t
+    }
+}
+
+fn pct(x: f64) -> String {
+    format!("{:.0} %", x * 100.0)
+}
+
+fn tone(t: b::Tone) -> s::Tone {
+    match t {
+        b::Tone::Neutral => s::Tone::Neutral,
+        b::Tone::Primary => s::Tone::Primary,
+        b::Tone::Accent => s::Tone::Accent,
+        b::Tone::Success => s::Tone::Success,
+        b::Tone::Warning => s::Tone::Warning,
+        b::Tone::Error => s::Tone::Error,
+        b::Tone::Info => s::Tone::Info,
+    }
+}
+
+fn severity(v: b::Severity) -> s::Severity {
+    match v {
+        b::Severity::Info => s::Severity::Info,
+        b::Severity::Warn => s::Severity::Warn,
+        b::Severity::Error => s::Severity::Error,
+        b::Severity::Blocker => s::Severity::Blocker,
+    }
+}
+
+fn mark(m: b::MarkState) -> s::MarkState {
+    match m {
+        b::MarkState::Filled => s::MarkState::Selected,
+        b::MarkState::Ambiguous => s::MarkState::Ambiguous,
+        b::MarkState::Unreadable => s::MarkState::Unreadable,
+        b::MarkState::Blank => s::MarkState::Blank,
+    }
+}
+
+fn status_tone(st: b::ExamStatus) -> s::Tone {
+    match st {
+        b::ExamStatus::Setup => s::Tone::Neutral,
+        b::ExamStatus::Scanning => s::Tone::Info,
+        b::ExamStatus::InReview => s::Tone::Warning,
+        b::ExamStatus::Ready | b::ExamStatus::Released => s::Tone::Success,
+    }
+}
+
+/// Converts a backend crop to a Slint image (one copy; the shell never keeps scans on disk).
+pub fn image(c: &b::CropImage) -> Image {
+    Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
+        &c.rgba, c.width, c.height,
+    ))
+}
+
+/// Parses a weight typed by the user: "" clears; "0.5", "0,5", "٠٫٥" and "½" are accepted.
+pub fn parse_weight(text: &str) -> Result<Option<f64>, String> {
+    let t: String = text
+        .trim()
+        .chars()
+        .map(|c| match c {
+            '\u{0660}'..='\u{0669}' => char::from_u32(c as u32 - 0x0660 + '0' as u32).unwrap_or(c),
+            '\u{06F0}'..='\u{06F9}' => char::from_u32(c as u32 - 0x06F0 + '0' as u32).unwrap_or(c),
+            '٫' | ',' => '.',
+            _ => c,
+        })
+        .collect();
+    match t.as_str() {
+        "" | "-" | "–" => Ok(None),
+        "½" => Ok(Some(0.5)),
+        _ => t
+            .parse::<f64>()
+            .map(Some)
+            .map_err(|_| format!("\"{text}\" is not a number; type a weight such as 0.5")),
+    }
+}
+
+fn fmt_weight(w: Option<f64>) -> String {
+    match w {
+        None => String::new(),
+        Some(w) if (w - w.round()).abs() < 1e-9 => format!("{w:.0}"),
+        Some(w) => {
+            let t = format!("{w:.2}");
+            t.trim_end_matches('0').to_string()
+        }
+    }
+}
+
+fn decision_word(d: Decision, labels: &[String]) -> String {
+    match d {
+        Decision::Option(i) => labels
+            .get(i as usize)
+            .cloned()
+            .unwrap_or_else(|| ((b'A' + i) as char).to_string()),
+        Decision::Blank => "Blank".into(),
+        Decision::Multi => "Multi".into(),
+        Decision::Unreadable => "Unreadable".into(),
+        Decision::Candidate(i) => format!("candidate {}", i + 1),
+        Decision::NotOnRoster => "not on roster".into(),
+        Decision::Duplicate => "duplicate".into(),
+        Decision::Acknowledge => "acknowledge".into(),
+    }
+}
+
+fn help_for(code: &str) -> &'static str {
+    match code {
+        "MRK-001" => {
+            "MRK-001 Low-confidence mark: the bubble's darkness falls in the hysteresis band or the engine's stages disagree. Decide what is marked from the paper, not from the key (no key is shown)."
+        }
+        "MRK-002" => {
+            "MRK-002 Multiple marks: two or more bubbles read as filled. Choose Multi unless one mark is clearly an erasure or a stray."
+        }
+        "MRK-003" => {
+            "MRK-003 Eraser residue: an erased mark next to a firm one (cancel mode erase_only). The firm mark usually stands; residue alone is not an answer."
+        }
+        "MRK-005" => {
+            "MRK-005 Tick, X or circled letter instead of a fill: in fill-only mode a tick is reviewed; record the option it clearly designates, or Unreadable."
+        }
+        "MRK-010" => {
+            "MRK-010 Stain, smudge or crease: the decision flips under perturbation. If the mark cannot be read with confidence, choose Unreadable (rescan); never Blank."
+        }
+        "REG-003" => {
+            "REG-003 High residual (fold, curl): the row may be displaced. Check the overlays sit on the printed bubbles before deciding; F2 shows the original."
+        }
+        "CAP-006" => {
+            "CAP-006 Scanner streaks: dirty glass masks a column. If more than 30 % of a bubble is masked it is Unreadable; otherwise decide as usual."
+        }
+        "VERIFY" => {
+            "Blind verify sample (§13.4): an auto-accepted question drawn at random. Enter what is marked; the engine's reading is withheld so your answer is an independent label."
+        }
+        "IDN-004" => {
+            "IDN-004 Identity unresolved: compare the grid, the write-in boxes, the name and the seat map. Keys 1–3 choose a candidate, N = not on roster, D = duplicate."
+        }
+        "IDN-005" => {
+            "IDN-005 Two booklets resolve to one student: open both and decide which binding is wrong. Neutral wording: never assume misconduct."
+        }
+        "IDN-007" => {
+            "IDN-007 Provisional student: results stay provisional until the registrar matches the record; acknowledging keeps them so."
+        }
+        "CAP-002" => {
+            "CAP-002 Effective DPI too low: below 100 dpi the page is not graded. Acknowledge to put it on the rescan pull list."
+        }
+        "COL-005" => {
+            "COL-005 Batch count mismatch: the header sheet's expected count differs from the sheets scanned. Reconcile against the absent list or rescan."
+        }
+        "SCO-001" => {
+            "SCO-001 Probable mis-key: the key has negative discrimination while a distractor is positive. Use Results to preview a key change (what-if) before deciding."
+        }
+        "SCO-002" => {
+            "SCO-002 Possibly flawed item: the top group prefers a distractor. Review the item text; void or re-key from Results."
+        }
+        _ => "Help for this code is in Appendix A of the specification.",
+    }
+}
+
+// ------------------------------------------------------------------------------------ state
+
+struct State {
+    exam: Option<ExamId>,
+    exam_rows: Vec<ExamId>,
+    exam_filter: usize,
+    drawer_open: bool,
+    lane: Lane,
+    item: Option<ItemId>,
+    current: Option<b::ReviewItem>,
+    /// Ordered open items of the lane (for next / previous).
+    order: Vec<ItemId>,
+    pending: Option<Decision>,
+    collapsed: BTreeSet<String>,
+    overlay: bool,
+    show_all: bool,
+    registered: bool,
+    zoom: i32,
+    help: bool,
+    single_key: bool,
+    sel_row: usize,
+    sel_col: usize,
+    search_request: i32,
+    thumbs: Vec<Image>,
+}
+
+/// The shell controller: owns the backend handle and keeps the UI globals in sync.
+pub struct Shell {
+    ui: slint::Weak<AppWindow>,
+    backend: Rc<RefCell<dyn Backend>>,
+    st: RefCell<State>,
+    timer: RefCell<Option<slint::Timer>>,
+}
+
+impl Shell {
+    /// Binds `backend` to `ui`, wires every callback and fills every screen.
+    pub fn bind(ui: &AppWindow, backend: Rc<RefCell<dyn Backend>>) -> Rc<Self> {
+        let exam = backend.borrow().default_exam();
+        let thumbs = (0..4)
+            .map(|k| image(&crops::page_thumbnail(11 + k, 84, 108)))
+            .collect();
+        let shell = Rc::new(Self {
+            ui: ui.as_weak(),
+            backend,
+            st: RefCell::new(State {
+                exam,
+                exam_rows: Vec::new(),
+                exam_filter: 0,
+                drawer_open: true,
+                lane: Lane::Marks,
+                item: None,
+                current: None,
+                order: Vec::new(),
+                pending: None,
+                collapsed: BTreeSet::new(),
+                overlay: true,
+                show_all: false,
+                registered: true,
+                zoom: 3,
+                help: false,
+                single_key: true,
+                sel_row: 17,
+                sel_col: 3,
+                search_request: 0,
+                thumbs,
+            }),
+            timer: RefCell::new(None),
+        });
+        shell.wire(ui);
+        shell.refresh_all();
+        shell
+    }
+
+    fn ui(&self) -> AppWindow {
+        self.ui.upgrade().expect("window alive")
+    }
+
+    fn exam(&self) -> Option<ExamId> {
+        self.st.borrow().exam.clone()
+    }
+
+    fn say(&self, text: impl AsRef<str>, t: s::Tone) {
+        let ui = self.ui();
+        let app = ui.global::<s::App>();
+        app.set_message(ss(text));
+        app.set_message_tone(t);
+    }
+
+    /// Starts the ~2 Hz timer that lets the backend fold in background work (live batch view).
+    /// Windowed mode only; headless tests and screenshots stay deterministic without it.
+    pub fn start_live_updates(self: &Rc<Self>) {
+        let timer = slint::Timer::default();
+        let weak = Rc::downgrade(self);
+        timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(500),
+            move || {
+                if let Some(shell) = weak.upgrade() {
+                    let changed = shell.backend.borrow_mut().pump();
+                    if changed {
+                        shell.refresh_scan();
+                        shell.refresh_dashboard();
+                    }
+                }
+            },
+        );
+        *self.timer.borrow_mut() = Some(timer);
+    }
+
+    // -------------------------------------------------------------------------- navigation
+
+    /// Shows `page` (and refreshes what it shows).
+    pub fn navigate(&self, page: s::Page) {
+        let ui = self.ui();
+        ui.global::<s::App>().set_page(page);
+        match page {
+            s::Page::Review => {
+                if self.st.borrow().item.is_none() {
+                    self.refresh_review();
+                    let first = self.st.borrow().order.first().copied();
+                    self.select_item(first);
+                } else {
+                    self.refresh_review();
+                }
+            }
+            s::Page::Setup => self.refresh_setup(),
+            s::Page::Scan => self.refresh_scan(),
+            s::Page::Results => self.refresh_results(),
+            s::Page::Outcomes => self.refresh_outcomes(),
+            _ => {}
+        }
+    }
+
+    /// Makes `exam` the current exam (breadcrumbs, setup, scan, review, results, outcomes).
+    pub fn select_exam(&self, exam: &ExamId) {
+        {
+            let mut st = self.st.borrow_mut();
+            if st.exam.as_ref() != Some(exam) {
+                st.item = None;
+                st.current = None;
+                st.pending = None;
+                st.lane = Lane::Marks;
+                st.sel_row = 0;
+                st.sel_col = 0;
+            }
+            st.exam = Some(exam.clone());
+        }
+        self.refresh_all();
+        let first = self.st.borrow().order.first().copied();
+        self.select_item(first);
+    }
+
+    pub fn refresh_all(&self) {
+        self.refresh_dashboard();
+        self.refresh_setup();
+        self.refresh_scan();
+        self.refresh_review();
+        self.refresh_results();
+        self.refresh_outcomes();
+    }
+
+    // -------------------------------------------------------------------------- wiring
+
+    fn wire(self: &Rc<Self>, ui: &AppWindow) {
+        let app = ui.global::<s::App>();
+        let me = self.clone();
+        app.on_navigate(move |p| me.navigate(p));
+        let me = self.clone();
+        app.on_key(move |t, ctrl, shift, alt| me.global_key(&t, ctrl, shift, alt));
+        let me = self.clone();
+        app.on_request(move |what| {
+            me.say(
+                format!("{what}: handled by omr-app (not in the demo backend)"),
+                s::Tone::Info,
+            )
+        });
+        let me = self.clone();
+        app.on_set_single_key(move |v| {
+            me.st.borrow_mut().single_key = v;
+            me.ui().global::<s::App>().set_single_key(v);
+        });
+        let weak = ui.as_weak();
+        app.on_set_dark(move |v| {
+            if let Some(ui) = weak.upgrade() {
+                ui.global::<s::Theme>().set_dark(v);
+            }
+        });
+        let weak = ui.as_weak();
+        app.on_set_reduce_motion(move |v| {
+            if let Some(ui) = weak.upgrade() {
+                ui.global::<s::Theme>().set_reduce_motion(v);
+            }
+        });
+
+        // exams
+        let ex = ui.global::<s::ExamsVM>();
+        let me = self.clone();
+        ex.on_select(move |row| {
+            let id = me.st.borrow().exam_rows.get(row as usize).cloned();
+            if let Some(id) = id {
+                me.st.borrow_mut().drawer_open = true;
+                me.select_exam(&id);
+            }
+        });
+        let me = self.clone();
+        ex.on_set_filter(move |i| {
+            me.st.borrow_mut().exam_filter = i.max(0) as usize;
+            me.refresh_dashboard();
+        });
+        let me = self.clone();
+        ex.on_open(move |p| me.navigate(p));
+        let me = self.clone();
+        ex.on_close_drawer(move || {
+            me.st.borrow_mut().drawer_open = false;
+            me.refresh_dashboard();
+        });
+
+        // setup
+        let su = ui.global::<s::SetupVM>();
+        let me = self.clone();
+        su.on_cycle_key(move |row, v| me.cycle_key(row as usize, v as usize));
+        let me = self.clone();
+        su.on_set_key(move |row, v, t| me.set_key(row as usize, v as usize, &t));
+        let me = self.clone();
+        su.on_set_weight(move |row, c, t| me.set_weight(row as usize, c as usize, &t));
+        let me = self.clone();
+        su.on_set_note(move |row, c, t| me.set_note(row as usize, c as usize, &t));
+        let me = self.clone();
+        su.on_select_cell(move |row, c| {
+            {
+                let mut st = me.st.borrow_mut();
+                st.sel_row = row.max(0) as usize;
+                st.sel_col = c.max(0) as usize;
+            }
+            me.refresh_setup();
+        });
+
+        // scan
+        let sc = ui.global::<s::ScanVM>();
+        let me = self.clone();
+        sc.on_open_review(move || me.navigate(s::Page::Review));
+        let me = self.clone();
+        sc.on_open_code(move |code| me.open_code(&code));
+        let me = self.clone();
+        sc.on_open_sheet(move |serial, code| {
+            if code.is_empty() {
+                me.say(
+                    format!("Sheet {serial}: the page viewer is served by omr-app"),
+                    s::Tone::Info,
+                );
+            } else {
+                me.open_code(&code);
+            }
+        });
+        let me = self.clone();
+        sc.on_toggle_pause(move || {
+            let Some(exam) = me.exam() else { return };
+            let running = me.ui().global::<s::ScanVM>().get_running();
+            let r = me.backend.borrow_mut().pause_batch(&exam, running);
+            match r {
+                Ok(()) => {
+                    me.say(
+                        if running {
+                            "Batch paused"
+                        } else {
+                            "Batch resumed"
+                        },
+                        s::Tone::Info,
+                    );
+                    me.refresh_scan();
+                }
+                Err(e) => me.say(e.to_string(), s::Tone::Warning),
+            }
+        });
+
+        // review
+        let rv = ui.global::<s::ReviewVM>();
+        let me = self.clone();
+        rv.on_select_lane(move |i| {
+            let lane = Lane::ALL.get(i as usize).copied().unwrap_or(Lane::Marks);
+            me.select_lane(lane);
+        });
+        let me = self.clone();
+        rv.on_select_item(move |id| me.select_item(Some(ItemId(id as u64))));
+        let me = self.clone();
+        rv.on_toggle_group(move |code| {
+            {
+                let mut st = me.st.borrow_mut();
+                let code = code.to_string();
+                if !st.collapsed.remove(&code) {
+                    st.collapsed.insert(code);
+                }
+            }
+            me.refresh_review();
+        });
+        let me = self.clone();
+        rv.on_choose_option(move |i| me.choose(Decision::Option(i as u8)));
+        let me = self.clone();
+        rv.on_choose_special(move |i| {
+            let kind = me.st.borrow().current.as_ref().map(|c| c.kind);
+            let d = match (kind, i) {
+                (Some(ReviewKind::Identity), 0) => Decision::NotOnRoster,
+                (Some(ReviewKind::Identity), _) => Decision::Duplicate,
+                (_, 0) => Decision::Blank,
+                (_, 1) => Decision::Multi,
+                _ => Decision::Unreadable,
+            };
+            me.choose(d);
+        });
+        let me = self.clone();
+        rv.on_choose_candidate(move |i| me.choose(Decision::Candidate(i as u8)));
+        let me = self.clone();
+        rv.on_accept(move || me.accept());
+        let me = self.clone();
+        rv.on_apply_group(move || me.apply_group());
+        let me = self.clone();
+        rv.on_defer(move || me.act(ReviewAction::Defer));
+        let me = self.clone();
+        rv.on_escalate(move || me.act(ReviewAction::Escalate));
+        let me = self.clone();
+        rv.on_rescan(move || me.act(ReviewAction::AddToRescan));
+        let me = self.clone();
+        rv.on_undo(move || me.undo());
+        let me = self.clone();
+        rv.on_toggle_overlay(move || me.toggle(|st| st.overlay = !st.overlay));
+        let me = self.clone();
+        rv.on_toggle_show_all(move || me.toggle(|st| st.show_all = !st.show_all));
+        let me = self.clone();
+        rv.on_toggle_registered(move || me.toggle(|st| st.registered = !st.registered));
+        let me = self.clone();
+        rv.on_zoom_by(move |d| me.toggle(|st| st.zoom = (st.zoom + d).clamp(2, 4)));
+        let me = self.clone();
+        rv.on_toggle_help(move || me.toggle(|st| st.help = !st.help));
+        let me = self.clone();
+        rv.on_search(move |t| {
+            me.say(
+                format!("Roster search for \"{t}\" runs in omr-app (bidi-aware, fuzzy)"),
+                s::Tone::Info,
+            )
+        });
+        let me = self.clone();
+        rv.on_key(move |t, ctrl, shift, alt| me.review_key(&t, ctrl, shift, alt));
+
+        // results
+        let rs = ui.global::<s::ResultsVM>();
+        let weak = ui.as_weak();
+        rs.on_select_item(move |i| {
+            if let Some(ui) = weak.upgrade() {
+                ui.global::<s::ResultsVM>().set_selected_item(i);
+            }
+        });
+        let me = self.clone();
+        rs.on_release(move || {
+            me.say(
+                "Release needs the instructor's confirmation dialog (§13.4)",
+                s::Tone::Info,
+            )
+        });
+        let me = self.clone();
+        rs.on_what_if(move || {
+            me.say(
+                "What-if preview re-scores in omr-app (§12.2)",
+                s::Tone::Info,
+            )
+        });
+        let me = self.clone();
+        rs.on_check_action(move |i| {
+            if i == 0 {
+                me.navigate(s::Page::Review);
+            } else if i == 1 {
+                me.st.borrow_mut().lane = Lane::Scoring;
+                me.st.borrow_mut().item = None;
+                me.navigate(s::Page::Review);
+            } else {
+                me.navigate(s::Page::Scan);
+            }
+        });
+
+        // outcomes
+        let me = self.clone();
+        ui.global::<s::OutcomesVM>().on_export_tp154(move || {
+            me.say(
+                "TP-154 A.1 and B.1 export (XLSX, CSV, HTML) runs in omr-report",
+                s::Tone::Info,
+            )
+        });
+    }
+
+    fn toggle(&self, f: impl FnOnce(&mut State)) {
+        f(&mut self.st.borrow_mut());
+        self.push_item();
+    }
+
+    // -------------------------------------------------------------------------- keys
+
+    fn global_key(&self, text: &str, ctrl: bool, _shift: bool, alt: bool) -> bool {
+        match keymap::global_key(text, ctrl, alt) {
+            Some(GlobalKey::Screen(n)) => {
+                let page = [
+                    s::Page::Exams,
+                    s::Page::Setup,
+                    s::Page::Scan,
+                    s::Page::Review,
+                    s::Page::Results,
+                    s::Page::Outcomes,
+                ][n as usize];
+                self.navigate(page);
+                true
+            }
+            Some(GlobalKey::Settings) => {
+                self.navigate(s::Page::Settings);
+                true
+            }
+            Some(GlobalKey::Dismiss) => {
+                let page = self.ui().global::<s::App>().get_page();
+                if page == s::Page::Exams && self.st.borrow().drawer_open {
+                    self.st.borrow_mut().drawer_open = false;
+                    self.refresh_dashboard();
+                    true
+                } else if page == s::Page::Review && self.st.borrow().help {
+                    self.toggle(|st| st.help = false);
+                    true
+                } else {
+                    false
+                }
+            }
+            None => false,
+        }
+    }
+
+    /// Handles a key pressed while the review canvas (or a control inside it) has focus.
+    pub fn review_key(&self, text: &str, ctrl: bool, shift: bool, alt: bool) -> bool {
+        let (context, single_key) = {
+            let st = self.st.borrow();
+            let ctx = match st.current.as_ref().map(|c| (c.kind, c)) {
+                Some((ReviewKind::Identity, c)) => KeyContext::Identity {
+                    candidates: c.identity.as_ref().map_or(0, |e| e.candidates.len().min(3)),
+                },
+                Some((ReviewKind::Notice, _)) => KeyContext::Notice,
+                Some((_, c)) => KeyContext::Mark {
+                    options: c.bubbles.len(),
+                },
+                None => KeyContext::Notice,
+            };
+            (ctx, st.single_key)
+        };
+        let Some(cmd) = keymap::review_key(text, ctrl, shift, alt, context, single_key) else {
+            return false;
+        };
+        let mark_ctx = matches!(context, KeyContext::Mark { .. });
+        match cmd {
+            ReviewKey::Option(i) => self.choose(Decision::Option(i)),
+            ReviewKey::Candidate(i) => self.choose(Decision::Candidate(i)),
+            ReviewKey::NotOnRoster => self.choose(Decision::NotOnRoster),
+            ReviewKey::Duplicate => self.choose(Decision::Duplicate),
+            ReviewKey::Blank if mark_ctx => self.choose(Decision::Blank),
+            ReviewKey::Multi if mark_ctx => self.choose(Decision::Multi),
+            ReviewKey::Unreadable if mark_ctx => self.choose(Decision::Unreadable),
+            ReviewKey::Blank | ReviewKey::Multi | ReviewKey::Unreadable => return false,
+            ReviewKey::Accept => self.accept(),
+            ReviewKey::ApplyToGroup => self.apply_group(),
+            ReviewKey::Next => self.step(1),
+            ReviewKey::Previous => self.step(-1),
+            ReviewKey::Defer => self.act(ReviewAction::Defer),
+            ReviewKey::Escalate => self.act(ReviewAction::Escalate),
+            ReviewKey::Rescan => self.act(ReviewAction::AddToRescan),
+            ReviewKey::Undo => self.undo(),
+            ReviewKey::ToggleOverlay => self.toggle(|st| st.overlay = !st.overlay),
+            ReviewKey::ToggleOriginal => self.toggle(|st| st.registered = !st.registered),
+            ReviewKey::Help => self.toggle(|st| st.help = !st.help),
+            ReviewKey::ZoomIn => self.toggle(|st| st.zoom = (st.zoom + 1).min(4)),
+            ReviewKey::ZoomOut => self.toggle(|st| st.zoom = (st.zoom - 1).max(2)),
+            ReviewKey::Search => {
+                let n = {
+                    let mut st = self.st.borrow_mut();
+                    st.search_request += 1;
+                    st.search_request
+                };
+                self.ui().global::<s::ReviewVM>().set_search_request(n);
+            }
+        }
+        true
+    }
+
+    // -------------------------------------------------------------------------- review actions
+
+    fn select_lane(&self, lane: Lane) {
+        {
+            let mut st = self.st.borrow_mut();
+            st.lane = lane;
+            st.item = None;
+            st.current = None;
+            st.pending = None;
+        }
+        self.refresh_review();
+        let first = self.st.borrow().order.first().copied();
+        self.select_item(first);
+    }
+
+    fn open_code(&self, code: &str) {
+        let Some(exam) = self.exam() else { return };
+        for lane in Lane::ALL {
+            let q = self.backend.borrow().review_queue(&exam, lane);
+            if let Some(g) = q.groups.iter().find(|g| g.code == code) {
+                let id = g.items[0].id;
+                {
+                    let mut st = self.st.borrow_mut();
+                    st.lane = lane;
+                    st.collapsed.remove(code);
+                }
+                self.ui().global::<s::App>().set_page(s::Page::Review);
+                self.select_item(Some(id));
+                return;
+            }
+        }
+        self.navigate(s::Page::Review);
+        self.say(
+            format!("No open {code} items in this exam's queue"),
+            s::Tone::Info,
+        );
+    }
+
+    /// Shows item `id` (or nothing) in the review frame.
+    pub fn select_item(&self, id: Option<ItemId>) {
+        let exam = self.exam();
+        let item = match (exam, id) {
+            (Some(e), Some(id)) => self.backend.borrow().review_item(&e, id),
+            _ => None,
+        };
+        {
+            let mut st = self.st.borrow_mut();
+            st.item = item.as_ref().map(|i| i.id);
+            st.pending = item.as_ref().and_then(|i| i.current);
+            if let Some(code) = item.as_ref().map(|i| i.code.clone()) {
+                st.collapsed.remove(&code);
+            }
+            st.current = item;
+            st.show_all = self.ui().global::<s::App>().get_show_all_default();
+        }
+        self.refresh_review();
+    }
+
+    fn step(&self, delta: i32) {
+        let next = {
+            let st = self.st.borrow();
+            let pos = st
+                .item
+                .and_then(|id| st.order.iter().position(|&x| x == id))
+                .map_or(0, |p| p as i32 + delta);
+            if st.order.is_empty() {
+                None
+            } else {
+                Some(st.order[pos.clamp(0, st.order.len() as i32 - 1) as usize])
+            }
+        };
+        if next.is_some() {
+            self.select_item(next);
+        }
+    }
+
+    /// Sets the pending answer (shown as the selected chip; committed by Accept / Enter).
+    pub fn choose(&self, d: Decision) {
+        let valid = {
+            let st = self.st.borrow();
+            match (st.current.as_ref(), d) {
+                (None, _) => false,
+                (Some(c), Decision::Option(i)) => {
+                    matches!(c.kind, ReviewKind::Mark | ReviewKind::BlindVerify)
+                        && (i as usize) < c.bubbles.len()
+                }
+                (Some(c), Decision::Candidate(i)) => {
+                    c.kind == ReviewKind::Identity
+                        && (i as usize)
+                            < c.identity.as_ref().map_or(0, |e| e.candidates.len().min(3))
+                }
+                (Some(c), Decision::NotOnRoster | Decision::Duplicate) => {
+                    c.kind == ReviewKind::Identity
+                }
+                (Some(c), Decision::Acknowledge) => c.kind == ReviewKind::Notice,
+                (Some(c), _) => matches!(c.kind, ReviewKind::Mark | ReviewKind::BlindVerify),
+            }
+        };
+        if !valid {
+            return;
+        }
+        {
+            let mut st = self.st.borrow_mut();
+            // choosing the same thing twice clears it (toggle), as chips are checkable
+            st.pending = if st.pending == Some(d) { None } else { Some(d) };
+        }
+        self.push_item();
+    }
+
+    /// Commits the pending answer, or the suggestion when nothing was chosen.
+    pub fn accept(&self) {
+        let (decision, accepted_suggestion) = {
+            let st = self.st.borrow();
+            let Some(c) = st.current.as_ref() else { return };
+            let sugg = c.suggestion.as_ref().map(|s| s.decision);
+            match (st.pending, sugg, c.kind) {
+                (_, _, ReviewKind::Notice) => (Decision::Acknowledge, true),
+                (Some(p), s, _) => (p, Some(p) == s),
+                (None, Some(s), _) => (s, true),
+                (None, None, _) => {
+                    drop(st);
+                    self.say(
+                        "Choose what is marked first (blind verify shows no suggestion)",
+                        s::Tone::Warning,
+                    );
+                    return;
+                }
+            }
+        };
+        let note = self.ui().global::<s::ReviewVM>().get_note().to_string();
+        self.act(ReviewAction::Resolve {
+            decision,
+            accepted_suggestion,
+            note,
+        });
+    }
+
+    fn apply_group(&self) {
+        let decision = {
+            let st = self.st.borrow();
+            let Some(c) = st.current.as_ref() else { return };
+            if c.kind != ReviewKind::Mark || !c.group.allowed {
+                let reason = c.group.reason.clone();
+                drop(st);
+                self.say(reason, s::Tone::Warning);
+                return;
+            }
+            st.pending.or(c.suggestion.as_ref().map(|s| s.decision))
+        };
+        if let Some(decision) = decision {
+            self.act(ReviewAction::ApplyToGroup { decision });
+        }
+    }
+
+    fn act(&self, action: ReviewAction) {
+        let (exam, item, label, labels) = {
+            let st = self.st.borrow();
+            let (Some(exam), Some(c)) = (st.exam.clone(), st.current.as_ref()) else {
+                return;
+            };
+            let label = if c.question > 0 {
+                format!("Q{:02} ({})", c.question, c.serial)
+            } else {
+                format!("{} {}", c.code, c.serial)
+            };
+            let labels: Vec<String> = c.bubbles.iter().map(|b| b.label.clone()).collect();
+            (exam, c.id, label, labels)
+        };
+        let what = match &action {
+            ReviewAction::Resolve { decision, .. } => {
+                format!("Recorded {label}: {}", decision_word(*decision, &labels))
+            }
+            ReviewAction::ApplyToGroup { decision } => format!(
+                "Applied {} to the group of {label}",
+                decision_word(*decision, &labels)
+            ),
+            ReviewAction::Defer => format!("Deferred {label}"),
+            ReviewAction::Escalate => format!("Escalated {label} to the instructor"),
+            ReviewAction::AddToRescan => format!("Added {label} to the rescan list"),
+        };
+        let result = self.backend.borrow_mut().apply(&exam, item, action);
+        match result {
+            Ok(out) => {
+                let n = out.affected.len();
+                self.say(
+                    if n > 1 {
+                        format!("{what} ({n} items)")
+                    } else {
+                        what
+                    },
+                    s::Tone::Success,
+                );
+                self.ui()
+                    .global::<s::ReviewVM>()
+                    .set_note(SharedString::new());
+                self.refresh_review();
+                self.select_item(out.next);
+                self.refresh_dashboard();
+                self.refresh_results();
+            }
+            Err(e) => self.say(e.to_string(), s::Tone::Error),
+        }
+    }
+
+    fn undo(&self) {
+        let Some(exam) = self.exam() else { return };
+        let result = self.backend.borrow_mut().undo(&exam);
+        match result {
+            Ok(Some(id)) => {
+                self.say(
+                    "Undone: the item is open again (compensating event)",
+                    s::Tone::Info,
+                );
+                // the re-opened item may sit in another lane
+                for lane in Lane::ALL {
+                    let q = self.backend.borrow().review_queue(&exam, lane);
+                    if q.groups.iter().any(|g| g.items.iter().any(|i| i.id == id)) {
+                        self.st.borrow_mut().lane = lane;
+                        break;
+                    }
+                }
+                self.select_item(Some(id));
+                self.refresh_dashboard();
+                self.refresh_results();
+            }
+            Ok(None) => self.say("Nothing to undo", s::Tone::Neutral),
+            Err(e) => self.say(e.to_string(), s::Tone::Error),
+        }
+    }
+
+    // -------------------------------------------------------------------------- setup edits
+
+    fn setup_row(&self, row: usize) -> Option<(ExamId, b::ExamSetup, u32)> {
+        let exam = self.exam()?;
+        let setup = self.backend.borrow().exam_setup(&exam)?;
+        let q = setup.mapping.get(row)?.question;
+        Some((exam, setup, q))
+    }
+
+    fn cycle_key(&self, row: usize, version: usize) {
+        let Some((exam, setup, q)) = self.setup_row(row) else {
+            return;
+        };
+        let options = &setup.template.option_labels;
+        let cur = setup
+            .keys
+            .get(version)
+            .and_then(|k| k.answers.get(row))
+            .cloned()
+            .unwrap_or_default();
+        let next = match options.iter().position(|o| *o == cur) {
+            Some(i) => options[(i + 1) % options.len()].clone(),
+            None => options.first().cloned().unwrap_or_default(),
+        };
+        let r = self.backend.borrow_mut().set_key(&exam, version, q, &next);
+        self.after_setup_edit(
+            r,
+            format!(
+                "Key Q{q:02} version {}: {next}",
+                setup.keys[version].version
+            ),
+        );
+    }
+
+    fn set_key(&self, row: usize, version: usize, text: &str) {
+        let Some((exam, setup, q)) = self.setup_row(row) else {
+            return;
+        };
+        // typed key letters follow the label set; Arabic letters map by position (§20.2)
+        let answer = if text.is_empty() {
+            String::new()
+        } else {
+            match keymap::option_for(text, setup.template.option_labels.len()) {
+                Some(i) => setup.template.option_labels[i as usize].clone(),
+                None => text.to_uppercase(),
+            }
+        };
+        let r = self
+            .backend
+            .borrow_mut()
+            .set_key(&exam, version, q, &answer);
+        let v = setup
+            .keys
+            .get(version)
+            .map(|k| k.version.clone())
+            .unwrap_or_default();
+        self.after_setup_edit(
+            r,
+            format!(
+                "Key Q{q:02} version {v}: {}",
+                if answer.is_empty() {
+                    "cleared"
+                } else {
+                    &answer
+                }
+            ),
+        );
+    }
+
+    fn set_weight(&self, row: usize, clo: usize, text: &str) {
+        let Some((exam, setup, q)) = self.setup_row(row) else {
+            return;
+        };
+        {
+            let mut st = self.st.borrow_mut();
+            st.sel_row = row;
+            st.sel_col = clo;
+        }
+        let r = match parse_weight(text) {
+            Ok(w) => self
+                .backend
+                .borrow_mut()
+                .set_mapping_weight(&exam, q, clo, w),
+            Err(e) => Err(b::BackendError::Invalid(e)),
+        };
+        let code = setup
+            .clos
+            .get(clo)
+            .map(|c| c.code.clone())
+            .unwrap_or_default();
+        self.after_setup_edit(
+            r,
+            format!(
+                "Weight Q{q:02} × {code}: {}",
+                if text.trim().is_empty() {
+                    "cleared"
+                } else {
+                    text.trim()
+                }
+            ),
+        );
+    }
+
+    fn set_note(&self, row: usize, clo: usize, text: &str) {
+        let Some((exam, setup, q)) = self.setup_row(row) else {
+            return;
+        };
+        let r = self
+            .backend
+            .borrow_mut()
+            .set_mapping_note(&exam, q, clo, text);
+        let code = setup
+            .clos
+            .get(clo)
+            .map(|c| c.code.clone())
+            .unwrap_or_default();
+        self.after_setup_edit(r, format!("Note saved for Q{q:02} × {code}"));
+    }
+
+    fn after_setup_edit(&self, r: Result<(), b::BackendError>, ok: String) {
+        let ui = self.ui();
+        let su = ui.global::<s::SetupVM>();
+        match r {
+            Ok(()) => {
+                su.set_error(SharedString::new());
+                self.say(ok, s::Tone::Success);
+            }
+            Err(e) => {
+                su.set_error(ss(e.to_string()));
+                self.say(e.to_string(), s::Tone::Error);
+            }
+        }
+        self.refresh_setup();
+        self.refresh_dashboard();
+    }
+
+    // -------------------------------------------------------------------------- refresh: chrome + exams
+
+    fn refresh_dashboard(&self) {
+        let ui = self.ui();
+        let d = self.backend.borrow().dashboard();
+        let app = ui.global::<s::App>();
+        app.set_user_name(ss(&d.user.name));
+        app.set_user_role(ss(&d.user.role));
+        app.set_user_initials(ss(&d.user.initials));
+        app.set_engine(ss(&d.engine));
+        app.set_workspace(ss(&d.workspace));
+
+        let ex = ui.global::<s::ExamsVM>();
+        ex.set_term_label(ss(format!("{} · {}", d.term.label, d.term.gregorian)));
+        ex.set_sheets_week(ss(thousands(d.stats.sheets_this_week)));
+        ex.set_sheets_today(ss(format!("+{} today", thousands(d.stats.sheets_today))));
+        ex.set_open_exceptions(ss(thousands(d.stats.open_exceptions)));
+        ex.set_open_errors(ss(format!("{} ERROR or BLOCKER", d.stats.open_errors)));
+        ex.set_median_review(ss(format!("{:.1}", d.stats.median_review_secs)));
+        ex.set_throughput(ss(format!("{:.0}", d.stats.throughput_pages_per_sec)));
+
+        let statuses = [
+            ("All", None),
+            ("Setup", Some(b::ExamStatus::Setup)),
+            ("Scanning", Some(b::ExamStatus::Scanning)),
+            ("In review", Some(b::ExamStatus::InReview)),
+            ("Ready to release", Some(b::ExamStatus::Ready)),
+            ("Released", Some(b::ExamStatus::Released)),
+        ];
+        ex.set_filters(model(
+            statuses
+                .iter()
+                .map(|(label, st)| s::FilterChip {
+                    label: ss(label),
+                    count: d
+                        .exams
+                        .iter()
+                        .filter(|e| st.is_none_or(|x| e.status == x))
+                        .count() as i32,
+                })
+                .collect(),
+        ));
+        let (filter, current, drawer_open) = {
+            let st = self.st.borrow();
+            (st.exam_filter, st.exam.clone(), st.drawer_open)
+        };
+        ex.set_filter(filter as i32);
+        let wanted = statuses.get(filter).and_then(|x| x.1);
+        let shown: Vec<&b::ExamSummary> = d
+            .exams
+            .iter()
+            .filter(|e| wanted.is_none_or(|w| e.status == w))
+            .collect();
+        let rows: Vec<s::ExamRow> = shown
+            .iter()
+            .map(|e| {
+                let progress = if e.sheets_expected == 0 {
+                    0.0
+                } else {
+                    e.sheets_scanned as f32 / e.sheets_expected as f32
+                };
+                let c = e.open_exceptions;
+                s::ExamRow {
+                    id: ss(&e.id.0),
+                    code: ss(&e.course_code),
+                    title: ss(&e.course_title),
+                    title_ar: ss(&e.course_title_ar),
+                    assessment: ss(&e.assessment),
+                    date: ss(&e.date),
+                    date_hijri: ss(&e.date_hijri),
+                    term: ss(&e.term.label),
+                    forms: model(e.versions.iter().map(ss).collect()),
+                    scanned: ss(thousands(e.sheets_scanned)),
+                    expected: ss(thousands(e.sheets_expected)),
+                    progress,
+                    progress_tone: if progress >= 1.0 {
+                        s::Tone::Success
+                    } else if e.status == b::ExamStatus::Setup {
+                        s::Tone::Neutral
+                    } else {
+                        s::Tone::Warning
+                    },
+                    info: c.info as i32,
+                    warn: c.warn as i32,
+                    error: c.error as i32,
+                    blocker: c.blocker as i32,
+                    status: ss(e.status.label()),
+                    status_tone: status_tone(e.status),
+                    label: ss(format!(
+                        "{} {}, {}, {}, {} of {} sheets, {} open exceptions",
+                        e.course_code,
+                        e.course_title,
+                        e.assessment,
+                        e.status.label(),
+                        e.sheets_scanned,
+                        e.sheets_expected,
+                        c.total()
+                    )),
+                }
+            })
+            .collect();
+        let selected = current
+            .as_ref()
+            .and_then(|id| shown.iter().position(|e| &e.id == id))
+            .map_or(-1, |i| i as i32);
+        self.st.borrow_mut().exam_rows = shown.iter().map(|e| e.id.clone()).collect();
+        ex.set_rows(model(rows));
+        ex.set_selected(selected);
+
+        let cur = current
+            .as_ref()
+            .and_then(|id| d.exams.iter().find(|e| &e.id == id));
+        ex.set_drawer_open(drawer_open && cur.is_some());
+        if let Some(e) = cur {
+            app.set_course(ss(format!("{} {}", e.course_code, e.course_title)));
+            app.set_assessment(ss(&e.assessment));
+            app.set_term(ss(&e.term.label));
+            app.set_term_gregorian(ss(&e.term.gregorian));
+            let open = e.open_exceptions;
+            let review_open: u32 = self.lane_total(&e.id);
+            app.set_review_open(review_open as i32);
+            let (title, text, t) = match e.status {
+                b::ExamStatus::InReview if open.blocking() > 0 => (
+                    "Review required".to_string(),
+                    format!(
+                        "{} ERROR exceptions block release, and {} warnings need a look.",
+                        open.blocking(),
+                        open.warn
+                    ),
+                    b::Tone::Warning,
+                ),
+                b::ExamStatus::InReview => (
+                    "Review in progress".into(),
+                    "Only warnings remain open.".into(),
+                    b::Tone::Warning,
+                ),
+                b::ExamStatus::Scanning => (
+                    "Scanning in progress".into(),
+                    format!(
+                        "{} of {} sheets recognised; exceptions reach the review queue as they appear.",
+                        thousands(e.sheets_scanned),
+                        thousands(e.sheets_expected)
+                    ),
+                    b::Tone::Info,
+                ),
+                b::ExamStatus::Ready => (
+                    "Ready to release".into(),
+                    "No ERROR exceptions are open. Release is a deliberate act of the instructor."
+                        .into(),
+                    b::Tone::Success,
+                ),
+                b::ExamStatus::Released => (
+                    "Released".into(),
+                    "Results were released; later changes need four-eyes approval (§10.8).".into(),
+                    b::Tone::Success,
+                ),
+                b::ExamStatus::Setup => (
+                    "Setup in progress".into(),
+                    "Publish the key and approve the CLO mapping before scanning.".into(),
+                    b::Tone::Neutral,
+                ),
+            };
+            ex.set_drawer(s::ExamDrawer {
+                code: ss(&e.course_code),
+                title: ss(&e.course_title),
+                title_ar: ss(&e.course_title_ar),
+                assessment: ss(&e.assessment),
+                status: ss(e.status.label()),
+                status_tone: status_tone(e.status),
+                callout_title: ss(title),
+                callout_text: ss(text),
+                callout_tone: tone(t),
+                review_label: ss(format!("Continue review ({review_open})")),
+                can_review: review_open > 0,
+                key_status: ss(&e.key_status),
+                mapped: e.mapped_items as i32,
+                total: e.total_items as i32,
+                roster: ss(format!("{} students", thousands(e.roster_count))),
+                sections: ss(e.sections.join(", ")),
+                last_scan: ss(&e.last_scan),
+                batch_id: ss(&e.batch_id),
+                term: ss(format!("{} · {}", e.term.label, e.term.gregorian)),
+                term_ar: ss(&e.term.label_ar),
+            });
+        }
+    }
+
+    fn lane_total(&self, exam: &ExamId) -> u32 {
+        self.backend
+            .borrow()
+            .review_queue(exam, Lane::Marks)
+            .lanes
+            .iter()
+            .map(|l| l.open)
+            .sum()
+    }
+
+    // -------------------------------------------------------------------------- refresh: setup
+
+    fn refresh_setup(&self) {
+        let ui = self.ui();
+        let su = ui.global::<s::SetupVM>();
+        let setup = self
+            .exam()
+            .and_then(|e| self.backend.borrow().exam_setup(&e));
+        su.set_available(setup.is_some());
+        let Some(setup) = setup else { return };
+        let t = &setup.template;
+        su.set_template_id(ss(&t.id));
+        su.set_template_kind(ss(match t.kind {
+            b::TemplateKind::Legacy => format!("Legacy form · {}", t.name),
+            b::TemplateKind::Generated => format!("Generated · {}", t.name),
+        }));
+        let labels = match t.label_set {
+            b::LabelSet::Latin => "Latin labels",
+            b::LabelSet::Arabic => "Arabic labels",
+            b::LabelSet::Numeric => "numeric labels",
+        };
+        let kv = |l: &str, v: String| s::KV {
+            label: ss(l),
+            value: ss(v),
+            tone: s::Tone::Neutral,
+        };
+        su.set_template(model(vec![
+            kv(
+                "Questions",
+                format!("{} of {} printed", t.questions, t.capacity),
+            ),
+            kv(
+                "Options",
+                format!(
+                    "{}–{} · {labels}",
+                    t.option_labels.first().cloned().unwrap_or_default(),
+                    t.option_labels.last().cloned().unwrap_or_default()
+                ),
+            ),
+            kv("Versions", t.versions.join(", ")),
+            kv("Cancel mode", t.cancel_mode.label().into()),
+            kv("Resolution", format!("{} dpi", t.dpi)),
+            kv("Page identity", t.page_identity.clone()),
+            kv("Digest", t.digest.clone()),
+        ]));
+        su.set_versions(model(setup.keys.iter().map(|k| ss(&k.version)).collect()));
+        su.set_options(model(t.option_labels.iter().map(ss).collect()));
+        su.set_key_status(ss(&setup.key_status));
+        su.set_key_published(setup.key_published);
+        su.set_mapping_mode(ss(match setup.mapping_mode {
+            b::MappingMode::Split => "Split mode: each row's weights sum to 1",
+            b::MappingMode::Full => "Full mode: each mapped CLO gets the full item",
+        }));
+        let total_points: f64 = setup
+            .mapping
+            .iter()
+            .map(|r| r.points)
+            .sum::<f64>()
+            .max(1e-9);
+        su.set_clos(model(
+            setup
+                .clos
+                .iter()
+                .enumerate()
+                .map(|(ci, c)| {
+                    let evidence: f64 = setup
+                        .mapping
+                        .iter()
+                        .map(|r| r.cells[ci].weight.unwrap_or(0.0) * r.points)
+                        .sum();
+                    let items = setup
+                        .mapping
+                        .iter()
+                        .filter(|r| r.cells[ci].weight.is_some())
+                        .count();
+                    let share = (evidence / total_points) as f32;
+                    s::CloHead {
+                        code: ss(&c.code),
+                        domain: ss(c.domain.letter()),
+                        title: ss(&c.title),
+                        title_ar: ss(&c.title_ar),
+                        plo: ss(&c.plo),
+                        share,
+                        share_text: ss(format!("{:.0}%", share * 100.0)),
+                        items: items as i32,
+                    }
+                })
+                .collect(),
+        ));
+        let (sel_row, sel_col) = {
+            let mut st = self.st.borrow_mut();
+            st.sel_row = st.sel_row.min(setup.mapping.len().saturating_sub(1));
+            st.sel_col = st.sel_col.min(setup.clos.len().saturating_sub(1));
+            (st.sel_row, st.sel_col)
+        };
+        let rows: Vec<s::MapRow> = setup
+            .mapping
+            .iter()
+            .enumerate()
+            .map(|(ri, r)| {
+                let sum: f64 = r.cells.iter().filter_map(|c| c.weight).sum();
+                let any = r.cells.iter().any(|c| c.weight.is_some());
+                let sum_ok = match setup.mapping_mode {
+                    b::MappingMode::Split => !any || (sum - 1.0).abs() < 1e-9,
+                    b::MappingMode::Full => true,
+                };
+                let label = format!("Q{:02}", r.question);
+                s::MapRow {
+                    q: r.question as i32,
+                    label: ss(&label),
+                    keys: model(
+                        setup
+                            .keys
+                            .iter()
+                            .map(|k| ss(k.answers.get(ri).cloned().unwrap_or_default()))
+                            .collect(),
+                    ),
+                    points: ss(fmt_weight(Some(r.points))),
+                    cells: model(
+                        r.cells
+                            .iter()
+                            .enumerate()
+                            .map(|(ci, c)| s::MapCell {
+                                text: ss(fmt_weight(c.weight)),
+                                weight: c.weight.unwrap_or(0.0) as f32,
+                                mapped: c.weight.is_some(),
+                                has_note: !c.note.is_empty(),
+                                selected: ri == sel_row && ci == sel_col,
+                                label: ss(format!(
+                                    "{label} {} weight",
+                                    setup.clos.get(ci).map_or("", |c| c.code.as_str())
+                                )),
+                            })
+                            .collect(),
+                    ),
+                    sum: ss(if any {
+                        fmt_weight(Some(sum))
+                    } else {
+                        "–".into()
+                    }),
+                    sum_ok,
+                    status: ss(match r.status {
+                        b::MappingStatus::Draft => "draft",
+                        b::MappingStatus::Proposed => "proposed",
+                        b::MappingStatus::Approved => "approved",
+                    }),
+                    status_tone: match r.status {
+                        b::MappingStatus::Draft => s::Tone::Neutral,
+                        b::MappingStatus::Proposed => s::Tone::Accent,
+                        b::MappingStatus::Approved => s::Tone::Success,
+                    },
+                }
+            })
+            .collect();
+        su.set_rows(model(rows));
+        su.set_lints(model(
+            setup
+                .lints
+                .iter()
+                .map(|l| s::LintRow {
+                    code: ss(&l.code),
+                    severity: severity(l.severity),
+                    message: ss(&l.message),
+                })
+                .collect(),
+        ));
+        su.set_sel_row(sel_row as i32);
+        su.set_sel_col(sel_col as i32);
+        if let (Some(r), Some(c)) = (setup.mapping.get(sel_row), setup.clos.get(sel_col)) {
+            su.set_sel_title(ss(format!("Q{:02} × {}", r.question, c.code)));
+            su.set_sel_clo(ss(&c.title));
+            su.set_sel_weight(ss(fmt_weight(r.cells[sel_col].weight)));
+            su.set_sel_note(ss(&r.cells[sel_col].note));
+        }
+    }
+
+    // -------------------------------------------------------------------------- refresh: scan
+
+    fn refresh_scan(&self) {
+        let ui = self.ui();
+        let sc = ui.global::<s::ScanVM>();
+        let exam = self.exam();
+        let p = exam
+            .as_ref()
+            .and_then(|e| self.backend.borrow().batch_progress(e));
+        sc.set_available(p.is_some());
+        if let Some(e) = &exam {
+            sc.set_review_open(self.lane_total(e) as i32);
+        }
+        let Some(p) = p else { return };
+        let total = p.pages_total.max(1);
+        sc.set_batch_label(ss(&p.batch_label));
+        sc.set_source(ss(&p.source));
+        sc.set_device(ss(&p.device));
+        sc.set_running(p.running);
+        sc.set_pps(p.pages_per_sec as f32);
+        sc.set_pps_max(p.max_pages_per_sec as f32);
+        sc.set_pps_floor(p.floor_pages_per_sec as f32);
+        sc.set_pps_text(ss(format!("{:.0}", p.pages_per_sec)));
+        sc.set_pages_value(ss(thousands(p.pages_done)));
+        sc.set_pages_caption(ss(format!(
+            "of {} · {:.0} %",
+            thousands(p.pages_total),
+            100.0 * p.pages_done as f64 / total as f64
+        )));
+        sc.set_auto_value(ss(format!("{:.1}", p.auto_accepted * 100.0)));
+        sc.set_auto_caption(ss(format!(
+            "questions · AR {:.1} %",
+            p.abstention_rate * 100.0
+        )));
+        sc.set_first_value(ss(format!("{:.1}", p.first_result.as_secs_f64())));
+        sc.set_first_caption(ss("target < 3 s (A3)"));
+        let secs = p.remaining.as_secs();
+        sc.set_remaining_value(ss(format!("{}:{:02}", secs / 60, secs % 60)));
+        sc.set_remaining_caption(ss(if p.queued + p.in_flight > 0 {
+            format!("m:ss · {} pages queued", thousands(p.queued + p.in_flight))
+        } else {
+            "batch complete".to_string()
+        }));
+        sc.set_done_frac(p.pages_done as f32 / total as f32);
+        sc.set_flight_frac(p.in_flight as f32 / total as f32);
+        sc.set_stages(model(
+            p.stages
+                .iter()
+                .map(|st| s::KV {
+                    label: ss(&st.stage),
+                    value: ss(thousands(st.count)),
+                    tone: if st.stage == "Quarantined" && st.count > 0 {
+                        s::Tone::Warning
+                    } else {
+                        s::Tone::Neutral
+                    },
+                })
+                .collect(),
+        ));
+        let max = p
+            .exceptions
+            .iter()
+            .map(|c| c.count)
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        sc.set_codes(model(
+            p.exceptions
+                .iter()
+                .map(|c| s::CodeBar {
+                    code: ss(&c.code),
+                    title: ss(&c.title),
+                    severity: severity(c.severity),
+                    count: c.count as i32,
+                    frac: c.count as f32 / max as f32,
+                })
+                .collect(),
+        ));
+        let thumbs: Vec<s::Thumb> = p
+            .thumbnails
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let (state, code, sev, word) = match &t.state {
+                    b::ThumbState::Auto => (
+                        0,
+                        String::new(),
+                        b::Severity::Info,
+                        "auto-accepted".to_string(),
+                    ),
+                    b::ThumbState::Review { code, severity } => {
+                        (1, code.clone(), *severity, format!("needs review, {code}"))
+                    }
+                    b::ThumbState::Rejected { code, severity } => {
+                        (2, code.clone(), *severity, format!("rejected, {code}"))
+                    }
+                    b::ThumbState::Reading => {
+                        (3, String::new(), b::Severity::Info, "reading".into())
+                    }
+                    b::ThumbState::Queued => (4, String::new(), b::Severity::Info, "queued".into()),
+                };
+                s::Thumb {
+                    serial: ss(&t.serial),
+                    state,
+                    code: ss(code),
+                    severity: severity(sev),
+                    variant: (i % 4) as i32,
+                    label: ss(format!("Sheet {}, {word}", t.serial)),
+                }
+            })
+            .collect();
+        sc.set_thumbs(model(thumbs));
+        sc.set_thumb_images(model(self.st.borrow().thumbs.clone()));
+        let rejected: u32 = p
+            .exceptions
+            .iter()
+            .filter(|c| c.code == "CAP-002")
+            .map(|c| c.count)
+            .sum();
+        let review: u32 = p
+            .exceptions
+            .iter()
+            .filter(|c| c.code != "CAP-002" && c.severity >= b::Severity::Warn)
+            .map(|c| c.count)
+            .sum();
+        sc.set_rejected_count(ss(thousands(rejected)));
+        sc.set_review_count(ss(thousands(review)));
+        sc.set_auto_count(ss(thousands(
+            p.pages_done.saturating_sub(review + rejected),
+        )));
+        sc.set_recon(model(
+            p.reconciliation
+                .iter()
+                .map(|r| s::KV {
+                    label: ss(&r.label),
+                    value: ss(&r.value),
+                    tone: tone(r.tone),
+                })
+                .collect(),
+        ));
+        match &p.reconciliation_code {
+            Some((code, sev)) => {
+                sc.set_recon_code(ss(code));
+                sc.set_recon_severity(severity(*sev));
+            }
+            None => sc.set_recon_code(SharedString::new()),
+        }
+        sc.set_activity(model(p.activity.iter().map(ss).collect()));
+        sc.set_engine(ss(&p.engine));
+        sc.set_workers(p.workers as i32);
+    }
+
+    // -------------------------------------------------------------------------- refresh: review
+
+    fn refresh_review(&self) {
+        let ui = self.ui();
+        let rv = ui.global::<s::ReviewVM>();
+        let Some(exam) = self.exam() else {
+            rv.set_has_item(false);
+            return;
+        };
+        let lane = self.st.borrow().lane;
+        let q = self.backend.borrow().review_queue(&exam, lane);
+        rv.set_lanes(model(
+            q.lanes
+                .iter()
+                .map(|l| s::LaneChip {
+                    label: ss(l.lane.label()),
+                    count: l.open as i32,
+                    selected: l.lane == lane,
+                })
+                .collect(),
+        ));
+        rv.set_resolved(q.resolved as i32);
+        rv.set_total(q.total as i32);
+        rv.set_median(ss(format!("median {:.1} s / item", q.median_secs_per_item)));
+        rv.set_audit_head(ss(&q.audit_head));
+        rv.set_two_person(q.two_person_rule);
+        ui.global::<s::App>()
+            .set_review_open(q.lanes.iter().map(|l| l.open).sum::<u32>() as i32);
+
+        let (current, collapsed) = {
+            let st = self.st.borrow();
+            (st.item, st.collapsed.clone())
+        };
+        let mut entries = Vec::new();
+        let mut order = Vec::new();
+        let mut y = 0.0_f32;
+        let mut selected_y = 0.0_f32;
+        for g in &q.groups {
+            let expanded = !collapsed.contains(&g.code);
+            entries.push(s::QueueEntry {
+                header: true,
+                code: ss(&g.code),
+                title: ss(&g.title),
+                severity: severity(g.severity),
+                count: g.items.len() as i32,
+                expanded,
+                ..Default::default()
+            });
+            y += 32.0;
+            for it in &g.items {
+                order.push(it.id);
+                if !expanded {
+                    continue;
+                }
+                let selected = Some(it.id) == current;
+                if selected {
+                    selected_y = y;
+                }
+                let blind = it.kind == ReviewKind::BlindVerify;
+                entries.push(s::QueueEntry {
+                    header: false,
+                    code: ss(&g.code),
+                    severity: severity(it.severity),
+                    id: it.id.0 as i32,
+                    label: ss(&it.label),
+                    detail: ss(&it.detail),
+                    serial: ss(match it.kind {
+                        ReviewKind::Mark | ReviewKind::BlindVerify => {
+                            format!("Booklet {}", it.serial)
+                        }
+                        _ => g.code.clone(),
+                    }),
+                    fills: model(it.fills.clone()),
+                    selected,
+                    blind,
+                    deferred: it.deferred,
+                    a11y: ss(format!(
+                        "{}{}, {}{}{}",
+                        it.label,
+                        if it.question > 0 {
+                            format!(" {}, booklet {}", it.detail, it.serial)
+                        } else {
+                            format!(", {}", it.detail)
+                        },
+                        g.code,
+                        if blind { ", blind verify" } else { "" },
+                        if it.deferred { ", deferred" } else { "" }
+                    )),
+                    ..Default::default()
+                });
+                y += 62.0;
+            }
+        }
+        rv.set_queue(model(entries));
+        rv.set_selected_y(selected_y);
+        rv.set_empty_text(ss(format!("No open items in the {} lane", lane.label())));
+        self.st.borrow_mut().order = order;
+        self.push_item();
+    }
+
+    /// Pushes the current item and the reviewer's pending choice into the decision frame.
+    fn push_item(&self) {
+        let ui = self.ui();
+        let rv = ui.global::<s::ReviewVM>();
+        let st = self.st.borrow();
+        rv.set_overlay(st.overlay);
+        rv.set_show_all(st.show_all);
+        rv.set_registered(st.registered);
+        rv.set_zoom(st.zoom);
+        rv.set_help_open(st.help);
+        let Some(c) = st.current.as_ref() else {
+            rv.set_has_item(false);
+            rv.set_code(SharedString::new());
+            return;
+        };
+        rv.set_has_item(true);
+        rv.set_help_text(ss(help_for(&c.code)));
+        let kind = match c.kind {
+            ReviewKind::Mark => 0,
+            ReviewKind::BlindVerify => 1,
+            ReviewKind::Identity => 2,
+            ReviewKind::Notice => 3,
+        };
+        rv.set_kind(kind);
+        rv.set_code(ss(&c.code));
+        rv.set_code_title(ss(&c.code_title));
+        rv.set_sub_reason(ss(&c.sub_reason));
+        rv.set_severity(severity(c.severity));
+        let view = if st.registered {
+            "registered"
+        } else {
+            "original scan"
+        };
+        rv.set_caption(ss(match c.kind {
+            ReviewKind::Mark | ReviewKind::BlindVerify => format!(
+                "Question {} · Form {} · booklet {} · page {} · {view}, {} dpi",
+                c.question, c.form, c.serial, c.page, c.dpi
+            ),
+            ReviewKind::Identity => format!(
+                "Booklet {} · student number grid · {view}, {} dpi",
+                c.serial, c.dpi
+            ),
+            ReviewKind::Notice => format!("{} · {}", c.code, c.code_title),
+        }));
+        rv.set_question_label(ss(format!("Question {}", c.question)));
+        rv.set_crop(image(&c.crop));
+        rv.set_crop_w(c.crop.width as f32);
+        rv.set_crop_h(c.crop.height as f32);
+        match &c.original {
+            Some(o) => {
+                rv.set_original(image(o));
+                rv.set_has_original(true);
+            }
+            None => rv.set_has_original(false),
+        }
+        let labels: Vec<String> = c.bubbles.iter().map(|b| b.label.clone()).collect();
+        let bubble = |b: &b::BubbleView| s::BubbleVM {
+            label: ss(&b.label),
+            x: b.cx,
+            y: b.cy,
+            r: b.r,
+            fill: b.fill,
+            fill_text: ss(format!("{:.2}", b.fill)),
+            mark: mark(b.state),
+            overlay: b.state != b::MarkState::Blank || st.show_all,
+        };
+        rv.set_bubbles(model(c.bubbles.iter().map(bubble).collect()));
+        rv.set_fill_bars(model(if c.kind == ReviewKind::Mark {
+            c.bubbles.iter().map(bubble).collect()
+        } else {
+            Vec::new()
+        }));
+        rv.set_threshold(c.threshold);
+        rv.set_band_lo(c.band.0);
+        rv.set_band_hi(c.band.1);
+        let sugg = c.suggestion.as_ref().map(|s| s.decision);
+        rv.set_has_suggestion(c.suggestion.is_some());
+        if let Some(sg) = &c.suggestion {
+            rv.set_suggestion_letter(ss(decision_word(sg.decision, &labels)));
+            rv.set_suggestion_word(ss(decision_word(sg.decision, &labels)));
+            rv.set_suggestion_source(ss(match &sg.source {
+                b::SuggestionSource::Engine => "Engine suggestion".to_string(),
+                b::SuggestionSource::Rule(r) => format!("Rule suggestion · {r}"),
+                b::SuggestionSource::Ai { model } => format!("AI suggestion · {model}"),
+            }));
+            rv.set_suggestion_detail(ss(match (c.kind, sg.decision) {
+                (ReviewKind::Identity, Decision::Candidate(i)) => c
+                    .identity
+                    .as_ref()
+                    .and_then(|e| e.candidates.get(i as usize))
+                    .map(|cd| format!("Candidate {} · {} · {:.2}", i + 1, cd.name, cd.posterior))
+                    .unwrap_or_default(),
+                (ReviewKind::Identity, d) => {
+                    format!("{} · posterior {:.2}", decision_word(d, &labels), sg.fill)
+                }
+                (_, Decision::Option(_)) => {
+                    format!("Filled {:.2} · margin {:.2}", sg.fill, sg.margin)
+                }
+                _ => format!("Top fill {:.2} · margin {:.2}", sg.fill, sg.margin),
+            }));
+            rv.set_suggestion_tag(ss(format!(
+                "{} · {}",
+                c.code,
+                c.sub_reason.replace('_', " ")
+            )));
+        }
+        let pending = st.pending;
+        rv.set_options(model(
+            labels
+                .iter()
+                .enumerate()
+                .map(|(i, l)| s::ChipVM {
+                    label: ss(l),
+                    key: ss(l),
+                    suggested: sugg == Some(Decision::Option(i as u8)),
+                    selected: pending == Some(Decision::Option(i as u8)),
+                })
+                .collect(),
+        ));
+        let specials: Vec<(Decision, &str, &str)> = match c.kind {
+            ReviewKind::Identity => vec![
+                (Decision::NotOnRoster, "Not on roster", "N"),
+                (Decision::Duplicate, "Duplicate", "D"),
+            ],
+            _ => vec![
+                (Decision::Blank, "Blank", "Bksp"),
+                (Decision::Multi, "Multi", "Ctrl+M"),
+                (Decision::Unreadable, "Unreadable", "Ctrl+U"),
+            ],
+        };
+        rv.set_specials(model(
+            specials
+                .iter()
+                .map(|&(d, l, k)| s::ChipVM {
+                    label: ss(l),
+                    key: ss(k),
+                    suggested: sugg == Some(d),
+                    selected: pending == Some(d),
+                })
+                .collect(),
+        ));
+        if let Some(ev) = &c.identity {
+            rv.set_read_id(ss(&ev.read_id));
+            rv.set_boxes_read(ss(&ev.boxes_read));
+            rv.set_hypothesis(ss(&ev.hypothesis));
+            rv.set_neighbours(model(ev.neighbours.iter().map(ss).collect()));
+            rv.set_candidates(model(
+                ev.candidates
+                    .iter()
+                    .take(3)
+                    .enumerate()
+                    .map(|(i, cd)| s::Candidate {
+                        rank: i as i32 + 1,
+                        name: ss(&cd.name),
+                        name_ar: ss(&cd.name_ar),
+                        student_id: ss(&cd.student_id),
+                        national_id: ss(&cd.national_id_masked),
+                        meta: ss(format!(
+                            "Sec {} · {} · {} · seat {}",
+                            cd.section, cd.campus, cd.track, cd.seat
+                        )),
+                        posterior: ss(format!("{:.2}", cd.posterior)),
+                        channels: model(
+                            cd.channels
+                                .iter()
+                                .map(|ch| s::KV {
+                                    label: ss(&ch.channel),
+                                    value: ss(&ch.detail),
+                                    tone: if ch.agrees {
+                                        s::Tone::Success
+                                    } else {
+                                        s::Tone::Error
+                                    },
+                                })
+                                .collect(),
+                        ),
+                        suggested: sugg == Some(Decision::Candidate(i as u8)),
+                        selected: pending == Some(Decision::Candidate(i as u8)),
+                    })
+                    .collect(),
+            ));
+        } else {
+            rv.set_candidates(model(Vec::new()));
+        }
+        if let Some(n) = &c.notice {
+            rv.set_notice_headline(ss(&n.headline));
+            rv.set_notice_lines(model(
+                n.lines
+                    .iter()
+                    .map(|(l, v)| s::KV {
+                        label: ss(l),
+                        value: ss(v),
+                        tone: s::Tone::Neutral,
+                    })
+                    .collect(),
+            ));
+            rv.set_notice_consequence(ss(&n.consequence));
+        }
+        rv.set_other_fills(model(c.other_fills.clone()));
+        rv.set_other_caption(ss(format!(
+            "Typical full fill {:.2} · {} answered",
+            c.typical_full_fill, c.answered
+        )));
+        rv.set_summary(ss(&c.summary));
+        let (label, enabled) = match (c.kind, pending) {
+            (ReviewKind::Notice, _) => ("Acknowledge".to_string(), true),
+            (ReviewKind::BlindVerify, None) => ("Choose what is marked".to_string(), false),
+            (ReviewKind::Identity, None) => match sugg {
+                Some(Decision::Candidate(i)) => (format!("Accept candidate {}", i + 1), true),
+                Some(d) => (format!("Accept: {}", decision_word(d, &labels)), true),
+                None => ("Choose a candidate".into(), false),
+            },
+            (_, None) => ("Accept suggestion".to_string(), sugg.is_some()),
+            (_, Some(p)) if Some(p) == sugg => ("Accept suggestion".to_string(), true),
+            (ReviewKind::Identity, Some(p)) => {
+                (format!("Accept {}", decision_word(p, &labels)), true)
+            }
+            (_, Some(p)) => (format!("Accept {}", decision_word(p, &labels)), true),
+        };
+        rv.set_accept_label(ss(label));
+        rv.set_accept_enabled(enabled);
+        rv.set_group_label(ss(format!("Apply to group · {}", c.group.size)));
+        rv.set_group_enabled(c.group.allowed && c.kind == ReviewKind::Mark);
+        rv.set_group_reason(ss(&c.group.reason));
+        // contact sheet: every open member of the group, so batch confirm is an informed act
+        let mut tiles = Vec::new();
+        if c.kind == ReviewKind::Mark
+            && c.group.members.len() >= 2
+            && let Some(exam) = st.exam.as_ref()
+        {
+            for &m in c.group.members.iter().take(6) {
+                if let Some(it) = self.backend.borrow().review_item(exam, m) {
+                    tiles.push(s::ContactTile {
+                        image: image(&it.crop),
+                        id: m.0 as i32,
+                        serial: ss(format!("Booklet {}", it.serial)),
+                        current: m == c.id,
+                        label: ss(format!(
+                            "Open booklet {} in the group{}",
+                            it.serial,
+                            if m == c.id { ", current" } else { "" }
+                        )),
+                    });
+                }
+            }
+        }
+        rv.set_contact_caption(ss(format!(
+            "{} open items share this group (code, question, suggestion, fill bucket)",
+            c.group.members.len()
+        )));
+        rv.set_contact(model(tiles));
+    }
+
+    // -------------------------------------------------------------------------- refresh: results
+
+    fn refresh_results(&self) {
+        let ui = self.ui();
+        let rs = ui.global::<s::ResultsVM>();
+        let r = self.exam().and_then(|e| self.backend.borrow().results(&e));
+        rs.set_available(r.is_some());
+        let Some(r) = r else { return };
+        let st = &r.stats;
+        rs.set_key_label(ss(&r.key_label));
+        rs.set_students(ss(thousands(st.students)));
+        rs.set_students_caption(ss(format!(
+            "of {} on roster · {} absent",
+            st.roster, st.absent
+        )));
+        rs.set_mean(ss(format!("{:.1}", st.mean_pct)));
+        rs.set_mean_caption(ss(format!(
+            "median {:.0} % · SD {:.1}",
+            st.median_pct, st.sd_pct
+        )));
+        rs.set_pass_rate(ss(format!("{:.1}", st.pass_rate * 100.0)));
+        rs.set_pass_caption(ss("≥ 60 % (D or better)"));
+        rs.set_alpha(ss(format!("{:.2}", st.alpha)));
+        rs.set_alpha_caption(ss(format!(
+            "Feldt 95 % CI {:.2}–{:.2}",
+            st.alpha_ci.0, st.alpha_ci.1
+        )));
+        rs.set_sem(ss(format!("{:.1}", st.sem_points)));
+        rs.set_sem_caption(ss("±1.96 SEM band at the cut"));
+        rs.set_open_errors(ss(st.open_errors.to_string()));
+        rs.set_open_caption(ss(if st.open_errors > 0 {
+            "ERROR · holds release"
+        } else {
+            "none open"
+        }));
+        let max = r.grades.iter().map(|g| g.count).max().unwrap_or(1).max(1);
+        rs.set_grades(model(
+            r.grades
+                .iter()
+                .map(|g| s::GradeBar {
+                    letter: ss(&g.letter),
+                    letter_ar: ss(&g.letter_ar),
+                    band: ss(match g.hi {
+                        None => format!("≥ {:.0}", g.lo),
+                        Some(h) if g.fail => format!("< {h:.0}"),
+                        Some(h) => format!("{:.0}–{h:.0}", g.lo),
+                    }),
+                    count: g.count as i32,
+                    frac: g.count as f32 / max as f32,
+                    fail: g.fail,
+                })
+                .collect(),
+        ));
+        rs.set_statuses(model(
+            r.statuses
+                .iter()
+                .map(|x| s::StatusBarVM {
+                    code: ss(&x.code),
+                    label: ss(&x.label),
+                    label_ar: ss(&x.label_ar),
+                    count: x.count as i32,
+                })
+                .collect(),
+        ));
+        rs.set_scale_label(ss(&r.scale_label));
+        let hmax = r.histogram.counts.iter().copied().max().unwrap_or(1).max(1);
+        rs.set_histogram(model(
+            r.histogram
+                .counts
+                .iter()
+                .map(|&c| c as f32 / hmax as f32)
+                .collect(),
+        ));
+        rs.set_histogram_counts(model(
+            r.histogram.counts.iter().map(|&c| c as i32).collect(),
+        ));
+        rs.set_pass_mark(r.histogram.pass_mark as f32);
+        rs.set_mean_pct(r.histogram.mean as f32);
+        rs.set_sem_pct(r.histogram.sem as f32);
+        rs.set_histogram_caption(ss(format!(
+            "N = {} · {:.0} % bins · mean {:.1} % (▲) · pass mark {:.0} % with ±1.96 SEM",
+            st.students, r.histogram.bin_width, r.histogram.mean, r.histogram.pass_mark
+        )));
+        rs.set_items(model(
+            r.items
+                .iter()
+                .map(|it| {
+                    let flag = it.flags.first();
+                    let flag_text = flag
+                        .map(|f| {
+                            let mut t = f.message.clone();
+                            if let Some(c) = &f.code {
+                                t.push_str(&format!(" · {c}"));
+                            }
+                            if !f.stable {
+                                t.push_str(" (proposed)");
+                            }
+                            t
+                        })
+                        .unwrap_or_default();
+                    s::ItemRow {
+                        q: ss(format!("Q{:02}", it.question)),
+                        p: ss(format!("{:.2}", it.p)),
+                        r: ss(signed(it.r_ir, 2)),
+                        r_ci: ss(format!(
+                            "[{}, {}]",
+                            signed(it.r_ci.0, 2),
+                            signed(it.r_ci.1, 2)
+                        )),
+                        r_negative: it.r_ir < 0.0,
+                        steps: it.band.steps() as i32,
+                        band: ss(it.band.word()),
+                        shares: model(it.option_shares.iter().map(|&x| x as f32).collect()),
+                        keyed: it.keyed.map_or(-1, |k| k as i32),
+                        flag: ss(&flag_text),
+                        flag_tone: flag.map_or(s::Tone::Neutral, |f| tone(f.tone)),
+                        has_flag: flag.is_some(),
+                        selected: false,
+                        label: ss(format!(
+                            "Q{:02}, p {:.2}, r {}, {}{}",
+                            it.question,
+                            it.p,
+                            signed(it.r_ir, 2),
+                            it.band.word(),
+                            if flag_text.is_empty() {
+                                String::new()
+                            } else {
+                                format!(", {flag_text}")
+                            }
+                        )),
+                    }
+                })
+                .collect(),
+        ));
+        rs.set_option_labels(model(r.option_labels.iter().map(ss).collect()));
+        rs.set_readiness(model(
+            r.readiness
+                .iter()
+                .map(|c| s::CheckRow {
+                    tone: tone(c.tone),
+                    text: ss(&c.text),
+                    action: ss(&c.action),
+                })
+                .collect(),
+        ));
+        rs.set_release_blocked(r.release_blocked.is_some());
+        rs.set_release_reason(ss(r.release_blocked.unwrap_or_default()));
+    }
+
+    // -------------------------------------------------------------------------- refresh: outcomes
+
+    fn refresh_outcomes(&self) {
+        let ui = self.ui();
+        let ov = ui.global::<s::OutcomesVM>();
+        let o = self.exam().and_then(|e| self.backend.borrow().outcomes(&e));
+        ov.set_available(o.is_some());
+        let Some(o) = o else { return };
+        let p = &o.policy;
+        let method = match p.class_method {
+            b::ClassMethod::Average => "average μ",
+            b::ClassMethod::ThresholdProportion => "π",
+            b::ClassMethod::PerQuestion => "ρ (per question)",
+        };
+        ov.set_policy(ss(format!(
+            "Direct evidence · approved mappings only · T = {}, τ = {} · verdict on {method}, {} basis",
+            pct(p.target),
+            pct(p.tau),
+            p.verdict_basis
+        )));
+        ov.set_method_label(ss(format!(
+            "{} · τ {} · T {}",
+            match p.class_method {
+                b::ClassMethod::Average => "Average",
+                b::ClassMethod::ThresholdProportion => "Threshold-proportion",
+                b::ClassMethod::PerQuestion => "Per-question",
+            },
+            pct(p.tau),
+            pct(p.target)
+        )));
+        ov.set_policy_version(ss(&p.version));
+        ov.set_target(p.target as f32);
+        ov.set_classification(ss(&o.classification));
+        let rows: Vec<s::CloRow> = o
+            .clos
+            .iter()
+            .map(|c| {
+                let (verdict, vt) = match c.verdict {
+                    b::Verdict::Attained => ("Attained", s::Tone::Success),
+                    b::Verdict::NotAttained => ("Not attained", s::Tone::Error),
+                    b::Verdict::InsufficientEvidence => ("Insufficient evidence", s::Tone::Warning),
+                };
+                s::CloRow {
+                    code: ss(&c.code),
+                    domain: ss(c.domain.letter()),
+                    title: ss(&c.title),
+                    title_ar: ss(&c.title_ar),
+                    target: c.target as f32,
+                    average: c.average as f32,
+                    average_text: ss(format!("μ {:.0}%", c.average * 100.0)),
+                    average_lo: c.average_ci.0 as f32,
+                    average_hi: c.average_ci.1 as f32,
+                    proportion: c.proportion as f32,
+                    proportion_text: ss(format!("π {:.0}%", c.proportion * 100.0)),
+                    proportion_lo: c.proportion_ci.0 as f32,
+                    proportion_hi: c.proportion_ci.1 as f32,
+                    ci_text: ss(format!(
+                        "π CI {:.0}–{:.0} %",
+                        c.proportion_ci.0 * 100.0,
+                        c.proportion_ci.1 * 100.0
+                    )),
+                    n: ss(c.n.to_string()),
+                    verdict: ss(verdict),
+                    verdict_tone: vt,
+                    badge: c.ci_contains_target,
+                    note: ss(&c.mapping_note),
+                    label: ss(format!(
+                        "{} {}, domain {}, average {:.0} %, share at or above threshold {:.0} %, {verdict}{}, n {}",
+                        c.code,
+                        c.title,
+                        c.domain.letter(),
+                        c.average * 100.0,
+                        c.proportion * 100.0,
+                        if c.ci_contains_target { ", within the 95 % CI of the target" } else { "" },
+                        c.n
+                    )),
+                }
+            })
+            .collect();
+        let attained = o
+            .clos
+            .iter()
+            .filter(|c| c.verdict == b::Verdict::Attained)
+            .count();
+        let near = o.clos.iter().filter(|c| c.ci_contains_target).count();
+        let missing: Vec<&str> = o
+            .clos
+            .iter()
+            .filter(|c| c.verdict == b::Verdict::NotAttained)
+            .map(|c| c.code.as_str())
+            .collect();
+        ov.set_attained_summary(ss(format!(
+            "{attained} of {} CLOs attained · {near} within the 95 % CI of the target{}",
+            o.clos.len(),
+            if missing.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " · {} need{} a B.2 recommendation",
+                    missing.join(", "),
+                    if missing.len() == 1 { "s" } else { "" }
+                )
+            }
+        )));
+        ov.set_clos(model(rows));
+        let mut b1 = Vec::new();
+        let mut last = None;
+        for r in &o.tp154_b1 {
+            if last != Some(r.domain) {
+                let n = match r.domain {
+                    b::NqfDomain::Knowledge => "1.0",
+                    b::NqfDomain::Skills => "2.0",
+                    b::NqfDomain::Values => "3.0",
+                };
+                b1.push(s::B1Row {
+                    header: true,
+                    number: ss(n),
+                    domain_title: ss(r.domain.title()),
+                    domain_title_ar: ss(r.domain.title_ar()),
+                    ..Default::default()
+                });
+                last = Some(r.domain);
+            }
+            b1.push(s::B1Row {
+                header: false,
+                number: ss(&r.number),
+                clo: ss(&r.clo),
+                plo: ss(&r.plo),
+                methods: ss(&r.methods),
+                targeted: ss(&r.targeted),
+                actual: ss(&r.actual),
+                comment: ss(&r.comment),
+                comment_tone: if r.comment.starts_with("Not attained") {
+                    s::Tone::Error
+                } else {
+                    s::Tone::Neutral
+                },
+                ..Default::default()
+            });
+        }
+        ov.set_b1(model(b1));
+    }
+}
+
+/// Current pending choice and item, for tests and the accessible review list.
+impl Shell {
+    /// Switches the review lane without selecting an item.
+    /// Selects a cell of the mapping matrix (row = item index, col = CLO index).
+    pub fn select_cell(&self, row: usize, col: usize) {
+        {
+            let mut st = self.st.borrow_mut();
+            st.sel_row = row;
+            st.sel_col = col;
+        }
+        self.refresh_setup();
+    }
+
+    pub fn set_lane(&self, lane: Lane) {
+        let mut st = self.st.borrow_mut();
+        st.lane = lane;
+        st.item = None;
+        st.current = None;
+        st.pending = None;
+    }
+    pub fn current_item(&self) -> Option<ItemId> {
+        self.st.borrow().item
+    }
+    pub fn pending(&self) -> Option<Decision> {
+        self.st.borrow().pending
+    }
+    pub fn lane(&self) -> Lane {
+        self.st.borrow().lane
+    }
+    /// Model row count helper for tests.
+    pub fn queue_len(&self) -> usize {
+        self.ui().global::<s::ReviewVM>().get_queue().row_count()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn weights_parse_in_latin_and_arabic_digits() {
+        assert_eq!(parse_weight(""), Ok(None));
+        assert_eq!(parse_weight(" 0.5 "), Ok(Some(0.5)));
+        assert_eq!(parse_weight("0,25"), Ok(Some(0.25)));
+        assert_eq!(parse_weight("٠٫٥"), Ok(Some(0.5)));
+        assert_eq!(parse_weight("½"), Ok(Some(0.5)));
+        assert!(parse_weight("abc").is_err());
+    }
+
+    #[test]
+    fn number_formatting() {
+        assert_eq!(thousands(1284), "1,284");
+        assert_eq!(thousands(12), "12");
+        assert_eq!(signed(-0.14, 2), "\u{2212}0.14");
+        assert_eq!(signed(-0.001, 2), "0.00");
+        assert_eq!(fmt_weight(Some(1.0)), "1");
+        assert_eq!(fmt_weight(Some(0.5)), "0.5");
+        assert_eq!(fmt_weight(None), "");
+    }
+}

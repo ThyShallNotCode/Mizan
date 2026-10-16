@@ -1,0 +1,528 @@
+// View-model globals of the shell. Rust (src/bind.rs) fills them from a `Backend` and handles
+// every callback; the .slint files only lay the data out (spec §4.7: shells contain no logic).
+
+import { Tone, Severity, MarkState } from "theme.slint";
+
+export enum Page { exams, setup, scan, review, results, outcomes, settings }
+
+// ------------------------------------------------------------------------------- app chrome
+
+export global App {
+    in-out property <Page> page: Page.exams;
+    // exam context for breadcrumbs
+    in property <string> course: "CS 211 Data Structures";
+    in property <string> assessment: "Midterm 1";
+    in property <string> term: "1448 H, 1st term";
+    in property <string> term-gregorian: "Fall 2026";
+    in property <int> review-open;
+    in property <string> user-name;
+    in property <string> user-role;
+    in property <string> user-initials;
+    in property <string> engine: "omr 0.1.0";
+    in property <string> workspace;
+    // last command result, e.g. "Recorded Q17: B" or a validation error
+    in property <string> message;
+    in property <Tone> message-tone: Tone.neutral;
+    // settings
+    in-out property <bool> single-key: true;
+    in-out property <bool> show-all-default: false;
+    callback navigate(Page);
+    callback set-dark(bool);
+    callback set-reduce-motion(bool);
+    callback set-single-key(bool);
+    // a command the shell forwards but the demo backend does not model (e.g. "New exam")
+    callback request(string);
+    // global keys (Ctrl+1..6, Ctrl+0/Ctrl+comma, Escape); returns true when handled
+    callback key(string, bool, bool, bool) -> bool;
+}
+
+// ------------------------------------------------------------------------------- exams
+
+export struct ExamRow {
+    id: string,
+    code: string,
+    title: string,
+    title-ar: string,
+    assessment: string,
+    date: string,
+    date-hijri: string,
+    term: string,
+    forms: [string],
+    scanned: string,
+    expected: string,
+    progress: float,
+    progress-tone: Tone,
+    info: int,
+    warn: int,
+    error: int,
+    blocker: int,
+    status: string,
+    status-tone: Tone,
+    // accessible row label
+    label: string,
+}
+
+export struct FilterChip {
+    label: string,
+    count: int,
+}
+
+export struct ExamDrawer {
+    code: string,
+    title: string,
+    title-ar: string,
+    assessment: string,
+    status: string,
+    status-tone: Tone,
+    callout-title: string,
+    callout-text: string,
+    callout-tone: Tone,
+    review-label: string,
+    can-review: bool,
+    key-status: string,
+    mapped: int,
+    total: int,
+    roster: string,
+    sections: string,
+    last-scan: string,
+    batch-id: string,
+    term: string,
+    term-ar: string,
+}
+
+export global ExamsVM {
+    in property <[ExamRow]> rows;
+    in property <[FilterChip]> filters;
+    in property <int> filter;
+    in property <int> selected: -1;
+    in property <bool> drawer-open;
+    in property <ExamDrawer> drawer;
+    in property <string> sheets-week;
+    in property <string> sheets-today;
+    in property <string> open-exceptions;
+    in property <string> open-errors;
+    in property <string> median-review;
+    in property <string> throughput;
+    in property <string> term-label;
+    callback select(int);
+    callback set-filter(int);
+    // open the selected exam on a page
+    callback open(Page);
+    callback close-drawer();
+}
+
+// ------------------------------------------------------------------------------- setup
+
+export struct MapCell {
+    text: string,
+    weight: float,
+    mapped: bool,
+    has-note: bool,
+    selected: bool,
+    label: string,
+}
+
+export struct MapRow {
+    q: int,
+    label: string,
+    keys: [string],
+    points: string,
+    cells: [MapCell],
+    sum: string,
+    sum-ok: bool,
+    status: string,
+    status-tone: Tone,
+}
+
+export struct CloHead {
+    code: string,
+    domain: string,
+    title: string,
+    title-ar: string,
+    plo: string,
+    share: float,
+    share-text: string,
+    items: int,
+}
+
+export struct LintRow {
+    code: string,
+    severity: Severity,
+    message: string,
+}
+
+export struct KV {
+    label: string,
+    value: string,
+    tone: Tone,
+}
+
+export global SetupVM {
+    in property <bool> available;
+    in property <[KV]> template;
+    in property <string> template-id;
+    in property <string> template-kind;
+    in property <[string]> versions;
+    in property <[string]> options;
+    in property <string> key-status;
+    in property <bool> key-published;
+    in property <string> mapping-mode;
+    in property <[CloHead]> clos;
+    in property <[MapRow]> rows;
+    in property <[LintRow]> lints;
+    in property <int> sel-row;
+    in property <int> sel-col;
+    in property <string> sel-title;
+    in property <string> sel-clo;
+    in property <string> sel-weight;
+    in property <string> sel-note;
+    in property <string> error;
+    callback cycle-key(int, int);
+    callback set-key(int, int, string);
+    callback set-weight(int, int, string);
+    callback set-note(int, int, string);
+    callback select-cell(int, int);
+}
+
+// ------------------------------------------------------------------------------- scan
+
+export struct Thumb {
+    serial: string,
+    // 0 auto, 1 review, 2 rejected, 3 reading, 4 queued
+    state: int,
+    code: string,
+    severity: Severity,
+    variant: int,
+    label: string,
+}
+
+export struct CodeBar {
+    code: string,
+    title: string,
+    severity: Severity,
+    count: int,
+    frac: float,
+}
+
+export global ScanVM {
+    in property <bool> available;
+    in property <string> batch-label;
+    in property <string> source;
+    in property <string> device;
+    in property <bool> running;
+    in property <float> pps;
+    in property <float> pps-max: 120;
+    in property <float> pps-floor: 40;
+    in property <string> pps-text;
+    in property <string> pages-value;
+    in property <string> pages-caption;
+    in property <string> auto-value;
+    in property <string> auto-caption;
+    in property <string> first-value;
+    in property <string> first-caption;
+    in property <string> remaining-value;
+    in property <string> remaining-caption;
+    in property <float> done-frac;
+    in property <float> flight-frac;
+    in property <[KV]> stages;
+    in property <[CodeBar]> codes;
+    in property <[Thumb]> thumbs;
+    in property <[image]> thumb-images;
+    in property <string> auto-count;
+    in property <string> review-count;
+    in property <string> rejected-count;
+    in property <[KV]> recon;
+    in property <string> recon-code;
+    in property <Severity> recon-severity;
+    in property <[string]> activity;
+    in property <string> engine;
+    in property <int> workers;
+    in property <int> review-open;
+    callback toggle-pause();
+    callback open-review();
+    callback open-code(string);
+    // a thumbnail: its serial and worst open code ("" when none)
+    callback open-sheet(string, string);
+}
+
+// ------------------------------------------------------------------------------- review
+
+export struct LaneChip {
+    label: string,
+    count: int,
+    selected: bool,
+}
+
+export struct QueueEntry {
+    header: bool,
+    code: string,
+    title: string,
+    severity: Severity,
+    count: int,
+    expanded: bool,
+    id: int,
+    label: string,
+    detail: string,
+    serial: string,
+    fills: [float],
+    selected: bool,
+    blind: bool,
+    deferred: bool,
+    a11y: string,
+}
+
+export struct BubbleVM {
+    label: string,
+    x: float,
+    y: float,
+    r: float,
+    fill: float,
+    fill-text: string,
+    mark: MarkState,
+    overlay: bool,
+}
+
+export struct ChipVM {
+    label: string,
+    key: string,
+    suggested: bool,
+    selected: bool,
+}
+
+export struct ContactTile {
+    image: image,
+    id: int,
+    serial: string,
+    current: bool,
+    label: string,
+}
+
+export struct Candidate {
+    rank: int,
+    name: string,
+    name-ar: string,
+    student-id: string,
+    national-id: string,
+    meta: string,
+    posterior: string,
+    channels: [KV],
+    suggested: bool,
+    selected: bool,
+}
+
+export global ReviewVM {
+    in property <[LaneChip]> lanes;
+    in property <int> resolved;
+    in property <int> total;
+    in property <[QueueEntry]> queue;
+    in property <length> selected-y;
+    in property <bool> has-item;
+    // item: 0 mark, 1 blind verify, 2 identity, 3 notice
+    in property <int> kind;
+    in property <string> code;
+    in property <string> code-title;
+    in property <string> sub-reason;
+    in property <Severity> severity;
+    in property <string> caption;
+    in property <string> question-label;
+    in property <image> crop;
+    in property <image> original;
+    in property <bool> has-original;
+    in property <float> crop-w: 640;
+    in property <float> crop-h: 168;
+    in property <[BubbleVM]> bubbles;
+    in property <[BubbleVM]> fill-bars;
+    in property <float> threshold: 0.45;
+    in property <float> band-lo: 0.35;
+    in property <float> band-hi: 0.55;
+    in property <bool> has-suggestion;
+    in property <string> suggestion-letter;
+    in property <string> suggestion-word;
+    in property <string> suggestion-source;
+    in property <string> suggestion-detail;
+    in property <string> suggestion-tag;
+    in property <[ChipVM]> options;
+    in property <[ChipVM]> specials;
+    in property <[Candidate]> candidates;
+    in property <[ContactTile]> contact;
+    in property <string> contact-caption;
+    in property <string> read-id;
+    in property <string> boxes-read;
+    in property <string> hypothesis;
+    in property <[string]> neighbours;
+    in property <string> notice-headline;
+    in property <[KV]> notice-lines;
+    in property <string> notice-consequence;
+    in property <[float]> other-fills;
+    in property <string> other-caption;
+    in property <string> summary;
+    in property <string> accept-label;
+    in property <bool> accept-enabled;
+    in property <string> accept-hint;
+    in property <string> group-label;
+    in property <bool> group-enabled;
+    in property <string> group-reason;
+    in property <bool> overlay: true;
+    in property <bool> show-all;
+    in property <bool> registered: true;
+    in property <int> zoom: 3;
+    in-out property <string> note;
+    in property <string> median;
+    in property <string> audit-head;
+    in property <bool> two-person;
+    in property <string> help-text;
+    in property <bool> help-open;
+    in property <string> empty-text;
+    // incremented by Rust on "/" or Ctrl+F: the review screen focuses the roster search
+    in property <int> search-request;
+    callback select-lane(int);
+    callback select-item(int);
+    callback toggle-group(string);
+    callback choose-option(int);
+    callback choose-special(int);
+    callback choose-candidate(int);
+    callback accept();
+    callback apply-group();
+    callback defer();
+    callback escalate();
+    callback rescan();
+    callback undo();
+    callback toggle-overlay();
+    callback toggle-show-all();
+    callback toggle-registered();
+    callback zoom-by(int);
+    callback toggle-help();
+    callback search(string);
+    callback key(string, bool, bool, bool) -> bool;
+}
+
+// ------------------------------------------------------------------------------- results
+
+export struct GradeBar {
+    letter: string,
+    letter-ar: string,
+    band: string,
+    count: int,
+    frac: float,
+    fail: bool,
+}
+
+export struct StatusBarVM {
+    code: string,
+    label: string,
+    label-ar: string,
+    count: int,
+}
+
+export struct ItemRow {
+    q: string,
+    p: string,
+    r: string,
+    r-ci: string,
+    r-negative: bool,
+    steps: int,
+    band: string,
+    shares: [float],
+    keyed: int,
+    flag: string,
+    flag-tone: Tone,
+    has-flag: bool,
+    selected: bool,
+    label: string,
+}
+
+export struct CheckRow {
+    tone: Tone,
+    text: string,
+    action: string,
+}
+
+export global ResultsVM {
+    in property <bool> available;
+    in property <string> key-label;
+    in property <string> students;
+    in property <string> students-caption;
+    in property <string> mean;
+    in property <string> mean-caption;
+    in property <string> pass-rate;
+    in property <string> pass-caption;
+    in property <string> alpha;
+    in property <string> alpha-caption;
+    in property <string> sem;
+    in property <string> sem-caption;
+    in property <string> open-errors;
+    in property <string> open-caption;
+    in property <[GradeBar]> grades;
+    in property <[StatusBarVM]> statuses;
+    in property <string> scale-label;
+    in property <[float]> histogram;
+    in property <[int]> histogram-counts;
+    in property <float> pass-mark: 60;
+    in property <float> mean-pct;
+    in property <float> sem-pct;
+    in property <string> histogram-caption;
+    in property <[ItemRow]> items;
+    in property <[string]> option-labels;
+    in property <[CheckRow]> readiness;
+    in property <bool> release-blocked;
+    in property <string> release-reason;
+    in-out property <bool> show-key;
+    in-out property <bool> grade-table;
+    in property <int> selected-item: -1;
+    callback select-item(int);
+    callback release();
+    callback what-if();
+    callback check-action(int);
+}
+
+// ------------------------------------------------------------------------------- outcomes
+
+export struct CloRow {
+    code: string,
+    domain: string,
+    title: string,
+    title-ar: string,
+    target: float,
+    average: float,
+    average-text: string,
+    average-lo: float,
+    average-hi: float,
+    proportion: float,
+    proportion-text: string,
+    proportion-lo: float,
+    proportion-hi: float,
+    ci-text: string,
+    n: string,
+    verdict: string,
+    verdict-tone: Tone,
+    badge: bool,
+    note: string,
+    label: string,
+}
+
+export struct B1Row {
+    header: bool,
+    domain-title: string,
+    domain-title-ar: string,
+    number: string,
+    clo: string,
+    plo: string,
+    methods: string,
+    targeted: string,
+    actual: string,
+    comment: string,
+    comment-tone: Tone,
+}
+
+export global OutcomesVM {
+    in property <bool> available;
+    in property <string> policy;
+    in property <string> policy-version;
+    in property <string> method-label;
+    in property <float> target: 0.7;
+    in property <[CloRow]> clos;
+    in property <[B1Row]> b1;
+    in property <string> classification;
+    in property <string> attained-summary;
+    callback export-tp154();
+}

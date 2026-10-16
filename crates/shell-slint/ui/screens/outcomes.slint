@@ -1,0 +1,537 @@
+// Learning outcomes: CLO attainment with BOTH average μ and threshold-proportion π, verdict per
+// policy and 95 % CI (spec §11.3–11.4, TP-154 `actual_level_display = both`), and a TP-154 B.1
+// preview with Arabic and English headers (§11.7).
+
+import {
+    Theme, Tone, Severity, Card, TopBar, StatusBar, SecondaryButton, StatusPill, Tag, MeterBar,
+    Breadcrumb, TableRow,
+} from "../theme.slint";
+import { App, OutcomesVM, CloRow, B1Row } from "../state.slint";
+import { Icons, ThemeToggle, Centered, StatusText, EmptyState, MessageText } from "../widgets.slint";
+
+component Legend inherits HorizontalLayout {
+    spacing: Theme.space-lg;
+    alignment: end;
+    height: 18px;
+    HorizontalLayout {
+        spacing: Theme.space-xs + 2px;
+        Centered {
+            Rectangle {
+                width: 14px;
+                height: 7px;
+                border-radius: 2px;
+                background: Theme.series-1;
+            }
+        }
+        Text {
+            text: "Average μ";
+            font-size: Theme.text-xs;
+            color: Theme.ink-2;
+            vertical-alignment: center;
+        }
+    }
+    HorizontalLayout {
+        spacing: Theme.space-xs + 2px;
+        Centered {
+            Rectangle {
+                width: 14px;
+                height: 7px;
+                border-radius: 2px;
+                background: Theme.series-2;
+            }
+        }
+        Text {
+            text: "Share ≥ τ (π) with Wilson 95 % CI";
+            font-size: Theme.text-xs;
+            color: Theme.ink-2;
+            vertical-alignment: center;
+        }
+    }
+    HorizontalLayout {
+        spacing: Theme.space-xs + 2px;
+        Centered {
+            Path {
+                width: 8px;
+                height: 8px;
+                viewbox-width: 8;
+                viewbox-height: 8;
+                commands: "M 4 0 L 8 4 L 4 8 L 0 4 Z";
+                fill: Theme.chart-target;
+            }
+        }
+        Text {
+            text: "Target " + round(OutcomesVM.target * 100) + " %";
+            font-size: Theme.text-xs;
+            color: Theme.ink-2;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component CloAttainmentRow inherits Rectangle {
+    in property <CloRow> data;
+    in property <bool> last;
+    height: 54px;
+    accessible-role: AccessibleRole.list-item;
+    accessible-label: root.data.label;
+    HorizontalLayout {
+        spacing: Theme.space-lg;
+        VerticalLayout {
+            width: 372px;
+            alignment: center;
+            spacing: 1px;
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                Text {
+                    text: root.data.code;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.text-sm;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+                Centered {
+                    Tag {
+                        text: root.data.domain;
+                        tone: Tone.primary;
+                    }
+                }
+                Text {
+                    text: root.data.title;
+                    font-size: Theme.text-xs;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                    accessible-role: none;
+                }
+            }
+            Text {
+                text: root.data.title-ar;
+                font-family: Theme.font-arabic;
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                horizontal-alignment: left;
+                overflow: elide;
+                accessible-role: none;
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 3px;
+            MeterBar {
+                value: root.data.average;
+                target: root.data.target;
+                ci-low: root.data.average-lo;
+                ci-high: root.data.average-hi;
+                fill: Theme.series-1;
+                value-text: root.data.average-text;
+                thickness: 7px;
+                height: 17px;
+                accessible-label: root.data.code + " average";
+            }
+            MeterBar {
+                value: root.data.proportion;
+                target: root.data.target;
+                ci-low: root.data.proportion-lo;
+                ci-high: root.data.proportion-hi;
+                fill: Theme.series-2;
+                value-text: root.data.proportion-text;
+                thickness: 7px;
+                height: 17px;
+                accessible-label: root.data.code + " share at or above threshold";
+            }
+        }
+        VerticalLayout {
+            width: 112px;
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.data.ci-text;
+                font-family: Theme.font-mono;
+                font-size: Theme.text-2xs;
+                color: Theme.ink-2;
+                accessible-role: none;
+            }
+            Text {
+                text: "n = " + root.data.n;
+                font-family: Theme.font-mono;
+                font-size: Theme.text-2xs;
+                color: Theme.ink-2;
+                accessible-role: none;
+            }
+        }
+        VerticalLayout {
+            width: 168px;
+            alignment: center;
+            spacing: 3px;
+            HorizontalLayout {
+                alignment: start;
+                StatusPill {
+                    text: root.data.verdict;
+                    tone: root.data.verdict-tone;
+                }
+            }
+            // the CI badge sits under the verdict and never replaces it (§11.3)
+            if root.data.badge: HorizontalLayout {
+                spacing: 4px;
+                alignment: start;
+                Text {
+                    text: "±";
+                    font-size: Theme.text-xs;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.warning;
+                    accessible-role: none;
+                }
+                Text {
+                    text: "≈ target (95 % CI)";
+                    font-size: Theme.text-2xs;
+                    color: Theme.warning;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+            }
+        }
+        Text {
+            width: 200px;
+            text: root.data.note;
+            font-size: Theme.text-2xs;
+            color: Theme.ink-2;
+            vertical-alignment: center;
+            wrap: word-wrap;
+            accessible-role: none;
+        }
+    }
+    if !root.last: Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.border;
+    }
+}
+
+// Bilingual table header cell: English over Arabic (§20.2: Arabic is its own run).
+component BiHeader inherits Rectangle {
+    in property <string> en;
+    in property <string> ar;
+    in property <TextHorizontalAlignment> align: left;
+    VerticalLayout {
+        padding-left: Theme.space-md;
+        padding-right: Theme.space-md;
+        alignment: center;
+        spacing: 1px;
+        Text {
+            text: root.en;
+            font-size: Theme.text-xs;
+            font-weight: Theme.weight-medium;
+            color: Theme.ink-2;
+            horizontal-alignment: root.align;
+            overflow: elide;
+        }
+        Text {
+            text: root.ar;
+            font-family: Theme.font-arabic;
+            font-size: Theme.text-xs;
+            color: Theme.ink-2;
+            horizontal-alignment: root.align;
+            overflow: elide;
+        }
+    }
+}
+
+component B1Cell inherits Rectangle {
+    in property <string> text;
+    in property <bool> mono;
+    in property <color> tint: Theme.ink;
+    Text {
+        x: Theme.space-md;
+        width: parent.width - 2 * Theme.space-md;
+        height: parent.height;
+        text: root.text;
+        font-family: root.mono ? Theme.font-mono : Theme.font-sans;
+        font-size: Theme.text-xs;
+        color: root.tint;
+        vertical-alignment: center;
+        wrap: word-wrap;
+        overflow: elide;
+    }
+}
+
+component B1Table inherits VerticalLayout {
+    // column widths
+    property <length> c-num: 52px;
+    property <length> c-plo: 96px;
+    property <length> c-methods: 156px;
+    property <length> c-target: 176px;
+    property <length> c-actual: 132px;
+    property <length> c-comment: 276px;
+    TableRow {
+        header: true;
+        min-height: 46px;
+        BiHeader {
+            width: root.c-num;
+            en: "#";
+            ar: "م";
+        }
+        BiHeader {
+            horizontal-stretch: 1;
+            en: "Course learning outcomes";
+            ar: "مخرجات التعلم للمقرر";
+        }
+        BiHeader {
+            width: root.c-plo;
+            en: "Related PLO";
+            ar: "رمز مخرج البرنامج";
+        }
+        BiHeader {
+            width: root.c-methods;
+            en: "Assessment methods";
+            ar: "طرق التقييم";
+        }
+        BiHeader {
+            width: root.c-target;
+            en: "Targeted level";
+            ar: "مستوى الأداء المستهدف";
+        }
+        BiHeader {
+            width: root.c-actual;
+            en: "Actual level";
+            ar: "مستوى الأداء الفعلي";
+        }
+        BiHeader {
+            width: root.c-comment;
+            en: "Comment on the result";
+            ar: "التعليق على النتائج";
+        }
+    }
+    for r in OutcomesVM.b1: Rectangle {
+        height: r.header ? 26px : 34px;
+        background: r.header ? Theme.surface-sunken : transparent;
+        accessible-role: AccessibleRole.list-item;
+        accessible-label: r.header ? r.domain-title : r.number + " " + r.clo + ", actual " + r.actual + ", " + r.comment;
+        if r.header: HorizontalLayout {
+            padding-left: Theme.space-md;
+            padding-right: Theme.space-md;
+            spacing: Theme.space-md;
+            Text {
+                text: r.number + "  " + r.domain-title;
+                font-size: Theme.text-xs;
+                font-weight: Theme.weight-semibold;
+                color: Theme.ink;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+            Text {
+                text: r.domain-title-ar;
+                font-family: Theme.font-arabic;
+                font-size: Theme.text-xs;
+                font-weight: Theme.weight-semibold;
+                color: Theme.ink-2;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+        }
+        if !r.header: HorizontalLayout {
+            B1Cell {
+                width: root.c-num;
+                text: r.number;
+                mono: true;
+            }
+            B1Cell {
+                horizontal-stretch: 1;
+                text: r.clo;
+            }
+            B1Cell {
+                width: root.c-plo;
+                text: r.plo;
+                mono: true;
+            }
+            B1Cell {
+                width: root.c-methods;
+                text: r.methods;
+            }
+            B1Cell {
+                width: root.c-target;
+                text: r.targeted;
+            }
+            B1Cell {
+                width: root.c-actual;
+                text: r.actual;
+                mono: true;
+            }
+            B1Cell {
+                width: root.c-comment;
+                text: r.comment;
+                tint: r.comment-tone == Tone.neutral ? Theme.ink : Theme.tone-fg(r.comment-tone);
+            }
+        }
+        Rectangle {
+            y: parent.height - 1px;
+            height: 1px;
+            background: Theme.border;
+        }
+    }
+    Rectangle {
+        vertical-stretch: 1;
+    }
+}
+
+export component OutcomesScreen inherits VerticalLayout {
+    TopBar {
+        HorizontalLayout {
+            spacing: Theme.space-lg;
+            Breadcrumb {
+                parts: [App.course, App.assessment, "Outcomes"];
+            }
+            Centered {
+                Tag {
+                    text: OutcomesVM.method-label;
+                    tone: Tone.primary;
+                    mono: false;
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            Centered {
+                Tag {
+                    text: OutcomesVM.policy-version;
+                }
+            }
+            Centered {
+                SecondaryButton {
+                    text: "Export TP-154 tables…";
+                    icon: Icons.export;
+                    enabled: OutcomesVM.available;
+                    clicked => {
+                        OutcomesVM.export-tp154();
+                    }
+                }
+            }
+            Centered {
+                ThemeToggle { }
+            }
+        }
+    }
+    if !OutcomesVM.available: EmptyState {
+        vertical-stretch: 1;
+        title: "No outcome results yet";
+        text: "CLO attainment appears once scores exist and the item × CLO mapping is approved.";
+    }
+    if OutcomesVM.available: VerticalLayout {
+        vertical-stretch: 1;
+        padding: Theme.space-xl;
+        spacing: Theme.space-lg;
+        Card {
+            inset: 0;
+            vertical-stretch: 0;
+            VerticalLayout {
+                HorizontalLayout {
+                    padding: Theme.space-lg;
+                    padding-bottom: Theme.space-sm;
+                    spacing: Theme.space-md;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: Theme.space-2xs;
+                        alignment: start;
+                        Text {
+                            text: "CLO attainment";
+                            font-size: Theme.text-lg;
+                            font-weight: Theme.weight-semibold;
+                            color: Theme.ink;
+                        }
+                        Text {
+                            text: OutcomesVM.policy;
+                            font-size: Theme.text-xs;
+                            color: Theme.ink-2;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: start;
+                        Legend { }
+                    }
+                }
+                VerticalLayout {
+                    padding-left: Theme.space-lg;
+                    padding-right: Theme.space-lg;
+                    padding-bottom: Theme.space-sm;
+                    for c[i] in OutcomesVM.clos: CloAttainmentRow {
+                        data: c;
+                        last: i == OutcomesVM.clos.length - 1;
+                    }
+                }
+            }
+        }
+        Card {
+            vertical-stretch: 1;
+            inset: 0;
+            VerticalLayout {
+                HorizontalLayout {
+                    padding: Theme.space-lg;
+                    padding-bottom: Theme.space-md;
+                    spacing: Theme.space-md;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: Theme.space-2xs;
+                        alignment: start;
+                        HorizontalLayout {
+                            spacing: Theme.space-md;
+                            Text {
+                                text: "TP-154 · B.1 Course learning outcomes (preview)";
+                                font-size: Theme.text-lg;
+                                font-weight: Theme.weight-semibold;
+                                color: Theme.ink;
+                            }
+                            Text {
+                                text: "نتائج تقييم مخرجات التعلم للمقرر";
+                                font-family: Theme.font-arabic;
+                                font-size: Theme.text-md;
+                                font-weight: Theme.weight-semibold;
+                                color: Theme.ink-2;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Text {
+                            text: OutcomesVM.attained-summary;
+                            font-size: Theme.text-xs;
+                            color: Theme.ink-2;
+                        }
+                    }
+                    Centered {
+                        StatusPill {
+                            text: OutcomesVM.classification;
+                            tone: Tone.warning;
+                        }
+                    }
+                }
+                B1Table {
+                    vertical-stretch: 1;
+                }
+            }
+        }
+    }
+    StatusBar {
+        Centered {
+            StatusPill {
+                text: "Saved";
+                tone: Tone.success;
+            }
+        }
+        MessageText {
+            text: App.message;
+            tone: App.message-tone;
+            horizontal-stretch: 1;
+        }
+        StatusText {
+            text: "Actual level prints μ and π; the policy decides (§11.4)";
+        }
+        StatusText {
+            text: App.engine;
+            mono: true;
+        }
+    }
+}

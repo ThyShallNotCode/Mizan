@@ -1,0 +1,522 @@
+// Scan and recognise, live batch (DESIGN §9.3, concept scan-live.png).
+
+import {
+    Theme, Tone, Severity, Card, StatTile, TopBar, StatusBar, PrimaryButton, SecondaryButton,
+    GhostButton, StatusPill, Tag, Gauge, SeverityGlyph, Breadcrumb, FocusRing, Keycap,
+} from "../theme.slint";
+import { App, ScanVM, Thumb } from "../state.slint";
+import { Icons, ThemeToggle, Centered, StatusText, KVLine, EmptyState, MessageText } from "../widgets.slint";
+
+component ThumbTile inherits Rectangle {
+    in property <Thumb> t;
+    in property <image> img;
+    callback clicked();
+    height: self.width * 1.2 + 22px;
+    border-radius: Theme.radius-sm;
+    background: Theme.surface-raised;
+    border-width: 1px;
+    border-color: root.t.state == 1 || root.t.state == 2 ? Theme.tone-fg(root.t.severity == Severity.warn ? Tone.warning : Tone.error) : Theme.border;
+    opacity: root.t.state == 4 ? 0.45 : 1;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.t.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        clicked => {
+            fs.focus();
+            root.clicked();
+        }
+    }
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    Image {
+        x: 3px;
+        y: 3px;
+        width: parent.width - 6px;
+        height: parent.width * 1.2 - 3px;
+        source: root.img;
+        image-fit: fill;
+        accessible-role: none;
+    }
+    // rejected: desaturated veil; reading: static scan line (no motion when reduce-motion)
+    if root.t.state == 2: Rectangle {
+        x: 3px;
+        y: 3px;
+        width: parent.width - 6px;
+        height: parent.width * 1.2 - 3px;
+        background: Theme.surface-sunken.with-alpha(0.62);
+    }
+    if root.t.state == 3: Rectangle {
+        x: 3px;
+        y: (parent.width * 1.2) * 0.55;
+        width: parent.width - 6px;
+        height: 2px;
+        background: Theme.info.with-alpha(0.7);
+    }
+    HorizontalLayout {
+        y: parent.height - 21px;
+        height: 20px;
+        padding-left: Theme.space-xs + 1px;
+        padding-right: Theme.space-xs;
+        spacing: 4px;
+        Centered {
+            if root.t.state == 0: Path {
+                width: 10px;
+                height: 10px;
+                viewbox-width: 12;
+                viewbox-height: 12;
+                stroke: Theme.success;
+                stroke-width: 1.5px;
+                commands: "M 1.2 6 A 4.8 4.8 0 1 1 10.8 6 A 4.8 4.8 0 1 1 1.2 6 Z M 3.6 6.2 L 5.3 7.9 L 8.5 4.4";
+            }
+            if root.t.state == 1 || root.t.state == 2: SeverityGlyph {
+                severity: root.t.severity;
+                size: 9px;
+                accessible-role: none;
+            }
+            if root.t.state >= 3: SeverityGlyph {
+                severity: Severity.info;
+                size: 9px;
+                accessible-role: none;
+            }
+        }
+        Text {
+            text: root.t.state == 0 ? root.t.serial : root.t.state == 3 ? "reading" : root.t.state == 4 ? "queued" : root.t.code;
+            font-family: Theme.font-mono;
+            font-size: Theme.text-2xs;
+            font-weight: Theme.weight-medium;
+            color: Theme.ink;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+            accessible-role: none;
+        }
+    }
+    FocusRing {
+        active: fs.has-focus;
+        corner: Theme.radius-sm;
+    }
+}
+
+component CodeBarRow inherits Rectangle {
+    in property <string> code;
+    in property <string> title;
+    in property <Severity> severity;
+    in property <int> count;
+    in property <float> frac;
+    callback clicked();
+    height: 30px;
+    background: ta.has-hover ? Theme.surface-hover : transparent;
+    border-radius: Theme.radius-sm;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.code + " " + root.title + ", " + root.count + " open";
+    accessible-description: "Open the review queue filtered to this code";
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        clicked => {
+            fs.focus();
+            root.clicked();
+        }
+    }
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    HorizontalLayout {
+        padding-left: Theme.space-xs;
+        padding-right: Theme.space-xs;
+        spacing: Theme.space-sm;
+        Centered {
+            SeverityGlyph {
+                severity: root.severity;
+                size: 10px;
+                accessible-role: none;
+            }
+        }
+        Text {
+            width: 64px;
+            text: root.code;
+            font-family: Theme.font-mono;
+            font-size: Theme.text-xs;
+            font-weight: Theme.weight-medium;
+            color: Theme.ink;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+        Centered {
+            horizontal-stretch: 1;
+            Rectangle {
+                height: 6px;
+                border-radius: 3px;
+                background: Theme.track;
+                Rectangle {
+                    x: 0;
+                    width: parent.width * root.frac;
+                    border-radius: 3px;
+                    background: Theme.ink-3;
+                }
+            }
+        }
+        Text {
+            width: 32px;
+            text: root.count;
+            font-family: Theme.font-mono;
+            font-size: Theme.text-xs;
+            color: Theme.ink;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+    FocusRing {
+        active: fs.has-focus;
+        corner: Theme.radius-sm;
+    }
+}
+
+export component ScanScreen inherits VerticalLayout {
+    TopBar {
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            Breadcrumb {
+                parts: [App.course, App.assessment, ScanVM.batch-label];
+            }
+            Centered {
+                Tag {
+                    text: ScanVM.source;
+                    tone: Tone.primary;
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            Centered {
+                StatusPill {
+                    text: ScanVM.device;
+                    tone: Tone.info;
+                }
+            }
+            Centered {
+                SecondaryButton {
+                    text: ScanVM.running ? "Pause" : "Resume";
+                    icon: ScanVM.running ? Icons.pause : Icons.play;
+                    key-hint: "Ctrl+Space";
+                    enabled: ScanVM.available && ScanVM.done-frac < 1;
+                    clicked => {
+                        ScanVM.toggle-pause();
+                    }
+                }
+            }
+            Centered {
+                GhostButton {
+                    text: "Stop";
+                    enabled: ScanVM.running;
+                    clicked => {
+                        App.request("Stop the batch");
+                    }
+                }
+            }
+            Centered {
+                PrimaryButton {
+                    text: "Open review · " + ScanVM.review-open;
+                    key-hint: "Ctrl+4";
+                    clicked => {
+                        ScanVM.open-review();
+                    }
+                }
+            }
+            Centered {
+                ThemeToggle { }
+            }
+        }
+    }
+    if !ScanVM.available: EmptyState {
+        vertical-stretch: 1;
+        title: "No batch for this exam";
+        text: "Start a scan or import files to see the live batch.";
+    }
+    if ScanVM.available: HorizontalLayout {
+        vertical-stretch: 1;
+        padding: Theme.space-xl;
+        spacing: Theme.space-lg;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: Theme.space-lg;
+            HorizontalLayout {
+                spacing: Theme.space-md;
+                height: 148px;
+                Card {
+                    width: 236px;
+                    inset: 0;
+                    VerticalLayout {
+                        padding: Theme.space-md;
+                        padding-left: Theme.space-lg;
+                        spacing: 0;
+                        Text {
+                            text: "THROUGHPUT";
+                            font-size: Theme.text-2xs;
+                            font-weight: Theme.weight-semibold;
+                            letter-spacing: 0.6px;
+                            color: Theme.ink-2;
+                        }
+                        HorizontalLayout {
+                            alignment: center;
+                            Gauge {
+                                value: ScanVM.pps;
+                                maximum: ScanVM.pps-max;
+                                floor-mark: ScanVM.pps-floor;
+                                value-text: ScanVM.pps-text;
+                                unit: "pages / s · floor 40";
+                                label: "Throughput";
+                            }
+                        }
+                    }
+                }
+                StatTile {
+                    horizontal-stretch: 1;
+                    label: "PAGES";
+                    value: ScanVM.pages-value;
+                    caption: ScanVM.pages-caption;
+                }
+                StatTile {
+                    horizontal-stretch: 1;
+                    label: "AUTO-ACCEPTED";
+                    value: ScanVM.auto-value;
+                    unit: "%";
+                    caption: ScanVM.auto-caption;
+                }
+                StatTile {
+                    horizontal-stretch: 1;
+                    label: "FIRST RESULT";
+                    value: ScanVM.first-value;
+                    unit: "s";
+                    caption: ScanVM.first-caption;
+                    caption-tone: Tone.success;
+                }
+                StatTile {
+                    horizontal-stretch: 1;
+                    label: "REMAINING";
+                    value: ScanVM.remaining-value;
+                    caption: ScanVM.remaining-caption;
+                }
+            }
+            Card {
+                title: "Pipeline";
+                subtitle: "Progress is announced politely, at most every 5 s (WCAG 4.1.3)";
+                vertical-stretch: 0;
+                VerticalLayout {
+                    spacing: Theme.space-md;
+                    Rectangle {
+                        height: 8px;
+                        border-radius: 4px;
+                        background: Theme.track;
+                        accessible-role: AccessibleRole.progress-indicator;
+                        accessible-label: "Pages recognised";
+                        accessible-value: ScanVM.pages-caption;
+                        Rectangle {
+                            x: 0;
+                            width: parent.width * ScanVM.done-frac;
+                            border-radius: 4px;
+                            background: Theme.primary;
+                        }
+                        Rectangle {
+                            x: parent.width * ScanVM.done-frac + 2px;
+                            width: max(0px, parent.width * ScanVM.flight-frac - 2px);
+                            border-radius: 4px;
+                            background: Theme.accent;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.space-xl;
+                        alignment: start;
+                        for s in ScanVM.stages: HorizontalLayout {
+                            spacing: Theme.space-xs + 2px;
+                            Text {
+                                text: s.label;
+                                font-size: Theme.text-xs;
+                                color: Theme.ink-2;
+                            }
+                            Text {
+                                text: s.value;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.text-xs;
+                                font-weight: Theme.weight-medium;
+                                color: s.tone == Tone.neutral ? Theme.ink : Theme.tone-fg(s.tone);
+                            }
+                        }
+                    }
+                }
+            }
+            Card {
+                vertical-stretch: 1;
+                inset: 0;
+                VerticalLayout {
+                    HorizontalLayout {
+                        padding: Theme.space-lg;
+                        padding-bottom: Theme.space-md;
+                        spacing: Theme.space-sm;
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: Theme.space-2xs;
+                            Text {
+                                text: "Sheets";
+                                font-size: Theme.text-lg;
+                                font-weight: Theme.weight-semibold;
+                                color: Theme.ink;
+                            }
+                            Text {
+                                text: "Latest 30 · arrows move, Enter opens the sheet";
+                                font-size: Theme.text-xs;
+                                color: Theme.ink-2;
+                            }
+                        }
+                        Centered {
+                            StatusPill {
+                                text: "Auto " + ScanVM.auto-count;
+                                tone: Tone.success;
+                            }
+                        }
+                        Centered {
+                            StatusPill {
+                                text: "Review " + ScanVM.review-count;
+                                tone: Tone.warning;
+                            }
+                        }
+                        Centered {
+                            StatusPill {
+                                text: "Rejected " + ScanVM.rejected-count;
+                                tone: Tone.error;
+                            }
+                        }
+                    }
+                    Rectangle {
+                        vertical-stretch: 1;
+                        property <length> gap: 6px;
+                        property <length> tile-w: (self.width - 2 * Theme.space-lg - 9 * self.gap) / 10;
+                        for t[i] in ScanVM.thumbs: ThumbTile {
+                            x: Theme.space-lg + mod(i, 10) * (parent.tile-w + parent.gap);
+                            y: floor(i / 10) * (parent.tile-w * 1.2 + 22px + parent.gap);
+                            width: parent.tile-w;
+                            t: t;
+                            img: ScanVM.thumb-images[t.variant];
+                            clicked => {
+                                ScanVM.open-sheet(t.serial, t.code);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        VerticalLayout {
+            width: 340px;
+            spacing: Theme.space-lg;
+            Card {
+                title: "Exceptions by code";
+                subtitle: "This batch · Enter opens the filtered queue";
+                VerticalLayout {
+                    spacing: 2px;
+                    for c in ScanVM.codes: CodeBarRow {
+                        code: c.code;
+                        title: c.title;
+                        severity: c.severity;
+                        count: c.count;
+                        frac: c.frac;
+                        clicked => {
+                            ScanVM.open-code(c.code);
+                        }
+                    }
+                }
+            }
+            Card {
+                title: "Batch reconciliation";
+                VerticalLayout {
+                    spacing: Theme.space-sm;
+                    if ScanVM.recon-code != "": HorizontalLayout {
+                        alignment: start;
+                        StatusPill {
+                            text: ScanVM.recon-code;
+                            tone: ScanVM.recon-severity == Severity.warn ? Tone.warning : Tone.error;
+                        }
+                    }
+                    for kv in ScanVM.recon: KVLine {
+                        label: kv.label;
+                        value: kv.value;
+                        tone: kv.tone;
+                        mono: true;
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        SecondaryButton {
+                            text: "Rescan pull list";
+                            key-hint: "Ctrl+R";
+                            clicked => {
+                                App.request("Rescan pull list");
+                            }
+                        }
+                    }
+                }
+            }
+            Card {
+                title: "Activity";
+                vertical-stretch: 1;
+                Rectangle {
+                    background: Theme.surface-sunken;
+                    border-radius: Theme.radius-md;
+                    vertical-stretch: 1;
+                    clip: true;
+                    VerticalLayout {
+                        padding: Theme.space-md;
+                        spacing: Theme.space-xs;
+                        alignment: start;
+                        for a in ScanVM.activity: Text {
+                            text: a;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.text-2xs;
+                            color: Theme.ink;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    StatusBar {
+        Centered {
+            StatusPill {
+                text: ScanVM.running ? "Recognising" : "Idle";
+                tone: ScanVM.running ? Tone.info : Tone.neutral;
+            }
+        }
+        StatusText {
+            text: ScanVM.engine + " · " + ScanVM.workers + " workers";
+            mono: true;
+        }
+        MessageText {
+            text: App.message;
+            tone: App.message-tone;
+            horizontal-stretch: 1;
+        }
+        StatusText {
+            text: "Deterministic: decisions are identical at any thread count (A5)";
+        }
+        StatusText {
+            text: App.engine;
+            mono: true;
+        }
+    }
+}

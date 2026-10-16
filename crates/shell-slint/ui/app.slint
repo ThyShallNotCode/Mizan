@@ -1,6 +1,141 @@
+// OMR Correction desktop shell: frame, navigation rail and screen switch (DESIGN §9).
+// Screens are instantiated only while visible, so accessible labels stay unique per screen.
+
+import { Theme, NavRail, NavItem } from "theme.slint";
+import { App, ExamsVM, SetupVM, ScanVM, ReviewVM, ResultsVM, OutcomesVM, Page } from "state.slint";
+import { Icons } from "widgets.slint";
+import { ExamsScreen } from "screens/exams.slint";
+import { SetupScreen } from "screens/setup.slint";
+import { ScanScreen } from "screens/scan.slint";
+import { ReviewScreen } from "screens/review.slint";
+import { ResultsScreen } from "screens/results.slint";
+import { OutcomesScreen } from "screens/outcomes.slint";
+import { SettingsScreen } from "screens/settings.slint";
+import { Palette } from "std-widgets.slint";
+
+export { Theme, App, ExamsVM, SetupVM, ScanVM, ReviewVM, ResultsVM, OutcomesVM, Page }
+
 export component AppWindow inherits Window {
     title: "OMR Correction";
-    preferred-width: 1280px;
-    preferred-height: 800px;
-    Text { text: "OMR Correction"; }
+    icon: @image-url("assets/icon.png");
+    preferred-width: 1440px;
+    preferred-height: 900px;
+    min-width: 1280px;
+    min-height: 800px;
+    default-font-family: Theme.font-sans;
+    default-font-size: Theme.text-sm;
+    background: Theme.canvas;
+    forward-focus: root-keys;
+
+    // std-widgets (ListView scrollbars) follow the app theme
+    property <bool> dark: Theme.dark;
+    changed dark => {
+        Palette.color-scheme = self.dark ? ColorScheme.dark : ColorScheme.light;
+    }
+
+    root-keys := FocusScope {
+        key-pressed(event) => {
+            if (App.key(event.text, event.modifiers.control, event.modifiers.shift, event.modifiers.alt)) {
+                return accept;
+            }
+            return reject;
+        }
+        HorizontalLayout {
+            NavRail {
+                accessible-role: AccessibleRole.navigation;
+                accessible-label: "Main navigation";
+                Rectangle {
+                    height: 56px;
+                    Image {
+                        width: 36px;
+                        height: 36px;
+                        source: Icons.logo;
+                        accessible-role: AccessibleRole.image;
+                        accessible-label: "OMR Correction";
+                    }
+                }
+                NavItem {
+                    icon: Icons.exams;
+                    label: "Exams";
+                    active: App.page == Page.exams;
+                    clicked => {
+                        App.navigate(Page.exams);
+                    }
+                }
+                NavItem {
+                    icon: Icons.setup;
+                    label: "Setup";
+                    active: App.page == Page.setup;
+                    clicked => {
+                        App.navigate(Page.setup);
+                    }
+                }
+                NavItem {
+                    icon: Icons.scan;
+                    label: "Scan";
+                    active: App.page == Page.scan;
+                    clicked => {
+                        App.navigate(Page.scan);
+                    }
+                }
+                NavItem {
+                    icon: Icons.review;
+                    label: "Review";
+                    badge: App.review-open > 0 ? "\{App.review-open}" : "";
+                    active: App.page == Page.review;
+                    clicked => {
+                        App.navigate(Page.review);
+                    }
+                }
+                NavItem {
+                    icon: Icons.results;
+                    label: "Results";
+                    active: App.page == Page.results;
+                    clicked => {
+                        App.navigate(Page.results);
+                    }
+                }
+                NavItem {
+                    icon: Icons.outcomes;
+                    label: "Outcomes";
+                    active: App.page == Page.outcomes;
+                    clicked => {
+                        App.navigate(Page.outcomes);
+                    }
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+                NavItem {
+                    icon: Icons.settings;
+                    label: "Settings";
+                    active: App.page == Page.settings;
+                    clicked => {
+                        App.navigate(Page.settings);
+                    }
+                }
+            }
+            if App.page == Page.exams: ExamsScreen {
+                horizontal-stretch: 1;
+            }
+            if App.page == Page.setup: SetupScreen {
+                horizontal-stretch: 1;
+            }
+            if App.page == Page.scan: ScanScreen {
+                horizontal-stretch: 1;
+            }
+            if App.page == Page.review: ReviewScreen {
+                horizontal-stretch: 1;
+            }
+            if App.page == Page.results: ResultsScreen {
+                horizontal-stretch: 1;
+            }
+            if App.page == Page.outcomes: OutcomesScreen {
+                horizontal-stretch: 1;
+            }
+            if App.page == Page.settings: SettingsScreen {
+                horizontal-stretch: 1;
+            }
+        }
+    }
 }

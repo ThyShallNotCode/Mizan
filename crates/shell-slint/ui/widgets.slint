@@ -1,0 +1,836 @@
+// Shell-level widgets built from theme.slint tokens (DESIGN §8 "Not in theme.slint yet":
+// switches, cells, chart pieces, the scan paper). Every interactive widget is exactly one AT
+// node with a unique label; inner texts are hidden (DESIGN §8, §10).
+
+import {
+    Theme, Tone, Severity, MarkState, FocusRing, SeverityGlyph, Keycap, Tag, MarkGlyph, IconButton,
+    BubbleOverlay, StatusPill, TopBar, StatusBar,
+} from "theme.slint";
+import { BubbleVM } from "state.slint";
+
+export global Icons {
+    out property <image> exams: @image-url("assets/icons/exams.svg");
+    out property <image> setup: @image-url("assets/icons/setup.svg");
+    out property <image> scan: @image-url("assets/icons/scan.svg");
+    out property <image> review: @image-url("assets/icons/review.svg");
+    out property <image> results: @image-url("assets/icons/results.svg");
+    out property <image> outcomes: @image-url("assets/icons/outcomes.svg");
+    out property <image> export: @image-url("assets/icons/export.svg");
+    out property <image> settings: @image-url("assets/icons/settings.svg");
+    out property <image> search: @image-url("assets/icons/search.svg");
+    out property <image> sun: @image-url("assets/icons/sun.svg");
+    out property <image> moon: @image-url("assets/icons/moon.svg");
+    out property <image> check: @image-url("assets/icons/check.svg");
+    out property <image> chevron-right: @image-url("assets/icons/chevron-right.svg");
+    out property <image> chevron-down: @image-url("assets/icons/chevron-down.svg");
+    out property <image> plus: @image-url("assets/icons/plus.svg");
+    out property <image> filter: @image-url("assets/icons/filter.svg");
+    out property <image> keyboard: @image-url("assets/icons/keyboard.svg");
+    out property <image> help: @image-url("assets/icons/help.svg");
+    out property <image> defer: @image-url("assets/icons/defer.svg");
+    out property <image> escalate: @image-url("assets/icons/escalate.svg");
+    out property <image> rescan: @image-url("assets/icons/rescan.svg");
+    out property <image> undo: @image-url("assets/icons/undo.svg");
+    out property <image> zoom-in: @image-url("assets/icons/zoom-in.svg");
+    out property <image> overlay: @image-url("assets/icons/overlay.svg");
+    out property <image> release: @image-url("assets/icons/release.svg");
+    out property <image> logo: @image-url("assets/icon.svg");
+    out property <image> close: @image-url("assets/icons/close.svg");
+    out property <image> pause: @image-url("assets/icons/pause.svg");
+    out property <image> play: @image-url("assets/icons/play.svg");
+}
+
+// Small-caps section label ("WHAT IS MARKED?").
+export component SectionLabel inherits Text {
+    font-size: Theme.text-2xs;
+    font-weight: Theme.weight-semibold;
+    letter-spacing: 0.6px;
+    color: Theme.ink-2;
+    vertical-alignment: center;
+}
+
+// Theme switch for every top bar (one per visible screen, so the label stays unique).
+export component ThemeToggle inherits IconButton {
+    icon: Theme.dark ? Icons.sun : Icons.moon;
+    label: Theme.dark ? "Light theme" : "Dark theme";
+    clicked => {
+        Theme.dark = !Theme.dark;
+    }
+}
+
+// Vertically centres a fixed-height child inside a stretched layout cell.
+export component Centered inherits VerticalLayout {
+    alignment: center;
+}
+
+// Key-value line (label left, value right).
+export component KVLine inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> mono;
+    in property <Tone> tone: Tone.neutral;
+    in property <bool> wrap-value;
+    spacing: Theme.space-md;
+    Text {
+        text: root.label;
+        font-size: Theme.text-sm;
+        color: Theme.ink-2;
+        vertical-alignment: top;
+        min-width: 96px;
+    }
+    Text {
+        text: root.value;
+        horizontal-stretch: 1;
+        font-family: root.mono ? Theme.font-mono : Theme.font-sans;
+        font-size: root.mono ? Theme.text-xs : Theme.text-sm;
+        font-weight: Theme.weight-medium;
+        color: root.tone == Tone.neutral ? Theme.ink : Theme.tone-fg(root.tone);
+        horizontal-alignment: right;
+        vertical-alignment: top;
+        wrap: root.wrap-value ? word-wrap : no-wrap;
+        overflow: elide;
+    }
+}
+
+// Toggle switch (role switch; label carries the setting's name).
+export component Switch inherits Rectangle {
+    in property <string> label;
+    in property <string> description;
+    in-out property <bool> checked;
+    callback toggled(bool);
+    min-height: 40px;
+    accessible-role: AccessibleRole.switch;
+    accessible-label: root.label;
+    accessible-description: root.description;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-action-default => {
+        root.checked = !root.checked;
+        root.toggled(root.checked);
+    }
+    ta := TouchArea {
+        clicked => {
+            fs.focus();
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.checked = !root.checked;
+                root.toggled(root.checked);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    HorizontalLayout {
+        spacing: Theme.space-md;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            spacing: 2px;
+            Text {
+                text: root.label;
+                font-size: Theme.text-sm;
+                font-weight: Theme.weight-medium;
+                color: Theme.ink;
+                accessible-role: none;
+            }
+            if root.description != "": Text {
+                text: root.description;
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+        }
+        Centered {
+            track := Rectangle {
+                width: 36px;
+                height: 20px;
+                border-radius: 10px;
+                background: root.checked ? Theme.primary : Theme.track;
+                border-width: root.checked ? 0px : 1px;
+                border-color: Theme.border-strong;
+                animate background { duration: Theme.duration-base; }
+                Rectangle {
+                    x: root.checked ? parent.width - self.width - 3px : 3px;
+                    y: 3px;
+                    width: 14px;
+                    height: 14px;
+                    border-radius: 7px;
+                    background: root.checked ? Theme.on-primary : Theme.ink-2;
+                    animate x { duration: Theme.duration-base; }
+                }
+                FocusRing {
+                    active: fs.has-focus;
+                    corner: 10px;
+                }
+            }
+        }
+    }
+}
+
+// Segmented control item (exclusive choice; role radio-button).
+export component Segment inherits Rectangle {
+    in property <string> text;
+    in property <string> label: self.text;
+    in property <bool> selected;
+    callback clicked();
+    height: 28px;
+    min-width: seg-text.preferred-width + 2 * Theme.space-md;
+    border-radius: Theme.radius-md;
+    background: root.selected ? Theme.surface-raised : ta.has-hover ? Theme.surface-hover : transparent;
+    border-width: root.selected ? 1px : 0px;
+    border-color: Theme.border;
+    drop-shadow-blur: root.selected ? 3px : 0px;
+    drop-shadow-offset-y: root.selected ? 1px : 0px;
+    drop-shadow-color: root.selected ? Theme.shadow-1-color : transparent;
+    accessible-role: AccessibleRole.radio-button;
+    accessible-label: root.label;
+    accessible-checkable: true;
+    accessible-checked: root.selected;
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        clicked => {
+            fs.focus();
+            root.clicked();
+        }
+    }
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    seg-text := Text {
+        text: root.text;
+        font-size: Theme.text-sm;
+        font-weight: root.selected ? Theme.weight-semibold : Theme.weight-medium;
+        color: root.selected ? Theme.primary : Theme.ink-2;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+    FocusRing {
+        active: fs.has-focus;
+    }
+}
+
+export component SegmentGroup inherits Rectangle {
+    height: 34px;
+    border-radius: Theme.radius-lg;
+    background: Theme.surface-sunken;
+    border-width: 1px;
+    border-color: Theme.border;
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+        @children
+    }
+}
+
+// Step indicator of the setup stepper (status glyph + text; not a control).
+export component StepIndicator inherits HorizontalLayout {
+    in property <int> number;
+    in property <string> text;
+    // 0 todo (ring), 1 done (check), 2 lint warnings (triangle)
+    in property <int> state;
+    spacing: Theme.space-xs + Theme.space-2xs;
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.number + " " + root.text + (root.state == 1 ? ", done" : root.state == 2 ? ", warnings" : ", to do");
+    Centered {
+        Path {
+            width: 12px;
+            height: 12px;
+            viewbox-width: 12;
+            viewbox-height: 12;
+            stroke-width: 1.5px;
+            stroke: root.state == 1 ? Theme.success : root.state == 2 ? Theme.warning : Theme.ink-3;
+            fill: root.state == 2 ? Theme.warning : transparent;
+            commands: root.state == 1 ? "M 1.2 6 A 4.8 4.8 0 1 1 10.8 6 A 4.8 4.8 0 1 1 1.2 6 Z M 3.6 6.2 L 5.3 7.9 L 8.5 4.4"
+                : root.state == 2 ? "M 6 1 L 11.4 10.6 L 0.6 10.6 Z"
+                : "M 1.2 6 A 4.8 4.8 0 1 1 10.8 6 A 4.8 4.8 0 1 1 1.2 6 Z";
+        }
+    }
+    Text {
+        text: root.number + "  " + root.text;
+        font-size: Theme.text-xs;
+        font-weight: Theme.weight-medium;
+        color: root.state == 0 ? Theme.ink-2 : Theme.ink;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+}
+
+// Status bar text helpers.
+export component StatusText inherits Text {
+    in property <bool> mono;
+    font-family: root.mono ? Theme.font-mono : Theme.font-sans;
+    font-size: Theme.text-2xs;
+    color: Theme.ink-2;
+    vertical-alignment: center;
+}
+
+// Shown when a screen has nothing to show for the current exam.
+export component EmptyState inherits Rectangle {
+    in property <string> title;
+    in property <string> text;
+    VerticalLayout {
+        alignment: center;
+        spacing: Theme.space-sm;
+        HorizontalLayout {
+            alignment: center;
+            Image {
+                width: 56px;
+                height: 56px;
+                source: @image-url("assets/girih-tile.svg");
+                colorize: Theme.border-strong;
+                accessible-role: none;
+            }
+        }
+        Text {
+            text: root.title;
+            font-size: Theme.text-lg;
+            font-weight: Theme.weight-semibold;
+            color: Theme.ink;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: root.text;
+            font-size: Theme.text-sm;
+            color: Theme.ink-2;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+}
+
+// Command feedback line in the status bar ("Recorded Q17: B"), polite (WCAG 4.1.3).
+export component MessageText inherits Text {
+    in property <Tone> tone;
+    font-size: Theme.text-2xs;
+    font-weight: Theme.weight-medium;
+    color: root.tone == Tone.neutral ? Theme.ink-2 : Theme.tone-fg(root.tone);
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+// Diagonal hatch (F bar, "Fail"): never colour alone (DESIGN §3.4).
+export component Hatch inherits Rectangle {
+    in property <color> ink: Theme.error;
+    in property <color> fill: Theme.error-soft;
+    background: root.fill;
+    clip: true;
+    Path {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: root.width / 1px;
+        viewbox-height: root.height / 1px;
+        stroke: root.ink;
+        stroke-width: 2px;
+        commands: "M -200 200 L 0 0 M -192 200 L 8 0 M -184 200 L 16 0 M -176 200 L 24 0 M -168 200 L 32 0 M -160 200 L 40 0 M -152 200 L 48 0 M -144 200 L 56 0 M -136 200 L 64 0 M -128 200 L 72 0 M -120 200 L 80 0 M -112 200 L 88 0 M -104 200 L 96 0 M -96 200 L 104 0 M -88 200 L 112 0 M -80 200 L 120 0 M -72 200 L 128 0 M -64 200 L 136 0 M -56 200 L 144 0 M -48 200 L 152 0 M -40 200 L 160 0 M -32 200 L 168 0 M -24 200 L 176 0 M -16 200 L 184 0 M -8 200 L 192 0 M 0 200 L 200 0 M 8 200 L 208 0 M 16 200 L 216 0 M 24 200 L 224 0 M 32 200 L 232 0 M 40 200 L 240 0";
+    }
+}
+
+// Mini fill sparkline of a queue row: one dot per option, opacity = darkness.
+export component FillDots inherits HorizontalLayout {
+    in property <[float]> fills;
+    spacing: 3px;
+    for f in root.fills: Rectangle {
+        width: 9px;
+        height: 9px;
+        border-radius: 4.5px;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+        Rectangle {
+            border-radius: 4.5px;
+            background: Theme.ink;
+            opacity: f;
+        }
+    }
+}
+
+// Five-step discrimination meter.
+export component StepMeter inherits HorizontalLayout {
+    in property <int> steps;
+    in property <bool> negative;
+    spacing: 2px;
+    for i in 5: Rectangle {
+        width: 6px;
+        height: 12px;
+        border-radius: 1px;
+        background: i < root.steps ? Theme.ink-2 : Theme.track;
+    }
+}
+
+// Option-share sparkline; the keyed option is drawn in series-1 only when the key is shown.
+export component ShareSpark inherits HorizontalLayout {
+    in property <[float]> shares;
+    in property <int> keyed: -1;
+    spacing: 3px;
+    alignment: start;
+    for s[i] in root.shares: VerticalLayout {
+        alignment: end;
+        Rectangle {
+            width: 10px;
+            height: max(2px, 18px * s);
+            border-radius: 1px;
+            background: i == root.keyed ? Theme.series-1 : Theme.ink-3;
+        }
+    }
+}
+
+// Mini stacked severity bar for the exams table (ERROR+BLOCKER, WARN, INFO).
+export component SeverityStack inherits HorizontalLayout {
+    in property <int> blocker;
+    in property <int> error;
+    in property <int> warn;
+    in property <int> info;
+    property <int> total: max(1, root.blocker + root.error + root.warn + root.info);
+    height: 6px;
+    spacing: 0;
+    Rectangle {
+        border-radius: 3px;
+        background: Theme.track;
+        clip: true;
+        Rectangle {
+            x: 0;
+            width: parent.width * (root.blocker + root.error) / root.total;
+            background: Theme.error;
+        }
+        Rectangle {
+            x: parent.width * (root.blocker + root.error) / root.total;
+            width: parent.width * root.warn / root.total;
+            background: Theme.warning;
+        }
+        Rectangle {
+            x: parent.width * (root.blocker + root.error + root.warn) / root.total;
+            width: parent.width * root.info / root.total;
+            background: Theme.info;
+        }
+    }
+}
+
+// Severity glyph + count (exams table, counters).
+export component SeverityCount inherits HorizontalLayout {
+    in property <Severity> severity;
+    in property <int> count;
+    spacing: 3px;
+    Centered {
+        SeverityGlyph {
+            severity: root.severity;
+            size: 9px;
+        }
+    }
+    Text {
+        text: root.count;
+        font-family: Theme.font-mono;
+        font-size: Theme.text-xs;
+        color: Theme.ink;
+        vertical-alignment: center;
+    }
+}
+
+// Circular coverage ring (CLO mapping coverage in the exam drawer).
+export component CoverageRing inherits Rectangle {
+    in property <float> value;
+    in property <string> text;
+    width: 44px;
+    height: 44px;
+    property <angle> end: 360deg * clamp(root.value, 0, 0.9999) - 90deg;
+    Path {
+        width: 44px;
+        height: 44px;
+        viewbox-width: 44;
+        viewbox-height: 44;
+        stroke: Theme.track;
+        stroke-width: 4px;
+        MoveTo { x: 22; y: 4; }
+        ArcTo { x: 22; y: 40; radius-x: 18; radius-y: 18; sweep: true; large-arc: true; }
+        ArcTo { x: 22; y: 4; radius-x: 18; radius-y: 18; sweep: true; large-arc: true; }
+    }
+    if root.value > 0.001: Path {
+        width: 44px;
+        height: 44px;
+        viewbox-width: 44;
+        viewbox-height: 44;
+        stroke: Theme.primary;
+        stroke-width: 4px;
+        stroke-line-cap: round;
+        MoveTo { x: 22; y: 4; }
+        ArcTo {
+            x: 22 + 18 * cos(root.end);
+            y: 22 + 18 * sin(root.end);
+            radius-x: 18;
+            radius-y: 18;
+            sweep: true;
+            large-arc: root.value > 0.5;
+        }
+    }
+    Text {
+        text: root.text;
+        font-family: Theme.font-mono;
+        font-size: Theme.text-2xs;
+        font-weight: Theme.weight-medium;
+        color: Theme.ink;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// Keyboard legend line.
+export component ShortcutRow inherits HorizontalLayout {
+    in property <string> keys;
+    in property <string> action;
+    spacing: Theme.space-sm;
+    Text {
+        text: root.action;
+        font-size: Theme.text-xs;
+        color: Theme.ink-2;
+        vertical-alignment: center;
+        horizontal-stretch: 1;
+    }
+    Keycap {
+        text: root.keys;
+    }
+}
+
+// Agree / disagree evidence glyph: check-ring vs cross-diamond (colour AND shape, §13.3).
+export component AgreeGlyph inherits Rectangle {
+    in property <bool> agrees;
+    width: 12px;
+    height: 12px;
+    accessible-role: AccessibleRole.image;
+    accessible-label: root.agrees ? "agrees" : "disagrees";
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        stroke-width: 1.4px;
+        stroke: root.agrees ? Theme.success : Theme.error;
+        commands: root.agrees ? "M 1.2 6 A 4.8 4.8 0 1 1 10.8 6 A 4.8 4.8 0 1 1 1.2 6 Z M 3.6 6.2 L 5.3 7.9 L 8.5 4.4"
+            : "M 6 0.6 L 11.4 6 L 6 11.4 L 0.6 6 Z M 4.2 4.2 L 7.8 7.8 M 7.8 4.2 L 4.2 7.8";
+    }
+}
+
+// A single-line editable cell (weights, notes): one text-input AT node with a unique label.
+export component EditCell inherits Rectangle {
+    in property <string> text;
+    in property <string> label;
+    in property <string> placeholder;
+    in property <bool> mono: true;
+    in property <bool> arabic;
+    in property <bool> invalid;
+    in property <bool> highlighted;
+    in property <TextHorizontalAlignment> align: right;
+    callback committed(string);
+    callback focused();
+    property <bool> editing: input.has-focus;
+    // Commits, then shows the backend's canonical value (a refused edit snaps back).
+    function commit(v: string) {
+        root.committed(v);
+        input.text = root.text;
+    }
+    // The view-model is the source of truth: follow it unless the user is typing.
+    changed text => {
+        if (!input.has-focus) {
+            input.text = root.text;
+        }
+    }
+    height: 26px;
+    border-radius: Theme.radius-sm;
+    background: root.invalid ? Theme.error-soft : root.highlighted ? Theme.primary-soft : root.editing ? Theme.surface-raised : transparent;
+    border-width: root.editing ? 1px : 0px;
+    border-color: Theme.primary;
+    forward-focus: input;
+    accessible-role: AccessibleRole.text-input;
+    accessible-label: root.label;
+    accessible-value: input.text;
+    accessible-placeholder-text: root.placeholder;
+    accessible-action-set-value(v) => {
+        root.focused();
+        root.commit(v);
+    }
+    accessible-action-default => {
+        input.focus();
+        root.focused();
+    }
+    TouchArea {
+        clicked => {
+            input.focus();
+            root.focused();
+        }
+    }
+    if input.text == "" && !root.editing: Text {
+        x: root.align == TextHorizontalAlignment.right ? 0 : 6px;
+        width: parent.width - 6px;
+        height: parent.height;
+        text: root.placeholder;
+        font-family: root.mono ? Theme.font-mono : Theme.font-sans;
+        font-size: Theme.text-xs;
+        color: Theme.ink-3;
+        horizontal-alignment: root.align;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+    input := TextInput {
+        x: 6px;
+        width: parent.width - 12px;
+        height: parent.height;
+        text: root.text;
+        single-line: true;
+        font-family: root.arabic ? Theme.font-arabic : root.mono ? Theme.font-mono : Theme.font-sans;
+        font-size: root.mono ? Theme.text-xs : Theme.text-sm;
+        color: root.invalid ? Theme.error : Theme.ink;
+        horizontal-alignment: root.align;
+        vertical-alignment: center;
+        selection-background-color: Theme.primary-soft;
+        accessible-role: none;
+        changed has-focus => {
+            if (self.has-focus) {
+                root.focused();
+            } else if (self.text != root.text) {
+                root.commit(self.text);
+            }
+        }
+        accepted => {
+            root.commit(self.text);
+        }
+    }
+}
+
+// The scanned paper with bubble overlays (DESIGN §4: overlays are theme-invariant; chrome never
+// sits on a bubble). Geometry comes in crop pixels; `scale` maps it to logical pixels.
+export component ScanPaper inherits Rectangle {
+    in property <image> source;
+    in property <float> crop-w;
+    in property <float> crop-h;
+    in property <float> scale: 1;
+    in property <[BubbleVM]> bubbles;
+    in property <bool> show-overlays: true;
+    in property <string> caption;
+    in property <string> image-label;
+    width: root.crop-w * root.scale * 1px + 2 * 12px;
+    height: root.crop-h * root.scale * 1px + 12px + (root.caption == "" ? 12px : 36px);
+    background: Theme.paper;
+    border-radius: 2px;
+    drop-shadow-blur: Theme.shadow-2-blur;
+    drop-shadow-offset-y: Theme.shadow-2-offset;
+    drop-shadow-color: Theme.shadow-2-color;
+    Image {
+        x: 12px;
+        y: 12px;
+        width: root.crop-w * root.scale * 1px;
+        height: root.crop-h * root.scale * 1px;
+        source: root.source;
+        image-fit: fill;
+        accessible-role: AccessibleRole.image;
+        accessible-label: root.image-label;
+    }
+    if root.show-overlays: Rectangle {
+        x: 12px;
+        y: 12px;
+        width: root.crop-w * root.scale * 1px;
+        height: root.crop-h * root.scale * 1px;
+        for b in root.bubbles: BubbleOverlay {
+            property <length> s: b.r * 2 * 1.6 * root.scale * 1px;
+            x: b.x * root.scale * 1px - self.s / 2;
+            y: b.y * root.scale * 1px - self.s / 2;
+            size: self.s;
+            mark: b.mark;
+            option-label: b.label;
+            visible: b.overlay;
+        }
+    }
+    if root.caption != "": Text {
+        x: 16px;
+        y: parent.height - 30px;
+        width: parent.width - 32px;
+        height: 22px;
+        text: root.caption;
+        font-family: Theme.font-mono;
+        font-size: Theme.text-2xs;
+        color: #5D6672; // printed on paper: theme-invariant like the overlays
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+}
+
+// One bar of the "Fill by bubble" chart (fill as height, mono value above, letter below).
+export component FillBar inherits Rectangle {
+    in property <string> letter;
+    in property <float> fill;
+    in property <string> fill-text;
+    in property <MarkState> mark: MarkState.blank;
+    in property <length> plot: 96px;
+    width: 44px;
+    height: root.plot + 40px;
+    property <length> top: 18px;
+    Rectangle {
+        x: 12px;
+        y: root.top + root.plot * (1 - clamp(root.fill, 0, 1));
+        width: 20px;
+        height: max(2px, root.plot * clamp(root.fill, 0, 1));
+        border-radius: 3px;
+        background: root.mark == MarkState.blank ? Theme.ink-3 : Theme.mark-color(root.mark);
+    }
+    Text {
+        y: root.top + root.plot * (1 - clamp(root.fill, 0, 1)) - 16px;
+        width: parent.width;
+        accessible-role: none;
+        text: root.fill-text;
+        font-family: Theme.font-mono;
+        font-size: Theme.text-2xs;
+        color: Theme.ink;
+        horizontal-alignment: center;
+    }
+    Text {
+        y: root.top + root.plot + 6px;
+        width: parent.width;
+        accessible-role: none;
+        text: root.letter;
+        font-size: Theme.text-xs;
+        font-weight: Theme.weight-semibold;
+        color: Theme.ink-2;
+        horizontal-alignment: center;
+    }
+}
+
+// Queue row (review list): Q number + form, severity glyph, serial and fill sparkline.
+export component QueueRow inherits Rectangle {
+    in property <string> label;
+    in property <string> detail;
+    in property <string> serial;
+    in property <[float]> fills;
+    in property <Severity> severity: Severity.error;
+    in property <bool> selected;
+    in property <bool> blind;
+    in property <bool> deferred;
+    in property <string> a11y;
+    callback clicked();
+    height: 62px;
+    background: root.selected ? Theme.primary-soft : ta.has-hover ? Theme.surface-hover : transparent;
+    accessible-role: AccessibleRole.list-item;
+    accessible-label: root.a11y;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.selected;
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+    if root.selected: Rectangle {
+        x: 0;
+        width: 3px;
+        background: Theme.primary;
+    }
+    VerticalLayout {
+        padding-left: Theme.space-lg;
+        padding-right: Theme.space-md;
+        padding-top: Theme.space-sm + 2px;
+        padding-bottom: Theme.space-sm + 2px;
+        spacing: Theme.space-xs;
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+            Text {
+                text: root.label;
+                font-size: Theme.text-md;
+                font-weight: Theme.weight-semibold;
+                color: root.selected ? Theme.primary : Theme.ink;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+            Text {
+                text: root.detail;
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+                accessible-role: none;
+            }
+            if root.deferred: Centered {
+                Tag {
+                    text: "deferred";
+                    mono: false;
+                }
+            }
+            if root.blind: Centered {
+                Tag {
+                    text: "blind";
+                    tone: Tone.info;
+                    mono: false;
+                }
+            }
+            Centered {
+                SeverityGlyph {
+                    severity: root.severity;
+                    size: 11px;
+                    accessible-role: none;
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+            Text {
+                text: root.serial;
+                font-family: Theme.font-mono;
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+            Centered {
+                FillDots {
+                    fills: root.fills;
+                }
+            }
+        }
+    }
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.border;
+    }
+}
+
+// Shared app status bar layout: left items, stretch, right items.
+export component AppStatusBar inherits StatusBar {
+}
+
+// Avatar with initials (top bar user).
+export component Avatar inherits Rectangle {
+    in property <string> initials;
+    width: 32px;
+    height: 32px;
+    border-radius: 16px;
+    background: Theme.primary-soft;
+    border-width: 1px;
+    border-color: Theme.primary;
+    Text {
+        text: root.initials;
+        font-size: Theme.text-xs;
+        font-weight: Theme.weight-semibold;
+        color: Theme.primary;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}

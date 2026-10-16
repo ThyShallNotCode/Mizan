@@ -1,0 +1,618 @@
+// Exams dashboard (DESIGN §9.1, concept exams-dashboard.png).
+
+import {
+    Theme, Tone, Severity, Card, StatTile, GirihDivider, TopBar, StatusBar, SearchField, PrimaryButton,
+    SecondaryButton, GhostButton, IconButton, Chip, StatusPill, Tag, ProgressBar, TableRow,
+    TableHeaderCell, TableCell, SeverityGlyph,
+} from "../theme.slint";
+import { App, ExamsVM, ExamRow, Page } from "../state.slint";
+import {
+    Icons, ThemeToggle, Centered, KVLine, SectionLabel, StatusText, SeverityStack, SeverityCount,
+    CoverageRing, Avatar, MessageText,
+} from "../widgets.slint";
+import { ListView } from "std-widgets.slint";
+
+component ExamTableRow inherits TableRow {
+    in property <ExamRow> data;
+    row-height: 56px;
+    accessible-label: root.data.label;
+    Rectangle {
+        horizontal-stretch: 1;
+        min-width: 220px;
+        VerticalLayout {
+            padding-left: Theme.space-md;
+            padding-right: Theme.space-sm;
+            alignment: center;
+            spacing: 2px;
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                Text {
+                    text: root.data.code;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.text-sm;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.primary;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.data.title;
+                    font-size: Theme.text-sm;
+                    font-weight: Theme.weight-medium;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+            }
+            // Arabic title: its own run in the Arabic face, shaped RTL, left-aligned with the column
+            Text {
+                text: root.data.title-ar;
+                font-family: Theme.font-arabic;
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                horizontal-alignment: left;
+                overflow: elide;
+            }
+        }
+    }
+    TableCell {
+        width: 104px;
+        text: root.data.assessment;
+        tint: Theme.ink;
+    }
+    TableCell {
+        width: 116px;
+        text: root.data.date;
+        secondary: root.data.date-hijri;
+        mono: true;
+    }
+    Rectangle {
+        width: 100px;
+        HorizontalLayout {
+            padding-left: Theme.space-md;
+            spacing: 3px;
+            alignment: start;
+            for f in root.data.forms: Centered {
+                Tag {
+                    text: f;
+                }
+            }
+        }
+    }
+    Rectangle {
+        width: 124px;
+        VerticalLayout {
+            padding-left: Theme.space-md;
+            padding-right: Theme.space-md;
+            alignment: center;
+            spacing: 5px;
+            HorizontalLayout {
+                spacing: 2px;
+                Text {
+                    text: root.data.scanned;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.text-sm;
+                    font-weight: Theme.weight-medium;
+                    color: Theme.ink;
+                }
+                Text {
+                    text: " / " + root.data.expected;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.text-xs;
+                    color: Theme.ink-2;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+            }
+            ProgressBar {
+                value: root.data.progress;
+                tone: root.data.progress-tone;
+                thickness: 4px;
+            }
+        }
+    }
+    Rectangle {
+        width: 148px;
+        VerticalLayout {
+            padding-left: Theme.space-md;
+            padding-right: Theme.space-md;
+            alignment: center;
+            spacing: 5px;
+            if root.data.error + root.data.blocker + root.data.warn + root.data.info == 0: Text {
+                text: "None";
+                font-size: Theme.text-sm;
+                color: Theme.ink-3;
+            }
+            if root.data.error + root.data.blocker + root.data.warn + root.data.info > 0: SeverityStack {
+                blocker: root.data.blocker;
+                error: root.data.error;
+                warn: root.data.warn;
+                info: root.data.info;
+            }
+            if root.data.error + root.data.blocker + root.data.warn + root.data.info > 0: HorizontalLayout {
+                spacing: Theme.space-sm;
+                alignment: start;
+                if root.data.error + root.data.blocker > 0: SeverityCount {
+                    severity: Severity.error;
+                    count: root.data.error + root.data.blocker;
+                }
+                if root.data.warn > 0: SeverityCount {
+                    severity: Severity.warn;
+                    count: root.data.warn;
+                }
+                if root.data.info > 0: SeverityCount {
+                    severity: Severity.info;
+                    count: root.data.info;
+                }
+            }
+        }
+    }
+    Rectangle {
+        width: 120px;
+        HorizontalLayout {
+            padding-left: Theme.space-md;
+            alignment: start;
+            Centered {
+                StatusPill {
+                    text: root.data.status;
+                    tone: root.data.status-tone;
+                }
+            }
+        }
+    }
+}
+
+component Drawer inherits Rectangle {
+    width: Theme.drawer-width;
+    background: Theme.surface;
+    drop-shadow-blur: Theme.shadow-2-blur;
+    drop-shadow-offset-x: -2px;
+    drop-shadow-color: Theme.shadow-2-color;
+    Rectangle {
+        x: 0;
+        width: 1px;
+        background: Theme.border;
+    }
+    VerticalLayout {
+        // header
+        VerticalLayout {
+            padding: Theme.space-xl;
+            padding-bottom: Theme.space-lg;
+            spacing: Theme.space-xs;
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                Text {
+                    text: ExamsVM.drawer.code;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.text-xl;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.primary;
+                    vertical-alignment: center;
+                }
+                Centered {
+                    Tag {
+                        text: ExamsVM.drawer.assessment;
+                        mono: false;
+                    }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+                IconButton {
+                    icon: Icons.close;
+                    label: "Close details (Esc)";
+                    clicked => {
+                        ExamsVM.close-drawer();
+                    }
+                }
+            }
+            Text {
+                text: ExamsVM.drawer.title;
+                font-size: Theme.text-md;
+                font-weight: Theme.weight-medium;
+                color: Theme.ink;
+            }
+            Text {
+                text: ExamsVM.drawer.title-ar;
+                font-family: Theme.font-arabic;
+                font-size: Theme.text-sm;
+                color: Theme.ink-2;
+                horizontal-alignment: left;
+            }
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                Text {
+                    text: ExamsVM.drawer.term;
+                    font-size: Theme.text-xs;
+                    color: Theme.ink-3;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: ExamsVM.drawer.term-ar;
+                    font-family: Theme.font-arabic;
+                    font-size: Theme.text-xs;
+                    color: Theme.ink-3;
+                    vertical-alignment: center;
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.border;
+        }
+        VerticalLayout {
+            padding: Theme.space-xl;
+            spacing: Theme.space-lg;
+            // status call-out
+            Rectangle {
+                border-radius: Theme.radius-lg;
+                background: Theme.tone-soft(ExamsVM.drawer.callout-tone);
+                border-width: 1px;
+                border-color: Theme.border;
+                VerticalLayout {
+                    padding: Theme.space-lg;
+                    spacing: Theme.space-sm;
+                    HorizontalLayout {
+                        spacing: Theme.space-sm;
+                        Centered {
+                            StatusPill {
+                                text: ExamsVM.drawer.status;
+                                tone: ExamsVM.drawer.status-tone;
+                            }
+                        }
+                        Text {
+                            text: ExamsVM.drawer.callout-title;
+                            font-size: Theme.text-sm;
+                            font-weight: Theme.weight-semibold;
+                            color: Theme.tone-fg(ExamsVM.drawer.callout-tone);
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                    }
+                    Text {
+                        text: ExamsVM.drawer.callout-text;
+                        font-size: Theme.text-sm;
+                        color: Theme.ink;
+                        wrap: word-wrap;
+                    }
+                    if ExamsVM.drawer.can-review: PrimaryButton {
+                        text: ExamsVM.drawer.review-label;
+                        icon: Icons.review;
+                        key-hint: "Ctrl+4";
+                        clicked => {
+                            ExamsVM.open(Page.review);
+                        }
+                    }
+                }
+            }
+            SectionLabel {
+                text: "CONFIGURATION";
+            }
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                Centered {
+                    Image {
+                        source: Icons.check;
+                        width: 16px;
+                        height: 16px;
+                        colorize: Theme.success;
+                    }
+                }
+                Text {
+                    text: "Answer key";
+                    font-size: Theme.text-sm;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Centered {
+                    Tag {
+                        text: ExamsVM.drawer.key-status;
+                        tone: Tone.primary;
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                Centered {
+                    Image {
+                        source: Icons.outcomes;
+                        width: 16px;
+                        height: 16px;
+                        colorize: Theme.ink-2;
+                    }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    Text {
+                        text: "CLO mapping";
+                        font-size: Theme.text-sm;
+                        color: Theme.ink;
+                    }
+                    Text {
+                        text: ExamsVM.drawer.mapped + " of " + ExamsVM.drawer.total + " items approved";
+                        font-size: Theme.text-xs;
+                        color: Theme.ink-2;
+                    }
+                }
+                CoverageRing {
+                    value: ExamsVM.drawer.total > 0 ? ExamsVM.drawer.mapped / ExamsVM.drawer.total : 0;
+                    text: ExamsVM.drawer.total > 0 ? round(100 * ExamsVM.drawer.mapped / ExamsVM.drawer.total) + "%" : "–";
+                }
+            }
+            Rectangle {
+                height: 1px;
+                background: Theme.border;
+            }
+            SectionLabel {
+                text: "LOGISTICS";
+            }
+            KVLine {
+                label: "Roster";
+                value: ExamsVM.drawer.roster;
+            }
+            KVLine {
+                label: "Sections";
+                value: ExamsVM.drawer.sections;
+            }
+            KVLine {
+                label: "Last scan";
+                value: ExamsVM.drawer.last-scan;
+            }
+            KVLine {
+                label: "Batch ID";
+                value: ExamsVM.drawer.batch-id;
+                mono: true;
+            }
+            Rectangle {
+                vertical-stretch: 1;
+            }
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                SecondaryButton {
+                    text: "Open results";
+                    horizontal-stretch: 1;
+                    clicked => {
+                        ExamsVM.open(Page.results);
+                    }
+                }
+                SecondaryButton {
+                    text: "Exam setup";
+                    horizontal-stretch: 1;
+                    clicked => {
+                        ExamsVM.open(Page.setup);
+                    }
+                }
+            }
+            GhostButton {
+                text: "Scan and recognise";
+                icon: Icons.scan;
+                clicked => {
+                    ExamsVM.open(Page.scan);
+                }
+            }
+        }
+    }
+}
+
+export component ExamsScreen inherits VerticalLayout {
+    TopBar {
+        HorizontalLayout {
+            spacing: Theme.space-lg;
+            Text {
+                text: "OMR Correction";
+                font-size: Theme.text-lg;
+                font-weight: Theme.weight-semibold;
+                color: Theme.ink;
+                vertical-alignment: center;
+            }
+            Centered {
+                Tag {
+                    text: ExamsVM.term-label;
+                    mono: false;
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            Centered {
+                SearchField {
+                    placeholder: "Search exams and courses";
+                    key-hint: "Ctrl+K";
+                    width: 280px;
+                    accepted(t) => {
+                        App.request("Search for \"" + t + "\"");
+                    }
+                }
+            }
+            Centered {
+                PrimaryButton {
+                    text: "New exam";
+                    icon: Icons.plus;
+                    key-hint: "Ctrl+N";
+                    clicked => {
+                        App.request("New exam");
+                    }
+                }
+            }
+            Centered {
+                ThemeToggle { }
+            }
+            Rectangle {
+                width: 1px;
+                background: Theme.border;
+            }
+            VerticalLayout {
+                alignment: center;
+                Text {
+                    text: App.user-name;
+                    font-size: Theme.text-sm;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.ink;
+                    horizontal-alignment: right;
+                }
+                Text {
+                    text: App.user-role;
+                    font-size: Theme.text-2xs;
+                    color: Theme.ink-2;
+                    horizontal-alignment: right;
+                }
+            }
+            Centered {
+                Avatar {
+                    initials: App.user-initials;
+                }
+            }
+        }
+    }
+    HorizontalLayout {
+        vertical-stretch: 1;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            padding: Theme.space-xl;
+            spacing: Theme.space-lg;
+            VerticalLayout {
+                spacing: Theme.space-sm;
+                HorizontalLayout {
+                    Text {
+                        text: "Exams";
+                        font-size: Theme.text-xl;
+                        font-weight: Theme.weight-semibold;
+                        color: Theme.ink;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: ExamsVM.term-label;
+                        font-size: Theme.text-xs;
+                        color: Theme.ink-2;
+                        vertical-alignment: center;
+                    }
+                }
+                GirihDivider { }
+            }
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                alignment: start;
+                for f[i] in ExamsVM.filters: Chip {
+                    text: f.label;
+                    count: f.count;
+                    selected: i == ExamsVM.filter;
+                    clicked => {
+                        ExamsVM.set-filter(i);
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: Theme.space-md;
+                StatTile {
+                    horizontal-stretch: 1;
+                    label: "SHEETS SCANNED THIS WEEK";
+                    value: ExamsVM.sheets-week;
+                    caption: ExamsVM.sheets-today;
+                    caption-tone: Tone.success;
+                }
+                StatTile {
+                    horizontal-stretch: 1;
+                    label: "OPEN EXCEPTIONS";
+                    value: ExamsVM.open-exceptions;
+                    caption: ExamsVM.open-errors;
+                    caption-tone: Tone.error;
+                }
+                StatTile {
+                    horizontal-stretch: 1;
+                    label: "MEDIAN REVIEW TIME";
+                    value: ExamsVM.median-review;
+                    unit: "s / item";
+                    caption: "Marks lane, this week";
+                }
+                StatTile {
+                    horizontal-stretch: 1;
+                    label: "THROUGHPUT";
+                    value: ExamsVM.throughput;
+                    unit: "pages / s";
+                    caption: "Floor 40 pages / s";
+                }
+            }
+            Card {
+                inset: 0;
+                vertical-stretch: 1;
+                VerticalLayout {
+                    TableRow {
+                        header: true;
+                        TableHeaderCell {
+                            text: "Course";
+                            horizontal-stretch: 1;
+                            min-width: 220px;
+                        }
+                        TableHeaderCell {
+                            text: "Assessment";
+                            width: 104px;
+                        }
+                        TableHeaderCell {
+                            text: "Date";
+                            width: 116px;
+                        }
+                        TableHeaderCell {
+                            text: "Forms";
+                            width: 100px;
+                        }
+                        TableHeaderCell {
+                            text: "Sheets";
+                            width: 124px;
+                        }
+                        TableHeaderCell {
+                            text: "Exceptions";
+                            width: 148px;
+                        }
+                        TableHeaderCell {
+                            text: "Status";
+                            width: 120px;
+                        }
+                    }
+                    ListView {
+                        vertical-stretch: 1;
+                        for row[i] in ExamsVM.rows: ExamTableRow {
+                            height: 56px;
+                            data: row;
+                            selected: i == ExamsVM.selected;
+                            clicked => {
+                                ExamsVM.select(i);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if ExamsVM.drawer-open: Drawer { }
+    }
+    StatusBar {
+        Centered {
+            StatusPill {
+                text: "Project saved";
+                tone: Tone.success;
+            }
+        }
+        StatusText {
+            text: App.workspace;
+            mono: true;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        MessageText {
+            text: App.message;
+            tone: App.message-tone;
+        }
+        StatusText {
+            text: App.engine;
+            mono: true;
+        }
+    }
+}
