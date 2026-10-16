@@ -11,3 +11,8 @@ publish.workspace = true
 omr-model.workspace = true
 omr-scoring.workspace = true
 serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+num-rational.workspace = true

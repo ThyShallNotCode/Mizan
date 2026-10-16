@@ -767,6 +767,7 @@ export component Card inherits Rectangle {
             padding-bottom: root.inset > 0 ? 0 : Theme.space-md;
             spacing: Theme.space-2xs;
             vertical-stretch: 0;
+            alignment: start;
             Text {
                 text: root.title;
                 font-size: Theme.text-lg;
@@ -784,7 +785,13 @@ export component Card inherits Rectangle {
         VerticalLayout {
             padding: root.inset;
             spacing: Theme.space-md;
+            vertical-stretch: 1;
             @children
+        }
+        // Absorbs slack when the content has a capped height, so the title block
+        // never spreads out; growable content still takes (almost) all extra space.
+        Rectangle {
+            vertical-stretch: 0.001;
         }
     }
 }

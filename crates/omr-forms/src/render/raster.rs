@@ -45,8 +45,8 @@ fn pixmap_to_gray(p: &tiny_skia::Pixmap) -> GrayImage {
     let mut out = Vec::with_capacity((w * h) as usize);
     for px in p.data().chunks_exact(4) {
         // Opaque white background, so premultiplied equals straight colour.
-        let y = (u32::from(px[0]) * 299 + u32::from(px[1]) * 587 + u32::from(px[2]) * 114 + 500)
-            / 1000;
+        let y =
+            (u32::from(px[0]) * 299 + u32::from(px[1]) * 587 + u32::from(px[2]) * 114 + 500) / 1000;
         out.push(y as u8);
     }
     GrayImage::from_raw(w, h, out).unwrap_or_else(|| GrayImage::new(w, h))
@@ -62,7 +62,11 @@ pub fn rasterize_svg(svg: &str, dpi: f32) -> Result<GrayImage, RenderError> {
     let mut pm = tiny_skia::Pixmap::new(w, h).ok_or(RenderError::Dpi(dpi))?;
     pm.fill(tiny_skia::Color::WHITE);
     let s = tree_scale(&tree, dpi);
-    resvg::render(&tree, tiny_skia::Transform::from_scale(s, s), &mut pm.as_mut());
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(s, s),
+        &mut pm.as_mut(),
+    );
     Ok(pixmap_to_gray(&pm))
 }
 

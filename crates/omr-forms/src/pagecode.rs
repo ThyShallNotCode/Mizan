@@ -77,7 +77,9 @@ pub fn exam_id40(exam: &ExamId, salt: u8) -> u64 {
     h.update(exam.0.as_bytes());
     h.update([salt]);
     let d = h.finalize();
-    d[..5].iter().fold(0u64, |acc, b| (acc << 8) | u64::from(*b))
+    d[..5]
+        .iter()
+        .fold(0u64, |acc, b| (acc << 8) | u64::from(*b))
 }
 
 /// The routed fields of a page code (chars 1–21).
@@ -418,7 +420,10 @@ mod tests {
     #[test]
     fn req_a7_wrong_key_is_rejected() {
         let s = code().encode(&key(7)).unwrap();
-        assert_eq!(decode_verified(&s, &key(8)), Err(PageCodeError::TagMismatch));
+        assert_eq!(
+            decode_verified(&s, &key(8)),
+            Err(PageCodeError::TagMismatch)
+        );
         let e = PageCodeError::TagMismatch.exception();
         assert_eq!(e.code, "IDN-002");
         assert_eq!(e.severity, Severity::Blocker);
@@ -461,7 +466,10 @@ mod tests {
         ));
         let mut c = code();
         c.serial = BookletSerial(MAX_SERIAL + 1);
-        assert_eq!(c.encode(&key(1)), Err(PageCodeError::FieldOutOfRange("serial")));
+        assert_eq!(
+            c.encode(&key(1)),
+            Err(PageCodeError::FieldOutOfRange("serial"))
+        );
     }
 
     #[test]

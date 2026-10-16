@@ -46,7 +46,12 @@ pub fn variable_regions(inst: &SheetInstance<'_>) -> Result<Vec<RectUm>, RenderE
         && let Some(art) = inst.template.art(inst.page)
     {
         for s in [&art.name_slot, &art.id_slot].into_iter().flatten() {
-            v.push(RectUm::new(s.at.x, s.at.y - s.size, s.max_w, s.size * 13 / 10));
+            v.push(RectUm::new(
+                s.at.x,
+                s.at.y - s.size,
+                s.max_w,
+                s.size * 13 / 10,
+            ));
         }
     }
     Ok(v)
@@ -90,7 +95,13 @@ fn gray_hex(g: u8) -> String {
 }
 
 /// A path of axis-aligned module runs (one subpath per horizontal run of dark modules).
-fn module_path(out: &mut String, origin: PtUm, module: Um, n: usize, dark: impl Fn(usize, usize) -> bool) {
+fn module_path(
+    out: &mut String,
+    origin: PtUm,
+    module: Um,
+    n: usize,
+    dark: impl Fn(usize, usize) -> bool,
+) {
     out.push_str("<path fill=\"#000\" d=\"");
     for r in 0..n {
         let mut c = 0;
@@ -128,13 +139,21 @@ fn text(out: &mut String, t: &TextItem, content: &str, mono: bool) {
     out.push_str("<text");
     attr_mm(out, "x", t.at.x);
     attr_mm(out, "y", t.at.y);
-    let fam = if mono || t.mono { MONO_FAMILY } else { SANS_FAMILY };
+    let fam = if mono || t.mono {
+        MONO_FAMILY
+    } else {
+        SANS_FAMILY
+    };
     let _ = write!(out, " font-family=\"{fam}\"");
     attr_mm(out, "font-size", t.size);
     if t.bold {
         out.push_str(" font-weight=\"bold\"");
     }
-    let _ = write!(out, " fill=\"{}\" text-anchor=\"{anchor}\">", gray_hex(t.gray));
+    let _ = write!(
+        out,
+        " fill=\"{}\" text-anchor=\"{anchor}\">",
+        gray_hex(t.gray)
+    );
     // usvg lays every paragraph out left to right; an RLE … PDF embedding gives Arabic-first
     // lines their right-to-left run order.
     if t.rtl {
@@ -178,11 +197,21 @@ fn write_static(out: &mut String, inst: &SheetInstance<'_>, g: &PageGeometry, ar
     for t in &g.tags {
         let id = t.id_in_set(inst.tag_set());
         if let Some(m) = apriltag::modules(id) {
-            module_path(out, PtUm::new(t.outer.x, t.outer.y), TAG_MODULE, 10, |r, c| m[r][c]);
+            module_path(
+                out,
+                PtUm::new(t.outer.x, t.outer.y),
+                TAG_MODULE,
+                10,
+                |r, c| m[r][c],
+            );
         }
     }
     // Bubble outlines.
-    let _ = writeln!(out, "<g fill=\"none\" stroke=\"#000\" stroke-width=\"{}\">", fmt_mm(BUBBLE_STROKE));
+    let _ = writeln!(
+        out,
+        "<g fill=\"none\" stroke=\"#000\" stroke-width=\"{}\">",
+        fmt_mm(BUBBLE_STROKE)
+    );
     let circles = g
         .bubbles
         .iter()
@@ -268,7 +297,11 @@ fn write_static(out: &mut String, inst: &SheetInstance<'_>, g: &PageGeometry, ar
     // "How to mark" examples with verdict icons.
     for e in &art.examples {
         let (cx, cy) = (e.centre.x, e.centre.y);
-        let _ = write!(out, "<circle fill=\"none\" stroke=\"#000\" stroke-width=\"{}\"", fmt_mm(BUBBLE_STROKE));
+        let _ = write!(
+            out,
+            "<circle fill=\"none\" stroke=\"#000\" stroke-width=\"{}\"",
+            fmt_mm(BUBBLE_STROKE)
+        );
         attr_mm(out, "cx", cx);
         attr_mm(out, "cy", cy);
         attr_mm(out, "r", BUBBLE_RADIUS);
@@ -279,17 +312,33 @@ fn write_static(out: &mut String, inst: &SheetInstance<'_>, g: &PageGeometry, ar
             ExampleKind::Circle => circle(out, e.centre, BUBBLE_RADIUS + 800, Some(350)),
             ExampleKind::Tick => polyline(
                 out,
-                &[(cx - 1_300, cy), (cx - 300, cy + 1_100), (cx + 1_500, cy - 1_400)],
+                &[
+                    (cx - 1_300, cy),
+                    (cx - 300, cy + 1_100),
+                    (cx + 1_500, cy - 1_400),
+                ],
                 450,
             ),
             ExampleKind::Cross => {
-                polyline(out, &[(cx - 1_400, cy - 1_400), (cx + 1_400, cy + 1_400)], 450);
-                polyline(out, &[(cx - 1_400, cy + 1_400), (cx + 1_400, cy - 1_400)], 450);
+                polyline(
+                    out,
+                    &[(cx - 1_400, cy - 1_400), (cx + 1_400, cy + 1_400)],
+                    450,
+                );
+                polyline(
+                    out,
+                    &[(cx - 1_400, cy + 1_400), (cx + 1_400, cy - 1_400)],
+                    450,
+                );
             }
         }
         let (ix, iy) = (e.icon.x, e.icon.y);
         if e.ok() {
-            polyline(out, &[(ix - 700, iy), (ix - 200, iy + 600), (ix + 800, iy - 700)], 350);
+            polyline(
+                out,
+                &[(ix - 700, iy), (ix - 200, iy + 600), (ix + 800, iy - 700)],
+                350,
+            );
         } else {
             polyline(out, &[(ix - 600, iy - 600), (ix + 600, iy + 600)], 350);
             polyline(out, &[(ix - 600, iy + 600), (ix + 600, iy - 600)], 350);
@@ -308,7 +357,9 @@ fn write_variable(
     let echo_code = pagecode::echo_code(&payload)?;
     let prefix = inst.echo_prefix();
     for c in &g.codes {
-        module_path(out, PtUm::new(c.rect.x, c.rect.y), c.module, n, |r, col| dark[r * n + col]);
+        module_path(out, PtUm::new(c.rect.x, c.rect.y), c.module, n, |r, col| {
+            dark[r * n + col]
+        });
         let (x, anchor) = match c.echo_align {
             HAlign::Left => (c.echo.x, Anchor::Left),
             HAlign::Right => (c.echo.right(), Anchor::Right),
@@ -376,7 +427,9 @@ fn circle(out: &mut String, c: PtUm, r: Um, stroke: Option<Um>) {
 }
 
 fn polyline(out: &mut String, pts: &[(Um, Um)], w: Um) {
-    out.push_str("<path fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\"");
+    out.push_str(
+        "<path fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\"",
+    );
     attr_mm(out, "stroke-width", w);
     out.push_str(" d=\"");
     for (i, (x, y)) in pts.iter().enumerate() {

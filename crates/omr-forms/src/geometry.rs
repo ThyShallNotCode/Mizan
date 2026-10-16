@@ -118,6 +118,15 @@ pub fn rows_capacity(h: Um) -> u16 {
     n
 }
 
+// §6.3 pitch rules, checked at compile time.
+const _: () = assert!(PITCH_X * 10 >= 16 * BUBBLE_DIAMETER, "pitch ≥ 1.6 × Ø");
+const _: () = assert!(PITCH_X - BUBBLE_DIAMETER >= 2_000, "edge gap ≥ 2 mm");
+const _: () = assert!(PITCH_Y >= 5_500 && PITCH_Y <= 7_000, "row pitch 5.5–7.0 mm");
+const _: () = assert!(
+    ID_PITCH_Y >= 5_500 && ID_PITCH_Y <= 7_000,
+    "row pitch 5.5–7.0 mm"
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,8 +136,6 @@ mod tests {
         assert_eq!(QR_SIZE, 18_850);
         assert_eq!(TAG_MODULE * 10, TAG_SIZE);
         assert_eq!(TAG_MODULE * 8, TAG_BLACK);
-        assert!(PITCH_X * 10 >= 16 * BUBBLE_DIAMETER, "pitch ≥ 1.6 × Ø");
-        assert!(PITCH_X - BUBBLE_DIAMETER >= 2_000, "edge gap ≥ 2 mm");
         assert_eq!(SAFE_BOX_A4.w, 196_000);
         assert_eq!(column_width(5), 44_200);
     }
@@ -138,7 +145,10 @@ mod tests {
         assert_eq!(rows_extent(1), BUBBLE_DIAMETER);
         assert_eq!(rows_extent(5), 4 * PITCH_Y + BUBBLE_DIAMETER);
         assert_eq!(rows_extent(6), 5 * PITCH_Y + BAND_GAP + BUBBLE_DIAMETER);
-        assert_eq!(row_centre_offset(5) - row_centre_offset(4), PITCH_Y + BAND_GAP);
+        assert_eq!(
+            row_centre_offset(5) - row_centre_offset(4),
+            PITCH_Y + BAND_GAP
+        );
         let h = rows_extent(28);
         assert_eq!(rows_capacity(h), 28);
         assert_eq!(rows_capacity(h - 1), 27);

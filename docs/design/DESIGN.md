@@ -534,7 +534,13 @@ Nav order: **Exams, Setup, Scan, Review, Results, Outcomes, Export**, then Setti
 - **`accessible-role` naming.** Inside a component that has a property called `text`, `accessible-role: text;` resolves to the property. The theme always writes `AccessibleRole.text`, etc.
 - **No `parent` in a component root.** A component's root bindings cannot use `parent`. That is why `FocusRing` fills its parent and draws an inner rectangle.
 - **SVG assets** need Slint's SVG support. The default `slint` features have it. With `EmbedForSoftwareRenderer`, they are rasterised at build time.
-- **`forbid(unsafe_code)`.** In the render harness, generated code under `#![forbid(unsafe_code)]` failed with E0453: a vtable macro expansion carries `#[allow(unsafe_code)]`. See the open issue in the hand-off. The shell crate currently compiles its trivial window, which should be re-checked once the shell includes the theme.
+- **`forbid(unsafe_code)` conflicts with Slint codegen.** Slint 1.18.1 generated code expands `ItemTreeVTable_static!`, which carries `#[allow(unsafe_code)]`. Under a crate-level `#![forbid(unsafe_code)]`, rustc rejects it with E0453.
+  - **Reproduced on the scaffold:** `cargo check -p shell-slint` fails today at `out/app.rs` (`ItemTreeVTable_static! (static VT for self::InnerAppWindow)`), against `crates/shell-slint/src/main.rs:2`. The same thing happened in the render harness, which therefore omits `forbid`.
+  - **Fix options for the shell owner:**
+    - an audited R6 exception for `shell-slint` (crate-level `#![deny(unsafe_code)]`, with the generated module included under `#[allow(unsafe_code)] mod ui { slint::include_modules!(); }`);
+    - or keeping `forbid` and moving generated code into a tiny generated-UI crate with a documented exception.
+
+  `omr-archtest` R6 currently says "no audited exceptions yet", so this needs a decision.
 
 ---
 

@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 73e1e79313ec740c973f9da7c10fcca4e1f85b6dba4768b9caf65998a7012ae8 # shrinks to spec = TemplateSpec { title: "Midterm Examination", course: "COURSE 101", exam: ExamId(00000000-0000-0000-0000-000000000000), exam_salt: 0, revision: TemplateRevision(1), paper: A4, questions: 1, options: Uniform(2), labels: Latin, forms: 1, id_digits: 10, id_digit_labels: Western, form_grid: false, cancel_mode: Some(EraseOnly), instructions: "", code_diagonal: TlBr, direction: None }
+cc ae26a5182fb2ee904bec51b106227daaf980b38f7f8d9c492ed0327aac1b0956 # shrinks to spec = TemplateSpec { title: "Midterm Examination", course: "COURSE 101", exam: ExamId(00000000-0000-0000-0000-000000000000), exam_salt: 0, revision: TemplateRevision(1), paper: A4, questions: 1, options: Uniform(2), labels: Latin, forms: 1, id_digits: 10, id_digit_labels: Western, form_grid: false, cancel_mode: Some(EraseOnly), instructions: "", code_diagonal: TlBr, direction: None }

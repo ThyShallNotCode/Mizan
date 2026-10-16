@@ -659,11 +659,16 @@ mod tests {
     #[test]
     fn border_rings_are_white_then_black() {
         let m = modules(0).expect("tag 0");
-        for i in 0..TOTAL_WIDTH {
-            assert!(!m[0][i] && !m[9][i] && !m[i][0] && !m[i][9], "outer ring must be white");
-        }
-        for i in 1..9 {
-            assert!(m[1][i] && m[8][i] && m[i][1] && m[i][8], "border ring must be black");
+        for (r, row) in m.iter().enumerate() {
+            for (c, cell) in row.iter().enumerate() {
+                let outer = r == 0 || c == 0 || r == 9 || c == 9;
+                let border = !outer && (r == 1 || c == 1 || r == 8 || c == 8);
+                if outer {
+                    assert!(!cell, "outer ring must be white at ({r}, {c})");
+                } else if border {
+                    assert!(cell, "border ring must be black at ({r}, {c})");
+                }
+            }
         }
     }
 

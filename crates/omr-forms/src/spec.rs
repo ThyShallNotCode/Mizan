@@ -279,7 +279,9 @@ mod tests {
     use super::*;
 
     fn exam() -> ExamId {
-        ExamId(uuid::Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0001))
+        ExamId(uuid::Uuid::from_u128(
+            0x0190_0000_0000_7000_8000_0000_0000_0001,
+        ))
     }
 
     #[test]

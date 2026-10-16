@@ -13,9 +13,7 @@ use crate::geometry::*;
 use crate::hash::{self, CanonicalError, Sha384Digest};
 use crate::lint::{self, LintFinding, LintLevel};
 use crate::pagecode::{PageCode, exam_id40};
-use crate::spec::{
-    CodeDiagonal, DigitLabels, Direction, LabelSet, Paper, SpecError, TemplateSpec,
-};
+use crate::spec::{CodeDiagonal, DigitLabels, Direction, LabelSet, Paper, SpecError, TemplateSpec};
 use crate::units::{PtUm, RectUm, Um, um_to_mm};
 use omr_model::{BookletSerial, CancelMode, FormCode, PageNo, PointMm};
 use serde::{Deserialize, Serialize};
@@ -622,9 +620,7 @@ impl Template {
 
     /// A page by 1-based number.
     pub fn page(&self, p: PageNo) -> Option<&PageGeometry> {
-        self.manifest
-            .pages
-            .get(usize::from(p.0).checked_sub(1)?)
+        self.manifest.pages.get(usize::from(p.0).checked_sub(1)?)
     }
 
     /// The unhashed art of a page.
@@ -792,15 +788,16 @@ fn text_item(
     }
 }
 
-fn fixed(
-    s: &str,
-    at: PtUm,
-    size: Um,
-    anchor: Anchor,
-    bold: bool,
-    role: TextRole,
-) -> TextItem {
-    text_item(TextContent::Fixed(s.to_owned()), s, at, size, anchor, bold, role)
+fn fixed(s: &str, at: PtUm, size: Um, anchor: Anchor, bold: bool, role: TextRole) -> TextItem {
+    text_item(
+        TextContent::Fixed(s.to_owned()),
+        s,
+        at,
+        size,
+        anchor,
+        bold,
+        role,
+    )
 }
 
 /// Truncates `s` with an ellipsis so it fits `max_w`.
@@ -823,7 +820,7 @@ fn fit(s: &str, size: Um, bold: bool, max_w: Um) -> String {
 }
 
 /// Greedy word wrap to `max_w`.
-fn wrap(s: &str, size: Um, max_w: Um) -> Vec<String> {
+fn wrap(s: &str, size: Um, bold: bool, max_w: Um) -> Vec<String> {
     let mut lines = Vec::new();
     let mut cur = String::new();
     for word in s.split_whitespace() {
@@ -832,7 +829,7 @@ fn wrap(s: &str, size: Um, max_w: Um) -> Vec<String> {
         } else {
             format!("{cur} {word}")
         };
-        if approx_text_width(&cand, size, false, false) <= max_w || cur.is_empty() {
+        if approx_text_width(&cand, size, bold, false) <= max_w || cur.is_empty() {
             cur = cand;
         } else {
             lines.push(std::mem::take(&mut cur));
@@ -863,8 +860,7 @@ pub fn cancel_instruction(mode: CancelMode) -> (&'static str, &'static str) {
     }
 }
 
-const DEFAULT_INSTRUCTIONS_EN: &str =
-    "Use a dark HB/2B pencil or a black pen. Mark one bubble per question. Do not fold or staple this sheet.";
+const DEFAULT_INSTRUCTIONS_EN: &str = "Use a dark HB/2B pencil or a black pen. Mark one bubble per question. Do not fold or staple this sheet.";
 const DEFAULT_INSTRUCTIONS_AR: &str =
     "استخدم قلم رصاص HB أو 2B أو قلمًا أسود. ظلّل دائرة واحدة لكل سؤال. لا تطوِ الورقة ولا تدبّسها.";
 
@@ -1069,7 +1065,8 @@ fn build_header(
         TextRole::FormPage,
     ));
     let mut line_y = s.y + 14_900;
-    for (label, is_name) in [("Name · الاسم", true), ("Student ID · الرقم الجامعي", false)] {
+    for (label, is_name) in [("Name · الاسم", true), ("Student ID · الرقم الجامعي", false)]
+    {
         let t = fixed(
             label,
             PtUm::new(za_x0, line_y),
@@ -1116,24 +1113,24 @@ fn build_header(
         let zb_w = zb_x1 - zb_x0;
         let mut lines: Vec<(String, bool, TextRole)> = Vec::new();
         if spec.instructions.trim().is_empty() {
-            for l in wrap(DEFAULT_INSTRUCTIONS_EN, INSTR_FONT, zb_w) {
+            for l in wrap(DEFAULT_INSTRUCTIONS_EN, INSTR_FONT, false, zb_w) {
                 lines.push((l, false, TextRole::Instruction));
             }
-            for l in wrap(DEFAULT_INSTRUCTIONS_AR, INSTR_FONT, zb_w) {
+            for l in wrap(DEFAULT_INSTRUCTIONS_AR, INSTR_FONT, false, zb_w) {
                 lines.push((l, false, TextRole::Instruction));
             }
         } else {
             for para in spec.instructions.lines() {
-                for l in wrap(para, INSTR_FONT, zb_w) {
+                for l in wrap(para, INSTR_FONT, false, zb_w) {
                     lines.push((l, false, TextRole::Instruction));
                 }
             }
         }
         let (en, ar) = cancel_instruction(cancel_mode);
-        for l in wrap(en, INSTR_FONT, zb_w) {
+        for l in wrap(en, INSTR_FONT, true, zb_w) {
             lines.push((l, true, TextRole::Cancel));
         }
-        for l in wrap(ar, INSTR_FONT, zb_w) {
+        for l in wrap(ar, INSTR_FONT, true, zb_w) {
             lines.push((l, true, TextRole::Cancel));
         }
         for (l, bold, role) in lines {
@@ -1142,24 +1139,50 @@ fn build_header(
             } else {
                 (zb_x0, Anchor::Left)
             };
-            let t = fixed(&l, PtUm::new(x, y + INSTR_FONT * 8 / 10), INSTR_FONT, anchor, bold, role);
+            let t = fixed(
+                &l,
+                PtUm::new(x, y + INSTR_FONT * 8 / 10),
+                INSTR_FONT,
+                anchor,
+                bold,
+                role,
+            );
             art.texts.push(t);
             y += INSTR_LINE;
         }
         // How-to-mark row: caption, then five examples with verdict icons. The gap keeps a
         // form grid sharing this row 3 mm clear of the text above (block quiet zone).
         y += 1_800;
+        let caption_text = "How to mark · طريقة التظليل:";
+        let cap_w = approx_text_width(caption_text, SMALL_FONT, true, false);
+        let examples_w = 5 * EXAMPLE_PITCH;
+        // In a narrow zone the caption gets its own line above the examples.
+        let inline = cap_w + 2_000 + examples_w <= zb_w;
+        if !inline {
+            art.texts.push(fixed(
+                caption_text,
+                PtUm::new(zb_x0, y + SMALL_FONT * 8 / 10),
+                SMALL_FONT,
+                Anchor::Left,
+                true,
+                TextRole::Caption,
+            ));
+            y += INSTR_LINE + 700;
+        }
         let yc = y + BUBBLE_RADIUS + 700;
-        let caption = fixed(
-            "How to mark · طريقة التظليل:",
-            PtUm::new(zb_x0, yc + 800),
-            SMALL_FONT,
-            Anchor::Left,
-            true,
-            TextRole::Caption,
-        );
-        let mut x = caption.bbox.right() + 2_000 + BUBBLE_RADIUS;
-        art.texts.push(caption);
+        let mut x = zb_x0 + BUBBLE_RADIUS + 700;
+        if inline {
+            let caption = fixed(
+                caption_text,
+                PtUm::new(zb_x0, yc + 800),
+                SMALL_FONT,
+                Anchor::Left,
+                true,
+                TextRole::Caption,
+            );
+            x = caption.bbox.right() + 2_000 + BUBBLE_RADIUS;
+            art.texts.push(caption);
+        }
         for kind in [
             ExampleKind::Fill,
             ExampleKind::Tick,
@@ -1193,10 +1216,19 @@ fn build_header(
                 0
             };
             let (mut fy, start_x, per_row) = if per_row_same >= spec.forms {
-                (yc, zb_x1 - BUBBLE_RADIUS - (Um::from(spec.forms) - 1) * FORM_PITCH, spec.forms)
+                (
+                    yc,
+                    zb_x1 - BUBBLE_RADIUS - (Um::from(spec.forms) - 1) * FORM_PITCH,
+                    spec.forms,
+                )
             } else {
-                let per = (((zb_w - cap_w - 2_000 - BUBBLE_DIAMETER) / FORM_PITCH) + 1).max(1) as u16;
-                (row_bottom + QUIET_ZONE + BUBBLE_RADIUS, zb_x0 + cap_w + 2_000 + BUBBLE_RADIUS, per)
+                let per =
+                    (((zb_w - cap_w - 2_000 - BUBBLE_DIAMETER) / FORM_PITCH) + 1).max(1) as u16;
+                (
+                    row_bottom + QUIET_ZONE + BUBBLE_RADIUS,
+                    zb_x0 + cap_w + 2_000 + BUBBLE_RADIUS,
+                    per,
+                )
             };
             let cap = fixed(
                 caption,
@@ -1361,7 +1393,9 @@ fn layout(
     for p in 0..page_count {
         let first = p == 0;
         let header = if first {
-            headers.take().unwrap_or_else(|| build_header(spec, cancel_mode, true, &tags, &codes))
+            headers
+                .take()
+                .unwrap_or_else(|| build_header(spec, cancel_mode, true, &tags, &codes))
         } else {
             build_header(spec, cancel_mode, false, &tags, &codes)
         };
@@ -1434,8 +1468,14 @@ fn layout(
                     Direction::Rtl => Anchor::Left,
                 };
                 let at = PtUm::new(phys(ROW_QNUM_EDGE), y + QNUM_FONT * 36 / 100);
-                art.texts
-                    .push(fixed(&label, at, QNUM_FONT, anchor, true, TextRole::QuestionNumber));
+                art.texts.push(fixed(
+                    &label,
+                    at,
+                    QNUM_FONT,
+                    anchor,
+                    true,
+                    TextRole::QuestionNumber,
+                ));
             }
             blocks.push(Block {
                 kind: BlockKind::Mcq { column: ci as u8 },
@@ -1520,7 +1560,10 @@ mod tests {
         assert!(t.page_count() >= 2);
         let per_page: Vec<usize> = t.pages().iter().map(|p| p.questions().count()).collect();
         assert_eq!(per_page.iter().sum::<usize>(), 250);
-        let (mn, mx) = (per_page.iter().min().unwrap(), per_page.iter().max().unwrap());
+        let (mn, mx) = (
+            per_page.iter().min().unwrap(),
+            per_page.iter().max().unwrap(),
+        );
         assert!(mx - mn <= 2, "{per_page:?}");
         // Every question exactly once, in order.
         let all: Vec<u16> = t.pages().iter().flat_map(|p| p.questions()).collect();
@@ -1533,7 +1576,11 @@ mod tests {
         let t = Template::build(spec(40, 4)).unwrap();
         let b = t.question_bubbles(17);
         assert_eq!(b.len(), 4);
-        assert!(b.iter().enumerate().all(|(i, x)| x.question == 17 && x.option == i as u8));
+        assert!(
+            b.iter()
+                .enumerate()
+                .all(|(i, x)| x.question == 17 && x.option == i as u8)
+        );
         assert_eq!(b[0].bubble_id(), "Q18/0");
         assert!(b[1].centre.x - b[0].centre.x == PITCH_X);
     }
@@ -1547,7 +1594,13 @@ mod tests {
         assert_eq!(b[0].label, "أ");
         assert!(b[0].centre.x > b[1].centre.x, "option 0 is rightmost");
         let q0 = t.question(0).unwrap();
-        let q_last_col = t.manifest().questions.iter().map(|g| g.column).max().unwrap();
+        let q_last_col = t
+            .manifest()
+            .questions
+            .iter()
+            .map(|g| g.column)
+            .max()
+            .unwrap();
         let first_col_x = b[0].centre.x;
         let last = t
             .manifest()

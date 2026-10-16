@@ -57,7 +57,12 @@ mod tests {
         let db = raster_fontdb();
         let families: Vec<String> = db
             .faces()
-            .flat_map(|f| f.families.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>())
+            .flat_map(|f| {
+                f.families
+                    .iter()
+                    .map(|(n, _)| n.clone())
+                    .collect::<Vec<_>>()
+            })
             .collect();
         assert!(families.iter().any(|f| f == SANS_FAMILY), "{families:?}");
         assert!(families.iter().any(|f| f == MONO_FAMILY), "{families:?}");

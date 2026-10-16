@@ -7,10 +7,16 @@ use omr_model::{BookletSerial, CancelMode, ExamId, FormCode, PageNo};
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let out = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| "sample-sheets".into()));
+    let out = PathBuf::from(
+        std::env::args()
+            .nth(1)
+            .unwrap_or_else(|| "sample-sheets".into()),
+    );
     std::fs::create_dir_all(&out)?;
     let key = ExamKey::from_bytes([0x5A; 32]);
-    let exam = ExamId(uuid::Uuid::from_u128(0x0190_1234_5678_7abc_8def_0123_4567_89ab));
+    let exam = ExamId(uuid::Uuid::from_u128(
+        0x0190_1234_5678_7abc_8def_0123_4567_89ab,
+    ));
 
     let mut latin = TemplateSpec::standard(exam, 100, 5, CancelMode::EraseOnly);
     latin.title = "PHYS 101 Midterm Examination".into();
@@ -38,9 +44,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for i in &insts {
             std::fs::write(out.join(format!("{name}_p{}.svg", i.page.0)), sheet_svg(i)?)?;
             let img = rasterize_sheet(i, 200.0)?;
-            std::fs::write(out.join(format!("{name}_p{}.png", i.page.0)), encode_png(&img)?)?;
+            std::fs::write(
+                out.join(format!("{name}_p{}.png", i.page.0)),
+                encode_png(&img)?,
+            )?;
         }
-        std::fs::write(out.join(format!("{name}.pdf")), sheets_pdf(&insts, &t.spec().title)?)?;
+        std::fs::write(
+            out.join(format!("{name}.pdf")),
+            sheets_pdf(&insts, &t.spec().title)?,
+        )?;
         std::fs::write(out.join(format!("{name}_manifest.json")), t.manifest_json())?;
     }
     Ok(())

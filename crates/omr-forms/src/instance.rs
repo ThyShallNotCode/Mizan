@@ -77,7 +77,7 @@ pub fn looks_like_national_id(s: &str) -> bool {
             }
         })
         .sum();
-    sum % 10 == 0
+    sum.is_multiple_of(10)
 }
 
 /// One printed side of one booklet.
@@ -217,14 +217,22 @@ mod tests {
 
     #[test]
     fn instance_texts_and_payload() {
-        let mut s = TemplateSpec::standard(ExamId(uuid::Uuid::from_u128(5)), 20, 4, CancelMode::EraseOnly);
+        let mut s = TemplateSpec::standard(
+            ExamId(uuid::Uuid::from_u128(5)),
+            20,
+            4,
+            CancelMode::EraseOnly,
+        );
         s.forms = 2;
         let t = Template::build(s).unwrap();
         let k = ExamKey::from_bytes([3; 32]);
         let i = SheetInstance::new(&t, &k, FormCode(2), PageNo(1)).with_serial(BookletSerial(77));
         assert_eq!(i.form_page_text(), "Form B · Page 1/1");
         let p = i.payload().unwrap();
-        assert_eq!(crate::pagecode::decode_verified(&p, &k).unwrap().serial, BookletSerial(77));
+        assert_eq!(
+            crate::pagecode::decode_verified(&p, &k).unwrap().serial,
+            BookletSerial(77)
+        );
         let bad = SheetInstance::new(&t, &k, FormCode(3), PageNo(1));
         assert_eq!(bad.payload(), Err(InstanceError::NoSuchForm(3)));
     }

@@ -4380,9 +4380,12 @@ dependencies = [
 name = "omr-analytics"
 version = "0.1.0"
 dependencies = [
+ "num-rational",
  "omr-model",
  "omr-scoring",
+ "proptest",
  "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4488,7 +4491,10 @@ dependencies = [
  "num-traits",
  "omr-model",
  "omr-scoring",
+ "proptest",
  "serde",
+ "serde_json",
+ "sha2",
  "thiserror 2.0.21",
 ]
 
@@ -4533,7 +4539,10 @@ dependencies = [
  "num-rational",
  "num-traits",
  "omr-model",
+ "proptest",
  "serde",
+ "serde_json",
+ "sha2",
  "thiserror 2.0.21",
 ]
 

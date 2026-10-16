@@ -245,7 +245,10 @@ fn lint_page(m: &LayoutManifest, page: &PageGeometry, art: &PageArt, out: &mut V
                 rule: LintRule::L01,
                 level: LintLevel::Block,
                 page: p,
-                message: format!("bubble {} lies outside every block. Fix: regenerate the layout.", a.0),
+                message: format!(
+                    "bubble {} lies outside every block. Fix: regenerate the layout.",
+                    a.0
+                ),
             });
         }
         for b in circles.iter().skip(i + 1) {
@@ -255,7 +258,10 @@ fn lint_page(m: &LayoutManifest, page: &PageGeometry, art: &PageArt, out: &mut V
                     rule: LintRule::L01,
                     level: LintLevel::Block,
                     page: p,
-                    message: format!("bubbles {} and {} overlap. Fix: increase the pitch.", a.0, b.0),
+                    message: format!(
+                        "bubbles {} and {} overlap. Fix: increase the pitch.",
+                        a.0, b.0
+                    ),
                 });
             }
         }
@@ -265,7 +271,11 @@ fn lint_page(m: &LayoutManifest, page: &PageGeometry, art: &PageArt, out: &mut V
                     rule: LintRule::L01,
                     level: LintLevel::Block,
                     page: p,
-                    message: format!("row tick of Q{} touches bubble {}. Fix: widen the row.", t.question + 1, a.0),
+                    message: format!(
+                        "row tick of Q{} touches bubble {}. Fix: widen the row.",
+                        t.question + 1,
+                        a.0
+                    ),
                 });
             }
         }
@@ -275,7 +285,10 @@ fn lint_page(m: &LayoutManifest, page: &PageGeometry, art: &PageArt, out: &mut V
                     rule: LintRule::L05,
                     level: LintLevel::Block,
                     page: p,
-                    message: format!("text {:?} collides with bubble {}. Fix: move the text.", t.content, a.0),
+                    message: format!(
+                        "text {:?} collides with bubble {}. Fix: move the text.",
+                        t.content, a.0
+                    ),
                 });
             }
         }
@@ -308,8 +321,19 @@ mod tests {
 
     #[test]
     fn standard_layouts_are_clean() {
-        for (q, o, id) in [(20, 4, 9), (60, 5, 10), (100, 5, 10), (150, 4, 0), (30, 10, 12)] {
-            let mut s = TemplateSpec::standard(ExamId(uuid::Uuid::from_u128(1)), q, o, CancelMode::EraseOnly);
+        for (q, o, id) in [
+            (20, 4, 9),
+            (60, 5, 10),
+            (100, 5, 10),
+            (150, 4, 0),
+            (30, 10, 12),
+        ] {
+            let mut s = TemplateSpec::standard(
+                ExamId(uuid::Uuid::from_u128(1)),
+                q,
+                o,
+                CancelMode::EraseOnly,
+            );
             s.id_digits = id;
             s.form_grid = true;
             s.forms = 4;
@@ -347,8 +371,14 @@ mod tests {
         m.pages[0].bubbles[1].centre = c0;
         m.pages[0].tags[0].outer.x -= 2_000;
         let f = lint_layout(&m, t.arts(), 200);
-        assert!(f.iter().any(|x| x.rule == LintRule::L01 && x.message.contains("overlap")));
+        assert!(
+            f.iter()
+                .any(|x| x.rule == LintRule::L01 && x.message.contains("overlap"))
+        );
         assert!(f.iter().any(|x| x.rule == LintRule::L04));
-        assert!(f.iter().all(|x| x.message.contains("Fix:")), "R10 remediation text");
+        assert!(
+            f.iter().all(|x| x.message.contains("Fix:")),
+            "R10 remediation text"
+        );
     }
 }
