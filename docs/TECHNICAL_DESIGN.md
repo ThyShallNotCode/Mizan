@@ -448,7 +448,7 @@ No item may slip past GA; if one does, GA moves (§25.2). Remark features exclud
 | PAR-05 | Review | Grid plus image review; validate-and-transform rules; data lock; database lookup for ID verification and demographics (ODBC/PostgreSQL/MariaDB); change tracking; keyboard-first | §13, §13.6, §9.2 |
 | PAR-06 | Grading | Scanned or typed key; CSV key with partial credit and AND keys; multiple correct answers; negative and decimal marking; bonus and throw-out; version mapping; curves; grade scales; scaled-score lookup; rubric points, including anonymous on-screen marking by several markers; benchmarks (the attainment threshold τ_c); objectives | §10, §11.4, §13.7 |
 | PAR-07 | Reports | KR-20/21, α, point-biserial, CIs, percentiles, demographic comparison; changed-answer reports by item and by student and a descriptive similarity listing (every edition, Integrity Officer role); annotated student reports by LMS file, print or email; survey frequency and crosstab reports by question group | §12, §12.7, §17.2, §17.4 |
-| PAR-08 | Exports | CSV and templated or fixed-width text, XLSX, SPSS .sav, JSON; SQL scripts for SQL Server, Oracle, PostgreSQL and SQLite, including "database update" (upsert) mode, and ODBC; Canvas, Moodle, Blackboard Ultra and D2L CSVs; ExamSoft and Questionmark QSF (layouts from public material, unverified; low priority); destinations: local or sync folder, SMB, SFTP | §16.3 |
+| PAR-08 | Exports | CSV and templated or fixed-width text, XLSX, SPSS .sav, JSON; SQL scripts for SQL Server, Oracle, PostgreSQL and SQLite, including "database update" (upsert) mode, and ODBC; Canvas, Moodle, Blackboard Ultra and D2L CSVs; ExamSoft and Questionmark QSF (layouts from public material, unverified; low priority); destinations: local or sync folder, SMB (SFTP is beyond parity, §16.3) | §16.3 |
 | PAR-09 | Migration | Remark data and key import; template library (every edition) | §3.5 |
 | PAR-10 | Localisation | EN, ES, PT and DE UI; RTL/Arabic reports and exports (Remark's own parity is RTL PDF export). A fully mirrored Arabic UI is a differentiator (G11), gated by Q-01 and ADR-001 | §20, §5.2 |
 | PAR-11 | Accommodations | Large-print and alternate layouts on the same key; a single make-up sheet, also after release, scored without rescanning the class or changing released students | §6.11, §9.1, §10.6, §10.9 |
@@ -662,7 +662,7 @@ Helper caps (proposed) are hard limits within the §21.5 process-tree budget; on
 
 | Case | Detection | Handling (back-off and quarantine policy: §22.1) |
 |---|---|---|
-| Helper crash or OOM | Channel EOF; non-zero exit; Job Object, cgroup or `RLIMIT_AS` limit; macOS footprint watchdog | Requeue the request as *retryable*; restart with exponential back-off. Two crashes on one input quarantine that input. A crash storm of one helper type (including `llama-server` and `omr-ml-worker`) disables it for the session, switches to its fallback and raises SYS-002 |
+| Helper crash or OOM | Channel EOF; non-zero exit; Job Object, cgroup or `RLIMIT_AS` limit; macOS footprint watchdog | Requeue the request as *retryable*; restart with exponential back-off. Two crashes on one input quarantine that input. A crash storm of one helper type (including `llama-server` and `omr-ml-worker`) disables it for the session, switches to its fallback and raises SYS-002. An AI process killed at its RSS cap drops one model tier instead (SYS-020, §18.2) |
 | Helper hang | 3 missed heartbeats, or deadline exceeded | Kill it, then handle as a crash |
 | Unsealed or hash-mismatched output | Seal check, or hash of the private copy | Reject the result and kill the helper; handle as a crash |
 | Binary missing, quarantined by AV, or build mismatch | Spawn error, hash check or handshake | SYS-006: the feature switches to its fallback (helper table) and a repair install is offered; the core keeps running. A missing decision-path *model* halts recognition instead (§22.1) |
@@ -734,7 +734,7 @@ Every desktop mode runs the same signed binary; being *local* or *server-backed*
 - **Grids** expose a windowed model (`row_count`, `row_data(i)`) over Rust column vectors; sorting and filtering stay in Rust (target < 100 ms for 100k rows), so the toolkit never holds 100k rows of widgets.
 
 **Compositor.**
-- **Tiles** follow the lazy pyramid of §21.6: ingest writes only the ¼ and ⅛ display levels and a thumbnail, from the §8.2 registration pyramid (≤ 1.5 ms per page, §8.1), never a full pyramid (≈ 1.33× the page). Full-resolution and ½ tiles (512 px) are cut with `fast_image_resize` from the decoded original on view or prefetch (decode 6.4–36.7 ms per page [M], §21.3), held in the memory LRU (§21.5) and spilled to `cache/` under min(2 GB, 2% of free space).
+- **Tiles** follow the lazy pyramid of §21.6: ingest writes only display levels L1 (≈ 100 dpi) and L2 (≈ 25 dpi) and a thumbnail, from the §8.2 registration pyramid (≤ 1.5 ms per page, §8.1), never a full pyramid (≈ 1.33× the page). Full-resolution and ½ tiles (512 px) are cut with `fast_image_resize` from the decoded original on view or prefetch (decode 6.4–36.7 ms per page [M], §21.3), held in the memory LRU (§21.5) and spilled to `cache/` under min(2 GB, 2% of free space) (§14.5).
 - **Cache.** `cache/` (tiles, thumbnails, exception crops) is AES-256-GCM-encrypted under K_cache,session, random and never stored (§19.2), so it is never plaintext on disk and dies with the session. Evidence crops that must outlive an original are CAS objects (§14.5).
 - **Frames.** The compositor thread picks the smallest mip level at or above the display scale and draws tiles and overlays into a double-buffered RGBA buffer at device resolution with `tiny-skia` 0.12, or `vello_cpu` 0.3 if the spike favours it; a 2560×1440 viewport is estimated at 3–8 ms.
 - **Blitting.** The shell copies the buffer via Slint `SharedPixelBuffer`, or a `QImage` in a `QQuickPaintedItem` for Qt.
@@ -776,7 +776,7 @@ Key sources: https://github.com/ajrcarey/pdfium-render · https://www.sqlite.org
 | ONNX Runtime (C++) via `ort` | Operator coverage and speed for HTR/OCR | In process (CPU EP) for decision-path identity and orientation models only (§9.4); AI-pack models and GPU EPs in `omr-ml-worker` |
 | llama.cpp (C++) | VLM/LLM generation | `llama-server` sidecar |
 | zxing-cpp (C++); C AprilTag (fallback) | Independent second decoder; tag-detection fallback | `omr-pdfium-worker` |
-| SQLite, mimalloc (C) | Mature and fuzzed upstream | In process |
+| SQLite, mimalloc, libzstd (C) | Mature and fuzzed upstream | In process; libzstd reads only AEAD-verified `cache/` entries |
 | SwiftUI / Jetpack Compose | Native mobile accessibility | UniFFI boundary |
 | Qt/QML (fallback only) | RTL and accessibility maturity | `shell-qt` only |
 | TypeScript server web UI | The browser is the client for dashboards and LTI | Separate front end (§15.1) |
@@ -802,7 +802,7 @@ Key sources: https://github.com/ajrcarey/pdfium-render · https://www.sqlite.org
 | S2 | 100k-row grid | Windowed model; scrolling and sorting | Sort < 100 ms; smooth scrolling |
 | S3 | Screen readers | NVDA, VoiceOver and Orca, keyboard only, complete the scripted non-visual task flow and operate every review control (§2.4, §20.3) | Completed on all three |
 | S4 | Arabic | Names in grids and labels; editing; review shortcuts with the Arabic keyboard layout active | Display correct; editing usable; physical-key (scan-code) events reach the shell on all three OSes (unverified for Slint) |
-| S5 | Cold start | Launch to interactive on the 8-core reference laptop | < 1 s (the GA target on the N100-class reference is ≤ 1.5 s, §2.4) |
+| S5 | Cold start | Launch to interactive on the 8-core reference laptop | < 1 s (GA target: ≤ 1.5 s, §21.1) |
 | S6 | Installer size | Including ORT and PDFium | < 60 MB |
 
 **Consequences:**
@@ -848,7 +848,7 @@ This is the authoritative stack for the whole document: every crate pinned in an
 | Local IPC | interprocess 2.4 (anonymous pipes on Windows) + postcard; `rustix` (socketpair, `SCM_RIGHTS`, sealed `memfd`; version pinned at P0); memmap2 (sealed memfds only) | (unverified); MIT/Apache-2.0 | Handles, not paths: works inside every sandbox (§4.4) | Local gRPC/HTTP (overhead, attack surface); named pipes and path-based temp files (blocked by sandboxes; TOCTOU, SIGBUS) |
 | Server | axum 0.8.9; tokio 1.53; tower-http 0.7; sqlx 0.9 + Postgres 18; object_store 0.14 (S3 / Ceph RGW / SeaweedFS); `FOR UPDATE SKIP LOCKED` queue; utoipa 6.0 (OpenAPI 3.1); opentelemetry 0.33; pgaudit; pgBackRest; S3 Object Lock | MIT; PostgreSQL; Apache-2.0 | Stateless workers share the engine crates | MinIO CE (archived April 2026); Garage (AGPL); apalis 1.0 (too fresh); CRDTs (loro/yrs) for grading |
 | AuthZ and AuthN | cedar-policy 4.13; openidconnect 4.0.1 (RFC 8252 PKCE loopback); SAML via a Keycloak broker; SCIM 2.0; jsonwebtoken 11.1 (LTI) | Apache-2.0; MIT | One policy language on desktop and server | samael 0.0.x (libxmlsec1, signature-wrapping risk); ZITADEL (AGPL since v3); atomic-lti 2.2.0 (reference only) |
-| Crypto and secrets | keyring-core 1.0.1 (interactive desktop; service and headless backends in §19.2); AES-256-GCM (`aes-gcm` 0.11.1) with HKDF-SHA256 per-object keys everywhere (§19.2); zeroize 1.9; rustls with the platform verifier; SQLCipher 4.17.0 optional | MIT/Apache-2.0 family | Per-student crypto-shredding; FIPS-approved AEAD | XChaCha20-Poly1305 (not FIPS-approved; not offered); keyring 3.x (split); whole-database-only encryption |
+| Crypto and secrets | keyring-core 1.0.1 (interactive desktop; service and headless backends in §19.2); AES-256-GCM (`aes-gcm` 0.11.1) everywhere: a random DEK_obj per original, HKDF-SHA256 per-item keys (§19.2); zeroize 1.9; rustls with the platform verifier; SQLCipher 4.17.0 optional | MIT/Apache-2.0 family | Per-student crypto-shredding; FIPS-approved AEAD | XChaCha20-Poly1305 (not FIPS-approved; not offered); keyring 3.x (split); whole-database-only encryption |
 | i18n | fluent-bundle 0.16; icu 2.3.1 (ICU4X, data trimmed with datagen); encoding_rs + chardetng | Apache-2.0/MIT; Unicode-3.0 | Six Arabic plural forms, Umm al-Qura Hijri, collation | ICU4C (large C++ dependency) |
 | Files and standards | csv 1.4; rust_xlsxwriter 0.99.1; calamine 0.36.1; quick-xml 0.42 (QTI); Standard Webhooks. No `.docx` parser in v1: Word forms are imported via PDF (§6.10) | MIT/Apache-2.0 family | §16.3 | — |
 | Plugins | rhai 1.26.1 (pure, operation-limited formulas); wasmtime 49.0.3 components (WIT worlds, WASI 0.3, fuel/epoch limits, Ed25519-signed packages) | MIT/Apache-2.0; Apache-2.0 WITH LLVM-exception | Deny-by-default sandbox; data-only API | mlua 0.12 (C code); Extism 1.41 (outside the component model); native dylibs (unsafe ABI) |
@@ -859,7 +859,7 @@ This is the authoritative stack for the whole document: every crate pinned in an
 | Packaging | MSIX + MSI (WiX); notarized DMG (universal2 through 2027); AppImage, Flatpak, .deb/.rpm; Velopack 1.2.161 (Sparkle 2 on macOS); `dist` 0.33.0 for the CLI | MIT | Silent and managed installs; offline bundles | cargo-packager 0.11.8 (maintenance slowing) |
 | Supply chain | cargo-deny 0.20.2; cargo-vet 0.10.2; cargo-auditable 0.7.7; cargo-cyclonedx 0.5.9; cargo-about 0.9; Sigstore | Dev-only | §5.4, §19.7 | — |
 | Testing and profiling | insta 1.49; proptest 1.12; cargo-fuzz 0.13.2 (libfuzzer-sys 0.4.13, arbitrary 1.5); cargo-mutants 27.1; cargo-nextest 0.9.148; criterion 0.8.2; gungraun 0.20.0; Tracy (tracing-tracy 0.12.0, tracy-client 0.19.0); samply 0.13.1. Dev-only oracles: OpenCV, libjpeg-turbo (`turbojpeg` 1.5.1); psychometric oracles in §12.8 | Dev-only | §21.7, §23.4 | divan 0.1.21 (stale) |
-| Supporting crates (pinned by their owning sections) | nokhwa 0.10.11 (§7.1); image_hasher 3.1.1 (§7.4); rand_chacha (§6.6); unicode-normalization 0.1.25, rphonetic 4.0.0 (§9.3); lapjv 0.3.0, pathfinding 4.16 (§9.6); linfa 0.8.1, smartcore 0.6.16 (§8.7); tower-sessions 0.15 (§15.1); odbc-api (§9.2, §16.3); petal-clustering 0.14, minijinja 3.0.1 (§18.3); aes-gcm 0.11.1 (§19.2); atomic-write-file 0.3.1, fs4, sysinfo 0.39 (§22); rustix (§4.4); tokenizers (conditional, §18.2) | As declared upstream (atomic-write-file BSD-3); checked by cargo-deny | Licence and version review covers every pinned crate | — |
+| Supporting crates (pinned by their owning sections) | nokhwa 0.10.11 (§7.1); rand_chacha (§6.6); unicode-normalization 0.1.25, rphonetic 4.0.0 (§9.3); lapjv 0.3.0, pathfinding 4.16 (§9.6); linfa 0.8.1, smartcore 0.6.16 (§8.7); tower-sessions 0.15 (§15.1); odbc-api (§9.2, §16.3); petal-clustering 0.14, minijinja 3.0.1 (§18.3); aes-gcm 0.11.1 (§19.2); atomic-write-file 0.3.1, fs4, sysinfo 0.39 (§22); rustix (§4.4); tokenizers (conditional, §18.2); zstd 0.13 (C libzstd, level 1; §21.6; unverified); russh + russh-sftp (pure Rust; SFTP export, §16.3; versions pinned at P0) | As declared upstream (atomic-write-file BSD-3); checked by cargo-deny | Licence and version review covers every pinned crate | — |
 
 ### 5.4 Licence policy
 
@@ -902,7 +902,7 @@ Permanently excluded: Ultralytics YOLO; DEIMv2; RF-DETR Atto/Femto/Pico/XL; DINO
 | Dependency | Risk | L / I | Mitigation | Exit |
 |---|---|---|---|---|
 | `ort` =2.0.0-rc.14 | Still an RC; rc.13 and rc.14 broke the API; identity models are on the decision path | Low / Med | Exact pin; `InferenceBackend`; vendored ORT 1.31.0; model-contract tests; the §9.4 decision-path rule and §23.6 cross-ISA gate | tract/rten for small models; a channel that fails the gate stops counting toward auto-accept |
-| `mistralrs` 0.8 | crates.io 0.8.1 lags GitHub; CPU speed and the candidate-scoring API unverified | Med / Low | P0 check; pin; `omr-ml-worker` only | PMI off; blind read plus second reader (§18.3) |
+| `mistralrs` 0.8 | crates.io 0.8.1 lags GitHub; CPU speed and the candidate-scoring API unverified | Med / Low | P0 check (§25.1); pin; `omr-ml-worker` only | PMI off; blind read plus second reader (§18.3) |
 | `fastembed` 7.1 | Its `ort` must resolve to exactly =2.0.0-rc.14 (`ort-sys` declares `links`) | Med / Low | CI `cargo tree -i ort`; `default-features = false` | e5-small on `ort` + `tokenizers` |
 | kornia-rs 0.2.0 | Young; ORB/SIFT quality and AprilTag robustness at 3–4 px per module unvalidated | Med / Med | Pin; own traits; differential tests against OpenCV; spike (§25.1) | `apriltag` 0.4 in the worker; in-house DLT/RANSAC |
 | Typst 0.15.1 | No API stability; output drift | Med / Med | Pin; `DocRenderer` trait; golden PDFs; veraPDF/PAC checks; upgrades only with a golden diff review | krilla directly |
@@ -1179,8 +1179,8 @@ Each variant is a revision in the **same family**: geometry changes, master item
 **Fillable-PDF electronic bubble sheet** (Remark "Electronic Bubble Sheets"; exams and surveys).
 - **Export.** The generator adds an AcroForm to the frozen revision's pages at the layout-manifest coordinates: one radio group per single-answer item (name = `field_id`, export value = option index); one check box per `bubble_id` for multi-select; digit-only, length-limited text fields for grid-ins, ID and candidate number; and a hidden read-only field per page carrying the page-code payload with its MAC. Each "on" appearance is a solid disc over the measured interior, so a flattened or printed copy still reads through the normal OMR path. Personalized exports carry a bound serial, as on paper. The writer is `pdf-writer` 0.15; its AcroForm support is unverified and MUST be confirmed before GA (spike S6, §25.1).
 - **Import.** Returned files are untrusted: `lopdf` 0.45 parses them in the sandboxed `omr-pdfium-worker` (§4.4) and reads only field values, with no OMR.
-  - A bad MAC, a field missing from the manifest, or an out-of-range value raises IDN-002.
-  - Values enter L1 with provenance `digital_fillable`, pass through the same identity (§9) and scoring pipeline, and form their own slice (§23.1).
+  - A bad MAC or a field that is not in the layout manifest raises IDN-002 (invalid fillable-PDF return, Page scope). An out-of-range value in a known field raises MRK-017 (sub-reason `fillable_value_out_of_range`, Item scope), and only that item goes to review.
+  - Values enter L1 with provenance `digital_fillable`, pass through the same identity (§9.1) and scoring pipeline, and form their own slice (§23.1).
   - A file with no field values (flattened or printed) is rasterized and recognized as a scan, provenance `born_digital` (§7.3).
 - **Limit.** Anyone can edit a PDF form, so integrity rests on the delivery channel; exam policy decides whether high-stakes exams accept `digital_fillable`.
 
@@ -1217,15 +1217,15 @@ Remark recommends bitonal capture at 200–300 dpi "for speed". We diverge: bito
 
 | Setting | Value | Reason / enforcement |
 |---|---|---|
-| Mode | **8-bit grayscale**; colour only for dropout or ink diagnostics | Bit depth checked per page. Bitonal input raises CAP-003 (WARN) and is held to the bitonal targets |
+| Mode | **8-bit grayscale**; colour only for dropout or ink diagnostics | Bit depth checked per page. Bitonal input raises CAP-003 `bitonal` (WARN) and is held to the bitonal targets |
 | Resolution | 200 dpi for OMR; 300 dpi with ICR or small codes | 4.2 mm = 33 px at 200 dpi. Measured < 100 dpi rejected; 100–150 dpi warns; > 400 dpi gets a downsampled working copy (CAP-002) |
-| Compression | JPEG q ≥ 85, or lossless | JBIG2 symbol substitution swapped digits on Xerox devices in 2013. Estimated Q̂ < 85 → batch WARN with the settings card (§8.9); Q̂ < 70 also doubles the hysteresis (§8.2). Lossy JBIG2 and MRC refused (CAP-004) |
+| Compression | JPEG q ≥ 85, or lossless | JBIG2 symbol substitution swapped digits on Xerox devices in 2013. Estimated Q̂ < 85 → CAP-003 `jpeg_quality_low` (batch WARN) with the settings card (§8.9); Q̂ < 70 also doubles the hysteresis (§8.2). Lossy JBIG2 and MRC refused (CAP-004) |
 | Blank-page skip | **OFF** | Blank backs carry codes, so a skipped side shows as a gap (COL-001) |
 | Despeckle, sharpening, text enhancement, background removal, driver dropout, hole-punch fill, streak reduction, bitonal thresholding | **OFF** | Each alters mark pixels. Checked by capability read-back and per-page histograms |
 | Deskew / crop | Allowed, with overscan and a **black background** | Tears stay detectable (CAP-009) |
 | Double-feed / imprinter / duplex | Ultrasonic ON / `BATCH-SEQ` ON / ON even for one-sided forms | CAP-010; §7.5; duplex also catches flipped sheets |
 
-**Sites that insist on bitonal** (HKU, for example, advises B/W at 400 dpi) scan at 300–400 dpi, use the black-pixel-ratio model, raise CAP-003 and report against the bitonal targets (§2.4).
+**Sites that insist on bitonal** (HKU, for example, advises B/W at 400 dpi) scan at 300–400 dpi, use the black-pixel-ratio model, raise CAP-003 `bitonal` and report against the bitonal targets (§2.4).
 
 **Device profiles** (`device_profile`, append-only versioned, §14.3), keyed by vendor, model, serial, driver version and transport, store the locked settings, a capability snapshot, white level, edge spread, ADF anisotropy, skew and streak history. They are auto-calibrated from the first N sheets and the calibration sheet (§6.9, §23.5).
 
@@ -1312,7 +1312,7 @@ The guards are this header-declared size check plus the decoders' limit-aware or
 | Issued serial never scanned at exam close | COL-007 (WARN): absent/unreturned list (§9.6); the Instructor confirms absence. While any IDN exception or unattributed page of the exam is open, no one on it is released as absent or zero (§13.1) |
 | Page cannot be attributed (no valid code, serial, tracker or identity field) | IDN-001 / IDN-002 / REG-001 / COL-006: persistent unrecognized queue, never dropped. Blocks release (§13.1 unattributed-page rule) until attached, discarded as not exam material, or replaced by a rescan |
 
-**Rescan pull list**, sorted by batch, then stack position. Each entry shows imprint number, serial, page, room and reason, so an operator retrieves every sheet in one pass through the stack. It is available on screen or as a PDF; `R` in review adds to it (§13.3). Rescans link through COL-003 (§7.4).
+**Rescan pull list**, sorted by batch, then stack position. Each entry shows imprint number, serial, page, room and reason, so an operator retrieves every sheet in one pass through the stack. It is available on screen or as a PDF; `Ctrl+R` in review adds to it (§13.3). Rescans link through COL-003 (§7.4).
 
 ### 7.6 Phone/tablet capture details
 
@@ -1613,7 +1613,7 @@ Generic low-confidence routing (non-decisive set, disagreement, instability, pos
 **Erasure rule.** Only for `cancel_mode` ∈ {`erase_only`, `cross_cancels`} (under `fill_cancels_check` a fill cancels). On by default; review-only in high-stakes mode.
 - A *candidate* is a bubble with pᵢ ≥ 0.01, or whose conformal set contains any class other than `empty`.
 - The rule applies when exactly two candidates exist, the darker one's set ⊆ {filled}, the weaker one's set ⊆ {erased_residue, partial_or_dot} (`light_fill` only if the exam policy explicitly enables it), ρ ≤ 0.5 (configurable to 0.67, i.e. 1.5–2× darker; ρ per F14, rule off where ρ is undefined) and m ≥ 0.25.
-- The darker bubble is then accepted as `Single`, logged MRK-003 `resolved_erasure` (INFO); otherwise review under MRK-003 or MRK-002 (ERROR). Its parameters are part of λ, so its errors count against SER.
+- The darker bubble is then accepted as `Single`, logged MRK-003 `resolved_erasure` (INFO, not in the §13.4 blind sample: its parameters are part of λ, so its errors count against the certified SER); otherwise review under MRK-003 or MRK-002 (ERROR).
 
 **Multi-select.** Each bubble is decided alone, and only with a decisive set: selected if logit pᵢ ≥ L_b, not selected if ≤ −L_b, otherwise the question goes to review with that bubble highlighted. Initial L_b = L_q + ln k nat (k options), i.e. 8.5 nat standard and 10.8 nat high-stakes for k = 5, keeping the summed per-bubble error within the single-answer budget; L_b is part of λ (§8.7 step 8). The response is `Set{options}`; one wrong bubble makes the whole question a silent error.
 
@@ -1709,7 +1709,7 @@ Severity follows Appendix A: an instance resolved automatically by the stated ru
 | 29 | Tiny batch, all-blank survey, or ≥ 95 % choosing one option | Slice bimodality or clamp-mass check fails; position mixture rejected | Prior model; β_p by the §8.6 unimodal rule, else β_p⁰ | MRK-016 (`gmm_fallback`, `prior_model`) |
 | 30 | Duplicate file or rescan | Plaintext BLAKE3; otherwise the §7.4 agreement rule on bubbles auto-accepted in both images (no perceptual hash) | Identical bytes: link. Agreeing marks: keep the image with fewer abstentions; abstained bubbles → MRK-001. Differing auto-accepted states: a human decides | CAP-011 / COL-003 / COL-004 (serial, booklet tracker) or IDN-005 (serial `000000`, ID-grid tracker) |
 | 31 | Decoder bomb or truncated file | Header limits before `try_reserve`; deadline | Reject the page; the batch continues (§7.4, §22.1) | CAP-001 |
-| 32 | Driver despeckle, bitonal or blank-skip left on | Bitonal detect; light-mark shift; count gaps | Settings card (§7.2); batch WARN | CAP-003 / COL-001 |
+| 32 | Driver despeckle, bitonal or blank-skip left on | Bitonal detect; light-mark shift; count gaps | Settings card (§7.2); batch WARN | CAP-003 `bitonal` / COL-001 |
 | 33 | Drift (scanner, paper, pen) | AR trend; audit disagreement; feature shift | Tighten-only ACI between runs; recalibrate; supervised batch | SYS-019 (§23.5) |
 
 ### 8.13 Published accuracy baselines & how existing systems work
@@ -1778,7 +1778,7 @@ Sources (§16.1–§16.5; CSV encoding detection incl. Windows-1256, §16.3): CS
 **Import rules** (MUST). Most field identity failures come from ingestion, not OCR: Excel float coercion, Windows-1256 files, stale exports.
 1. **IDs are text end to end.** Integer-valued numeric cells below 10¹⁵ are converted and flagged; scientific notation (`1.23E+15`), > 15 significant digits or `.0` artefacts block the import as precision loss.
 2. **Leading zeros** are restored only under an explicit institution rule (fixed length N), shown in the preview; mixed ID lengths are reported.
-3. **Key normalization:** Arabic-Indic, Extended and full-width digits → ASCII; NBSP → space; format and bidi controls (§9.3 step 7) stripped. Display text is unchanged.
+3. **ID key normalization** (canonical; also the `student_pid` input, §14.9): NFKC (full-width digits → ASCII, NBSP → space); Arabic-Indic and Extended digits → ASCII (§20.1); format and bidi controls (§9.3 step 7) stripped; trimmed; upper-cased. Display text is unchanged.
 4. **Validation report before commit:** duplicate IDs block; regex or check-digit failures and empty names warn; *namesake groups* (identical normalized names, or token edit distance ≤ 1) are recorded for §9.7.
 5. **Formula-like names** (`= + - @`) are stored verbatim and neutralized only on export (§16.3).
 
@@ -1846,7 +1846,7 @@ Skeleton-only matching puts C in *skeleton mode* (§9.5, §9.7).
 - **Wrong field.** A name read of only digits, or letters in the ID boxes, re-scores the crop with the other channel's recognizer (IDN-004 `wrong_field`, INFO).
 - **Decision-path models.** B′, C, D and the PP-LCNet orientation model (§8.3) MUST run with batch size 1, or in page-local batches in fixed field order padded to a template-fixed width, with `intra_op_num_threads = 1` and the CPU EP only. Log-likelihoods are quantized to 1/1024 nat before fusion, and the §23.6 cross-ISA gate covers these models; one that fails moves to `tract-onnx` or stops counting toward §9.7 condition 4 (spike S8, §25.1). The cross-page micro-batcher (§21.2) serves only the template detector, embeddings and AI-pack models. No GPU for identity (§4.2 invariant 6).
 - **No timing-dependent evaluation.** Every channel applicable to a booklet (field present, crop exists) is evaluated before the decision; only absent channels are skipped, and the evaluated set is stored. A channel that overruns its §22.4 deadline is marked `timed_out` and the booklet goes to review, never auto-accepted on the remaining channels.
-- **Cost** ≈ 10–40 ms of a core per identity page, ≈ 15–40 ms with ID boxes and a name field (est.), against the ≤ 35 ms per-page mark budget (§8.1). Identity runs in its own lane after mark recognition, but name plus ID boxes on every page need up to ≈ 2× CPU end to end (est.; throughput in §21.1).
+- **Cost** ≈ 10–40 ms of a core per identity page, ≈ 15–40 ms with ID boxes and a name field (est.), against the ≤ 35 ms per-page mark budget (§8.1). Identity runs in its own lane after mark recognition, but name plus ID boxes on every page need up to ≈ 2× CPU end to end: ≈ 95–140 pages/s on single-page sheets, outside the 200 pages/s target (est.; §2.4, §21.1).
 - **Training data.** Typst-rendered synthetic sheets with commercially licensed handwriting fonts and stroke/slant/elastic/scan-noise augmentation, plus consented pilot data. KHATT, Muharaf (CC BY-NC-SA 4.0) and IFN/ENIT are evaluation-only; MADBase/AHDBase/HODA terms are unverified, so research-only.
 
 ### 9.5 Roster-constrained fusion
@@ -1958,7 +1958,7 @@ Channel rules for condition 4:
 **Certification** uses Learn-then-Test only, never conformal risk control (sample sizes restated in §23.1).
 - Risk R(λ) = P(wrong student | auto-accepted at λ), with the booklet as sampling unit. λ moves L_id, τ_m and θ_f together from strict to loose; fixed-sequence testing stops at the first non-rejection. Each λ gets the exact one-sided binomial (Clopper–Pearson) p-value on the auto-accepted subset of a held-out labelled LTT split, δ = 0.05. A separate test split only confirms (achieved bound 3/n_test).
 - n_acc ≥ ln(1/δ)/α ≈ 3.0/α auto-accepted sheets at zero errors (3k for 10⁻³), ≈ 4.74/α at one (47k at 10⁻⁴), so the ≤ 10⁻⁴ launch contract needs ≈ 30k labelled **auto-accepted** sheets in the LTT split (≈ 33k labelled at 90% auto-accept).
-- Certificates are per slice: name script × ID-field design (grid only, grid + boxes, personalized) × capture tier (scanner, bitonal, phone); ID-only acceptance is certified separately. An uncertified slice stays in shadow mode and publishes its achieved bound, never the target.
+- Certificates are per slice: name script × ID-field design (grid only, grid + boxes, personalized) × capture tier (scanner, bitonal, phone, `digital_fillable` per §6.11); ID-only acceptance is certified separately. An uncertified slice stays in shadow mode and publishes its achieved bound, never the target.
 - The ≤ 10⁻⁶ engineering goal holds by construction only (AB plus an independent C or E, and the hard-conflict rules); certifying it would need ≈ 3M labelled sheets.
 
 **Shadow mode** (uncertified slices).
@@ -2030,7 +2030,7 @@ Small VLMs fail mainly by following language priors (WildHandBench: 63–91% of 
 | 15 | Page code unreadable or invalid | All decoders and echo-line OCR fail; or no MAC-valid copy | Channels A–C and booklet neighbours; print-quality report | IDN-001 (unreadable) / IDN-002 (no MAC-valid copy) |
 | 16 | Loose page without identity fields | Serial known, no identity fields; or no serial or tracker either | Inherits the booklet identity; without serial or tracker it is an orphan page under the §13.1 unattributed-page rule | — / COL-006 |
 | 17 | Red or green ink erased by dropout | Box empty, strokes visible in the colour scan | Re-measure identity ROIs on luminance; rescan in colour | MRK-007 |
-| 18 | Despeckle removed the dot of ٠; JPEG artefacts in ID boxes | Scanner profile; blank box where the row CTC sees a glyph | Settings card (§7.2); rescan | CAP-003 (bitonal input) / IDN-004 |
+| 18 | Despeckle removed the dot of ٠; JPEG artefacts in ID boxes | Scanner profile; blank box where the row CTC sees a glyph | Settings card (§7.2); rescan | CAP-003 `bitonal` / `jpeg_quality_low`; IDN-004 |
 | 19 | Roster changed after scanning | New snapshot hash | Idempotent re-run; diff for approval; confirmed pairs stay fixed | IDN-004 `roster_diff` |
 | 20 | Adversarial swap: student writes a stronger student's ID | AB agrees on the victim; C contradicts or does not support; duplicate if the victim's booklet exists | AB alone never auto-accepts (§9.7); duplicate workflow | IDN-005 / IDN-004 `channel_conflict` |
 | 21 | Team sheet; accommodation or make-up template | Multi-identity regions; template ID | One row per identity region (§9.6); same pipeline per template and exam instance | — |
@@ -2038,9 +2038,9 @@ Small VLMs fail mainly by following language priors (WildHandBench: 63–91% of 
 ### 9.10 Privacy of identity snippets
 
 - **Stored data.** Only identity ROIs (name, ID boxes and grid, confirm digits), each a 200 dpi gray lossless WebP or PNG of ≈ 5–20 KB, re-derivable from the original scan.
-- **Encryption** (key tree, epochs and residual-copy bound: §19.2). Each snippet has a random 256-bit DEK_snip (AES-256-GCM, HKDF-SHA256 per-object keys). W_snip = wrap(K_snip,exam, DEK_snip) is held under the booklet's K_booklet, which hangs under K_student once identity is confirmed; `ID_CORRECTION` re-wraps K_booklet to the new K_student (`BookletRekeyed`). Destroying K_snip,exam (TTL) or K_student (erasure) makes the snippet unreadable.
+- **Encryption** (key tree, epochs and residual-copy bound: §19.2). Each snippet has a random 256-bit DEK_snip (AES-256-GCM, HKDF-SHA256 per-object keys). W_snip = wrap(K_snip,exam, DEK_snip) is held under the booklet's K_booklet, which hangs under K_student once identity is confirmed; `ID_CORRECTION` re-wraps K_booklet to the new K_student (`BookletRekeyed`); a snippet whose page moves to another booklet (page attach, COL-004 split) is re-wrapped under that K_booklet (`SnippetRekeyed`). Destroying K_snip,exam (TTL) or K_student (erasure) makes the snippet unreadable.
 - **Retention.** TTL = end of the appeal window + N days (policy; a legal hold suspends it). Expiry destroys K_snip,exam; the audit log keeps hashes and decisions without pixels. Identity regions inside retained originals follow the §19.5 retention engine.
-- **Role gating** (Cedar, §15.5 matrix row "Resolve identity; see snippets"): Instructor, Co-instructor, Scanner-Operator and TA-Reviewer (identity lane only, restriction b), with restriction r under anonymous marking. Snippets never appear in mark-review items, logs, crash reports or telemetry (§22.7).
+- **Role gating** (Cedar, §15.5 matrix row "Resolve identity; see snippets"): Instructor, Co-instructor, Scanner-Operator and TA-Reviewer (identity lane only, restriction b), with restriction r under anonymous marking, when the designated identity adjudicator (Registrar or a non-grading Co-instructor, below) also has access. Snippets never appear in mark-review items, logs, crash reports or telemetry (§22.7).
 - **Anonymous marking** (required by many UK universities).
   - Identity is resolved normally, but the compositor masks identity ROIs in every mark and score view; graders see only a candidate number.
   - Until release, restriction r and the §15.5 forbid rule deny snippet access and identity-lane actions to every principal with grading rights on the assessment. Identity items escalate to the designated identity adjudicator (Registrar or a named non-grading Co-instructor), never to the Instructor lane.
@@ -2240,7 +2240,7 @@ CLO interaction (§11.3, §11.4): L5 drop-lowest never removes CLO evidence unle
 
 **Grade scales.** Intervals [lo, hi) with GPA points on 4.0 or 5.0 scales; the top interval is [lo, +∞) and the bottom one has lo = −∞, so exactly 100 % and any L5 value are covered. Scope: per test, section or learning objective (Remark parity). A gap, an overlap or a non-increasing boundary over (−∞, +∞) is SCO-029 (BLOCKER). The Saudi-style template (A+ ≥ 95 … F < 60) is editable only, because institutions vary (unverified).
 
-**Rank and merit lists** (G11) follow §17.2; percentile rank is the mid-rank PR above. Scoring-side rules: the basis is the value shown under the RoundingPolicy (§10.2), compared exactly; ordinal ranking ("1234") only when the tie-break chain resolves every tie, never alphabetical or by ID; only `Scored`, non-provisional students are ranked (absent, excused and withdrawn students listed separately); cohort scope reads §14.9 snapshots; publication needs the institution flag `rank_publication`; a changed list (regrade, later sitting) is re-issued as a new version, the old one watermarked SUPERSEDED (§17.1).
+**Rank and merit lists** (G11). §17.2 owns the report: its ranking basis, tie rules, ranked population, cohort scope, publication and re-issue. Scoring contributes only the mid-rank percentile PR defined above.
 
 ### 10.7 Rule extensibility and validation
 
@@ -2312,7 +2312,7 @@ A `sitting(id, assessment, kind = main | makeup | accommodation | late, window U
 | Curve | Frozen fitted numbers, or the frozen lookup table of a percentile or rank transform, apply unchanged (§10.6). Late students never enter a fit |
 | Item statistics, mis-key flags | Frozen per release snapshot ("N = main sitting"); a recomputation including later sittings is a labelled diff. A mis-key found later is a key change for every student under §10.8 |
 | Key disclosure | Withheld while any sitting is outstanding (§17.3) |
-| Release and push | Per student through the normal gate (§13.4, §17.4); LMS pushes and notifications go to the newly released students only. Boundary and rank lists are re-issued as new versions (§10.6) |
+| Release and push | Per student through the normal gate (§13.4, §17.4); LMS pushes and notifications go to the newly released students only. Boundary lists (§10.2) and rank lists (§17.2) are re-issued as new versions |
 | CLO | Each sitting release publishes a new AssessmentResultSnapshot (§14.9). Attainment stays provisional (SCO-033) until every sitting is Closed, or until the coordinator closes the remaining absentees under the missing-data policy (§11.3) |
 | Identity | Matched against the original roster snapshot. A student already scored in an earlier sitting raises IDN-005 unless the retake policy allows it (§9) |
 | Closing | `SittingClosed` is an event. Absentees left at closure follow the course policy's `excused` or `missing_work` rule (§10.5) |
@@ -2731,7 +2731,7 @@ The methods are an optional P3 module; the band and boundary list are GA. Cuts a
 | **Parity** (Remark Changed Answer and Student Response Similarities) | Every edition, Free included; GA | **Changed answers by item:** WR/RW/WW counts per item (also revealing ambiguous items). **By student:** per-sheet WR/RW/WW counts with the score group. **Similarity listing:** pairs passing the Harpp–Hogan screen (EEIC/D ≥ 1.0 and similarity > 5 SD), with identical-incorrect and identical-correct counts and seat distance if known | None: no p-values, thresholds or flags; labelled "descriptive, not a statistical test". By-item counts hold no per-student data, so Cedar policy MAY extend them to the Instructor |
 | **Inferential module** | Department edition, P3 | GBT, ω, randomization tests, erasure tests, cross-form letter matching, seat-map multiplicity, case files and referrals (below) | Per-examinee α_e and BH families; release-gated by §12.8 |
 
-**Erasure data (both tiers).** The key-blind recognizer reports `erased_residue` and `resolved_erasure` (MRK-003); analytics joins them with the key to classify each erasure as WR, RW or WW. Disabled for bitonal (CAP-003) and phone captures until erasure detection is calibrated for them.
+**Erasure data (both tiers).** The key-blind recognizer reports `erased_residue` and `resolved_erasure` (MRK-003); analytics joins them with the key to classify each erasure as WR, RW or WW. Disabled for bitonal (CAP-003 `bitonal`) and phone captures until erasure detection is calibrated for them.
 
 **Module preconditions:** L1 final; identities `confirmed`; k ≥ 30 scored items; N ≥ 30 *(proposed)*. Otherwise parity tier only.
 
@@ -3138,7 +3138,7 @@ project_header(workspace_id, offering_id, assessment_id) ; pinned(kind roster_sn
 project_member(principal_id, display_name, ed25519_pub, added_by) 1-* role_binding(role, scope_type, scope_id, valid_from, valid_to)
 student(student_id = student_pid) 1-1 pii_vault(enc fields, key_id) ; alias(kind, enc value)
 roster_snapshot(sha256, parent, source, fetched_at) 1-* roster_row(student_id, section, enc fields, attributes{key: ordinary|special_category}) (§9.2)
-assessment(kind exam|imported|survey, anonymity anonymous|identified, identity_mode roster|candidate_no|none, anonymous_marking, W_a, direct|indirect, mode, sealed_until)
+assessment(kind exam|imported|survey, anonymity anonymous|identified, identity_mode roster|candidate_number|none, anonymous_marking, W_a, direct|indirect, mode, sealed_until)
     1-* master_item(item_key, bank_item_id?, M_i, m_i, bloom, renditions) (§10.3) ; imported_column(M_i, source) ; survey_item(group_id, scale, reverse, depends_on) (§6.5)
     1-* rubric_criterion(levels→points) ; rubric_version(question, items{id, label, points, criterion_id?}) (§13.7)
 sitting(kind main|makeup|accommodation|late, start_utc, end_utc, venue_tz, state) (§10.9) ; room(name, capacity)
@@ -3165,7 +3165,7 @@ task(kind approval|adjudication|divergence|roster_diff|mapping_approval|appeal|a
 outbox (§16.6) ; export ; events ; checkpoint ; access_log ; legal_hold ; retention_policy ; erasure_ledger ; disclosure_record (§16.3) ; jobs ; project_lease(holder, host, heartbeat_at)
 ```
 
-**Assessment kinds** (§10.1). `survey` and `imported` have no key; survey responses are ordinary L1 rows, and an anonymous survey forbids `identity_run`, `bound_student` and any serial→student link (§6.5). Rosterless assessments (`identity_mode` `candidate_no` or `none`) release to an export only, with no LMS push (§9).
+**Assessment kinds** (§10.1). `survey` and `imported` have no key; survey responses are ordinary L1 rows, and an anonymous survey forbids `identity_run`, `bound_student` and any serial→student link (§6.5). Rosterless assessments (`identity_mode` `candidate_number` or `none`) release to an export only, with no LMS push (§9).
 
 | Storage class | Entities | Rule |
 |---|---|---|
@@ -3288,7 +3288,7 @@ These rules apply equally to the workspace (§14.9).
 
 ### 14.8 Ingest state machine and resumability
 
-Each transition is one idempotent transaction, keyed by (object BLAKE3, step, step version) or by (booklet, run). Unfinished jobs resume at launch (§4.5).
+Each transition is one idempotent transaction, keyed by (object BLAKE3, step, step version) or by (booklet, run); stage outputs are memoized under the §14.6 cache keys. Unfinished jobs resume at launch (§4.5).
 
 | Page state | Entered when | Durability | On restart |
 |---|---|---|---|
@@ -3326,7 +3326,7 @@ Workspace.omrlib/
 | Registries | `project_registry`(project UUID, path, host, assessment_id, last chain head, last seen); `student_registry`(student_pid, vault ref, aliases, erasure state); `project_member` (§15.5) |
 | Results | `assessment_result_snapshot` (below); course- and programme-level `attainment_result`, `action_item`, `evidence_sample` (§11.5, §11.6) |
 
-**Stable pseudonymous student ID.** `student_pid` = UUIDv5, in the institution namespace, of HMAC-SHA256(K_inst, normalized SIS ID). Normalization: NFKC, ASCII digits (§20.1), trimmed, upper-case.
+**Stable pseudonymous student ID.** `student_pid` = UUIDv5, in the institution namespace, of HMAC-SHA256(K_inst, normalized SIS ID); the SIS ID is normalized only by the §9.2 import rules (IDs as text; rule 3 key normalization).
 - It is the project `student_id` of every roster student. A provisional student gets a UUIDv7 until an SIS ID is known; an alias event then links the two.
 - K_inst lives in the workspace vault, escrowed like the project data key (§19.2); without it a pid cannot be recomputed from an SIS ID.
 - A colleague's PC gets K_inst through a signed, `age`-encrypted workspace-join file or ADMX/MDM escrow. A snapshot computed under another K_inst is refused, since its pids would not join.
@@ -3339,10 +3339,11 @@ Workspace.omrlib/
 |---|---|
 | Header | workspace_id, offering_id, assessment_id, sections, sitting, score_run_id (§10.1), project chain head, publishing device key, supersedes |
 | Scores | Pseudonymous L3 item scores (student_pid × master item, columnar postcard); void, excused and choice-group lists; form maps |
-| Per student | Released L4 final (step 8, §10.1); status (Absent excused or unexcused, Excused, NotScorable, Provisional); sitting id. L5 (§10.5) and rank lists (§10.6) read these, because `IndividualOverride` events cannot be rebuilt from L3 plus the policy hash |
+| Per student | Released L4 final (step 8, §10.1); status (Absent excused or unexcused, Excused, NotScorable, Provisional); sitting id. L5 (§10.5) and rank lists (§17.2) read these, because `IndividualOverride` events cannot be rebuilt from L3 plus the policy hash |
 | Hashes | Mapping-set hash; policy hash; hashes of the evidence crops materialized at release (§17.6) |
 
 - Snapshots are immutable, JCS-hashed and pseudonymous; names come from the workspace vault at report time. The newest per (assessment, section) is current; older ones remain for trends.
+- **Erasure** is the only exception: full erasure (§19.2) deletes the student's rows from every snapshot; the signed hash covers a kept list of per-student row hashes, so the remaining rows still verify. Identity-only erasure leaves snapshots unchanged.
 - Course L5 aggregation, cross-assessment and multi-section CLO, PLO roll-up, trends and item-bank statistics are computed **only** from snapshots, never by opening projects.
 - If the workspace is unreachable, the snapshot waits in the project outbox, and L5 shows "n snapshots pending".
 
@@ -3494,7 +3495,7 @@ FOR UPDATE OF e SKIP LOCKED;
 
 ### 15.5 AuthZ with Cedar
 
-**Engine.** `cedar-policy` 4.13 runs in `omr-app` on the desktop and in the API middleware on the server, with one policy set and one schema. Its principal types are `User` and `Engine` (`engine:<component>`, §14.4); decision actions include `ResolveException`, `SetResponse`, `ConfirmIdentity`, `PublishKeyVersion`, `ApproveMapping`, `ReleaseGrades` and `AcceptSuggestion` (§18.1).
+**Engine.** `cedar-policy` 4.13 runs in `omr-app` on the desktop and in the API middleware on the server, with one policy set and one schema. Its principal types are `User` and `Engine` (`engine:<component>`, §14.4); decision actions include `ResolveException`, `SetResponse`, `ConfirmIdentity`, `PublishKeyVersion`, `ApproveMapping`, `ReleaseGrades` and `AcceptSuggestion` (§18.1), plus `LockData`/`UnlockData` (§13.6), `MarkResponse` (§13.7) and `LowerSeverity` (§13.1); blind review forbids the read action `ViewPriorResolution` (§15.3). These action names are canonical.
 
 **Principals and scope.**
 - A principal holds any number of role bindings: (role, scope ∈ {institution … section}, valid_from, valid_to). A coordinator is an Instructor bound at offering scope.
@@ -3521,7 +3522,7 @@ Legend: ● allowed in scope; letter = restricted (key below); — denied.
 | Resolve mark exceptions | ● | ● | a | — | — | — | — | — | — |
 | Mark constructed responses (§13.7) | ● | ● | s | — | — | — | — | — | — |
 | Lock or unlock L1 data (§13.6) | ● | — | — | — | — | — | — | — | — |
-| Resolve identity; see snippets (§9.10) | r | r | b, r | ● | — | — | — | — | — |
+| Resolve identity; see snippets (§9.10) | r | r | b, r | ● | — | — | u | — | — |
 | View answer key | c | d | e | — | f | f | — | f | — |
 | Edit or publish key or policy | ● | d | — | — | — | — | — | — | — |
 | Approve post-release change | g | g | — | — | ● | — | — | — | — |
@@ -3557,6 +3558,7 @@ Legend: ● allowed in scope; letter = restricted (key below); — denied.
 - r: denied to anyone with grading rights on the assessment while it uses anonymous marking and is unreleased (§9.10).
 - s: with a marking assignment; identity masked (§13.7).
 - t: Instructor and QA together, under four-eyes; never Admin alone; future runs only.
+- u: only as the designated identity adjudicator under anonymous marking (§9.10).
 
 **Global `forbid` rules:**
 - Keys are sealed for everyone but the owner, Admin included. Sole exception: Admin and Registrar together, by two-person break-glass, may transfer ownership to a named Co-instructor without either viewing the key (`KEY_OWNERSHIP_TRANSFER`, §19.3); the previous owner gets a task.
@@ -3588,7 +3590,8 @@ unless {
 // Engines and AI advise only (base policy set, §18.1).
 forbid (principal is Engine, action in [Action::"ResolveException", Action::"SetResponse",
         Action::"ConfirmIdentity", Action::"PublishKeyVersion", Action::"ApproveMapping",
-        Action::"ReleaseGrades", Action::"AcceptSuggestion"], resource);
+        Action::"ReleaseGrades", Action::"AcceptSuggestion", Action::"LockData", Action::"UnlockData",
+        Action::"MarkResponse", Action::"LowerSeverity"], resource);
 ```
 
 **Desktop solo.** The local user holds every role on their own projects, Integrity Officer included, except where ADMX/MDM policy forces key sealing, retention or AI off.
@@ -3627,7 +3630,7 @@ Key sources: https://postgresql.org/developer/roadmap · https://blog.elest.io/m
 | Google Classroom | REST | — | Only coursework created by the **same Cloud project** can be graded, so the app creates it. Only `draftGrade` and `assignedGrade` are writable. Verification tier unverified |
 | Microsoft Teams Assignments | Graph | Microsoft 365 LTI | PATCH `…/outcomes/{id}` with `educationPointsOutcome`, then `return`. Never write `published*`. The legacy Teams Assignments LTI was retired on 2026-09-17 |
 
-**Per-student PDF feedback** (desktop REST, §17.4), each unverified until its API check: Canvas submission-comment file; Moodle assignment feedback file; D2L dropbox feedback; Blackboard attempt feedback.
+**Per-student PDF feedback** (desktop REST, §17.4) on each REST connector as it ships (GA: Canvas, Moodle and the Q-03 LMS; others P3), each unverified until its API check: Canvas submission-comment file; Moodle assignment feedback file; D2L dropbox feedback; Blackboard attempt feedback.
 
 **K-12.** ClassLink is served through OneRoster 1.2 (§16.2). FACTS is a P3 `roster-connector` plugin, only if K-12 is in scope (Q-04).
 
@@ -3661,7 +3664,7 @@ Key sources: https://postgresql.org/developer/roadmap · https://blog.elest.io/m
 | QTI 3.0 (3.0.1); QTI 1.2 | ● / ● ; — / ● | `quick-xml` 0.42, XSD-validated in CI | DTD and external entities rejected. QTI 1.2 is for Canvas Classic Quizzes |
 | Moodle XML, GIFT, Aiken | ● / — | Own parsers | Fuzzed; preview before commit. No `.docx` parser: Word forms go through Save as PDF (§6.10), Word items through Aiken/GIFT paste or CSV |
 | Assessment scores (LMS gradebook exports, spreadsheets; CSV/XLSX) | ● / — | `csv` / `calamine` | Wizard: student key column (ID, email or LMS user ID, via roster aliases); each score column becomes one `Points` item with a declared M_i in an `imported` assessment (§10.1). Blank, `-`, `N/A` → missing; `EX`, `excused` → excused; value > M_i → error row. Versioned like a roster snapshot |
-| Online survey responses (Qualtrics, Microsoft Forms, Google Forms; CSV/XLSX) | ● / — | `csv` / `calamine` | Column-to-question mapping wizard with preview; rows join the survey's L1 responses with source = online (§10.1); comments go to the comment-coding lane (§13.7) |
+| Online survey responses (Qualtrics, Microsoft Forms, Google Forms; CSV/XLSX) | ● / — | `csv` / `calamine` | Column-to-question mapping wizard with preview; rows join the survey's L1 responses with source = online (§10.1); comments go to the comment-coding lane (§13.7). For an anonymous survey the wizard discards respondent-identifier columns (name, email, user or response ID, IP, location) before commit (§6.5) |
 | Seat map; attendance | ● / — | `csv` / `calamine` | Seat map: student, sitting, room, seat, row, col, optional neighbour list. Attendance: CSV, or a printed per-room OMR sign-in sheet. Both feed §9.5, §12.7 and key sealing (§19.3) |
 | Fillable-PDF response sheet (PAR-01) | ● / ● | `pdf-writer` 0.15 (AcroForm unverified; spike) / `lopdf` 0.45 | One radio group per item; values read without OMR (provenance `digital_fillable`), then the normal identity and scoring pipeline; JavaScript and XFA ignored |
 | LMS gradebook CSVs (Canvas, Moodle, Blackboard Ultra, D2L); Remark-compatible layouts | — / ● (Remark keys and data also ● in) | Versioned templates | Remark layouts documented from public material; no proprietary binaries; legal note in §3.5 |
@@ -3796,7 +3799,7 @@ Key sources: https://docs.ltiaas.com/learn/lti-dynamic-registration · https://s
 | Item analysis | Instructor | p, D, r_ir, r_pb, option table by quintile, trace sparklines, ranked flags with stability (§12.2) | #203/#204/#206; #320 |
 | Response matrix; incorrect responses | Instructor | Students × items, correct shown by glyph; per item, who chose which distractor | Same names |
 | Grade list | Instructor, Registrar | Raw, adjusted, letter, scaled (z, T, CEEB, DIQ, percentile), boundary list (SCO-017) | Student Grade #150; Student Statistics |
-| Rank / merit list | Instructor, Registrar (internal by default) | Per §10.6 (method, ties, population, scope, versioning). Published only under institution flag `rank_publication`, with candidate numbers; never pushed to an LMS | — (Addmen and Alpha merit lists) |
+| Rank / merit list | Instructor, Registrar (internal by default) | Rank, score, percentile rank (§10.6 mid-rank PR); rules below | — (Addmen and Alpha merit lists) |
 | Student report | Student | Annotated sheets + CLO breakdown (§17.3) | Student Test Report #151 |
 | Comparative / demographic | Instructor; demographics QA-only | Sections, campuses, terms; roster-snapshot attributes (§9.2); n < 5 suppressed | Comparative and Demographic Grade |
 | CLO and accreditation pack | Instructor, QA, programme | §11.7 | Learning Objectives #111; Benchmark #112 |
@@ -3810,9 +3813,11 @@ Key sources: https://docs.ltiaas.com/learn/lti-dynamic-registration · https://s
 | Operations | Scanner-Operator, Admin | Batch reconciliation (COL-005), exception summary, reviewer QA and automation-bias metrics (§13.4), scanner health, signed acceptance report (§23.7) | — |
 
 **Survey report** (kind `survey`, §10.1: no key, no score run).
-- Per item: valid N, frequency and %, response rate (responses ÷ enrolled in the roster snapshot); Likert mean, SD, median and top-2-box, reverse-keyed items flipped. Skipped questions (`NotApplicable`, §6.5) count apart from blanks. Online responses (§16.3) merge with paper, splittable by source.
+- Per item: valid N, frequency and %, response rate (responses ÷ enrolled in the roster snapshot); Likert mean, SD, median and top-2-box, reverse-keyed items flipped. Skipped questions (`NotApplicable`, §10.1) count apart from blanks. Online responses (§16.3) merge with paper, splittable by source.
 - Per question group: summary and scale α. Crosstabs of any item × item, question group or roster attribute, with χ²; cells with n < 5 suppressed (SCO-023).
 - Comment clips follow §10.1 (instructor sees them after grade release; excluded from exports by default); coded comments report code frequencies (§13.7). Anonymous surveys produce no student-level output.
+
+**Rank / merit list** (G11; rules owned here). Basis: the value displayed under the RoundingPolicy (§10.2), compared exactly. Tied students share a rank ("1224" *(proposed)*); ordinal "1234" only when the declared tie-break chain resolves every tie; never alphabetical or by ID. Only `Scored`, non-provisional students are ranked; absent, excused and withdrawn students are listed separately. Cohort scope reads §14.9 snapshots. Publication needs the institution flag `rank_publication`, uses candidate numbers and never goes to an LMS. A changed list (regrade, later sitting, §10.9) is re-issued as a new version, the old one watermarked SUPERSEDED (§17.1).
 
 Every tabular report also exports to XLSX/CSV (§16.3).
 
@@ -3851,7 +3856,7 @@ Candidate-number and "none" identity modes release to an export only, never to a
 
 | # | Channel | Mode, phase | Rules |
 |---|---|---|---|
-| 1 | LMS | Server: AGS score + comment (§16.1). Desktop REST (GA, for the connectors shipped at GA): per-student PDF uploaded as LMS feedback — Canvas submission-comment file, Moodle assignment feedback file, D2L dropbox feedback, Blackboard attempt feedback (each unverified until the API check, §16.1) | Value, scoreMaximum and column mapping per §16.6; pushed through the outbox; "released" only after read-back confirms |
+| 1 | LMS | Server: AGS score + comment (§16.1). Desktop REST (GA for Canvas, Moodle and the Q-03 market's primary LMS; others P3, §25.2): per-student PDF uploaded through that platform's feedback-file endpoint (§16.1; each unverified until its API check) | Value, scoreMaximum and column mapping per §16.6; pushed through the outbox; "released" only after read-back confirms |
 | 2 | Email with the PDF attached | Desktop, GA; policy-gated, off by default | SMTP MUST use OAuth 2.0 (Exchange Online disables SMTP AUTH Basic for existing tenants in December 2026). Only after the identity gate, only to the roster-snapshot address, only if its domain is on the institution allowlist (ADMX). Optional AES-256 encryption with a random per-student password delivered through the LMS |
 | 3 | Portal link | Server mode (P3) | SSO-protected, short-lived, single-student OIDC link *(proposed TTL 14 days)*; email then carries only the link |
 | 4 | Print and hand back; LMS bulk-feedback ZIP | Desktop | — |
@@ -3921,7 +3926,7 @@ This section covers the optional AI pack (`omr-ai`, the `llama-server` sidecar, 
 | P5 | Asymmetric harm | Thresholds minimise errors against the student (correct answer read as wrong, mark read as blank) before total error (Grabowski 2026). |
 
 **Enforcing P1** (cited by §4.2 row 1 and §4.7):
-1. **Cedar.** The §15.5 policy set forbids `Engine` principals `ResolveException`, `SetResponse`, `ConfirmIdentity`, `SetKey`, `ApproveMapping` and `ReleaseGrades`.
+1. **Cedar.** The §15.5 policy set forbids `Engine` principals `ResolveException`, `SetResponse`, `ConfirmIdentity`, `PublishKeyVersion`, `ApproveMapping`, `ReleaseGrades` and `AcceptSuggestion`.
 2. **Human input.** `AcceptSuggestion` carries the reviewer principal and `HumanInput{ui_event_seq, dwell_ms}`, minted only by the shell input handler on a real key press or click; the writer actor rejects it unless `dwell_ms > 0` and `ui_event_seq` is session-monotonic. Engines, the local API, CLI, plugins and scheduled jobs (§16.4) cannot mint it.
 3. **Single constructor.** An architecture test asserts that only the `AcceptSuggestion` handler builds a `Command` with a `suggestion_id`.
 4. **Replay.** The monthly projection replay (§14.4) flags suggestion-caused state changes lacking a human `SuggestionDecided{accepted | edited}`.
@@ -3956,7 +3961,7 @@ This section covers the optional AI pack (`omr-ai`, the `llama-server` sidecar, 
 | `llama-server` (llama.cpp, MIT; one pinned `bNNNN` build per platform and backend) | All free generation: blind reads, transcriptions, rubric and Bloom suggestions, narratives, query plans | `ai-sidecar` (§4.4): listens on `127.0.0.1` at a random port, never connects out; API key via `--api-key-file` (0600, per-session directory, deleted after start), never on the command line; GPU at Tier ≥ 2 | One per resident model; lazy; unloads after 5 min idle |
 | `omr-ml-worker`, AI-pack build | `mistralrs` 0.8 (MIT) PMI scoring, in process; AI-pack ORT models (e5-small, DINOv2-S, template detector) on CPU or a GPU EP | `parser`, no network (§4.4); inherited IPC channel only; GPU at Tier ≥ 2 | Lazy; loads AI-pack models only on a supervisor request (`AiRuntimeStarted`, §18.1) |
 
-- **Caps.** Per process 1.2 × (GGUF + `mmproj` bytes) + KV bytes + 256 MB, with KV bytes = 2 × n_ctx × n_attn_layers × n_kv_heads × head_dim × 2 B (f16) or the runtime's figure at load; n_ctx is 4,096 for reads and 8,192 for narratives (proposed). Enforcement per OS: §4.4.
+- **Caps.** Per process 1.2 × (GGUF + `mmproj` bytes) + KV bytes + 256 MB, with KV bytes = 2 × n_ctx × n_attn_layers × n_kv_heads × head_dim × 2 B (f16) or the runtime's figure at load; n_ctx is 4,096 for reads and 8,192 for narratives (proposed). It applies to each `llama-server` and to `omr-ml-worker` while the PMI scorer is loaded; otherwise `omr-ml-worker` keeps its ≤ 400 MB helper cap (§4.4, §21.5). AI caps sit outside the §21.5 tree limit. Enforcement per OS: §4.4.
 - **Residency.** Tier 1 runs the AI lane in model-grouped phases (queued blind reads per model, then PMI scoring), stopping one process before starting the next. Tier ≥ 2 swaps processes LRU when caps exceed free RAM minus the app budget.
 - **PMI scoring** (§18.3a step 3, §9.8) uses `mistralrs` because prompt-token log-probs in `llama-server` are unverified (`llama-cpp-2` is not used, §5.3), and Qwen3.5-2B (4B at Tier ≥ 2) because `mistralrs` does not list PaddleOCR-VL-1.6. The image+prompt KV prefix MUST be computed once per crop and render and reused, so each candidate adds only its |c| tokens. A P0 check (§5.5) MUST verify teacher-forced log-probs and prefix reuse in the pinned build (both unverified): without log-probs PMI scoring is off; without prefix reuse it is off at Tier 1 (§9.8). Badges then use the blind read and the second reader only.
 - **Embeddings and detector.** AI-pack ORT models never run in the main process. `fastembed` 7.1.1 (`default-features = false`) loads e5-small only from the manifest path, never from the Hugging Face Hub; CI (`cargo tree -i ort`) asserts a single `ort 2.0.0-rc.14`, else `ort` plus `tokenizers` replace fastembed (mean pooling, L2 normalization).
@@ -3986,8 +3991,8 @@ This section covers the optional AI pack (`omr-ai`, the `llama-server` sidecar, 
 | Failure | Response | Code |
 |---|---|---|
 | Hash or signature mismatch | Refuse the load; feature off | SYS-006 |
-| RSS cap hit, or repeated deadline overruns (§22.4) | Drop one tier; requeue | SYS-020 |
-| Crash or crash storm of `llama-server` or the AI-pack `omr-ml-worker` | Restart with back-off (§4.4); a crash storm turns AI off for the session | SYS-002 |
+| RSS cap hit or OOM, or overruns > 2× the deadline (§22.4) | Drop one tier; requeue | SYS-020 |
+| Other crash, or crash storm, of `llama-server` or the AI-pack `omr-ml-worker` | Restart with back-off (§4.4); a crash storm turns AI off for the session | SYS-002 |
 
 ### 18.3 Feature specs
 
@@ -4177,7 +4182,7 @@ Key store (backends below)                    server: KMS or Vault
  K_cache,session       random, memory only: cache/ tiles and crops (§14.5)
  K_sign                Ed25519 per device or service; server: KMS-held institution key
  Workspace keys/epochs.kst (§14.9):
-   K_inst              student_pid = UUIDv5(HMAC-SHA256(K_inst, SIS ID)); escrowed like the PDK
+   K_inst              student_pid = UUIDv5(HMAC-SHA256(K_inst, SIS ID normalized per §9.2)); escrowed like the PDK
    K_bank              item-bank content and key history (§19.3)
 ```
 
@@ -4185,7 +4190,7 @@ Key store (backends below)                    server: KMS or Vault
 - **Epochs.** No student-linkable key is wrapped directly under the PDK; each hangs under the current K_vault,e. The workspace has its own `keys/epochs.kst`.
 - **Pre-identity originals.** The booklet is unknown at spool time, so DEK_obj is first wrapped under K_vault,e, then under K_booklet at collation; `IdentityConfirmed` wraps K_booklet under K_student. Wraps are database rows (`object.wrap_key_id`, §14.5), so re-wrapping and shredding never rewrite the envelope.
 - **Helpers hold no keys** (capture agents, PDFium workers, AI processes); only the main process writes envelopes (§4.4, §7.4).
-- **Re-attribution.** `ID_CORRECTION` re-wraps K_booklet to the new K_student and deletes the old wrap (`BookletRekeyed`; snippets: `SnippetRekeyed`, §9.10), so erasing the wrong student never shreds the true owner's evidence. A page moved between booklets (COL-004, page attach) has its DEK_obj re-wrapped.
+- **Re-attribution.** `ID_CORRECTION` re-wraps K_booklet to the new K_student and deletes the old wrap (`BookletRekeyed`); snippets follow, since W_snip hangs under K_booklet (§9.10), so erasing the wrong student never shreds the true owner's evidence. A page moved between booklets (COL-004, page attach) has its DEK_obj and snippet wraps re-wrapped under the new K_booklet (`SnippetRekeyed`).
 - **Cache.** `cache/` is never plaintext on disk; K_cache,session is never stored, so the cache dies with the session.
 
 **Algorithms.**
@@ -4209,7 +4214,7 @@ Key store (backends below)                    server: KMS or Vault
 **SQLCipher 4.17.0** MAY be added as an extra layer, but not by default: one database key cannot crypto-shred one student. Its Community Edition licence text is unverified.
 
 **Crypto-shredding.** Overwriting fails on SSDs, on copy-on-write filesystems (APFS, Btrfs, ReFS) and against VSS, Time Machine and sync snapshots; NIST SP 800-88r2 recognizes cryptographic erase instead.
-1. **Check.** A legal hold or open appeal blocks erasure (§19.5). The workspace project registry (§14.9) is iterated; unreachable projects and archives are listed for manual action.
+1. **Check.** A legal hold or open appeal blocks erasure (§19.5). The workspace project and student registries (§14.9) are iterated; unreachable projects and archives are listed for manual action.
 2. **Destroy** the wraps for the scope (table).
 3. **Tombstone:** append `ErasureExecuted`. The chain stays verifiable because it hashes ciphertext digests.
 4. **Scrub:** `secure_delete`, `wal_checkpoint(TRUNCATE)`, `VACUUM`, cache purge.
@@ -4218,7 +4223,7 @@ Key store (backends below)                    server: KMS or Vault
 
 | Scope | Destroyed | Retained (stated in the confirmation) |
 |---|---|---|
-| Full erasure | K_student, which makes unreadable the vault fields, notes, originals, snippets and evidence crops (via K_booklet) and the student-linked event fields (`{ct_ref, ct_sha256}`, §14.4). Result rows and workspace snapshot rows (§14.9) are deleted | The audit-chain skeleton: event types, reason codes, actors, timestamps, hashes and the pseudonymous student_pid (re-linkable only with K_inst and the SIS ID), kept under GDPR Art. 17(3)(b)/(e) as the integrity record |
+| Full erasure | K_student, which makes unreadable the vault fields, notes, originals, snippets and evidence crops (via K_booklet) and the student-linked event fields (`{ct_ref, ct_sha256}`, §14.4). Result rows are deleted, and the student is removed from the immutable workspace snapshots as §14.9 specifies | The audit-chain skeleton: event types, reason codes, actors, timestamps, hashes and the pseudonymous student_pid (re-linkable only with K_inst and the SIS ID), kept under GDPR Art. 17(3)(b)/(e) as the integrity record |
 | Identity-only (a legal duty to keep the grade record, Art. 17(3)(b)/(e)) | Vault fields; originals, snippets and crops (pixels show names); the student-registry row | Pseudonymous results, the K_student-protected event fields, and the skeleton |
 
 **Epochs, snapshots and archives.**
@@ -4231,7 +4236,7 @@ Key store (backends below)                    server: KMS or Vault
 
 **Storage.** K_keys encrypts key versions and derived per-form keys; permutation tables (π_f, σ_f), because with one form's key they reveal every form's key; key-sheet scans; and **question content**: master-item text, QTI payloads, question-paper, booklet and print-run PDFs, and the Typst sources of integrated papers.
 
-Before `sealed_until`, content is never a plain file in `exports/`. Only the scoring services decrypt keys. Keys and content never reach recognition or identity (R2, §4.3), logs or crash reports, nor AI prompts (§18.3) or cloud tiers (§18.4) before unsealing. Bank items (§14.9) stay encrypted under the workspace K_bank after unsealing, because they are reused.
+Before `sealed_until`, content is never a plain file in `exports/`. Only the scoring services decrypt keys. Keys and content never reach recognition or identity (R2, §4.3), logs or crash reports. They reach AI prompts or cloud tiers only after unsealing, as §18.3 and tier A (§18.4) allow; the §18.3d key cross-check never sends the key. Bank items (§14.9) stay encrypted under the workspace K_bank after unsealing, because they are reused.
 
 **Ownership.** The authoring Instructor owns the key and may share it with named Co-instructors; TA-Reviewers see it only if policy allows, after unsealing.
 
@@ -4366,7 +4371,7 @@ Key sources: https://www.scl.org/10098-cjeu-exam-answers-and-examiner-s-comments
 - **Formatting: ICU4X** (`icu` 2.3.1) for numbers, dates, plural rules and collation, trimmed with `icu4x-datagen` to the shipped locales and compiled in. Rosters sort with the locale collator.
 - **Separate settings.** UI locale, report locale and digit style are independent: an English UI can produce Arabic reports.
 - **Bidi isolates.** Fluent wraps placeables in FSI/PDI (U+2068/U+2069): kept in the UI and PDFs; stripped from CSV, XLSX, logs and any widget that renders them as boxes. Exports scan for U+2066–2069.
-- **Digits at ingest.** U+0660–0669, U+06F0–06F9 and full-width U+FF10–FF19 become ASCII in IDs, numeric write-ins and roster files; the original string is kept for display and audit.
+- **Digits at ingest.** U+0660–0669, U+06F0–06F9 and full-width U+FF10–FF19 become ASCII in numeric write-ins; IDs and roster keys follow the canonical §9.2 rule 3 (also used for `student_pid`, §14.9). The original string is kept for display and audit.
 - **Time.** Stored as UTC + IANA zone (`Asia/Riyadh`), shown in the venue's zone, ordered by HLC (§15.2).
 - **Locale-neutral data exports:** ASCII digits, `.` decimal separator, ISO 8601 dates, UTF-8 BOM for CSV, IDs typed as text.
 - **CI** runs a +40 % expansion pseudo-locale and an RTL pseudo-locale to catch truncation and hard-coded strings *(proposed)*.
@@ -4450,7 +4455,7 @@ The ≥ 200 pages/s target on an 8-core laptop is ≈ 28× the fastest productio
 
 | Metric | Target (locked) | Anchor | Verified by |
 |---|---|---|---|
-| Recognition, 8-core laptop, §8.1 reference corpus (300-dpi gray JPEG q85, median ≤ 600 KB, 100 questions) | ≥ 200 pages/s; stretch 400 | 219–266 pages/s on 4 vCPU, clean, partial pipeline [M]. Noisy 1–1.65 MB pages: ≈ 130–160 pages/s at W = 7 (est., §8.1) | Bare-metal nightly (§21.7) |
+| Recognition, 8-core laptop, §8.1 reference corpus (300-dpi gray JPEG q85, median ≤ 600 KB, 100 questions) | ≥ 200 pages/s, identity HTR excluded (caveats); stretch 400 | 219–266 pages/s on 4 vCPU, clean, partial pipeline [M]. Noisy 1–1.65 MB pages: ≈ 130–160 pages/s at W = 7 (est., §8.1) | Bare-metal nightly (§21.7) |
 | Recognition, 4-core N100-class | ≥ 40 pages/s | ≈ 75 ms per page per worker at W = 3 | Reference laptop |
 | Scanner-following | p99 image → result ≤ 1 s; no queue growth at 420 ipm | 16.7 ms per clean page, 1 thread [M]; W ≥ 2 held (§21.2) | Simulated-scanner soak |
 | Scanned-PDF import | ≥ 100 pages/s | Stream extraction 0.39 ms + decode [M] | Corpus benchmark |
@@ -4459,10 +4464,10 @@ The ≥ 200 pages/s target on an 8-core laptop is ≈ 28× the fastest productio
 | UI | 60 Hz; ≤ 8 ms main-thread work per frame; no frame > 33 ms in a batch; input → visual ≤ 50 ms | — | Frame histogram |
 | Next review item | ≤ 50 ms | ±5-item prefetch; lazy tiles (§21.6) | Review harness |
 | Time to first result, 30 sheets | < 3 s | ≈ 0.15–0.35 s of compute (30 × ≤ 35 ms (§8.1) ÷ W, W = 3–7) | End-to-end test |
-| Cold / warm start | ≤ 1.5 s / ≤ 0.5 s | Lazy sessions | Startup trace |
+| Cold / warm start, N100-class reference | ≤ 1.5 s / ≤ 0.5 s | Lazy sessions | Startup trace |
 | Memory | ≤ 1.2 GB on 4 GB (≤ 2.5 GB on 16 GB): process-tree private memory, AI pack excluded | §21.5 | 24 h soak |
 
-**Caveats.** [M] is a partial-pipeline Rust harness (decode, fiducials, homography, mean darkness) on a 4-vCPU Xeon VM (`x86-64-v3`), clean synthetic 500-bubble sheets. Unverified: real-scan JPEG entropy; laptop per-core speed (claimed 1.3–1.8× a server core) and throttling; full-pipeline stage costs (§8.1); identity cost, ≈ 10–40 ms of a core per identity page with every applicable channel evaluated (§9.4, est.). Sheets with ID boxes and a handwritten name on every page need up to ≈ 2× CPU; single-page ones reach ≈ 95–140 pages/s at W = 7 (est.), so the 200 pages/s target excludes identity HTR (§2.4). Numbers MUST be re-measured on ≥ 2 reference laptops and ≥ 5 scanners before public claims (§25.1).
+**Caveats.** [M] is a partial-pipeline Rust harness (decode, fiducials, homography, mean darkness) on a 4-vCPU Xeon VM (`x86-64-v3`), clean synthetic 500-bubble sheets. Unverified: real-scan JPEG entropy; laptop per-core speed (claimed 1.3–1.8× a server core) and throttling; full-pipeline stage costs (§8.1); identity cost, ≈ 10–40 ms of a core per identity page (≈ 15–40 ms with ID boxes and a name field) with every applicable channel evaluated (§9.4, est.). Sheets with ID boxes and a handwritten name on every page need up to ≈ 2× CPU; single-page ones reach ≈ 95–140 pages/s at W = 7 (est.), so the 200 pages/s target excludes identity HTR (§2.4). Numbers MUST be re-measured on ≥ 2 reference laptops and ≥ 5 scanners before public claims (§25.1).
 
 ### 21.2 Pipeline design
 
@@ -4529,10 +4534,10 @@ Stage budgets (≤ 35 ms per reference-corpus page): §8.1; decoders per format:
 | Tile LRU / thumbnail and L1/L2 LRU | 96 / 48 MB | 192 / 96 MB | 256 / 128 MB | Lazy tiles (§21.6); dropped first under pressure |
 | SQLite page cache | 64 MB writer + 4 × 16 MB readers | Same | Same | `cache_size` is **per connection** (§14.2) |
 | UI, compositor buffers, textures | ≈ 150 MB | ≈ 175 MB | ≈ 200 MB | §4.7 |
-| Helpers: N = clamp(cores ÷ 2, 1, 4) PDFium/decode workers ≤ 128 MB each; capture agent ≤ 100 MB; `omr-ml-worker` ≤ 400 MB | 2 + agent: ≤ 356 MB | 3 + agent: ≤ 484 MB | 4 + agent + ml-worker: ≤ 1,012 MB | Hard caps (§4.4); only while active |
+| Helpers: N = clamp(cores ÷ 2, 1, 4) PDFium/decode workers ≤ 128 MB each; capture agent ≤ 100 MB; `omr-ml-worker` ≤ 400 MB without the PMI scorer | 2 + agent: ≤ 356 MB | 3 + agent: ≤ 484 MB | 4 + agent + ml-worker: ≤ 1,012 MB | Hard caps (§4.4); only while active |
 | **Tree limit** (worst case) | **1.2 GB** (≈ 1.16 GB) | **1.7 GB, proposed** (≈ 1.68 GB) | **2.5 GB** (≈ 2.5 GB) | Main process alone: ≈ 0.81 / 1.20 / 1.49 GB |
 | SQLite reader mmap (file-backed, outside the limit) | 0 | ≤ 4 × 256 MiB | ≤ 4 × 256 MiB | 0 on removable media (SIGBUS risk, §14.2) |
-| AI pack (own caps, outside the limit) | Not allowed | One AI process at a time, ≈ 2.5–3.5 GB at its cap (est.); never two | LRU swap within free RAM (§18.2) | Cap = 1.2 × (GGUF + `mmproj`) + KV + 256 MB; tier refusal: §18.2 |
+| AI pack: `llama-server`, and `omr-ml-worker` while the `mistralrs` PMI scorer is loaded (own caps, outside the limit) | Not allowed | One AI process at a time, ≈ 2.5–3.5 GB at its cap (est.); never two | LRU swap within free RAM (§18.2) | Cap = 1.2 × (GGUF + `mmproj`) + KV + 256 MB; tier refusal: §18.2 |
 
 - **Byte-weighted semaphore** (§4.5). Permits are sized from header-declared dimensions before decode; the semaphore, not `try_reserve`, prevents OOM (§7.4). A 600 dpi A3 gray page (≈ 70 MB) takes every permit and runs alone, so it cannot deadlock.
 - **Allocation guards**, since third-party decoders allocate their own buffers and under overcommit a successful `try_reserve` can still end in an OOM kill:
@@ -4551,7 +4556,7 @@ Stage budgets (≤ 35 ms per reference-corpus page): §8.1; decoders per format:
 
 **UI.**
 - **Main thread:** no decode, no SQL (§4.5).
-- **Lazy tile pyramid** (§4.7). Ingest writes only display levels L1 and L2 (from the §8.2 pyramid) and a ≈ 256 px thumbnail: ≈ 1 MB raw per 300-dpi A4 page, zstd level 1, within the ≤ 1.5 ms §8.1 budget line. A full pyramid at ingest (≈ 11.6 MB per page, ≈ 2.3 GB/s at 200 pages/s) is forbidden. Full-resolution tiles are cut from the original on view or prefetch (decode 6–37 ms, §21.3), held in the tile LRU (§21.5) and spilled to `cache/` (cap min(2 GB, 2% of free space); per-session encryption, §14.5).
+- **Lazy tile pyramid** (§4.7). Ingest writes only display levels L1 and L2 (from the §8.2 pyramid) and a ≈ 256 px thumbnail: ≈ 1 MB raw per 300-dpi A4 page, zstd level 1 (`zstd` crate, a libzstd binding; it decompresses only AEAD-verified blobs the app wrote, so §4.3 R5 does not apply; pin: §5.3), within the ≤ 1.5 ms §8.1 budget line. A full pyramid at ingest (≈ 11.6 MB per page, ≈ 2.3 GB/s at 200 pages/s) is forbidden. Full-resolution tiles are cut from the original on view or prefetch (decode 6–37 ms, §21.3), held in the tile LRU (§21.5) and spilled to `cache/` (cap min(2 GB, 2% of free space); per-session encryption, §14.5).
 - **Review prefetch.** Exception and audit crops are cached during recognition (§8.11) and re-derived from originals after a reopen, since the session cache key is gone (§14.5). Tiles for ±5 items are built at P0 (§4.7).
 - **Throttling.** Progress updates ≤ 20 Hz; lists and grids virtualized; a 100k-row sort < 100 ms (§5.2).
 - **Project open.** Read-only on the read path (blobs plus summary rows) within 300 ms; `PRAGMA quick_check` (§14.2) then runs in the background on a reader connection, ≈ 0.3–1 s on a ≈ 300 MB 10k-sheet database (est.). All writes, decision commits included, queue until it passes; a failure keeps the project read-only with SYS-010 (§22.2).
@@ -4662,7 +4667,7 @@ Cancellation tokens are checked at stage boundaries and inside own loops. Third-
 |---|---|---|
 | Decode | 2 s | Overrun rule |
 | Registration / read | 1 s / 1 s | Overrun rule |
-| OCR/HTR per field | 5 s | Cancel; the booklet's identity goes to review with the channel marked `timed_out`, never auto-accepted on the remaining channels (§9.4) |
+| OCR/HTR per field | 5 s | Cancel; the booklet's identity goes to review with the channel marked `timed_out`, never auto-accepted on the remaining channels (§9.4). No 4× re-run: review is already the safe outcome and no path changes |
 | PDF render (worker) | 30 s | Kill; overrun rule in a fresh worker; `hayro` only as an operator re-run (`path=alternate`) |
 | WASM epoch watchdog (§16.5) | ≥ 10× the expected run time; never yields a result | One out-of-process re-run at 4×, then SYS-003; a score run fails closed (SCO-009, sub-reason `timeout`, §10.7) |
 | Helper heartbeat | 1 s; 3 missed | Kill and restart (SYS-002) |
@@ -4699,7 +4704,7 @@ System-level failures only (recognition: §8.12; identity: §9.9; capture and de
 | # | Failure | Handling | Code | Owner |
 |---|---|---|---|---|
 | 1 | Page-task panic | Retry once, then quarantine; batch continues | SYS-001 | §22.1 |
-| 2 | Helper crash, OOM or crash storm | Back-off restart; input quarantined after 2 crashes; fallback after a storm | SYS-002 | §22.1 |
+| 2 | Helper crash, OOM or crash storm (an AI-pack RSS-cap hit is SYS-020, row 22) | Back-off restart; input quarantined after 2 crashes; fallback after a storm | SYS-002 | §22.1 |
 | 3 | Stall or lock-ordering deadlock | Overrun rule; thread stacks in the bundle | SYS-003 | §22.4 |
 | 4 | Corrupt input or decompression bomb | Header limits before decode; reject that page only | CAP-001 | §7.4 |
 | 5 | Disk low or full | Evict cache, pause, use the reserve, resume | SYS-004 | §22.3 |
@@ -4751,7 +4756,7 @@ Key sources: https://www.sqlite.org/pragma.html#pragma_synchronous · https://sq
 - **Also tracked:** sheet SER (sheets with ≥ 1 SE); post-review residual error (blind double review, §13.4; appeal overturns, §17.5); ID mis-attribution, gated separately (§9.7).
 - **Context.** At 99.95% per answer, ≈ 4% of 100-question sheets carry an error (Hernández-Mier 2025); SER ≤ 10⁻⁵ means ≤ 1 silent error per 1,000 such sheets.
 
-| Slice | Target (locked) | Labelled questions in the LTT split, 0 errors, one-sided 95%, before × DEFF |
+| Slice | Target (locked) | Labelled questions in the LTT split (0 errors, one-sided 95%), each × DEFF |
 |---|---|---|
 | Standard (own forms, ADF, 200–300 dpi gray) | SER ≤ 1×10⁻⁵ at AR ≤ 0.5% | ≥ 300k (3,000 sheets) |
 | High-stakes | SER ≤ 2×10⁻⁶ at AR ≤ 2%; design target until certified | ≥ 1.5M (15k sheets) |
@@ -4759,7 +4764,7 @@ Key sources: https://www.sqlite.org/pragma.html#pragma_synchronous · https://sq
 | Identity (unit = booklet, no DEFF) | ≤ 10⁻⁴ per auto-accepted sheet at launch (shadow mode until certified); goal ≤ 10⁻⁶ by construction | ≈ 30k labelled *auto-accepted* sheets (≈ 33k labelled at 90% auto-accept); ≈ 3k for 10⁻³ |
 
 **Certification.**
-- **LTT is the certification:** P(SER > ε*) ≤ δ = 0.05 on the held-out LTT split (§8.7 step 8). The disjoint test split only confirms it, with its achieved bound (3/n_test at k = 0). Until certified, a slice publishes its achieved bound, never the target; for high-stakes, until ≥ 1.5M real labelled questions exist in the certifying split.
+- **LTT is the certification:** P(SER > ε*) ≤ δ = 0.05 on the held-out LTT split (§8.7 step 8). The disjoint test split only confirms it, with its achieved bound (3/n_test at k = 0). Until certified, a slice publishes its achieved bound, never the target; for high-stakes, until the certifying split holds ≥ 1.5M × DEFF real labelled questions (n_eff ≥ 1.5M; ≥ 3M at the DEFF floor).
 - **Identity** is certified per slice on the auto-accepted subset of the identity LTT split (method, n_acc ≥ 3.0/α, ID-only acceptance: §9.7). The 10⁻⁶ goal is not certifiable (≈ 3M labelled sheets).
 
 **Statistics.**
@@ -4769,7 +4774,7 @@ Key sources: https://www.sqlite.org/pragma.html#pragma_synchronous · https://sq
   - The contract bound and the LTT p-values (§8.7 step 8) use n_eff = n ÷ DEFF and k_eff = ⌈k ÷ DEFF⌉. Reports also give the sheet-SER bound.
   - A sheet-level block bootstrap is no correction at k = 0 (every resample has zero errors); it is a cross-check only when k ≥ 3.
   - Example: at DEFF = 2, 300k questions with 0 errors certify only 2×10⁻⁵; 10⁻⁵ needs ≈ 600k.
-- **Slices.** Results are reported per slice (pen, pencil and light; erasures; multi-marks; bitonal; phone; scanner; printer; form family, own vs imported, §6.10; script; JPEG-quality band), with real and semi-synthetic results separate.
+- **Slices.** Results are reported per slice (pen, pencil and light; erasures; multi-marks; bitonal; phone; scanner; printer; form family, own vs imported, §6.10; script; JPEG-quality band), with real and semi-synthetic results separate. `digital_fillable` returns (§6.11) are their own slice: no OMR, so they never enter a scanned slice's SER bound; their identity is certified separately as its own capture tier, "ID-only" when accepted without E (§9.1, §9.7).
 - **Publication.** The protocol and results are published (G5, §3.4). Head-to-head figures against Remark need EULA review (§3.5).
 
 ### 23.2 Benchmark corpus
@@ -4976,7 +4981,7 @@ All spikes run in parallel in P0. S1, S2 and S5 gate P1 scope; S9 gates design-p
 | S9 | Release pipeline | 2 (+ certificate lead time) | Signed and notarized MSI/MSIX/DMG/AppImage from CI; update and rollback verified | Blocks P1 use with real student data |
 
 **P0 checks outside the spikes.**
-- `mistralrs` 0.8 MUST give teacher-forced prompt-token log-probs and image+prompt KV-prefix reuse on Qwen3.5-2B at Tier 1 (§18.2). No-go: PMI scoring off; badges use only the blind read and the second reader.
+- `mistralrs` 0.8 MUST give teacher-forced prompt-token log-probs and image+prompt KV-prefix reuse on Qwen3.5-2B at Tier 1 (§18.2). No-go: without log-probs PMI scoring is off; without prefix reuse, off at Tier 1. Badges then use only the blind read and the second reader.
 - `minidumper` MUST be able to exclude heap memory from dumps (§19.8). No-go: crash upload stays disabled and dumps stay local.
 
 ### 25.2 Phases with scope and exit criteria
@@ -4986,9 +4991,9 @@ Windows are indicative months from kickoff with the full team (§25.3).
 | Phase | Window | Scope | Exit criteria |
 |---|---|---|---|
 | P0 Foundations | M0–M2 | Crate boundaries (key-blindness enforced); 5-target CI with `cargo-deny`, `cargo-vet`, `cargo-auditable`, `cargo-cyclonedx`; `omr-model`, `omr-store`, event log, engine manifest; ingest fuzzing; S1–S9 and P0 checks; corpus programme and consent; certificates ordered; sizing of unitemized scope (§25.3) | ADR-001 decided; 1,000-page labelled corpus; ≥ 3 design partners (≥ 1 Arabic-locale) with fixed exam dates; legal opinion on AI Act Art. 6(3)/6(4), incl. profiling, before any EU partner use (Q-09) |
-| P1 MVP (design-partner beta) | M3–M6 | Own sheets (Typst, fiducials, page code, variants); scanner/PDF/hot-folder ingest; recognition; roster identity (bubbled ID, ID-box digits B/B′, QR page-code binding E); scoring L0–L6; review; CTT; CSV/XLSX; workspace and snapshot publish (§14.9); basic CLO (one course, one policy family); desktop Cedar policies with solo roles, key sealing and four-eyes via a local second principal or policy-gated self-approval (§15.5); P1 privacy minimum (below); Art. 12 logging and Art. 14 oversight documentation; first-batch supervised mode | Each partner grades ≥ 1 real exam; achieved SER bound ≤ 3×10⁻⁵ at AR ≤ 1% (≥ 100k × DEFF labelled questions, §23.1); ≥ 100 pages/s on 4 cores; first result < 3 s; regrade ≤ 50 ms; 100k-page soak without abort; identity in shadow mode; draft ACR (VPAT 2.5 INT) if any partner is a US public institution |
+| P1 MVP (design-partner beta) | M3–M6 | Own sheets (Typst, fiducials, page code, variants); scanner/PDF/hot-folder ingest; recognition; roster identity (bubbled ID, ID-box digits B/B′, QR page-code binding E); scoring L0–L6; review; CTT; CSV/XLSX; workspace and snapshot publish (§14.9); basic CLO (one course, one policy family); desktop Cedar policies with solo roles, key sealing and four-eyes via a local second principal or policy-gated self-approval (§15.5); P1 privacy minimum (below); Art. 12 logging and Art. 14 oversight documentation; first-batch supervised mode | Each partner grades ≥ 1 real exam; achieved SER bound ≤ 3×10⁻⁵ at AR ≤ 1% (≥ 100k × DEFF labelled questions: the S2 corpus plus keyed partner P1 sheets, §23.1); ≥ 100 pages/s on 4 cores; first result < 3 s; regrade ≤ 50 ms; 100k-page soak without abort; identity in shadow mode; draft ACR (VPAT 2.5 INT) if any partner is a US public institution |
 | P2 v1.0 GA | M7–M11 | All of §3.3, including fillable-PDF sheets, surveys, data grid and lock (§13.6), DB lookup (§9.2), on-screen marking (§13.7), changed-answer and similarity reports, rank lists, email delivery (§17.4), appeal register (§17.5) and `omr-cli schedule`. Also: full CLO engine (frameworks, PLO roll-up from snapshots, policies, report packs, closing the loop); local ID and name HTR; template library and legacy-form import (vector PDF + classical CV); migration kit; native-Rust desktop REST for Canvas, Moodle and the Q-03 market's primary LMS (others by CSV until P3); capture tiers A1–A3, eSCL and the Windows TWAIN agent (§7.1); approval bundles (`.omrapr`) and blind double review (§15.5, §13.4); standalone licence service; onboarding (first-run and new-exam flows, sample project, offline help); Typst reports; signed packaging; EN/ES/PT/DE UI with Arabic reports and exports (mirrored UI only if Q-01 = yes) | 100% parity; standard slice certified at the §2.4 SER/AR target, or its achieved bound published with the contract labelled "target" (§23.1); bitonal and phone bounds published; §2.4 performance on 2 reference laptops; identity certified ≤ 10⁻⁴ per slice, else shadow mode with mandatory confirmation; AI Act Art. 9–15 evidence (§19.6); external ACR; SBOM; security review; HECVAT/DPA templates (§19.8) |
-| P3 Institution | M12–M20 | Server mode (Postgres as workspace), sync, sneakernet bundles, server role bindings, SSO/SCIM, LTI 1.3 Advantage, OneRoster 1.2 REST, student portal links and appeal form; one native mobile companion (UniFFI) chosen by the Q-03 market; browser upload, document camera, and WIA, ImageCaptureCore and SANE agents (§7.1); AI pack; Rasch, DIF, inferential integrity analytics (Department); standard setting (§12.6); marker severity (§12.5); confidence-based marking; WASM component plugins (third-party connector tier); remaining desktop REST connectors | ASVS 5.0 L2 review; LTI certification sought; phone-slice targets met; AI gates per §18.6 |
+| P3 Institution | M12–M20 | Server mode (Postgres as workspace), sync, sneakernet bundles, server role bindings, SSO/SCIM, LTI 1.3 Advantage, OneRoster 1.2 REST, student portal links and appeal form; one native mobile companion (UniFFI) chosen by the Q-03 market; browser upload, document camera, and WIA, ImageCaptureCore and SANE agents (§7.1); AI pack; Rasch, DIF, inferential integrity analytics (Department); standard setting (§12.6); marker severity (§12.5; double-marked agreement is GA with §13.7); confidence-based marking; WASM component plugins (third-party connector tier); remaining desktop REST connectors | ASVS 5.0 L2 review; LTI certification sought; phone-slice targets met; AI gates per §18.6 |
 | P4 AI extensions | M18–M26 | Learned template detector (RF-DETR/D-FINE, synthetic data); short-answer grouping on the §13.7 lane; NL query; second mobile companion platform | Per-feature golden sets (e.g. ≥ 95% exact-plan accuracy on ≥ 200 NL questions); auto-disable on low acceptance |
 
 **P1 privacy and security minimum.** No design partner processes real student data before:
@@ -5061,7 +5066,7 @@ Likelihood (L) and impact (I) are rated H/M/L.
 | R-01 | Accuracy contract unreachable on low-quality school scans (central product risk) | M | H | Enforced capture spec; check sheet; per-slice targets; tunable AR; supervised first batch | §7.2, §23 |
 | R-02 | Not enough labels to certify the §2.4 targets (label counts in §23.1); sheet clustering (DEFF) inflates every question count | H | H | Year-1 corpus ≥ 7,000 sheets; semi-synthetic generator (never quoted alone); shadow mode; achieved bounds until certified; high-stakes stays a design target | §23.1, §23.2, §9.7 |
 | R-03 | New scanners or printers break conformal exchangeability; review rate spikes | H | M | Per-device recalibration; 2% stratified supervised batch; drift monitoring | §23.5 |
-| R-04 | Scanner firmware "enhancements" silently destroy marks | H | H | Device profiles; refuse risky settings (CAP-003/004); duplex parity check | §7.2 |
+| R-04 | Scanner firmware "enhancements" silently destroy marks | H | H | Device profiles; flag (CAP-003) or refuse (CAP-004) risky settings; duplex parity check | §7.2 |
 | R-05 | Slint RTL (#2294) and bidi editing (#7841) late for MENA | M | H | Q-01; S1; warm Qt fallback; mirrored UI not parity (PAR-10); dated SixtyFPS commitment | §5.2 |
 | R-06 | Young or RC dependencies churn (`ort` rc.14, `kornia-rs` 0.2, Typst 0.x, `sqlx` 0.9, `hayro`, single-maintainer `oar-ocr`) | M | M | Exact pins; internal traits; fallbacks; golden tests | §5.5 |
 | R-07 | TWAIN driver hangs; PDFium crashes or ABI drift | H | M | Out-of-process agents and workers; watchdogs; quirks database; fuzzing | §7.1, §22 |
@@ -5162,7 +5167,7 @@ The single authority for exception codes: CI fails on any code cited in the docu
 | Code | Case | Detection | Default handling | Severity | Scope | Owning section |
 |---|---|---|---|---|---|---|
 | IDN-001 | Page code unreadable, or one copy invalid. Sub-reasons `one_copy_invalid`, `echo_line_recovered`, `neighbour_inferred`, `unresolved` | Tags OK; a copy fails `rxing`, the 2× retry and `zxing-cpp`, or fails its MAC while the other is MAC-valid | One MAC-valid copy: use it (INFO). Otherwise echo-line OCR, MAC-verified (INFO) → layout classifier + booklet neighbours (ERROR, confirm) → manual entry (ERROR) | INFO / ERROR | Page | §6.4, §8.3 |
-| IDN-002 | Foreign, unknown or old-revision form | No MAC-valid copy; unknown exam; valid MAC but unknown revision; template choice unresolved (§8.3); invalid fillable-PDF manifest (§6.11) | Queue: assign a template, create one (§6.10) or discard; never auto-graded | BLOCKER | Page | §8.3, §6.10 |
+| IDN-002 | Foreign, unknown or old-revision form, or invalid fillable-PDF return | No MAC-valid copy; unknown exam; valid MAC but unknown revision; template choice unresolved (§8.3); fillable-PDF import: bad MAC or a field not in the manifest (§6.11; an out-of-range value in a known field is MRK-017) | Queue: assign a template, create one (§6.10) or discard; never auto-graded | BLOCKER | Page | §8.3, §6.10, §6.11 |
 | IDN-003 | Declared-form conflict (wrong version sheet) | Code variant, bubbled version and assigned form disagree, or declared ≠ LL-argmax with ΔLL ≥ 10 nats (§10.3) | Scoring lane: score under each key side by side; a human decides; never auto-switch | ERROR | Booklet | §10.3 |
 | IDN-004 | Identity unresolved. Sub-reasons `id_blank`, `id_ambiguous`, `not_on_roster`, `low_posterior`, `low_margin`, `channel_conflict`, `writer_error`, `wrong_identifier`, `wrong_field`, `namesake`, `assignment_changed`, `assigned_to_absent`, `roster_diff`, `cross_section` | Posterior, margin, channel LLRs, ∅ test, batch assignment (§9.5–§9.7) | Ranked candidates with evidence; leftover solver; "add provisional student"; never nearest neighbour. INFO only on an auto-accepted booklet (§9.7): `writer_error`, `channel_conflict`, `id_blank`, `id_ambiguous`, `namesake`, `wrong_field`, `cross_section`. Otherwise ERROR; always ERROR for `not_on_roster` (+ `writer_error` in the ∅ ambiguous zone, §9.5), `low_posterior`, `low_margin`, `assignment_changed`, `assigned_to_absent`, `roster_diff` | INFO / ERROR | Booklet | §9.5, §9.7, §9.9 |
 | IDN-005 | Two booklets resolve to one student | Duplicate column used; two strong matches; duplicate binding; differing rescans under serial `000000` or an ID-grid tracker (§7.4); a later sitting for an already-scored student, unless the retake policy allows it (§10.9) | Side-by-side review; policy: latest, merge pages or manual; neutral note only | ERROR | Student | §9.6 |
@@ -5201,7 +5206,7 @@ The single authority for exception codes: CI fails on any code cited in the docu
 | MRK-014 | Grid-in ≠ write-in | Bubbled value ≠ ICR of the write-in | Policy `gridin_conflict` (§6.5): `bubbles_win` (default) or `written_wins` → INFO; `review` → ERROR | INFO / ERROR | Item | §6.5, §8.8, §9.4 |
 | MRK-015 | Blank section or booklet | All bubbles empty (sheet bimodality fails) | Blank section: INFO. Blank booklet: ERROR, never auto-scored 0 | INFO / ERROR | Booklet | §8.8 |
 | MRK-016 | `calibration_fallback`. Sub-reasons `gmm_fallback`, `prior_model` | `gmm_fallback`: Ashman's D ≤ 2, a component weight < 0.005, or > 0.5 % of mass in a clamp bin (§8.7); `prior_model`: a position's baseline falls back to β_p⁰ (§8.6). Typical cause: tiny batch or skewed field | Prior model; β_p by the §8.6 unimodal rule, else β_p⁰ | INFO | Batch | §8.6, §8.7 |
-| MRK-017 | Validation rule failed (sub-reason = rule ID; incl. skip-pattern violations) | `validation_ruleset` after each L1 change (§13.6) | Correct in the grid or queue; rules never change values | WARN / ERROR (rule severity) | Item, Booklet | §13.6 |
+| MRK-017 | Validation rule failed (sub-reason = rule ID; incl. skip-pattern violations and `fillable_value_out_of_range`, §6.11) | `validation_ruleset` after each L1 change (§13.6); fillable-PDF import (§6.11) | Correct in the grid or queue; rules never change values | WARN / ERROR (rule severity) | Item, Booklet | §13.6 |
 
 **Scoring, key, version and policy (SCO)**
 
@@ -5215,7 +5220,7 @@ Raised by score runs (§10), CLO computation (§11) and item analysis (§12); ne
 | SCO-004 | Key or form structure invalid. Sub-reason `choice_group` | Key option ≥ m_i or not printed; π_f not injective; σ not a bijection; master item never presented; accommodation variant fails publish validation; `choice_group`: unequal M_i within a choice group (§10.5) | Publication of that key, form map or policy refused; diff shown | BLOCKER | Exam | §10.1, §10.3, §10.5 |
 | SCO-005 | Form not identified by code, or near-chance under every key. Sub-reasons `inferred`, `near_chance` | `inferred`: no form code; form = provisional LL-argmax (§10.3). `near_chance`: best-form score ≤ E₀ + 2·SD₀ over SBA items, E₀ = Σ_j M_j·a_j/m_j, SD₀ = √(Σ_j M_j²·(a_j/m_j)·(1 − a_j/m_j)) | Score under each key shown; `inferred` cases with ΔLL ≥ 10 nats confirmable as a group. `near_chance`: wrong exam, wrong key or random responding. Never switch silently | ERROR | Booklet | §10.3 |
 | SCO-006 | Form totals differ with no declared normalization | M_f = Σ_j M_{π_f(j)} differ per form | Block publication until per-form normalization (% of M_f) is declared | ERROR | Exam | §10.3 |
-| SCO-007 | High key overlap between adjacent forms | A_fg > 1/k + 0.10 or O_fg > 0.20 for adjacently seated forms (§6.6) | Re-roll at design time; version inference and integrity statistics lose power | WARN | Exam | §6.6, §6.9 (L13) |
+| SCO-007 | High key overlap between adjacent forms | A_fg > 1/m + 0.10 or O_fg > 0.20 for adjacently seated forms (§6.6) | Re-roll at design time; version inference and integrity statistics lose power | WARN | Exam | §6.6, §6.9 (L13) |
 | SCO-008 | Unreadable or unresolved response reached scoring | `Unreadable`, `Pending` or unresolved review state in L1, with no open exception covering it | Item not scored (never as blank); back to MRK review, marking (§13.7) or rescan | ERROR | Booklet | §10.1 |
 | SCO-009 | Custom rule trap, fuel exhaustion, timeout or out-of-range output. Sub-reason `timeout` | Rhai/WASM trap, fuel or operation-limit exhaustion, overflow; output > item max, < policy floor, wrongly typed or non-finite, or differing across two evaluations. `timeout`: second watchdog overrun after the 4× re-run (§22.4) | Run fails closed; the previous published run stays current; no silent fallback to a built-in rule; SYS-009 for the plugin (SYS-003 for a timeout) | BLOCKER | Exam | §10.7 |
 | SCO-010 | Σ W_a ≠ 100 % | Course aggregation validation (incl. best-k-of-m, section minimums) | L5 course publication refused; grade release unaffected | BLOCKER | Course | §10.5 |
@@ -5252,14 +5257,14 @@ Installation-level conditions are recorded with Exam scope in each project open 
 | Code | Case | Detection | Default handling | Severity | Scope | Owning section |
 |---|---|---|---|---|---|---|
 | SYS-001 | Page task panic | `catch_unwind` returns `PageOutcome::Failed{stage, reason}` | One retry on the same path, then quarantine the page with its reason; the batch continues | ERROR | Page | §22.1 |
-| SYS-002 | Helper crash, OOM or crash storm (PDFium/decode worker, capture agent, `omr-ml-worker`, `llama-server`) | Socket EOF; non-zero exit; 3 missed 1-s heartbeats; memory cap: Job Object (Windows), cgroup v2 `memory.max` or RLIMIT_AS (Linux), footprint-polling watchdog (macOS) | Exponential back-off restart. 2 crashes on one input → quarantine it (ERROR). Crash storm (≥ 5 in 10 min; proposed) → helper off for the session, §4.4 fallback; a pixel-changing fallback records `path=alternate` and sends the page's questions to review | WARN / ERROR (quarantined input) | Page | §4.4, §22.1 |
+| SYS-002 | Helper crash, OOM or crash storm (PDFium/decode worker, capture agent, `omr-ml-worker`, `llama-server`) | Socket EOF; non-zero exit; 3 missed 1-s heartbeats; memory cap: Job Object (Windows), cgroup v2 `memory.max` or RLIMIT_AS (Linux), footprint-polling watchdog (macOS); an AI-pack RSS cap hit or OOM is SYS-020 (§18.2) | Exponential back-off restart. 2 crashes on one input → quarantine it (ERROR). Crash storm (≥ 5 in 10 min; proposed) → helper off for the session, §4.4 fallback; a pixel-changing fallback records `path=alternate` and sends the page's questions to review | WARN / ERROR (quarantined input) | Page | §4.4, §22.1 |
 | SYS-003 | Stage timeout or stalled page | Deadlines (§22.4): decode 2 s, registration 1 s, read 1 s, PDF render 30 s; watchdog every 500 ms. OCR/HTR timeouts (5 s) mark the channel `timed_out` instead (§9.4) | Overrun rule (§22.4): cancel; page BLAKE3 to the session quarantine list; one out-of-process re-run of the same path at 4×; second overrun → quarantine. Never an automatic path change (alternate path: operator re-run, `path=alternate`). Pool replaced at most once per batch; another stuck thread pauses ingest | ERROR | Page | §22.4 |
 | SYS-004 | Disk space low or full | Preflight: batch estimate × 1.3 plus tile-cache cap; low-water mark max(2 GB, min(5 %, 20 GB)); `ENOSPC`, `SQLITE_FULL`, `ERROR_DISK_FULL` | Evict `cache/`, then pause ingest and scanner; release the 128 MB reserve to save state; drop nothing scanned; resume when space is freed | WARN (low) / ERROR (full) | Batch | §22.3 |
 | SYS-005 | Memory pressure | Process-tree private memory vs the §21.5 budget (every 500 ms); Windows `LowMemoryResourceNotification` and commit at 85 % of budget; macOS `DispatchSource`; Linux PSI trigger (kernel ≥ 6.5), else `some avg10` polling plus cgroup v2 `memory.events` | Ladder: drop image LRUs, halve byte budget and workers, unload OCR/HTR models and AI-pack processes, pause ingest | INFO | Batch | §22.3 |
 | SYS-006 | Model, helper or DLL missing (incl. antivirus quarantine), or hash or build mismatch | BLAKE3 vs engine manifest; signature; handshake `build_sha`; `LoadLibrary` error | Refuse to load. Decision-path model: recognition halts for pending batches; repair install, or an Admin classical-only run (§22.1). Optional helper: its §4.4 fallback. AI-pack model or optional feature: off | BLOCKER (decision path) / WARN | Batch | §4.4, §19.7, §22.1 |
 | SYS-007 | Engine changed since the last run | Engine manifest hash ≠ the project's | No silent re-recognition; an explicit re-run creates a new run plus a diff | INFO | Exam | §14.6 |
 | SYS-008 | Decision self-test mismatch | Golden crops at first run or after an update give decisions ≠ reference | Recognition disabled on this machine for pending batches; diagnostics bundle | BLOCKER | Batch | §23.6, §23.7 |
-| SYS-009 | Plugin trap or capability violation | Rhai operation limit; WASM fuel/epoch trap; capability denial; schema validation | Kill and quarantine the plugin; mark affected results. Exporters and connectors fall back to built-ins; scoring rules raise SCO-009 | WARN | Exam | §16.5 |
+| SYS-009 | Plugin trap or capability violation | Rhai operation limit; WASM trap or fuel exhaustion (epoch overruns: SYS-003, §22.4); capability denial; schema validation | Kill and quarantine the plugin; mark affected results. Exporters and connectors fall back to built-ins; scoring rules raise SCO-009 | WARN | Exam | §16.5 |
 | SYS-010 | Database integrity failure. Sub-reason `writer_panic` | Background `quick_check` on a reader connection after a read-only open, writes queued until it passes (§14.2, §21.6); weekly `integrity_check`; `writer_panic`: writer-actor panic after its one respawn (§22.1) | Read-only; restore the last verified snapshot; replay later events from the server or a bundle (§14.7). Desktop only: recover rows into a new database (SQLite recovery extension; under rusqlite `bundled` unverified), verify the recovered chain from the last signed checkpoint, replay verified events onto the snapshot, list events after the first break for re-entry | BLOCKER | Exam | §14.7, §22.1, §22.2 |
 | SYS-011 | Audit-chain verification failure | Hash mismatch, gap or bad checkpoint signature | Read-only; release blocked; incident report naming the first bad seq | BLOCKER | Exam | §14.4 |
 | SYS-012 | LMS or SIS push failure | 429/5xx, auth error, unenrolled student; outbox per student × line item | Back-off with jitter, honouring `Retry-After`; "released" only after read-back confirms; delivery stays pending once retries are exhausted. Not a gate input (§13.1) | ERROR | Student | §16.6 |
@@ -5270,7 +5275,7 @@ Installation-level conditions are recorded with Exam scope in each project open 
 | SYS-017 | Key unwrap failure | Keychain entry missing, or the KEK unwrap fails | Recovery key or escrow; otherwise unrecoverable by design | BLOCKER | Exam | §19.2 |
 | SYS-018 | Clock skew | HLC skew > 5 min | Order by seq/HLC; flag in the audit log | WARN | Exam | §15.2, §22.5 |
 | SYS-019 | Recognition or identity drift | Control charts on AR, override and disagreement rates per scanner and template; feature shift | Tighten thresholds (never loosen automatically); recalibration prompt; supervised batch | WARN | Batch | §9.7, §23.5 |
-| SYS-020 | Local AI degraded or too slow | RSS cap or OOM of `llama-server` or the candidate-scoring `omr-ml-worker` (`mistralrs`); VLM overruns > 2× the deadline (§22.4) | Drop one model tier; requeue; suggestions absent meanwhile; grading unaffected. Crash storms are SYS-002 | INFO | Exam | §18.2, §22.4 |
+| SYS-020 | Local AI degraded or too slow | RSS cap or OOM of `llama-server` or the candidate-scoring `omr-ml-worker` (`mistralrs`); VLM overruns > 2× the deadline (§22.4) | Drop one model tier; requeue; suggestions absent meanwhile; grading unaffected. Other crashes and crash storms are SYS-002 (§18.2) | INFO | Exam | §18.2, §22.4 |
 | SYS-021 | Cloud LLM outage, 429 or refusal | API status | Local fallback; queue; never blocks grading | INFO | Exam | §18.4 |
 | SYS-022 | IdP outage or expired offline grant | Discovery or token failure; grant older than 14 days | Audited break-glass account; offline grant with PIN; an expired grant leaves the desktop read-only | WARN | Exam | §15.4 |
 | SYS-023 | Competing overrides | Version mismatch (409) on sync | Both kept; diff shown; adjudication in the lane of the contested code (§13.2); neither value released until resolved; never last-writer-wins | ERROR | Item | §15.2 |
