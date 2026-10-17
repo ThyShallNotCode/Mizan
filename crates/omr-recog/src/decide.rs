@@ -102,6 +102,24 @@ pub fn page_level(top1: impl IntoIterator<Item = i32>, cfg: &DecisionConfig) -> 
     lvl.clamp(i32::from(cfg.level_min), i32::from(cfg.level_max))
 }
 
+/// The erasure-residue level of a photographed page (C2, §8.8 on the uncalibrated phone
+/// slice): a runner-up logs MRK-003 only when it exceeds the page's unmarked bubbles (`unmarked`:
+/// every answer row's deltas but its darkest, sorted in place) at the configured quantile by
+/// `residue_log`, and never below `residue_log` itself. Fewer than 20 unmarked bubbles keep
+/// the absolute level. On a scanner page the unmarked bubbles sit near 0 and nothing changes;
+/// on a phone photo they read 0.10–0.14 (uneven light, blur), the absolute 0.10 itself.
+pub fn photo_residue_level(unmarked: &mut [i32], cfg: &DecisionConfig) -> u16 {
+    if unmarked.len() < 20 {
+        return cfg.residue_log;
+    }
+    unmarked.sort_unstable();
+    let k =
+        (unmarked.len() - 1) * usize::from(cfg.photo_residue_quantile_permille.min(1000)) / 1000;
+    let floor = unmarked[k] + i32::from(cfg.residue_log);
+    cfg.residue_log
+        .max(floor.clamp(0, i32::from(u16::MAX)) as u16)
+}
+
 fn review(kind: GroupKind, why: ReviewReason, theta_sel: i32) -> GroupDecision {
     GroupDecision {
         kind,
@@ -307,6 +325,35 @@ mod tests {
     fn dec(v: &[f64], level: f64) -> GroupDecision {
         let d: Vec<i32> = v.iter().map(|&x| q(x)).collect();
         decide_group(&d, q(level), &DecisionConfig::default(), false)
+    }
+
+    #[test]
+    fn a_photo_residue_must_stand_out_from_the_pages_unmarked_bubbles() {
+        // C2: on the real key photos unmarked bubbles read δ ≈ 0.10–0.14, so the absolute
+        // residue level (0.10) logged MRK-003 on almost every row. Relative to the page, an
+        // unmarked runner-up is quiet, and a real erasure residue still shows.
+        let cfg = DecisionConfig::default();
+        let mut unmarked: Vec<i32> = (0..116).map(|k| q(0.10) + (k % 5) * 10).collect();
+        let level = photo_residue_level(&mut unmarked, &cfg);
+        assert!(i32::from(level) >= q(0.23), "{level}");
+        let mut photo = cfg.clone();
+        photo.residue_log = level;
+        let d = |v: &[f64]| v.iter().map(|&x| q(x)).collect::<Vec<_>>();
+        // A fill with an unmarked runner-up at 0.13: logged on the absolute rule, not now.
+        let row = d(&[0.75, 0.13, 0.11, 0.12, 0.10]);
+        assert!(decide_group(&row, q(0.8), &cfg, false).resolved_erasure);
+        let r = decide_group(&row, q(0.8), &photo, false);
+        assert!(r.accepted && !r.resolved_erasure);
+        // An erased and changed answer (residue 0.30 next to the new fill) is still logged.
+        let erased = d(&[0.80, 0.12, 0.30, 0.11, 0.10]);
+        let r = decide_group(&erased, q(0.8), &photo, false);
+        assert!(r.accepted && r.resolved_erasure, "{r:?}");
+        // Unmarked bubbles near 0 (a clean capture) keep about the absolute level.
+        let mut clean: Vec<i32> = (0..116).map(|k| (k % 7) - 3).collect();
+        let l = photo_residue_level(&mut clean, &cfg);
+        assert!(l >= cfg.residue_log && l <= cfg.residue_log + 3, "{l}");
+        // Too few unmarked bubbles to judge: the absolute level.
+        assert_eq!(photo_residue_level(&mut [q(0.2); 5], &cfg), cfg.residue_log);
     }
 
     #[test]

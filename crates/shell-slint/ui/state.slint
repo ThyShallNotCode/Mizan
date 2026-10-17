@@ -134,6 +134,7 @@ export global ExamsVM {
     in-out property <string> new-key;
     in-out property <string> new-roster;
     in-out property <string> new-clo;
+    in-out property <string> new-key-sheets;
     callback create-exam();
 }
 
@@ -183,6 +184,46 @@ export struct KV {
     tone: Tone,
 }
 
+// One version chip of the key read from key sheets.
+export struct KsVersion {
+    label: string,
+    open: int,
+    confirmed: bool,
+    selected: bool,
+    a11y: string,
+}
+
+// One question of a version's key read from key sheets (§10.1). `choices` are the option
+// letters offered on a row that waits for the instructor; `pick` is the decision taken here and
+// not confirmed yet ("" none, "B", "A|C", "*").
+export struct KsRow {
+    q: string,
+    read: string,
+    answer: string,
+    status: string,
+    status-tone: Tone,
+    open: bool,
+    highlight: bool,
+    pick: string,
+    // the options marked on a several-marks row, offered as "Accept A|C" ("" none)
+    marked: string,
+    detail: string,
+    // the exam's key entry now, when it differs from the sheet ("" when equal or none)
+    key-now: string,
+    has-crop: bool,
+    label: string,
+}
+
+// One key-sheet scan (file and page) with what the recognizer saw on it.
+export struct KsScan {
+    label: string,
+    origin: string,
+    id-read: string,
+    version: string,
+    registration: string,
+    refusal: string,
+}
+
 export global SetupVM {
     in property <bool> available;
     in property <bool> has-roster: true;
@@ -209,6 +250,37 @@ export global SetupVM {
     in-out property <string> key-path;
     in property <bool> can-replace-key;
     callback replace-key(string);
+    // the key read from the instructor's filled answer sheets (§10.1): never auto-accepted,
+    // confirmed here
+    in property <bool> can-read-keysheets;
+    in-out property <bool> ks-bar-open;
+    in-out property <string> ks-path;
+    in property <bool> has-keysheets;
+    in-out property <bool> ks-open;
+    in property <string> ks-source;
+    in property <bool> ks-preview;
+    in property <bool> ks-pending;
+    in property <[KsVersion]> ks-versions;
+    in property <int> ks-version;
+    in property <string> ks-version-letter;
+    in property <string> ks-version-title;
+    in property <string> ks-version-status;
+    in property <[KsRow]> ks-rows;
+    in property <[image]> ks-crops;
+    in property <[string]> ks-option-labels;
+    in property <[KsScan]> ks-scans;
+    in property <[string]> ks-notes;
+    in property <string> ks-consequence;
+    in property <string> ks-confirm-label;
+    in property <bool> ks-can-confirm;
+    in property <bool> ks-can-confirm-all;
+    in property <bool> ks-confirmed;
+    callback ks-read(string);
+    callback ks-select-version(int);
+    // row, option (0-based); -1 void, -2 accept every marked option
+    callback ks-choose(int, int);
+    callback ks-confirm(bool);
+    callback ks-discard();
     callback cycle-key(int, int);
     callback set-key(int, int, string);
     callback set-weight(int, int, string);
@@ -220,7 +292,8 @@ export global SetupVM {
 
 export struct Thumb {
     serial: string,
-    // 0 auto, 1 review, 2 rejected, 3 reading, 4 queued
+    // 0 auto, 1 review, 2 rejected, 3 reading, 4 queued, 5 key sheet (never a student),
+    // 6 key sheet that gives no key
     state: int,
     code: string,
     severity: Severity,
@@ -265,6 +338,7 @@ export global ScanVM {
     in property <string> auto-count;
     in property <string> review-count;
     in property <string> rejected-count;
+    in property <int> key-sheet-count;
     in property <[KV]> recon;
     in property <string> recon-code;
     in property <Severity> recon-severity;
@@ -485,6 +559,11 @@ export struct ItemRow {
     flag: string,
     flag-tone: Tone,
     has-flag: bool,
+    // flag stability (§12.2): "98 %" high, "31 % · proposed" low, "computing…", "" none
+    stability: string,
+    stability-tone: Tone,
+    // 0 none, 1 high, 2 low (proposed), 3 computing
+    stability-kind: int,
     selected: bool,
     label: string,
 }
@@ -497,6 +576,10 @@ export struct CheckRow {
 
 export global ResultsVM {
     in property <bool> available;
+    // why there are no results yet (e.g. a key from key sheets waits for its confirmation)
+    in property <string> empty-title: "No results yet";
+    in property <string> empty-text: "Results appear once every sheet of the exam is recognised and scored.";
+    in property <bool> empty-to-setup;
     in property <string> key-label;
     in property <string> students;
     in property <string> students-caption;

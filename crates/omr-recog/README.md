@@ -6,7 +6,10 @@ page level, group decisions, erasure rule, hysteresis, Appendix A exceptions):
 - the **legacy-form path** (§6.10: printed forms without fiducials), which reproduces in Rust
   the algorithm the Python prototype validated on 143 real IAU CCSIT answer sheets:
   ring-lattice registration, per-bubble darkness in the bitonal degraded mode (§7.2, CAP-003),
-  the batch baseline β_p (§8.6) and the per-question decision logic (§8.8);
+  the batch baseline β_p (§8.6) and the per-question decision logic (§8.8) — plus a
+  **shift-sensitive verification** of every alignment against the blank form's non-periodic
+  content (a lattice can match one row or column away), a **camera path** for phone photos
+  and gray captures read against their paper background (§8.5);
 - the **own-form path** (`ownform` module, §6.3–§6.4, §8.2–§8.4): the generated A4 sheets with
   AprilTag 36h11 corner tags, row ticks and the QR page code — see
   [Own-form path](#own-form-path) below.
@@ -35,9 +38,15 @@ engine.working_factor(w, h)            // nearest integer factor (packed 1-bit d
 // Page stage (pure; one task per page in omr-app).
 let m: PageMeasurement = engine.measure_page(&gray);   // = register_page + measure_registered
 m.registration: RegistrationQuality { candidates, detections, ring_radius_px, pitch_px,
-    coarse_ncc, alias_margin, matched, template_points, rms_px, scale, rotation_rad, anisotropy }
-m.warp: Option<QuadWarp>, m.registration_exceptions, m.bubbles: Vec<BubbleMeasure {
+    coarse_ncc, alias_margin, orientation_margin, matched, template_points, rms_px, scale,
+    rotation_rad, anisotropy, verify_margin, verify_tests,
+    method: RegistrationMethod::{Lattice, LatticeCorrected, Camera, CameraCorrected},
+    paper_normalised /* gray capture read against B */, illumination_cv }
+m.warp: Option<QuadWarp /* rational on the camera path */>, m.registration_exceptions,
+m.bubbles: Vec<BubbleMeasure {
     centre, snapped, radius_px, inner: Darkness, core: Darkness, unreadable: Option<Unreadable> }>
+// Registration (register_page) also carries `unverified: Vec<bool>` per bubble: a region the
+// page does not show could not be verified, so its bubbles are UNREADABLE (REG-003 Region).
 
 // Batch stage.
 let baseline = engine.batch_baseline(&[&m1, &m2, …]);  // order-independent; MRK-016 prior_model
@@ -74,26 +83,37 @@ a confident double mark is flagged too. `ChoiceRead::confident` is false for sev
 | 3 Pitch | `register::pitch_vector` | densest cluster of near-horizontal NN vectors, 42 ≤ dx ≤ 56 → s, θ; radius = set member nearest 13.5·s |
 | 4 Coarse translation | `register::coarse` | NCC with the central 84 % of the blank form: 1/32 full search (upright and 180°), 1/16, 5 × 3 scale/angle hypotheses, 1/8, 1/4; one-pitch alias check |
 | 5 ICP | `register_with` | thresholds 12 → 8 → 6 → 4 → 3 → 3 px; LMedS affine × 2; quadratic WLS with 1/max(1, r/1.5); matched/RMS within 4 px |
+| 6 Verify (§8.4, F1) | `register::verify` | 11 lattice regions (5 answer blocks, student number, section, date, gender, version, exam), each with its own pitch; per region and axis (x, y, both diagonals) the blank-form pixels at 1/4 that differ from their ±1-pitch shift by ≥ 80 gray levels (non-periodic content: number boxes, titles, box borders, the empty bands beyond the first/last rows and columns; ≤ 400 points); Pearson r of the blank with the page sampled at `W(t)`, `W(t − k)`, `W(t + k)`; pass = r(0) ≥ 0.25 and beats both shifts by ≥ 0.15 on every axis, and no shift puts more template bubbles on detected rings (printed-ring support, tolerance 2); points off the page are skipped (a region with no testable axis is UNREADABLE) |
+| 6a Correct | `register::corrected_warp` | per region the best of up to ±1 column × ±2 rows of its own pitch (stay / shift / unknown by the same margin); refit the warp on the shifted correspondences (unknown regions left out), quadratic ICP 12 → 3 px, verify again (twice at most); a verified correction logs REG-003 WARN |
+| 6b Rows and columns (adversarial verification) | `register::{verify_windows, verify_columns, moved_detail, local_check}` | the region test passes on the part of a region that still matches, so each answer row is also compared at 1/2 with the question numbers of the rows up to 6 away (the blank form moved, not the page: a row hidden by a fold shows another row's number; gray captures read against their paper background), and on scanner pages each answer column with the option letters of the columns up to 4 away; another row's or column's content fitting better by ≥ 0.35 at ≥ 0.60 → the alignment is not verified (REG-003 ERROR, nothing read: a fold, a taped tear, an ADF feed stall moved part of the page); a row whose own number does not show (r ≤ 0, photos ≤ −0.5) → its bubbles UNREADABLE (REG-003 WARN + Region). Header grids (labels only inside the bubbles, under marks and handwriting) keep the region test only |
+| 7 Camera path | `register::{camera_lattice, icp_camera}` | when the scanner path fails or is not verified (or a gray page matched < 70 %): every candidate radius × the kernels within 1.5 px (most rings wins); option **and** row pitch vectors (windowed modes) give an affine coarse shape (phones are anisotropic and sheared); ICP grows from the template centre (450 → 700 → 950 → 1,250 px → all) fitting LMedS affine then seeded RANSAC homographies; the quadratic rounds keep the homography's denominator (a rational warp); then step 6. Unverified → REG-003 ERROR, nothing read |
+| Gray captures | `LegacyEngine::pyramid`, `measure` | told from bitonal by a histogram of every 16th row; paper background `B` = closing (≈ 2 bubble diameters) + blur at 1/4; the coarse and verification levels are `255·I/B`; darkness `Σ max(0, B − v) / (B·count)` (bitonal pages keep B = 255 exactly); the local-scale band is relative to the page scale; CAP-005 WARN when the paper level under the bubbles varies by > 15 % |
 | 6 Snap | `measure.rs` | detected ring within 3 px, else the predicted centre (filled bubbles) |
 | 7 Measure | `measure.rs` | inner r ≤ 0.72 R_local, core r ≤ 0.45 R_local, R_local = 13.5 × local scale; `Darkness` (1/1024) |
 | β_p | `baseline.rs` | median of unfilled (< 0.45) instances, ≥ 5 needed, cap 0.35; fallback β_p⁰ + field offset |
-| 8 Decide | `decide.rs` | level = median top-1 δ ≥ 0.25, clamp [0.30, 1.0]; table below |
+| 8 Decide | `decide.rs`; ring visibility in `legacy.rs` (an answer row read as blank where none of its printed rings was seen is UNREADABLE, REG-003 Region, never blank) | level = median top-1 δ ≥ 0.25, clamp [0.30, 1.0]; table below |
 
 | Outcome | Rule (δ = inner − β_p, n = δ/level) | Exception |
 |---|---|---|
 | Blank | top-1 δ < 0.08 | MRK-015 ERROR (Booklet) if every question is blank |
 | Multi | ≥ 2 options with n ≥ 0.80 and δ ≥ 0.30; others clearly below selection | MRK-002 INFO (auto) / ERROR (`multi_review`, `uncertain_set`) |
-| Single | exactly one option with n ≥ 0.55 and δ ≥ 0.20, ρ = top2/top1 ≤ 0.5, top1 − top2 ≥ 0.20 | MRK-003 `resolved_erasure` INFO when the runner-up > 0.10 |
+| Single | exactly one option with n ≥ 0.55 and δ ≥ 0.20, ρ = top2/top1 ≤ 0.5, top1 − top2 ≥ 0.20 | MRK-003 `resolved_erasure` INFO when the runner-up > 0.10 (on a photo: also above the page's unmarked bubbles' p95 + 0.10, `photo_residue_level`) |
 | Review | lone weak mark, near a threshold (hysteresis h), two marks, unresolved residue | MRK-001 `weak_mark` / `hysteresis`, MRK-002, MRK-003 (ERROR) |
 | Unreadable | registration failed, disk cut off, < 20 px, no local support or a local scale outside 0.80–1.10 — never Blank | REG-003 / CAP-009 / CAP-002 (ERROR, Region) |
 
 Every comparison is on integers (1/1024). Hysteresis: an accepted decision must clear each
-threshold by h = 8/1024, doubled for bitonal input (§8.7 step 7). High-stakes mode makes the
-erasure rule review-only. Page exceptions: REG-001 BLOCKER (no lattice / no correlation),
-REG-002 INFO (upside down, auto-rotated), REG-003 WARN/ERROR (matched < 70 % / < 45 %, RMS
-> 0.25 / 0.5 mm, one-pitch alias margin < 0.05), REG-004 WARN/ERROR (scale, skew > 3°,
-anisotropy > 2 %), CAP-003 `bitonal` WARN (Batch). All exceptions go through
-`omr_model::Exception::must` (Appendix A checked).
+threshold by h = 8/1024, doubled for bitonal input (§8.7 step 7) and doubled again for photos
+(`LegacyPageResult::photo`: a `CaptureKind::Camera` capture, which `omr-app` infers from the
+file, or a page registered on the camera path, with a verified one-pitch correction or with
+anisotropy above 2 %; the phone slice is not calibrated, §8.10 step 7). On a photo the unmarked
+bubbles read δ ≈ 0.10–0.14 (uneven light, blur), so the erasure-residue level is relative to the
+page (C2; config `omr-recog/legacy-bitonal/3`). High-stakes mode makes the erasure rule review-only. Page
+exceptions: REG-001 BLOCKER (no lattice / no correlation), REG-002 INFO (upside down,
+auto-rotated), REG-003 WARN/ERROR (matched < 70 % / < 45 %, RMS > 0.25 / 0.5 mm, one-pitch
+alias margin < 0.05; ERROR "alignment not verified" when no candidate wins the verification
+clearly; WARN after a verified one-pitch correction), REG-004 WARN/ERROR (scale, skew > 3°,
+anisotropy > 2 %), CAP-003 `bitonal` WARN (Batch), CAP-005 WARN (uneven light on a gray
+capture). All exceptions go through `omr_model::Exception::must` (Appendix A checked).
 
 ## Real-data evaluation (143 IAU sheets; aggregates only)
 
@@ -117,6 +137,45 @@ unset. Results (pooled batch baseline, h = 16/1024 for the bitonal input):
 The alias guard separates cleanly on every page (aligned NCC beats every one-pitch translation
 by ≥ 0.166, median 0.25; threshold 0.05).
 
+**Shift-sensitive verification (F1, 2026-10-17).** The orchestrator found two phone photos of
+the CS 522 key sheet (RGB JPEG ≈ 142 ppi, 4–6 % anisotropic after the scanning app's crop)
+registered one bubble row too high with every answer auto-accepted: the similarity coarse
+step cannot represent the anisotropy, ICP converged on the row alias, and ≈ 630 of 687 bubbles
+still matched rings. On the 143 scanner pages the verification passes on the first alignment
+with a margin of **≥ 0.334** (median 0.58; threshold 0.15) and changes nothing: measurements
+and decisions in all three baseline modes are **bit-identical** to the previous engine
+(fingerprints of every bubble measurement and every decision compared;
+`tests/support/iau_eval.rs` `digests`). Forcing every scanner page through the camera path
+(`OMR_EVAL_FORCE_CAMERA=1`) also registers and verifies all 143 (SER 0, AR 0.17 %, 0 wrong
+unflagged fields). The key photos now read their student number, version and all 58 answers
+exactly as the verified key (`tests/real_key_sheets.rs`, gated, match counts only), on the
+scanner path with a verified correction (margins 0.50 / 0.41) and on the camera path alone.
+Cost on scanner pages: ≈ 0.7 ms verification + 0.16 ms capture test per page (release, one
+thread); page stage (register + measure, min of 5, median over the 143 pages, three alternating
+rounds against the previous engine) 28.3 → 29.2 ms (+3 %). `omr bench` on the five real PDFs
+(the previous application with the new engine against the previous build, five alternating
+rounds, best of 3 each): 1 thread median 18.5 → 17.9 pages/s, 4 threads recognition median
+71.4 → 68.3 pages/s (−3 % / −4 %; best of rounds −1 % / −5 %; ±8 % between rounds on this
+shared container).
+
+**Folds and feed stalls (adversarial verification, 2026-10-17).** The verifier simulated sheets
+on which part of the page moved against the rest by whole rows or options: a fold or a taped
+tear hiding 1–3 answer rows, an ADF feed stall repeating 1–2 rows' worth of scan lines, and the
+same across the options. A one-pitch defect was refused already, but with two or three rows the
+region-wide test passed on the part that still matched and every row below the damage was read
+two or three rows off, **auto-accepted** (exploration: 88–123 silent errors in 16–24 pages per
+case, on scanner pages and photos alike). The row and column checks (step 6b) and the ring-visibility
+rule now refuse every such page or leave the hidden rows unreadable: 0 silent errors on scanner
+pages in every case, and on photos for every horizontal fold and stall. On the 143 real pages
+nothing changes (fingerprints of every measurement and decision identical; worst row evidence
+0.22 against 0.35; smallest own-row correlation 0.14), the CS 522 key photos and ARTI 503 key
+scans still read 58/58 and 56/56, and the 200 simulated photos read as before (3 refused, 5,617
+auto-accepted, 0 silent). Residual: a phone photo of a sheet folded **vertically** through an
+answer block so that exactly two options are hidden can still be misread (3 of 24 simulated
+photos; photos are not column-checked because their option letters are too blurred to tell
+apart). Cost: none measurable per page (register + measure median 32.8 ms vs 33.2 ms in the same
+conditions); the engine build takes ≈ 60 ms longer.
+
 ## Tests
 
 - Unit: decision table on hand-built deltas from the brief's numbers (`decide.rs`), hysteresis
@@ -136,6 +195,35 @@ by ≥ 0.166, median 0.25; threshold 0.05).
 - `tests/real_iau.rs` (`req_a1_real_iau_sheets_zero_silent_errors`): SER = 0, AR ≤ 0.5 %, no
   wrong-unflagged ID/section/version/exam in all three baseline modes, and no exact digits
   from a flagged ID grid.
+- Unit (`register.rs`, `one_pitch_aliases_are_never_verified_and_are_corrected`): the
+  registered warp of a synthetic page shifted by exactly one pitch in all eight directions and
+  by two rows still puts ≥ 350 bubbles on rings, yet never verifies (margin < 0); ICP from
+  each shift converges either back to the truth or onto an alias, and every converged alias —
+  and the region-wise alias of the photos (answers one answer row off, header grids one
+  header row off) — is corrected to the truth (< 1 px) and verifies. Whatever verifies is the
+  truth.
+- `tests/photo_synth.rs` (`req_a1_phone_photos_read_or_refused_never_silently_wrong`): 200
+  simulated phone photos of the committed blank form with random marks (29 answers, 10-digit
+  ID, version): RGB JPEG q 70–92 at 120–160 ppi, rotation ±4°, anisotropy ±6 %, keystone ±5 %
+  per axis, colour cast, vignetting up to 35 %, soft shadows up to 45 %, lens blur, noise, a
+  table around the sheet or a scanner-app crop with whitened paper, placement-dpi error ±4 %;
+  every fifth photo moved by exactly one option pitch / answer row (eight directions); half
+  marked `CaptureKind::Camera`. Result (seed 20 261 017): **0 silent errors** in 5,617
+  auto-accepted answers, 0 wrong student numbers or versions, 3 photos refused (REG-001 /
+  REG-003), 96 reviews on the 197 read photos (5,627 and 86 before the ring-visibility rule of
+  the adversarial verification); 126 photos needed a verified one-pitch correction (the
+  misreads the verification prevents). `OMR_PHOTO_N` overrides the count.
+- `tests/photo_adversarial.rs` (adversarial verification, synthetic; `OMR_PHOTO_ADV_N` pages per
+  case, default 6): photos upside down, skewed 11–13°, 10–14 % anisotropic, very dark or
+  overexposed, at 100 ppi, moved one or two pitches, key sheets bubbled all 0 / all 9 with every
+  question marked, a number that is mostly zeros — 0 silent errors, 0 wrong numbers or versions;
+  sheets folded, taped or stalled by 1–3 rows (scanner pages and photos) and by two options
+  (scanner pages) — 0 silent errors (`req_a1_folded_or_stalled_sheets_are_refused_never_read_rows_off`
+  fails on the engine without the row and column checks: 41 silent errors in the first 6 pages).
+- `tests/real_key_sheets.rs` (gated on `OMR_IAU_PDF_DIR` + `OMR_IAU_KEYS`; restricted, match
+  counts only): the CS 522 key photos and the ARTI 503 key scans, decoded as `omr-app` does,
+  must read the all-0 / all-9 student numbers, the version and every answer equal to the key.
+  `OMR_KEY_FORCE_CAMERA=1` runs them on the camera path.
 
 ## Spec sections
 
@@ -184,11 +272,21 @@ hysteresis, ID grids never auto-accepted), §8.9 (20 px bubble gate, coverage �
   get an inflated baseline (capped at 0.35); a lone erasure residue that clears θ_sel on a
   light-pencil page is accepted as a light mark (the brief's rule; the §8.7 CNN would separate
   `erased_residue`).
-- Not implemented on this path: illumination B/K, JPEG quality, streak masks,
+- Not implemented on this path: ink black K (taken as 0), JPEG quality, streak masks,
   cross-out/tick/circle classes, mirrored pages (REG-005), 90° pages (`omr-app` turns a
   portrait scan of the landscape form a quarter before registration; the own-form path below
   has tags, mirroring, quarter turns, B/K normalisation, streak masks and tick/cross-out
   review triggers).
+- **Camera path (not §8.10 proper).** The legacy form has no tags, so there is no tag
+  homography, DocAligner quad or Stage A′ feature matching: the camera path is the lattice
+  registration with both pitch vectors, projective growth and a rational quadratic warp, and
+  its proof is the shift-sensitive verification. Phone gates (RMS 0.4 / 0.8 mm) are not used:
+  photos meet the scanner gates. The phone slice has no calibration of its own (§23.1); camera
+  captures get the doubled-again hysteresis instead. `CaptureKind::Camera` is never inferred
+  from pixels (`classify_capture` returns `Gray` for a photo); the caller sets it.
+- **Verification thresholds** (contrast 80, margin 0.15, floor 0.25, ring tolerance 2) are
+  *initial*: the real scanner pages clear the margin by ≥ 2.2×, misregistered photos lose by
+  ≥ 0.30, synthetic aliases lose with a negative margin.
 
 # Own-form path
 

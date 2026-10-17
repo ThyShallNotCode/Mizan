@@ -290,6 +290,8 @@ fn req_a1_a8_synthetic_sheets_grade_end_to_end() {
         .unwrap();
     }
     assert!(p.queue(None).is_empty());
+    // Each decision made a new score run: its mis-key check (§12.2) runs before release.
+    p.judge_flags().unwrap();
     assert_eq!(p.session.release_blocked(), None);
     p.export(&out).unwrap();
 
@@ -670,6 +672,8 @@ fn req_a4_rescoring_is_incremental_and_fast() {
         review: Default::default(),
         timings: Default::default(),
         release: None,
+        key_sheets: Default::default(),
+        flags: Default::default(),
     };
     let mut sc = Scoring::build(&session).unwrap().unwrap();
     let before = sc.run.as_ref().unwrap().run_id.clone();

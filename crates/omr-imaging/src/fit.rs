@@ -3,7 +3,8 @@
 //! - [`fit_affine`]: weighted least squares (6 parameters).
 //! - [`fit_affine_lmeds`]: least median of squares over seeded 3-point samples, then least
 //!   squares on the inliers (the OpenCV `LMEDS` recipe).
-//! - [`fit_quadratic`]: weighted least squares for the 12-parameter [`QuadWarp`].
+//! - [`fit_quadratic`]: weighted least squares for the 12-parameter [`QuadWarp`];
+//!   [`fit_quadratic_projective`]: the same with a fixed projective denominator.
 //! - [`fit_homography`]: normalised DLT; [`ransac_homography`]: seeded RANSAC with adaptive
 //!   stopping, then DLT on the inliers.
 //!
@@ -159,6 +160,7 @@ pub fn fit_quadratic(
         norm,
         cx: [0.0; 6],
         cy: [0.0; 6],
+        den: [0.0; 2],
     };
     let mut ata = [0.0; 36];
     let mut bx = [0.0; 6];
@@ -183,6 +185,64 @@ pub fn fit_quadratic(
         norm,
         cx: bx,
         cy: by,
+        den: [0.0; 2],
+    })
+}
+
+/// Weighted least-squares **rational** quadratic warp with a fixed projective denominator
+/// `den` (e.g. from a homography fit): solves `Σ c_k f_k(s) = d · w(s)` with weights
+/// `wᵢ / w(s)²`, which minimises the image-space residual of `N(s)/w(s) − d` to first order.
+/// `den = [0, 0]` is [`fit_quadratic`].
+pub fn fit_quadratic_projective(
+    src: &[PointPx],
+    dst: &[PointPx],
+    w: Option<&[f64]>,
+    centre: PointPx,
+    norm: f64,
+    den: [f64; 2],
+) -> Option<QuadWarp> {
+    if den == [0.0, 0.0] {
+        return fit_quadratic(src, dst, w, centre, norm);
+    }
+    let n = src.len().min(dst.len());
+    if n < 6 {
+        return None;
+    }
+    let proto = QuadWarp {
+        centre,
+        norm,
+        cx: [0.0; 6],
+        cy: [0.0; 6],
+        den,
+    };
+    let mut ata = [0.0; 36];
+    let mut bx = [0.0; 6];
+    let mut by = [0.0; 6];
+    for i in 0..n {
+        let f = proto.basis(src[i]);
+        let wd = 1.0 + den[0] * f[1] + den[1] * f[2];
+        if !(wd.is_finite() && wd.abs() > 1e-9) {
+            continue;
+        }
+        let wi = weight(w, i) / (wd * wd);
+        for r in 0..6 {
+            let wf = wi * f[r];
+            for c in 0..6 {
+                ata[r * 6 + c] += wf * f[c];
+            }
+            bx[r] += wf * dst[i].x * wd;
+            by[r] += wf * dst[i].y * wd;
+        }
+    }
+    let mut a2 = ata;
+    solve(&mut ata, &mut bx, 6)?;
+    solve(&mut a2, &mut by, 6)?;
+    Some(QuadWarp {
+        centre,
+        norm,
+        cx: bx,
+        cy: by,
+        den,
     })
 }
 
@@ -373,6 +433,7 @@ mod tests {
             norm: 1000.0,
             cx: [1090.0, 905.0, 20.0, 4.0, -2.5, 1.5],
             cy: [720.0, -15.0, 910.0, -1.0, 3.0, 2.0],
+            den: [0.0; 2],
         };
         let s = grid();
         let d: Vec<PointPx> = s.iter().map(|&p| truth.map(p)).collect();
@@ -380,6 +441,18 @@ mod tests {
         for k in 0..6 {
             assert!((f.cx[k] - truth.cx[k]).abs() < 1e-6);
             assert!((f.cy[k] - truth.cy[k]).abs() < 1e-6);
+        }
+        // The rational fit with a known denominator recovers a perspective-plus-quadratic map.
+        let persp = QuadWarp {
+            den: [0.03, -0.025],
+            ..truth
+        };
+        let d: Vec<PointPx> = s.iter().map(|&p| persp.map(p)).collect();
+        let f =
+            fit_quadratic_projective(&s, &d, None, truth.centre, truth.norm, persp.den).unwrap();
+        for p in &s {
+            let (a, b) = (f.map(*p), persp.map(*p));
+            assert!((a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6);
         }
     }
 

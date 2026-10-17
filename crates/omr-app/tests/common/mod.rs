@@ -221,6 +221,8 @@ pub struct PdfImage {
     pub filter: Option<&'static str>,
     /// Capture resolution (sets the page size).
     pub dpi: f64,
+    /// Colour components (1 gray, 3 RGB).
+    pub components: u8,
 }
 
 impl PdfImage {
@@ -242,6 +244,7 @@ impl PdfImage {
             data: miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6),
             filter: Some("FlateDecode"),
             dpi,
+            components: 1,
         }
     }
 
@@ -254,6 +257,34 @@ impl PdfImage {
             data: jpeg(img, 90),
             filter: Some("DCTDecode"),
             dpi,
+            components: 1,
+        }
+    }
+
+    /// An RGB JPEG page (a phone photo as a PDF app stores it): the gray image in three
+    /// channels, a faint warm cast.
+    pub fn rgb_jpeg(img: &GrayImage, dpi: f64) -> Self {
+        let mut rgb = Vec::with_capacity(img.width() * img.height() * 3);
+        for &v in img.as_raw() {
+            rgb.extend_from_slice(&[v, v.saturating_sub(4), v.saturating_sub(10)]);
+        }
+        let mut data = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut data, 90)
+            .write_image(
+                &rgb,
+                img.width() as u32,
+                img.height() as u32,
+                image::ExtendedColorType::Rgb8,
+            )
+            .expect("jpeg");
+        Self {
+            width: img.width(),
+            height: img.height(),
+            bits: 8,
+            data,
+            filter: Some("DCTDecode"),
+            dpi,
+            components: 3,
         }
     }
 }
@@ -299,10 +330,15 @@ pub fn pdf(pages: &[PdfImage]) -> Vec<u8> {
             .into_bytes(),
         );
         let mut img = format!(
-            "<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceGray \
+            "<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /{} \
              /BitsPerComponent {} {}/Length {} >>\nstream\n",
             p.width,
             p.height,
+            if p.components == 3 {
+                "DeviceRGB"
+            } else {
+                "DeviceGray"
+            },
             p.bits,
             p.filter
                 .map(|f| format!("/Filter /{f} "))

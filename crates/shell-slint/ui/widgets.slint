@@ -244,6 +244,8 @@ export component StepIndicator inherits HorizontalLayout {
     in property <string> text;
     // 0 todo (ring), 1 done (check), 2 lint warnings (triangle)
     in property <int> state;
+    // the number only (narrow windows); the label keeps the step's name
+    in property <bool> compact;
     spacing: Theme.space-xs + Theme.space-2xs;
     accessible-role: AccessibleRole.text;
     accessible-label: root.number + " " + root.text + (root.state == 1 ? ", done" : root.state == 2 ? ", warnings" : ", to do");
@@ -262,7 +264,7 @@ export component StepIndicator inherits HorizontalLayout {
         }
     }
     Text {
-        text: root.number + "  " + root.text;
+        text: root.compact ? root.number : root.number + "  " + root.text;
         font-size: Theme.text-xs;
         font-weight: Theme.weight-medium;
         color: root.state == 0 ? Theme.ink-2 : Theme.ink;

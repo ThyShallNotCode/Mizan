@@ -103,6 +103,23 @@ pub const BARE: Spec = Spec {
     folder: "cs213-quiz-1",
 };
 
+/// An exam whose key comes from the instructor's filled key sheets (§10.1): graded with them,
+/// held until the instructor confirms the key summary. Older than the midterm, so the midterm
+/// stays the exam the workspace opens first.
+pub const FINAL: Spec = Spec {
+    course_code: "CS 214",
+    course_title: "Software Engineering",
+    course_title_ar: "هندسة البرمجيات",
+    title: "Final",
+    date: "2026-10-13",
+    snapshot: "2026-10-13T12:30:00Z",
+    sheets: 24,
+    seed: 20_261_018,
+    keyed: false,
+    roster_and_clos: true,
+    folder: "cs214-final",
+};
+
 /// What [`build`] produced.
 #[derive(Clone, Debug)]
 pub struct Built {
@@ -497,6 +514,127 @@ fn scan(page: &Raster, rng: &mut ChaCha8Rng) -> Raster {
         }
     }
     Raster::from_raw(w as u32, h as u32, out).expect("scan raster")
+}
+
+/// The key-sheet questions of version A that `quirks` makes need the instructor (0-based):
+/// two firm marks, no mark, and a faint mark (early rows, so a screenshot shows all three).
+pub const KEY_SHEET_MULTI: u16 = 1;
+pub const KEY_SHEET_BLANK: u16 = 4;
+pub const KEY_SHEET_FAINT: u16 = 7;
+
+/// The instructor's filled key sheet of `form` (0 = A): every student-number column bubbled
+/// with the key-sheet marker (0 for A, 9 for B), the version bubbled and the key of each
+/// question filled. With `quirks`, version A also carries the three rows that wait for the
+/// instructor ([`KEY_SHEET_MULTI`], [`KEY_SHEET_BLANK`], [`KEY_SHEET_FAINT`]).
+fn render_key_sheet(engine: &LegacyEngine, spec: &Spec, form: usize, quirks: bool) -> Raster {
+    let blank = engine.blank();
+    let (w, h) = (blank.width() as u32, blank.height() as u32);
+    let mut page = Raster::from_raw(w, h, blank.as_raw().to_vec()).expect("blank raster");
+    let mut rng = ChaCha8Rng::seed_from_u64(spec.seed ^ 0x4B45_5953 ^ (form as u64 * 0x9E37));
+    let ppm = DPI / 25.4;
+    let r_mm = engine.template().bubble_radius_px() / ppm;
+    let marker = if form == 0 { 0u8 } else { 9 };
+    {
+        let mut canvas = Canvas::new(&mut page, DPI);
+        let mut paint = |(x, y): (f64, f64), class, darkness, coverage, rng: &mut ChaCha8Rng| {
+            let m = BubbleMark {
+                option: 0,
+                class,
+                darkness,
+                coverage,
+                instrument: Instrument::Pencil,
+            };
+            canvas.paint_mark(x / ppm, y / ppm, r_mm, &m, rng);
+        };
+        for q in 0..QUESTIONS {
+            let k = key(spec, form, q);
+            let marks: Vec<Mark> = match q {
+                KEY_SHEET_MULTI if quirks && form == 0 => vec![
+                    (k, MarkClass::Filled, 0.82, 0.93),
+                    ((k + 2) % OPTIONS, MarkClass::Filled, 0.8, 0.92),
+                ],
+                KEY_SHEET_BLANK if quirks && form == 0 => Vec::new(),
+                KEY_SHEET_FAINT if quirks && form == 0 => vec![(k, MarkClass::LightFill, 0.3, 0.7)],
+                _ => vec![(k, MarkClass::Filled, 0.85, 0.94)],
+            };
+            for (o, class, d, c) in marks {
+                paint(
+                    bubble(engine, LegacyField::Answers, q, o),
+                    class,
+                    d,
+                    c,
+                    &mut rng,
+                );
+            }
+        }
+        for col in 0..10u16 {
+            paint(
+                bubble(engine, LegacyField::StudentNumber, col, marker),
+                MarkClass::Filled,
+                0.85,
+                0.94,
+                &mut rng,
+            );
+        }
+        paint(
+            bubble(engine, LegacyField::Version, 0, form as u8),
+            MarkClass::Filled,
+            0.85,
+            0.94,
+            &mut rng,
+        );
+    }
+    scan(&page, &mut rng)
+}
+
+/// Writes the key sheets of versions A and B (`key-sheet-A.jpg`, `key-sheet-B.jpg`) into
+/// `dir` and returns their paths.
+pub fn write_key_sheets(spec: &Spec, dir: &Path, quirks: bool) -> Vec<PathBuf> {
+    std::fs::create_dir_all(dir).expect("key-sheet folder");
+    let engine = LegacyEngine::iau_ccsit_v1().expect("committed IAU template");
+    (0..2)
+        .map(|form| {
+            let img = render_key_sheet(&engine, spec, form, quirks);
+            let jpeg = omr_sim::capture::encode_jpeg(&img, 90, DPI as u32).expect("jpeg");
+            let path = dir.join(format!("key-sheet-{}.jpg", ["A", "B"][form]));
+            std::fs::write(&path, jpeg).expect("write key sheet");
+            path
+        })
+        .collect()
+}
+
+/// Renders the students' sheets and the instructor's key sheets (version A with the three
+/// rows that wait for a decision) and grades them with the key sheets named, no key file
+/// (`omr grade --key-sheet`): the run is held until the key summary is confirmed.
+pub fn build_with_key_sheets(spec: &Spec, workspace: &Path) -> Built {
+    let scans = write_scans(spec, &workspace.join(format!("scans-{}", spec.folder)));
+    let keys = write_key_sheets(
+        spec,
+        &workspace.join(format!("key-sheets-{}", spec.folder)),
+        true,
+    );
+    let mut def = definition(spec);
+    def.key = KeySource::None;
+    // a confident double mark is read as one (MRK-002), so the key sheet's double mark is
+    // "several marks" (under `always` every double mark is reviewed, never confident)
+    def.multi_review = MultiReviewPolicy::Never;
+    def.exam_id = def.derived_exam_id();
+    def.validate().expect("the synthetic definition is valid");
+    let exam_dir = workspace.join(spec.folder);
+    std::fs::create_dir_all(&exam_dir).expect("exam folder");
+    let project = exam_dir.join("project.omrproj");
+    let opts = GradeOptions {
+        threads: 0,
+        project_dir: Some(project.clone()),
+        snapshot_utc: Some(spec.snapshot.into()),
+        operator: "principal:synthetic".into(),
+        max_pages: None,
+    };
+    ExamProject::grade_with_key_sheets(&def, &[scans], &keys, &opts, &|_| {})
+        .expect("grading with key sheets")
+        .close()
+        .expect("close");
+    Built { exam_dir, project }
 }
 
 /// Writes the sheets as 200-dpi JPEG files into `dir` (in parallel), returning `dir`.

@@ -130,11 +130,19 @@ impl DiskSum {
 
     /// Mean darkness `ink / (255 · count)` in 1/1024 units, rounded half up (0 if empty).
     pub fn darkness_q10(&self) -> u16 {
-        if self.count == 0 {
+        self.darkness_q10_of(255)
+    }
+
+    /// Mean darkness relative to a paper level, `ink / (paper · count)` in 1/1024 units,
+    /// rounded half up, at most 1024 (0 if empty or `paper` is 0). Pairs with
+    /// [`disk_sum_paper`]; `darkness_q10_of(255)` is [`Self::darkness_q10`].
+    pub fn darkness_q10_of(&self, paper: u8) -> u16 {
+        if self.count == 0 || paper == 0 {
             return 0;
         }
-        let num = 2 * 1024 * self.ink + 255 * u64::from(self.count);
-        let den = 2 * 255 * u64::from(self.count);
+        let p = u64::from(paper);
+        let num = 2 * 1024 * self.ink + p * u64::from(self.count);
+        let den = 2 * p * u64::from(self.count);
         (num / den).min(1024) as u16
     }
 }
@@ -145,6 +153,13 @@ impl DiskSum {
 /// A non-finite or negative radius, a non-finite centre, or a centre more than 10⁹ px away
 /// yields an empty, [`DiskSum::clipped`] sum (never a reading).
 pub fn disk_sum(img: &GrayImage, cx: f64, cy: f64, r: f64) -> DiskSum {
+    disk_sum_paper(img, cx, cy, r, 255)
+}
+
+/// [`disk_sum`] against a local paper level `B` (§8.5 normalised darkness with `K = 0`):
+/// `ink = Σ max(0, B − v)`, so pixels brighter than the paper add nothing; read it with
+/// [`DiskSum::darkness_q10_of`]`(B)`. `paper = 255` is exactly [`disk_sum`].
+pub fn disk_sum_paper(img: &GrayImage, cx: f64, cy: f64, r: f64, paper: u8) -> DiskSum {
     const FAR: f64 = 1e9;
     if !(cx.is_finite() && cy.is_finite() && r.is_finite())
         || r < 0.0
@@ -191,7 +206,7 @@ pub fn disk_sum(img: &GrayImage, cx: f64, cy: f64, r: f64) -> DiskSum {
                 && x >= 0
                 && x < w
             {
-                s.ink += u64::from(255 - row[x as usize]);
+                s.ink += u64::from(paper.saturating_sub(row[x as usize]));
                 s.count += 1;
             }
         }
@@ -245,6 +260,24 @@ mod tests {
         assert!(c.clipped());
         let white = GrayImage::new(40, 40, 255);
         assert_eq!(disk_sum(&white, 20.0, 20.0, 5.0).darkness_q10(), 0);
+        // Against a local paper level: paper reads 0 even when gray, half-paper reads 0.5.
+        let gray = GrayImage::new(40, 40, 160);
+        let s = disk_sum_paper(&gray, 20.0, 20.0, 5.0, 160);
+        assert_eq!(s.darkness_q10_of(160), 0);
+        let half = GrayImage::new(40, 40, 80);
+        assert_eq!(
+            disk_sum_paper(&half, 20.0, 20.0, 5.0, 160).darkness_q10_of(160),
+            512
+        );
+        // Brighter than the paper adds nothing; 255 is disk_sum.
+        assert_eq!(
+            disk_sum_paper(&white, 20.0, 20.0, 5.0, 160).darkness_q10_of(160),
+            0
+        );
+        assert_eq!(
+            disk_sum_paper(&half, 20.0, 20.0, 5.0, 255),
+            disk_sum(&half, 20.0, 20.0, 5.0)
+        );
         // Degenerate geometry is clipped (unreadable), never a reading.
         for (x, y, r) in [
             (f64::NAN, 20.0, 5.0),

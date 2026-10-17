@@ -415,6 +415,13 @@ pub enum ThumbState {
     Review { code: String, severity: Severity },
     /// Rejected at capture (e.g. CAP-002 below 100 dpi).
     Rejected { code: String, severity: Severity },
+    /// The instructor's key sheet (§10.1), never a student: its version, and whether its key
+    /// is confirmed (`refused`: it gives no key, e.g. its grid shows no key-sheet marker).
+    KeySheet {
+        version: String,
+        confirmed: bool,
+        refused: bool,
+    },
     /// Being recognised now.
     Reading,
     /// Waiting in the spool.
@@ -462,6 +469,8 @@ pub struct SheetCounts {
     pub auto: u32,
     pub review: u32,
     pub rejected: u32,
+    /// The instructor's key sheets (never counted as students).
+    pub key_sheets: u32,
 }
 
 /// Whether more scans can be added to a graded exam from the Scan screen (§8.1 later batch).
@@ -958,16 +967,37 @@ impl DiscriminationBand {
     }
 }
 
+/// How far an item-analysis flag survives sampling noise (§12.2 "Flag stability").
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum FlagStability {
+    /// The stability job has not reported yet ("computing…" in the table).
+    #[default]
+    Computing,
+    /// The rule fires in most bootstrap resamples (≥ 50 %) and holds at both ends of its 95 %
+    /// CI (N ≥ 1,000: at both ends of the Fisher-z CI; `share` is then `None`).
+    High { share: Option<f64>, note: String },
+    /// Low confidence *(proposed)*: the rule fires in fewer than half of the resamples, or
+    /// fails at one end of its CI. `note` says which, e.g. "fires in 31 % of 1,000 bootstrap
+    /// resamples; fails at the upper end of its 95 % CI".
+    Low { share: Option<f64>, note: String },
+    /// Not assessed: the rule is not one of ranks 1–4 (e.g. "too easy").
+    NotAssessed,
+}
+
 /// An item-analysis flag (§12.2).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ItemFlag {
-    /// e.g. "Probable mis-key: D".
+    /// e.g. "Probable mis-key: D" (the rule's statement, without the stability account).
     pub message: String,
     /// e.g. Some("SCO-001").
     pub code: Option<String>,
     pub tone: Tone,
     /// Low-confidence (unstable) flags are marked "proposed" (§12.2).
     pub stable: bool,
+    /// Rank of the rule (1 = probable mis-key … ; §12.2 "ranked").
+    pub rank: u8,
+    /// The stability of the flag, once the stability job has run.
+    pub stability: FlagStability,
 }
 
 /// One row of the item-analysis table.
@@ -1126,6 +1156,141 @@ pub struct Outcomes {
 
 // ------------------------------------------------------------------------------------- trait
 
+// ------------------------------------------------------------------------------------- key sheets
+
+/// How one row of a key sheet stands (§10.1): only a confidently read single option is a key
+/// entry; every other row waits for the instructor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyRowStatus {
+    /// One option read confidently (to be confirmed with the sheet).
+    Read,
+    /// Decided by the instructor (recorded with the confirmation).
+    Decided,
+    /// Several marks (SCO-027): which answers count?
+    MultiMark,
+    /// No mark (SCO-003).
+    Blank,
+    /// A mark on an option the exam does not use (SCO-004).
+    NotPrinted,
+    /// A mark not read confidently.
+    Uncertain,
+    /// Two key sheets of the version disagree.
+    Disagree,
+}
+
+impl KeyRowStatus {
+    /// Short status word.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Decided => "decided by you",
+            Self::MultiMark => "several marks",
+            Self::Blank => "no mark",
+            Self::NotPrinted => "option not used",
+            Self::Uncertain => "not read clearly",
+            Self::Disagree => "key sheets disagree",
+        }
+    }
+    /// True while the row waits for the instructor's decision.
+    pub fn open(self) -> bool {
+        !matches!(self, Self::Read | Self::Decided)
+    }
+}
+
+/// One question of a version's key read from key sheets.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeySheetRow {
+    /// 1-based question.
+    pub question: u32,
+    /// What the sheet shows: `B`, `A+C`, `blank`, `B?` (not read confidently), `?`.
+    pub read: String,
+    /// The key entry the row gives: `B`, `A|C`, `*` (void), or empty while undecided.
+    pub answer: String,
+    pub status: KeyRowStatus,
+    /// Why the row needs a decision and what to do (or the recognizer's codes).
+    pub detail: String,
+    /// The current key's entry when it differs from the sheet (the exam already has a key).
+    pub key_file: Option<String>,
+    /// Bubble fills δ, option order.
+    pub fills: Vec<f32>,
+    /// The options the sheet shows marked (offered as "accept these" on a multi-mark row).
+    pub marked: Vec<u8>,
+    /// The bubble row as scanned, straightened along its own axis, with the mark overlays
+    /// drawn on it (paper colours, DESIGN §4); `None` when the page image is unavailable.
+    pub crop: Option<CropImage>,
+}
+
+/// One key-sheet scan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeySheetScan {
+    /// File and page, e.g. `key-A.png page 1`.
+    pub label: String,
+    /// Named as a key sheet ("named") or found among the students' scans ("found in the stack").
+    pub origin: String,
+    /// The student-number grid as read (the key-sheet marker, e.g. `0000000000`).
+    pub id_read: String,
+    /// The version bubbled on the sheet.
+    pub version: String,
+    /// Registration summary, e.g. "matched 684/687 bubbles, rms 0.41 px".
+    pub registration: String,
+    /// SHA-384 of the file, abbreviated.
+    pub digest: String,
+    /// Why the sheet gives no key (R10: what to do), if so.
+    pub refusal: Option<String>,
+}
+
+/// One version's key read from key sheets.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeySheetVersion {
+    /// Version letter.
+    pub version: String,
+    /// Index of the version in the exam's forms (what [`KeyRowDecision::version`] names).
+    pub form: usize,
+    pub sheets: Vec<KeySheetScan>,
+    pub rows: Vec<KeySheetRow>,
+    /// Rows waiting for the instructor.
+    pub open: u32,
+    /// "by … at …" once confirmed.
+    pub confirmed: Option<String>,
+}
+
+/// The key read from an exam's key sheets, as the instructor confirms it (§10.1: key-sheet
+/// responses are never auto-accepted). Either the key sheets graded with the exam (the run is
+/// held until the confirmation) or key-sheet files read for an exam that already has a key
+/// (`preview`: nothing changes until the confirmation replaces the key).
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeySheetSummary {
+    /// Where the key comes from, e.g. "Key sheets graded with the exam" or "Read from 2 key-sheet
+    /// files".
+    pub source: String,
+    /// Read from files for this exam, not part of it yet.
+    pub preview: bool,
+    /// True while a version waits for the confirmation.
+    pub pending: bool,
+    /// A key file replaced the key sheets (they are listed, not used).
+    pub superseded: bool,
+    pub versions: Vec<KeySheetVersion>,
+    /// Key sheets that give no key, with the reason.
+    pub unusable: Vec<KeySheetScan>,
+    /// Versions without a key sheet and where their key comes from.
+    pub other_versions: Vec<(String, String)>,
+    /// What confirming does (shown beside the Confirm button).
+    pub consequence: String,
+    /// Rule notes (e.g. a marker not used in the stack).
+    pub notes: Vec<String>,
+}
+
+/// The instructor's decision on one key-sheet row, sent with the confirmation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyRowDecision {
+    /// Version (index into the exam's forms).
+    pub version: usize,
+    /// 1-based question.
+    pub question: u32,
+    /// `B`, `A|C` (several accepted answers) or `*` (void the question).
+    pub answer: String,
+}
+
 /// A new exam as typed in the New-exam form (plain text; the backend validates it with the
 /// same rules as `omr grade`). Blank optional fields take the sheet's defaults; a blank key
 /// file means the key is inferred (provisional, never releasable, replaceable from Setup).
@@ -1145,6 +1310,9 @@ pub struct NewExam {
     pub key: String,
     pub roster: String,
     pub clo: String,
+    /// Key-sheet files (the instructor's filled answer sheets), separated by `;` (optional):
+    /// graded with the exam as named key sheets, held until confirmed in Setup (§10.1).
+    pub key_sheets: String,
 }
 
 /// What the shell needs from the application core. Queries are cheap snapshots; commands
@@ -1298,6 +1466,64 @@ pub trait Backend {
         ))
     }
 
+    /// The key read from the exam's key sheets, waiting for (or past) the instructor's
+    /// confirmation: the key sheets graded with the exam, else key-sheet files read for it with
+    /// [`Backend::read_key_sheets`]. `None` when there are none.
+    fn key_sheets(&self, exam: &ExamId) -> Option<KeySheetSummary> {
+        let _ = exam;
+        None
+    }
+
+    /// Why the exam is held before anything is scored (e.g. a key from key sheets that waits
+    /// for the confirmation), with what to do; `None` when nothing holds it.
+    fn hold(&self, exam: &ExamId) -> Option<String> {
+        let _ = exam;
+        None
+    }
+
+    /// Reads key-sheet files (the instructor's filled answer sheets) for the exam with the
+    /// same recognizer as the students' sheets; the key they give is shown for confirmation
+    /// ([`Backend::key_sheets`]) and changes nothing until [`Backend::confirm_key_sheets`].
+    /// The default refuses.
+    fn read_key_sheets(
+        &mut self,
+        exam: &ExamId,
+        inputs: &[std::path::PathBuf],
+    ) -> Result<String, BackendError> {
+        let _ = (exam, inputs);
+        Err(BackendError::Denied(
+            "Reading a key from answer sheets needs a graded project: open one with --project \
+             or --workspace"
+                .into(),
+        ))
+    }
+
+    /// Confirms the key read from key sheets, one version (`Some(form)`) or every version
+    /// waiting (`None`), with the instructor's decisions on the rows that need one. Recorded
+    /// as an audited event with the confirming operator; the last version confirmed puts the
+    /// key in force and the exam is scored. A row left undecided refuses it, naming the row.
+    fn confirm_key_sheets(
+        &mut self,
+        exam: &ExamId,
+        version: Option<usize>,
+        decisions: &[KeyRowDecision],
+    ) -> Result<String, BackendError> {
+        let _ = (exam, version, decisions);
+        Err(BackendError::Denied(
+            "Confirming a key needs a graded project: open one with --project or --workspace"
+                .into(),
+        ))
+    }
+
+    /// Drops key-sheet files read with [`Backend::read_key_sheets`] and not confirmed (nothing
+    /// was changed). The default has none to drop.
+    fn discard_key_sheets(&mut self, exam: &ExamId) -> Result<String, BackendError> {
+        let _ = exam;
+        Err(BackendError::Invalid(
+            "No key-sheet files were read for this exam".into(),
+        ))
+    }
+
     /// Releases the exam's results (§13.4): refused while anything blocks release; the
     /// released score run is frozen in the audit log and the exports, the Blackboard upload
     /// with them, are written. Returns what happened. The default refuses.
@@ -1336,6 +1562,13 @@ pub trait Backend {
     /// Folds finished background work into the view-models. Returns true when anything the
     /// shell shows may have changed. The default does nothing.
     fn pump(&mut self) -> bool {
+        false
+    }
+
+    /// Blocks until background analyses that are running (flag stability) have reported and
+    /// folds them, as [`Backend::pump`] does: for headless screenshots, which must not catch
+    /// "computing…". Returns true when anything changed. The default has nothing to wait for.
+    fn settle(&mut self) -> bool {
         false
     }
 

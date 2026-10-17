@@ -276,5 +276,23 @@ pub(crate) fn carry_review(prior: &Session, session: &mut Session) -> (usize, BT
             }
         }
     }
+    // Probable mis-keys (SCO-001, §12.2) are judged on the score run, not built with the
+    // queue: each one carries over with its state and decision (a key kept with a note stays
+    // kept), and the next judgement of the flags re-opens, withdraws or adds as the re-run's
+    // item analysis says.
+    for o in prior
+        .review
+        .items
+        .iter()
+        .filter(|i| i.code == "SCO-001" && i.flag.is_some())
+    {
+        let mut it = o.clone();
+        it.id = session.review.items.len() as u64 + 1;
+        ids.insert(o.id, it.id);
+        if it.state == ItemState::Resolved && it.resolution.is_some() {
+            carried += 1;
+        }
+        session.review.items.push(it);
+    }
     (carried, ids)
 }

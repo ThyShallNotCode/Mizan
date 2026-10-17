@@ -316,6 +316,107 @@ pub fn page_scan(seed: u64, low_dpi: bool) -> CropImage {
     }
 }
 
+// ------------------------------------------------------------------------------------ overlays
+
+/// One mark overlay to draw on a scanned crop: centre and radius in crop pixels, and the state.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MarkOverlay {
+    pub cx: f32,
+    pub cy: f32,
+    pub r: f32,
+    pub state: crate::backend::MarkState,
+}
+
+/// Overlay colours on paper (DESIGN §4; they never change with the theme).
+const MARK_SELECTED: [u8; 3] = [0x00, 0x7F, 0x68];
+const MARK_AMBIGUOUS: [u8; 3] = [0xB0, 0x6C, 0x00];
+const MARK_UNREADABLE: [u8; 3] = [0x9E, 0x1B, 0x32];
+const MARK_HALO: [u8; 3] = [0xFF, 0xFF, 0xFF];
+
+/// The crop with its mark overlays drawn on it in the paper colours and shapes of DESIGN §4: a
+/// solid ring for a filled bubble, a dashed ring for an ambiguous one and a hatched square for
+/// an unreadable one, each over a white halo. Blank bubbles get none (the overlays show what is
+/// marked). Used where many small crops are listed (the key-sheet summary), so each row is one
+/// image and one accessible node.
+pub fn with_marks(img: &CropImage, marks: &[MarkOverlay]) -> CropImage {
+    let size = tiny_skia::IntSize::from_wh(img.width.max(1), img.height.max(1));
+    let Some(mut pm) = size
+        .filter(|_| img.rgba.len() == (img.width * img.height * 4) as usize)
+        .and_then(|s| Pixmap::from_vec(img.rgba.to_vec(), s))
+    else {
+        return img.clone();
+    };
+    for m in marks {
+        let ring = m.r * 1.28;
+        let width = (m.r * 0.16).clamp(1.5, 4.0);
+        match m.state {
+            crate::backend::MarkState::Filled => {
+                circle(&mut pm, m.cx, m.cy, ring, width + 2.0, MARK_HALO);
+                circle(&mut pm, m.cx, m.cy, ring, width, MARK_SELECTED);
+            }
+            crate::backend::MarkState::Ambiguous => {
+                for k in 0..12 {
+                    let a0 = k as f32 * std::f32::consts::TAU / 12.0;
+                    let a1 = a0 + std::f32::consts::TAU / 12.0 * 0.6;
+                    let mut pb = PathBuilder::new();
+                    pb.move_to(m.cx + ring * a0.cos(), m.cy + ring * a0.sin());
+                    for s in 1..=6 {
+                        let a = a0 + (a1 - a0) * s as f32 / 6.0;
+                        pb.line_to(m.cx + ring * a.cos(), m.cy + ring * a.sin());
+                    }
+                    if let Some(path) = pb.finish() {
+                        for (w, rgb) in [(width + 2.0, MARK_HALO), (width, MARK_AMBIGUOUS)] {
+                            let stroke = Stroke {
+                                width: w,
+                                line_cap: LineCap::Round,
+                                ..Stroke::default()
+                            };
+                            pm.stroke_path(
+                                &path,
+                                &paint(rgb),
+                                &stroke,
+                                Transform::identity(),
+                                None,
+                            );
+                        }
+                    }
+                }
+            }
+            crate::backend::MarkState::Unreadable => {
+                let (x, y, s) = (m.cx - ring, m.cy - ring, 2.0 * ring);
+                rect_outline(&mut pm, x, y, s, s, width + 2.0, MARK_HALO);
+                rect_outline(&mut pm, x, y, s, s, width, MARK_UNREADABLE);
+                let mut pb = PathBuilder::new();
+                let mut t = s / 4.0;
+                while t < 2.0 * s {
+                    let (a, b) = (
+                        (x + t.min(s), y + (t - s).max(0.0)),
+                        (x + (t - s).max(0.0), y + t.min(s)),
+                    );
+                    pb.move_to(a.0, a.1);
+                    pb.line_to(b.0, b.1);
+                    t += s / 4.0;
+                }
+                if let Some(path) = pb.finish() {
+                    let stroke = Stroke {
+                        width: (width * 0.6).max(1.0),
+                        ..Stroke::default()
+                    };
+                    pm.stroke_path(
+                        &path,
+                        &paint(MARK_UNREADABLE),
+                        &stroke,
+                        Transform::identity(),
+                        None,
+                    );
+                }
+            }
+            crate::backend::MarkState::Blank => {}
+        }
+    }
+    to_crop(&pm)
+}
+
 // ------------------------------------------------------------------------------------ raster
 
 fn to_crop(pm: &Pixmap) -> CropImage {
@@ -782,6 +883,62 @@ mod tests {
         let (x, y) = geo.centres[0][9];
         let (ex, ey) = geo.centres[0][0];
         assert!(darkness(&img, x, y, geo.radius) > darkness(&img, ex, ey, geo.radius) + 0.3);
+    }
+
+    #[test]
+    fn mark_overlays_are_drawn_in_the_paper_colours() {
+        use crate::backend::MarkState;
+        let (w, h) = (120u32, 40u32);
+        let paper = CropImage {
+            width: w,
+            height: h,
+            rgba: Arc::from([240u8, 240, 240, 255].repeat((w * h) as usize)),
+        };
+        let at = |img: &CropImage, x: u32, y: u32| {
+            let i = ((y * w + x) * 4) as usize;
+            [img.rgba[i], img.rgba[i + 1], img.rgba[i + 2]]
+        };
+        let marked = with_marks(
+            &paper,
+            &[
+                MarkOverlay {
+                    cx: 20.0,
+                    cy: 20.0,
+                    r: 10.0,
+                    state: MarkState::Filled,
+                },
+                MarkOverlay {
+                    cx: 60.0,
+                    cy: 20.0,
+                    r: 10.0,
+                    state: MarkState::Blank,
+                },
+                MarkOverlay {
+                    cx: 100.0,
+                    cy: 20.0,
+                    r: 10.0,
+                    state: MarkState::Unreadable,
+                },
+            ],
+        );
+        let near = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).all(|(x, y)| x.abs_diff(y) <= 30);
+        assert_eq!((marked.width, marked.height), (w, h));
+        // the solid ring sits at 1.28 r: teal there, paper inside
+        assert!(
+            near(at(&marked, 20 + 12, 20), MARK_SELECTED),
+            "{:?}",
+            at(&marked, 32, 20)
+        );
+        assert_eq!(at(&marked, 20, 20), [240, 240, 240]);
+        // a blank bubble gets no overlay
+        assert_eq!(at(&marked, 60 + 12, 20), [240, 240, 240]);
+        // the unreadable square's edge is crimson
+        assert!(
+            near(at(&marked, 100 - 13, 20), MARK_UNREADABLE),
+            "{:?}",
+            at(&marked, 87, 20)
+        );
+        assert!(marked.rgba.chunks_exact(4).all(|p| p[3] == 255), "opaque");
     }
 
     #[test]

@@ -159,6 +159,7 @@ fn ms(t: Instant) -> f64 {
 }
 
 /// A page task: which source and page, plus ingest outcome.
+#[derive(Clone)]
 struct PageTask {
     page_id: String,
     source: usize,
@@ -283,6 +284,60 @@ pub fn grade(
             .collect()
     });
     grade_sources(def, sources, opts, &pool, t0, progress)
+}
+
+/// [`grade`] with key-sheet files (`omr grade --key-sheet`, §10.1): every sheet in
+/// `key_sheets` is a key sheet (read by the same recognizer, routed to the key store, held
+/// for the instructor's confirmation); `inputs` may hold key sheets too, found by the rule.
+pub fn grade_with_key_sheets(
+    def: &ExamDefinition,
+    inputs: &[PathBuf],
+    key_sheets: &[PathBuf],
+    opts: &GradeOptions,
+    progress: &(dyn Fn(&Progress) + Sync),
+) -> Result<Graded, AppError> {
+    let ks = if key_sheets.is_empty() {
+        Vec::new()
+    } else {
+        ingest::collect_paths(key_sheets)?
+    };
+    let mut paths = if inputs.is_empty() {
+        Vec::new()
+    } else {
+        ingest::collect_paths(inputs)?
+    };
+    // A file named as a key sheet is a key sheet, also when a folder of scans holds it.
+    paths.retain(|p| !ks.contains(p));
+    paths.extend(ks.iter().cloned());
+    let t0 = Instant::now();
+    let pool = pool(opts.threads)?;
+    let sources: Vec<Result<SourceFile, (PathBuf, String)>> = pool.install(|| {
+        paths
+            .par_iter()
+            .map(|p| SourceFile::read(p).map_err(|e| (p.clone(), e)))
+            .collect()
+    });
+    let mut d = def.clone();
+    for (p, s) in paths.iter().zip(&sources) {
+        if !ks.contains(p) {
+            continue;
+        }
+        match s {
+            Ok(f) => {
+                if !d.key_sheets.declared.contains(&f.sha384) {
+                    d.key_sheets.declared.push(f.sha384.clone());
+                }
+            }
+            Err((_, e)) => {
+                return Err(AppError::Input(format!(
+                    "key sheet {}: {e}; check the path or rescan the key sheet",
+                    p.display()
+                )));
+            }
+        }
+    }
+    d.key_sheets.declared.sort();
+    grade_sources(&d, sources, opts, &pool, t0, progress)
 }
 
 /// Grades sources already in memory (tests, benchmarks).
@@ -600,8 +655,22 @@ pub fn grade_into(
     timings.pages = tasks.len();
 
     // ---- Batch stage: baseline per slice (capture class × device dpi), then decisions.
+    // Key sheets (§10.1) are read with the slice's baseline but never shape it: the students
+    // read exactly as without them. Named key sheets are known now; key sheets found in the
+    // stack by the rule are found after a first decision pass, and their slices are decided
+    // again without them.
     progress(&Progress::Stage("batch"));
     let t_batch = Instant::now();
+    let declared: std::collections::BTreeSet<&str> =
+        def.key_sheets.declared.iter().map(String::as_str).collect();
+    let is_declared: Vec<bool> = tasks
+        .iter()
+        .map(|t| {
+            t.duplicate_of.is_none() && declared.contains(source_infos[t.source].sha384.as_str())
+        })
+        .collect();
+    let mut key_pages: std::collections::BTreeSet<usize> =
+        (0..tasks.len()).filter(|&i| is_declared[i]).collect();
     let mut slices: BTreeMap<(bool, Option<u32>), Vec<usize>> = BTreeMap::new();
     for (i, s) in staged.iter().enumerate() {
         if let Some(m) = &s.measured {
@@ -611,37 +680,117 @@ pub fn grade_into(
                 .push(i);
         }
     }
-    let mut baselines = BTreeMap::new();
-    let mut batch_exceptions: Vec<Exception> = Vec::new();
-    for (key, idx) in &slices {
-        let ms_: Vec<&Measured> = idx
+    let slice_baseline = |idx: &[usize], keys: &std::collections::BTreeSet<usize>| {
+        let students: Vec<&Measured> = idx
             .iter()
+            .filter(|i| !keys.contains(i))
             .filter_map(|&i| staged[i].measured.as_ref())
             .collect();
-        let b = recognizer.baseline(&ms_);
+        if students.is_empty() {
+            let all: Vec<&Measured> = idx
+                .iter()
+                .filter_map(|&i| staged[i].measured.as_ref())
+                .collect();
+            recognizer.baseline(&all)
+        } else {
+            recognizer.baseline(&students)
+        }
+    };
+    let mut baselines = BTreeMap::new();
+    for (key, idx) in &slices {
+        baselines.insert(*key, slice_baseline(idx, &key_pages));
+    }
+    // A panic while deciding one page quarantines that page (CAP-001), never the batch.
+    let decide_pages = |only: Option<&std::collections::BTreeSet<usize>>,
+                        baselines: &BTreeMap<(bool, Option<u32>), crate::engine::BatchBaseline>|
+     -> Vec<Option<Result<Option<PageRead>, ()>>> {
+        pool.install(|| {
+            staged
+                .par_iter()
+                .zip(tasks.par_iter())
+                .enumerate()
+                .map(|(i, (s, t))| {
+                    if only.is_some_and(|o| !o.contains(&i)) {
+                        return None;
+                    }
+                    let Some(m) = s.measured.as_ref() else {
+                        return Some(Ok(None));
+                    };
+                    let b = &baselines[&(m.bitonal(), s.source_dpi)];
+                    Some(
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            recognizer.decide(m, b, &t.page_id)
+                        }))
+                        .map(Some)
+                        .map_err(|_| ()),
+                    )
+                })
+                .collect()
+        })
+    };
+    let mut reads: Vec<Result<Option<PageRead>, ()>> = decide_pages(None, &baselines)
+        .into_iter()
+        .map(|r| r.unwrap_or(Ok(None)))
+        .collect();
+    // Key sheets in the stack (§10.1 rule): a student-number grid bubbled with a marker no
+    // student can have, and a declared version.
+    let mut stack_notes = Vec::new();
+    if def.key_sheets.detect_in_stack {
+        let mut by_digits: BTreeMap<usize, Vec<u8>> = BTreeMap::new();
+        let mut found = std::collections::BTreeSet::new();
+        for (i, r) in reads.iter().enumerate() {
+            let Ok(Some(r)) = r else {
+                continue;
+            };
+            if is_declared[i] || tasks[i].duplicate_of.is_some() {
+                continue;
+            }
+            let digits = r
+                .student_id
+                .as_ref()
+                .map_or(0, |g| g.text().chars().count());
+            let markers = by_digits.entry(digits).or_insert_with(|| {
+                let (m, notes) = crate::keysheet::stack_markers(def, digits);
+                for n in notes {
+                    if !stack_notes.contains(&n) {
+                        stack_notes.push(n);
+                    }
+                }
+                m
+            });
+            if crate::keysheet::is_stack_key_sheet(r, markers) {
+                found.insert(i);
+            }
+        }
+        if !found.is_empty() {
+            let affected: Vec<(bool, Option<u32>)> = slices
+                .iter()
+                .filter(|(_, idx)| idx.iter().any(|i| found.contains(i)))
+                .map(|(k, _)| *k)
+                .collect();
+            key_pages.extend(found);
+            let mut redo = std::collections::BTreeSet::new();
+            for k in affected {
+                let idx = &slices[&k];
+                baselines.insert(k, slice_baseline(idx, &key_pages));
+                redo.extend(idx.iter().copied());
+            }
+            for (i, r) in decide_pages(Some(&redo), &baselines)
+                .into_iter()
+                .enumerate()
+            {
+                if let Some(r) = r {
+                    reads[i] = r;
+                }
+            }
+        }
+    }
+    let mut batch_exceptions: Vec<Exception> = Vec::new();
+    for b in baselines.values() {
         for e in b.exceptions() {
             push_batch(&mut batch_exceptions, e);
         }
-        baselines.insert(*key, b);
     }
-    // A panic while deciding one page quarantines that page (CAP-001), never the batch.
-    let reads: Vec<Result<Option<PageRead>, ()>> = pool.install(|| {
-        staged
-            .par_iter()
-            .zip(tasks.par_iter())
-            .map(|(s, t)| {
-                let Some(m) = s.measured.as_ref() else {
-                    return Ok(None);
-                };
-                let b = &baselines[&(m.bitonal(), s.source_dpi)];
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    recognizer.decide(m, b, &t.page_id)
-                }))
-                .map(Some)
-                .map_err(|_| ())
-            })
-            .collect()
-    });
     let mut pages: Vec<PageState> = Vec::with_capacity(tasks.len());
     for ((t, mut s), r) in tasks.iter().zip(staged).zip(reads) {
         let mut r = match r {
@@ -666,10 +815,13 @@ pub fn grade_into(
                 }
             });
         }
+        let i = pages.len();
         let status = if t.duplicate_of.is_some() {
             PageStatus::Duplicate
         } else if s.blank {
             PageStatus::Blank
+        } else if key_pages.contains(&i) {
+            PageStatus::KeySheet
         } else if s.refusal.is_some() {
             PageStatus::Refused
         } else if r.as_ref().is_some_and(|r| r.registered) {
@@ -727,8 +879,43 @@ pub fn grade_into(
     }
     timings.batch_stage_ms = ms(t_batch);
 
-    // ---- Collation: booklets in canonical order.
+    // ---- Key sheets out of the student population (§10.1): their pages go after every other
+    // page (each part in canonical order), so the students' pages keep the indices of a run
+    // without key sheets; then collation in canonical order.
+    let mut is_declared = is_declared;
+    if pages.iter().any(|p| p.status == PageStatus::KeySheet) {
+        let mut order: Vec<usize> = (0..pages.len()).collect();
+        order.sort_by_key(|&i| pages[i].status == PageStatus::KeySheet);
+        pages = order.iter().map(|&i| pages[i].clone()).collect();
+        tasks = order.iter().map(|&i| tasks[i].clone()).collect();
+        is_declared = order.iter().map(|&i| is_declared[i]).collect();
+    }
+    let mut key_sheets = crate::model::KeySheets {
+        sheets: crate::keysheet::collect(def, &pages, &source_infos, &is_declared),
+        notes: stack_notes,
+        ..Default::default()
+    };
+    crate::keysheet::refresh_pending(&mut key_sheets);
     let mut booklets = collate(def, &recognizer, &mut pages, &tasks);
+    // Phone photos of students' sheets (§8.10): the phone slice is not calibrated, so their
+    // answers went to review (MRK-001 `uncalibrated_capture`); the batch says why once.
+    let photos = booklets
+        .iter()
+        .flat_map(|b| &b.pages)
+        .filter(|&&pi| pages[pi].read.as_ref().is_some_and(|r| r.photo))
+        .count();
+    if photos > 0 {
+        push_batch(
+            &mut batch_exceptions,
+            &Exception::must("CAP-003", Severity::Warn, Scope::Batch)
+                .with_sub_reason(PHONE_UNCALIBRATED)
+                .with_detail(format!(
+                    "{photos} student page(s) are phone photos: the phone capture is not \
+                     calibrated yet (§8.10 step 7), so every answer on them waits for a person; \
+                     scan the sheets on a scanner instead"
+                )),
+        );
+    }
 
     // ---- Identity (§9).
     progress(&Progress::Stage("identity"));
@@ -740,9 +927,22 @@ pub fn grade_into(
     progress(&Progress::Stage("scoring"));
     let t_sc = Instant::now();
     let mut exam_exceptions = Vec::new();
-    let mut key = resolve_key(def, &mut booklets, &mut exam_exceptions)?;
+    let mut key = resolve_key(def, &mut booklets, &mut exam_exceptions, &key_sheets)?;
     if let Some(p) = prior_run {
         crate::append::carry_key(p, &mut key);
+        crate::keysheet::carry(
+            def,
+            p,
+            &mut key_sheets,
+            &mut key,
+            &mut exam_exceptions,
+            &source_infos,
+            &pages,
+        );
+    }
+    // Never scored from an unconfirmed key-sheet key: the run is held (SCO-003 BLOCKER).
+    if key_sheets.pending {
+        exam_exceptions.push(crate::keysheet::hold_exception(def, &key_sheets));
     }
     let mut session = Session {
         schema: SESSION_SCHEMA,
@@ -758,6 +958,8 @@ pub fn grade_into(
         review: ReviewState::default(),
         timings: Timings::default(),
         release: None,
+        key_sheets,
+        flags: Default::default(),
     };
     // ---- Review queue (an appended batch carries the earlier run's decisions over).
     let labels = def.option_labels();
@@ -1159,6 +1361,15 @@ fn collate(
                         q.auto_accepted = false;
                         q.exceptions.push(e);
                     }
+                    // A phone photo of a student's sheet (§8.10 step 7: the phone slice is
+                    // not calibrated): the reading is proposed, never accepted on its own.
+                    if r.photo && q.auto_accepted {
+                        q.auto_accepted = false;
+                        q.exceptions.push(uncalibrated_capture(
+                            serial_hint(&r.code_serial),
+                            q.question,
+                        ));
+                    }
                     let status = if q.auto_accepted {
                         ResponseStatus::Auto
                     } else {
@@ -1320,6 +1531,26 @@ fn collate(
 
 fn serial_hint(code_serial: &Option<u32>) -> Option<u32> {
     code_serial.filter(|&s| s > 0)
+}
+
+/// Sub-reason of the batch CAP-003 WARN that says a batch holds phone photos (§8.10).
+pub const PHONE_UNCALIBRATED: &str = "phone_uncalibrated";
+
+/// MRK-001 `uncalibrated_capture` (ERROR, Item): an answer on a phone photo of a student's
+/// sheet, sent to review because the phone slice is not calibrated (§8.10 step 7).
+fn uncalibrated_capture(booklet: Option<u32>, question: u16) -> Exception {
+    Exception::must("MRK-001", Severity::Error, Scope::Item)
+        .with_sub_reason("uncalibrated_capture")
+        .with_target(Target {
+            booklet,
+            question: Some(question),
+            ..Target::default()
+        })
+        .with_detail(
+            "phone photo: the phone capture is not calibrated (§8.10 step 7), so no answer on \
+             it is accepted on its own; confirm the answer shown (Enter) or correct it from the \
+             crop, or rescan the sheet on a scanner",
+        )
 }
 
 /// MRK-017 `option_not_offered` (ERROR, Item) when a response marks an option at or beyond the
@@ -1560,11 +1791,15 @@ pub fn provided_key(
     })
 }
 
-/// The key in force, form inference and the related exceptions (§10.3).
+/// The key in force, form inference and the related exceptions (§10.3). Versions read from
+/// key sheets that are not confirmed take the key sheets' rows (§10.1; held, never scored until
+/// the instructor confirms them); form inference of undeclared booklets uses them as a
+/// proposal only (refreshed at confirmation).
 fn resolve_key(
     def: &ExamDefinition,
     booklets: &mut [Booklet],
     exam_exceptions: &mut Vec<Exception>,
+    key_sheets: &crate::model::KeySheets,
 ) -> Result<Option<EffectiveKey>, AppError> {
     let n = usize::from(def.questions);
     let points = if def.points.is_empty() {
@@ -1587,6 +1822,8 @@ fn resolve_key(
             })
         }
     };
+    let mut key = key;
+    crate::keysheet::overlay(def, key_sheets, &mut key, exam_exceptions);
     if def.forms.len() < 2 {
         return Ok(key);
     }

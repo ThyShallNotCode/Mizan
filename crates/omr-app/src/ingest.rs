@@ -271,9 +271,16 @@ pub fn decode_page(
         OpenSource::Image => {
             let d = omr_imaging::decode(&src.bytes)
                 .map_err(|e| cap001(page_id, &format!("{}: {e}", src.name)))?;
+            // A phone photo (§8.10): a camera's EXIF exposure data.
+            let camera = d.format == omr_imaging::SourceFormat::Jpeg
+                && omr_imaging::jpeg_from_camera(&src.bytes);
             Ok(DecodedPage {
                 image: d.image,
-                capture: d.capture,
+                capture: if camera {
+                    CaptureKind::Camera
+                } else {
+                    d.capture
+                },
                 known_dpi: None,
                 source_dpi: None,
             })
@@ -345,8 +352,16 @@ pub fn decode_page(
                         let g8 = omr_pdf::GrayImage8::from_raw(w, h, img.into_raw())
                             .ok_or_else(|| fail("JPEG size".into()))?;
                         let image = to_gray(g8.oriented(p.placement.orientation));
+                        // A phone photo (§8.10): a colour JPEG placed below 200 ppi, or one
+                        // carrying a camera's EXIF exposure data.
+                        let camera = omr_imaging::photo_capture(j.components >= 3, src_dpi)
+                            || omr_imaging::jpeg_from_camera(&j.data);
                         Ok(DecodedPage {
-                            capture: omr_imaging::classify_capture(&image),
+                            capture: if camera {
+                                CaptureKind::Camera
+                            } else {
+                                omr_imaging::classify_capture(&image)
+                            },
                             image,
                             known_dpi: src_dpi,
                             source_dpi: src_dpi,

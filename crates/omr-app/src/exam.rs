@@ -93,6 +93,97 @@ pub enum KeySource {
     Inferred,
 }
 
+/// How key sheets are told apart from the students' sheets (§10.1 key sources). A key sheet is
+/// the instructor's own filled answer sheet: the same key-blind recognizer reads it, and the
+/// app routes what it read to the key store (`omr-scoring` turns it into key entries); it is
+/// never graded as a student, and its key is never used before the instructor confirms it.
+///
+/// **The rule** (the default suits IAU sheets): a page is a key sheet when
+/// 1. its file was named as a key sheet (`omr grade --key-sheet FILE`, `omr key read`), or
+/// 2. `detect_in_stack` is on and **every** column of its student-number grid is confidently
+///    bubbled with one marker digit (by default 0 or 9: `0000000000`, `9999999999`).
+///
+/// A key sheet gives the key of the version it declares (a confident version bubble, or a
+/// verified page code); on a one-version exam a blank version bubble is that version. A key
+/// sheet of a several-version exam whose version is blank or unclear is refused with what to do
+/// and holds the run: it is never graded as a student whose number is the marker.
+///
+/// A marker is used in the stack only when it can never be a student: the exam's ID scheme must
+/// reject it (IAU student numbers are `2YYNNNNNNN`, so both default markers are rejected) and no
+/// roster student may have it; otherwise detection with that marker is off and the key summary
+/// says so. A student number that merely starts or ends with zeros is never a marker. A named
+/// key sheet must show a marker too: a key sheet whose grid does not read as one (e.g.
+/// `1111111111` from a sheet registered one bubble row off) is refused, never read as a key.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeySheetRule {
+    /// Find key sheets inside the students' stack (rule 2).
+    pub detect_in_stack: bool,
+    /// Marker digits: a key sheet bubbles one of them in every student-number column. Empty:
+    /// no detection in the stack and no marker check on named key sheets.
+    pub markers: Vec<u8>,
+    /// SHA-384 (hex) of the files named as key sheets: every sheet in them is a key sheet.
+    #[serde(default)]
+    pub declared: Vec<String>,
+}
+
+impl Default for KeySheetRule {
+    fn default() -> Self {
+        Self {
+            detect_in_stack: true,
+            markers: vec![0, 9],
+            declared: Vec::new(),
+        }
+    }
+}
+
+impl KeySheetRule {
+    /// No key sheets in the stack, no marker check (`--key-sheet-marker none`).
+    pub fn off() -> Self {
+        Self {
+            detect_in_stack: false,
+            markers: Vec::new(),
+            declared: Vec::new(),
+        }
+    }
+
+    /// The markers usable in the stack for an ID grid of `digits` columns, and a note for each
+    /// marker left out because it could be a real student number (the scheme accepts it, or a
+    /// roster student has it).
+    pub fn stack_markers(
+        &self,
+        digits: usize,
+        scheme: &omr_identity::StudentIdScheme,
+        roster: Option<&[RosterStudent]>,
+    ) -> (Vec<u8>, Vec<String>) {
+        let mut ok = Vec::new();
+        let mut notes = Vec::new();
+        if !self.detect_in_stack || digits == 0 {
+            return (ok, notes);
+        }
+        for &d in &self.markers {
+            let id: String = std::iter::repeat_n(char::from(b'0' + d), digits).collect();
+            if scheme.accepts(&id) {
+                notes.push(format!(
+                    "key-sheet marker {id} is not used in the stack: under the {} student-ID \
+                     scheme it could be a real student number (name key sheets with --key-sheet)",
+                    scheme.name()
+                ));
+            } else if roster.is_some_and(|r| {
+                r.iter()
+                    .any(|s| omr_identity::normalize_id(&s.id) == omr_identity::normalize_id(&id))
+            }) {
+                notes.push(format!(
+                    "key-sheet marker {id} is not used in the stack: a roster student has this \
+                     number (name key sheets with --key-sheet)"
+                ));
+            } else {
+                ok.push(d);
+            }
+        }
+        (ok, notes)
+    }
+}
+
 /// The student-ID scheme (§9.2).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -319,6 +410,9 @@ pub struct ExamDefinition {
     /// Learning outcomes.
     #[serde(default)]
     pub outcomes: Option<OutcomeSetup>,
+    /// How key sheets are recognised (§10.1; see [`KeySheetRule`]).
+    #[serde(default)]
+    pub key_sheets: KeySheetRule,
     /// Page-code secret K_exam of a generated sheet (hex, 32 bytes). A secret (§6.4): never
     /// printed in reports or event payloads, and never serialised: the session snapshot leaves
     /// it out and the project keeps it in its private `secrets/` file (read back on open).
@@ -364,6 +458,7 @@ impl ExamDefinition {
             roster: None,
             id_scheme,
             outcomes: None,
+            key_sheets: KeySheetRule::default(),
             page_code_key_hex: None,
         };
         d.exam_id = d.derived_exam_id();
@@ -569,6 +664,23 @@ impl ExamDefinition {
         }
         if let Some(r) = &self.roster {
             check_roster(r, &self.id_scheme)?;
+        }
+        let ks = &self.key_sheets;
+        if ks.markers.iter().any(|d| *d > 9) {
+            return bad(format!(
+                "key-sheet markers {:?}: each marker is one digit 0–9",
+                ks.markers
+            ));
+        }
+        if ks.markers.iter().collect::<BTreeSet<_>>().len() != ks.markers.len() {
+            return bad(format!("key-sheet markers repeat: {:?}", ks.markers));
+        }
+        if ks.detect_in_stack && ks.markers.is_empty() {
+            return bad(
+                "key-sheet detection in the stack needs at least one marker digit (or turn it \
+                 off)"
+                    .into(),
+            );
         }
         if let Some(o) = &self.outcomes {
             let codes: BTreeSet<&str> = o.clos.iter().map(|c| c.code.as_str()).collect();

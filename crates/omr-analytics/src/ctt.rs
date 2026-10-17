@@ -20,7 +20,8 @@ pub enum SmallN {
     Low,
     /// 30–49: D hidden; rules 3–4 low-confidence.
     Limited,
-    /// 50–99: all CTT statistics; Feldt and bootstrap CIs always shown.
+    /// 50–99: all CTT statistics; Feldt and bootstrap CIs always shown (the Feldt CI here, the
+    /// bootstrap percentile CI of r_ir by the stability job, [`crate::stability`]).
     Moderate,
     /// ≥ 100: all statistics.
     Full,
@@ -348,164 +349,231 @@ fn sort_key(x: f64) -> u64 {
 pub fn item_stats(data: &AnalysisData, upper_fraction: f64) -> Vec<ItemStats> {
     let (nr, nr_max) = number_right(data);
     let (upper, lower) = upper_lower(&nr, upper_fraction);
-    let mut out = Vec::with_capacity(data.items.len());
+    let rows: Vec<usize> = (0..data.n).collect();
+    let view = RowView {
+        rows: &rows,
+        nr: &nr,
+        nr_max: &nr_max,
+        upper: &upper,
+        lower: &lower,
+    };
     let mut keys: Vec<u128> = Vec::with_capacity(data.n);
-    for (i, it) in data.items.iter().enumerate() {
-        let reached: Vec<usize> = (0..data.n)
-            .filter(|&e| data.status[data.idx(e, i)] == CellStatus::Reached)
-            .collect();
-        let n = reached.len();
-        let tier = SmallN::of(n);
-        let u: Vec<f64> = reached.iter().map(|&e| data.u[data.idx(e, i)]).collect();
-        let p = (n > 0).then(|| u.iter().sum::<f64>() / n as f64);
-        let mut difficulty_flags = Vec::new();
-        if let Some(p) = p {
-            if p < 0.30 {
-                difficulty_flags.push(DifficultyFlag::Hard);
-            }
-            if p > 0.90 {
-                difficulty_flags.push(DifficultyFlag::Easy);
-            }
-            if it.options > 0 && p <= 1.0 / f64::from(it.options) + 0.05 {
-                difficulty_flags.push(DifficultyFlag::NearChance);
-            }
+    (0..data.items.len())
+        .map(|i| item_stat(data, i, &view, &mut keys))
+        .collect()
+}
+
+/// Examinees seen by an item computation: position `k` stands for data row `rows[k]`, with its
+/// number-right total `nr[k]`, presented maximum `nr_max[k]` and upper/lower group membership
+/// (identity rows for [`item_stats`]; a bootstrap resample for flag stability).
+pub(crate) struct RowView<'a> {
+    pub rows: &'a [usize],
+    pub nr: &'a [f64],
+    pub nr_max: &'a [f64],
+    pub upper: &'a [bool],
+    pub lower: &'a [bool],
+}
+
+/// Corrected item–rest r_ir of item `i` over a row view, as [`item_stat`] computes it (the
+/// same rest score and tier rule: `None` below N = 10 or with zero variance), without the
+/// option statistics: the bootstrap percentile CI of every item (§12.3) draws it per resample.
+/// `u` and `rest` are reusable buffers.
+pub(crate) fn r_ir_of(
+    data: &AnalysisData,
+    i: usize,
+    view: &RowView,
+    u: &mut Vec<f64>,
+    rest: &mut Vec<f64>,
+) -> Option<f64> {
+    let it = &data.items[i];
+    u.clear();
+    rest.clear();
+    for (k, &e) in view.rows.iter().enumerate() {
+        let idx = data.idx(e, i);
+        if data.status[idx] != CellStatus::Reached {
+            continue;
         }
-        // Rest score as a share of the examinee's presented maximum minus M_i (equals the
-        // raw rest score up to a constant within one item-set class).
-        let rest: Vec<f64> = reached
-            .iter()
-            .map(|&e| {
-                let den = nr_max[e] - it.max;
-                if den > 0.0 {
-                    (nr[e] - it.max * data.u[data.idx(e, i)]) / den
-                } else {
-                    0.0
-                }
-            })
-            .collect();
-        let totals: Vec<f64> = reached.iter().map(|&e| nr[e]).collect();
-        let show_r = tier >= SmallN::Low;
-        let r_ir = if show_r { pearson(&u, &rest) } else { None };
-        let r_pb = if show_r { pearson(&u, &totals) } else { None };
-        let r_ir_ci = r_ir.and_then(|r| fisher_z_ci(r, n as u64));
-        let (mut up_n, mut lo_n, mut up_u, mut lo_u) = (0usize, 0usize, 0.0, 0.0);
-        for (k, &e) in reached.iter().enumerate() {
-            if upper[e] {
-                up_n += 1;
-                up_u += u[k];
-            }
-            if lower[e] {
-                lo_n += 1;
-                lo_u += u[k];
-            }
-        }
-        let d_index = (tier >= SmallN::Moderate && up_n > 0 && lo_n > 0)
-            .then(|| up_u / up_n as f64 - lo_u / lo_n as f64);
-        // Rank-based rest-score quintiles, ties by examinee order: group ⌊rank·5/N⌋. Group q
-        // starts at rank ⌈q·N/5⌉, so four O(N) selections of packed (value, index) keys give
-        // the cut points without a full sort.
-        let packed = |k: usize| (u128::from(sort_key(rest[k])) << 64) | k as u128;
-        keys.clear();
-        keys.extend((0..n).map(packed));
-        let mut cuts = [u128::MAX; 4];
-        for (q, cut) in cuts.iter_mut().enumerate() {
-            let r = ((q + 1) * n).div_ceil(5);
-            if r < n {
-                *cut = *keys.select_nth_unstable(r).1;
-            }
-        }
-        let quintile: Vec<usize> = (0..n)
-            .map(|k| {
-                let key = packed(k);
-                cuts.iter().filter(|c| key >= **c).count()
-            })
-            .collect();
-        let mut options = Vec::new();
-        if it.options > 0 {
-            let m = usize::from(it.options);
-            let cats = m + 1; // options, then omit
-            let mut count = vec![0usize; cats];
-            let mut sum_rest = vec![0.0f64; cats];
-            let mut up_c = vec![0usize; cats];
-            let mut lo_c = vec![0usize; cats];
-            let mut trace_c = vec![[0usize; 5]; cats];
-            let mut sizes = [0usize; 5];
-            for (k, &e) in reached.iter().enumerate() {
-                sizes[quintile[k]] += 1;
-                let c = data.choice[data.idx(e, i)];
-                let mut add = |cat: usize| {
-                    count[cat] += 1;
-                    sum_rest[cat] += rest[k];
-                    up_c[cat] += usize::from(upper[e]);
-                    lo_c[cat] += usize::from(lower[e]);
-                    trace_c[cat][quintile[k]] += 1;
-                };
-                if c == 0 {
-                    add(m);
-                } else {
-                    let mut bits = c;
-                    while bits != 0 {
-                        let o = bits.trailing_zeros() as usize;
-                        bits &= bits - 1;
-                        if o < m {
-                            add(o);
-                        }
-                    }
-                }
-            }
-            let (mean_r, sd_r) = moments(&rest);
-            let nf = n as f64;
-            for cat in 0..cats {
-                let option = (cat < m).then_some(cat as u8);
-                let prop = if n > 0 { count[cat] as f64 / nf } else { 0.0 };
-                let r = (show_r && sd_r > 1e-12 && prop > 0.0 && prop < 1.0).then(|| {
-                    (sum_rest[cat] / nf - prop * mean_r) / ((prop * (1.0 - prop)).sqrt() * sd_r)
-                });
-                let mut trace = [0.0; 5];
-                for q in 0..5 {
-                    if sizes[q] > 0 {
-                        trace[q] = trace_c[cat][q] as f64 / sizes[q] as f64;
-                    }
-                }
-                let keyed = option.is_some_and(|o| it.keyed & (1 << o) != 0);
-                options.push(OptionStats {
-                    option,
-                    keyed,
-                    count: count[cat],
-                    proportion: prop,
-                    r,
-                    upper: if up_n > 0 {
-                        up_c[cat] as f64 / up_n as f64
-                    } else {
-                        0.0
-                    },
-                    lower: if lo_n > 0 {
-                        lo_c[cat] as f64 / lo_n as f64
-                    } else {
-                        0.0
-                    },
-                    trace,
-                    non_functioning: option.is_some() && !keyed && n > 0 && prop < 0.05,
-                });
-            }
-        }
-        out.push(ItemStats {
-            item: i,
-            label: it.label.clone(),
-            n,
-            tier,
-            p,
-            difficulty_flags,
-            d_index,
-            r_pb,
-            r_ir,
-            r_ir_ci,
-            discrimination: r_ir.map(Discrimination::of),
-            low_confidence: tier == SmallN::Low,
-            options,
+        let x = data.u[idx];
+        let den = view.nr_max[k] - it.max;
+        u.push(x);
+        rest.push(if den > 0.0 {
+            (view.nr[k] - it.max * x) / den
+        } else {
+            0.0
         });
     }
-    out
+    if SmallN::of(u.len()) < SmallN::Low {
+        return None;
+    }
+    pearson(u, rest)
+}
+
+/// One item's statistics over a row view (the body of [`item_stats`]).
+pub(crate) fn item_stat(
+    data: &AnalysisData,
+    i: usize,
+    view: &RowView,
+    keys: &mut Vec<u128>,
+) -> ItemStats {
+    let it = &data.items[i];
+    let (nr, nr_max, upper, lower) = (view.nr, view.nr_max, view.upper, view.lower);
+    let row = |k: usize| view.rows[k];
+    let reached: Vec<usize> = (0..view.rows.len())
+        .filter(|&e| data.status[data.idx(row(e), i)] == CellStatus::Reached)
+        .collect();
+    let n = reached.len();
+    let tier = SmallN::of(n);
+    let u: Vec<f64> = reached
+        .iter()
+        .map(|&e| data.u[data.idx(row(e), i)])
+        .collect();
+    let p = (n > 0).then(|| u.iter().sum::<f64>() / n as f64);
+    let mut difficulty_flags = Vec::new();
+    if let Some(p) = p {
+        if p < 0.30 {
+            difficulty_flags.push(DifficultyFlag::Hard);
+        }
+        if p > 0.90 {
+            difficulty_flags.push(DifficultyFlag::Easy);
+        }
+        if it.options > 0 && p <= 1.0 / f64::from(it.options) + 0.05 {
+            difficulty_flags.push(DifficultyFlag::NearChance);
+        }
+    }
+    // Rest score as a share of the examinee's presented maximum minus M_i (equals the
+    // raw rest score up to a constant within one item-set class).
+    let rest: Vec<f64> = reached
+        .iter()
+        .map(|&e| {
+            let den = nr_max[e] - it.max;
+            if den > 0.0 {
+                (nr[e] - it.max * data.u[data.idx(row(e), i)]) / den
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    let totals: Vec<f64> = reached.iter().map(|&e| nr[e]).collect();
+    let show_r = tier >= SmallN::Low;
+    let r_ir = if show_r { pearson(&u, &rest) } else { None };
+    let r_pb = if show_r { pearson(&u, &totals) } else { None };
+    let r_ir_ci = r_ir.and_then(|r| fisher_z_ci(r, n as u64));
+    let (mut up_n, mut lo_n, mut up_u, mut lo_u) = (0usize, 0usize, 0.0, 0.0);
+    for (k, &e) in reached.iter().enumerate() {
+        if upper[e] {
+            up_n += 1;
+            up_u += u[k];
+        }
+        if lower[e] {
+            lo_n += 1;
+            lo_u += u[k];
+        }
+    }
+    let d_index = (tier >= SmallN::Moderate && up_n > 0 && lo_n > 0)
+        .then(|| up_u / up_n as f64 - lo_u / lo_n as f64);
+    // Rank-based rest-score quintiles, ties by examinee order: group ⌊rank·5/N⌋. Group q
+    // starts at rank ⌈q·N/5⌉, so four O(N) selections of packed (value, index) keys give
+    // the cut points without a full sort.
+    let packed = |k: usize| (u128::from(sort_key(rest[k])) << 64) | k as u128;
+    keys.clear();
+    keys.extend((0..n).map(packed));
+    let mut cuts = [u128::MAX; 4];
+    for (q, cut) in cuts.iter_mut().enumerate() {
+        let r = ((q + 1) * n).div_ceil(5);
+        if r < n {
+            *cut = *keys.select_nth_unstable(r).1;
+        }
+    }
+    let quintile: Vec<usize> = (0..n)
+        .map(|k| {
+            let key = packed(k);
+            cuts.iter().filter(|c| key >= **c).count()
+        })
+        .collect();
+    let mut options = Vec::new();
+    if it.options > 0 {
+        let m = usize::from(it.options);
+        let cats = m + 1; // options, then omit
+        let mut count = vec![0usize; cats];
+        let mut sum_rest = vec![0.0f64; cats];
+        let mut up_c = vec![0usize; cats];
+        let mut lo_c = vec![0usize; cats];
+        let mut trace_c = vec![[0usize; 5]; cats];
+        let mut sizes = [0usize; 5];
+        for (k, &e) in reached.iter().enumerate() {
+            sizes[quintile[k]] += 1;
+            let c = data.choice[data.idx(row(e), i)];
+            let mut add = |cat: usize| {
+                count[cat] += 1;
+                sum_rest[cat] += rest[k];
+                up_c[cat] += usize::from(upper[e]);
+                lo_c[cat] += usize::from(lower[e]);
+                trace_c[cat][quintile[k]] += 1;
+            };
+            if c == 0 {
+                add(m);
+            } else {
+                let mut bits = c;
+                while bits != 0 {
+                    let o = bits.trailing_zeros() as usize;
+                    bits &= bits - 1;
+                    if o < m {
+                        add(o);
+                    }
+                }
+            }
+        }
+        let (mean_r, sd_r) = moments(&rest);
+        let nf = n as f64;
+        for cat in 0..cats {
+            let option = (cat < m).then_some(cat as u8);
+            let prop = if n > 0 { count[cat] as f64 / nf } else { 0.0 };
+            let r = (show_r && sd_r > 1e-12 && prop > 0.0 && prop < 1.0).then(|| {
+                (sum_rest[cat] / nf - prop * mean_r) / ((prop * (1.0 - prop)).sqrt() * sd_r)
+            });
+            let mut trace = [0.0; 5];
+            for q in 0..5 {
+                if sizes[q] > 0 {
+                    trace[q] = trace_c[cat][q] as f64 / sizes[q] as f64;
+                }
+            }
+            let keyed = option.is_some_and(|o| it.keyed & (1 << o) != 0);
+            options.push(OptionStats {
+                option,
+                keyed,
+                count: count[cat],
+                proportion: prop,
+                r,
+                upper: if up_n > 0 {
+                    up_c[cat] as f64 / up_n as f64
+                } else {
+                    0.0
+                },
+                lower: if lo_n > 0 {
+                    lo_c[cat] as f64 / lo_n as f64
+                } else {
+                    0.0
+                },
+                trace,
+                non_functioning: option.is_some() && !keyed && n > 0 && prop < 0.05,
+            });
+        }
+    }
+    ItemStats {
+        item: i,
+        label: it.label.clone(),
+        n,
+        tier,
+        p,
+        difficulty_flags,
+        d_index,
+        r_pb,
+        r_ir,
+        r_ir_ci,
+        discrimination: r_ir.map(Discrimination::of),
+        low_confidence: tier == SmallN::Low,
+        options,
+    }
 }
 
 /// Test statistics per item-set class (§12, "Pooling"): reliability uses the complete N × k

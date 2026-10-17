@@ -200,11 +200,15 @@ fn project_one(
 }
 
 impl Scoring {
-    /// Builds and runs scoring for a session (no key → `None`).
+    /// Builds and runs scoring for a session (no key → `None`; a key read from key sheets the
+    /// instructor has not confirmed → `None`: never scored from it, §10.1).
     pub fn build(session: &Session) -> Result<Option<Self>, AppError> {
         let Some(key) = &session.key else {
             return Ok(None);
         };
+        if session.key_unconfirmed() {
+            return Ok(None);
+        }
         let def = &session.definition;
         let forms = form_map(def, key)?;
         let (kv, voids) = key_version(def, key);

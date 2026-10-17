@@ -139,6 +139,12 @@ impl Warp for Affine {
 
 /// The quadratic polynomial warp (12 parameters): with `x = (X − c_x)/n`, `y = (Y − c_y)/n`,
 /// `x' = Σ cx_k · f_k`, `y' = Σ cy_k · f_k` over `f = [1, x, y, x², x·y, y²]`.
+///
+/// Optionally **rational**: with a projective denominator `w = 1 + den₀·x + den₁·y`, the map is
+/// `(Σ cx_k f_k / w, Σ cy_k f_k / w)`, which represents any homography exactly (linear
+/// numerators) and a homography times a quadratic residual approximately — the camera path's
+/// warp (§8.10: phones use a homography). `den = [0, 0]` (the default) is the plain quadratic,
+/// bit for bit.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct QuadWarp {
     /// Normalisation centre (template pixels).
@@ -149,14 +155,37 @@ pub struct QuadWarp {
     pub cx: [f64; 6],
     /// Coefficients of y'.
     pub cy: [f64; 6],
+    /// Projective denominator coefficients (of the normalised x and y); zero for the plain
+    /// quadratic.
+    #[serde(default)]
+    pub den: [f64; 2],
 }
 
 impl QuadWarp {
     /// The basis `[1, x, y, x², x·y, y²]` at `p`.
+    #[inline]
     pub fn basis(&self, p: PointPx) -> [f64; 6] {
         let x = (p.x - self.centre.x) / self.norm;
         let y = (p.y - self.centre.y) / self.norm;
         [1.0, x, y, x * x, x * y, y * y]
+    }
+
+    /// True if the map has a projective denominator.
+    #[inline]
+    pub fn is_rational(&self) -> bool {
+        self.den != [0.0, 0.0]
+    }
+
+    /// The denominator `w = 1 + den₀·x + den₁·y` at `p` (1 for the plain quadratic).
+    #[inline]
+    pub fn denominator(&self, p: PointPx) -> f64 {
+        if self.is_rational() {
+            let x = (p.x - self.centre.x) / self.norm;
+            let y = (p.y - self.centre.y) / self.norm;
+            1.0 + self.den[0] * x + self.den[1] * y
+        } else {
+            1.0
+        }
     }
 
     /// The same map as an affine, expressed in this normalisation.
@@ -168,11 +197,41 @@ impl QuadWarp {
             norm,
             cx: [o.x, aa * norm, b * norm, 0.0, 0.0, 0.0],
             cy: [o.y, c * norm, d * norm, 0.0, 0.0, 0.0],
+            den: [0.0, 0.0],
         }
+    }
+
+    /// The same map as a homography (exact: linear numerators over the projective
+    /// denominator), expressed in this normalisation. `None` if the homography is singular at
+    /// the centre.
+    pub fn from_homography(h: &Homography, centre: PointPx, norm: f64) -> Option<Self> {
+        let g = &h.h;
+        let c0 = g[6] * centre.x + g[7] * centre.y + g[8];
+        if c0.abs() < 1e-12 || !c0.is_finite() {
+            return None;
+        }
+        let num = |a: f64, b: f64, c: f64| {
+            [
+                (a * centre.x + b * centre.y + c) / c0,
+                a * norm / c0,
+                b * norm / c0,
+                0.0,
+                0.0,
+                0.0,
+            ]
+        };
+        Some(Self {
+            centre,
+            norm,
+            cx: num(g[0], g[1], g[2]),
+            cy: num(g[3], g[4], g[5]),
+            den: [g[6] * norm / c0, g[7] * norm / c0],
+        })
     }
 }
 
 impl Warp for QuadWarp {
+    #[inline]
     fn map(&self, p: PointPx) -> PointPx {
         let f = self.basis(p);
         let mut x = 0.0;
@@ -180,6 +239,10 @@ impl Warp for QuadWarp {
         for ((fk, a), b) in f.iter().zip(&self.cx).zip(&self.cy) {
             x += a * fk;
             y += b * fk;
+        }
+        if self.is_rational() {
+            let w = 1.0 + self.den[0] * f[1] + self.den[1] * f[2];
+            return PointPx { x: x / w, y: y / w };
         }
         PointPx { x, y }
     }
@@ -196,7 +259,22 @@ impl Warp for QuadWarp {
         };
         let (xx, xy) = d(&self.cx);
         let (yx, yy) = d(&self.cy);
-        [[xx, xy], [yx, yy]]
+        if !self.is_rational() {
+            return [[xx, xy], [yx, yy]];
+        }
+        // Quotient rule: d(N/w) = (dN − (N/w)·dw) / w.
+        let f = self.basis(p);
+        let (nx, ny) = (
+            f.iter().zip(&self.cx).map(|(a, b)| a * b).sum::<f64>(),
+            f.iter().zip(&self.cy).map(|(a, b)| a * b).sum::<f64>(),
+        );
+        let w = 1.0 + self.den[0] * x + self.den[1] * y;
+        let (wx, wy) = (self.den[0] / n, self.den[1] / n);
+        let (mx, my) = (nx / w, ny / w);
+        [
+            [(xx - mx * wx) / w, (xy - mx * wy) / w],
+            [(yx - my * wx) / w, (yy - my * wy) / w],
+        ]
     }
 }
 
@@ -292,6 +370,43 @@ mod tests {
             let j = q.jacobian(p);
             assert!((j[0][0] - 1.01).abs() < 1e-12 && (j[1][0] + 0.01).abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn rational_quad_represents_a_homography() {
+        let h = Homography {
+            h: [0.95, 0.03, 40.0, -0.02, 1.01, -15.0, 2.2e-5, -1.6e-5, 1.0],
+        };
+        let c = PointPx {
+            x: 1100.0,
+            y: 800.0,
+        };
+        let q = QuadWarp::from_homography(&h, c, 1000.0).unwrap();
+        assert!(q.is_rational());
+        for p in [
+            PointPx { x: 0.0, y: 0.0 },
+            PointPx {
+                x: 2300.0,
+                y: 1600.0,
+            },
+            PointPx { x: 700.0, y: 90.0 },
+        ] {
+            let (a, b) = (q.map(p), h.map(p));
+            assert!((a.x - b.x).abs() < 1e-8 && (a.y - b.y).abs() < 1e-8);
+            // The analytic Jacobian agrees with central differences.
+            let j = q.jacobian(p);
+            let e = 1e-3;
+            let dx = (h.map(PointPx { x: p.x + e, ..p }).x - h.map(PointPx { x: p.x - e, ..p }).x)
+                / (2.0 * e);
+            let dy = (h.map(PointPx { y: p.y + e, ..p }).y - h.map(PointPx { y: p.y - e, ..p }).y)
+                / (2.0 * e);
+            assert!((j[0][0] - dx).abs() < 1e-7 && (j[1][1] - dy).abs() < 1e-7);
+        }
+        // The plain quadratic is unchanged by the denominator machinery.
+        let a = Affine::new(1.01, 0.02, 5.0, -0.01, 0.99, 3.0);
+        let plain = QuadWarp::from_affine(&a, c, 1000.0);
+        assert!(!plain.is_rational());
+        assert_eq!(plain.denominator(c), 1.0);
     }
 
     #[test]

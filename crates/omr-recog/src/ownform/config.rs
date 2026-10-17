@@ -94,11 +94,13 @@ pub fn gray_decision() -> DecisionConfig {
         erasure_rho_permille: 500,
         erasure_gap: 205,
         residue_log: 102,
+        photo_residue_quantile_permille: 950,
         level_clear_min: 256,
         level_min: 307,
         level_max: 1024,
         hysteresis: 8,
         bitonal_hysteresis_factor: 2,
+        camera_hysteresis_factor: 2,
         multi_review: MultiReview::Never,
         erasure_rule: true,
     }

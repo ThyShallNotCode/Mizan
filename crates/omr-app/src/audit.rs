@@ -72,6 +72,24 @@ pub fn validate(s: &Session) -> Result<(), AppError> {
             )));
         }
     }
+    for k in &s.key_sheets.sheets {
+        let bad = k.pages.is_empty()
+            || k.pages.iter().any(|&p| p >= np)
+            || k.form.is_some_and(|f| f >= nf)
+            || !(k.questions.is_empty() || k.questions.len() == nq)
+            || k.questions.iter().any(|q| q.page >= np);
+        if bad {
+            return Err(damaged("a key sheet points outside the exam"));
+        }
+    }
+    if s.key_sheets
+        .decisions
+        .iter()
+        .any(|d| d.form >= nf || d.question >= nq)
+        || s.key_sheets.confirmed.iter().any(|c| c.form >= nf)
+    {
+        return Err(damaged("a key-sheet decision points outside the exam"));
+    }
     if let Some(k) = &s.key
         && (k.forms.len() != nf || k.forms.iter().any(|f| f.len() != nq))
     {
@@ -155,8 +173,9 @@ pub fn against_store(
             )));
         }
     }
-    // The key in force is a published key version.
-    if let Some(k) = &s.key {
+    // The key in force is a published key version (a key-sheet key waiting for confirmation
+    // is not published yet, and nothing is scored from it).
+    if let Some(k) = s.key.as_ref().filter(|_| !s.key_unconfirmed()) {
         let (kv, _) = crate::score::key_version(&s.definition, k);
         let stored = reader
             .key_version(&exam, k.version)

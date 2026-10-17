@@ -924,6 +924,9 @@ fn an_incomplete_key_never_reads_as_releasable() {
     // Filling it in releases the exam and scores every sheet by hand.
     p.set_key(1, 4, &char::from(b'A' + key(1, 3)).to_string())
         .unwrap();
+    // The new score run's mis-key check (§12.2) reads "computing…" until it has run.
+    assert!(p.session.release_blocked().unwrap().contains("computing"));
+    p.judge_flags().unwrap();
     assert_eq!(p.session.release_blocked(), None);
     check_scores(&p);
     // Clearing an entry again blocks again.
@@ -1391,6 +1394,7 @@ fn req_a2_a_500_page_pdf_keeps_memory_bounded_and_throughput() {
                 data: std::fs::read(f).unwrap(),
                 filter: Some("DCTDecode"),
                 dpi: 200.0,
+                components: 1,
             }
         })
         .collect();

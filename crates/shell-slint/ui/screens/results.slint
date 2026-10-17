@@ -5,7 +5,7 @@ import {
     StatusPill, Tag, Breadcrumb, TableRow, TableHeaderCell, TableCell, SeverityGlyph, Keycap,
     GhostButton,
 } from "../theme.slint";
-import { App, ResultsVM, ItemRow } from "../state.slint";
+import { App, ResultsVM, ItemRow, Page, SetupVM } from "../state.slint";
 import {
     Icons, ThemeToggle, Centered, SectionLabel, StatusText, Hatch, StepMeter, ShareSpark, EmptyState,
     MessageText, Segment, SegmentGroup, TextField,
@@ -413,6 +413,7 @@ component ItemTableRow inherits TableRow {
     property <length> w-ci: root.narrow ? 116px : 124px;
     property <length> w-band: root.narrow ? 124px : 136px;
     property <length> w-spark: root.narrow ? 88px : 92px;
+    property <length> w-stab: root.narrow ? 104px : 116px;
     row-height: 40px;
     accessible-label: root.data.label;
     TableCell {
@@ -478,6 +479,32 @@ component ItemTableRow inherits TableRow {
             }
         }
     }
+    // flag stability (§12.2): share of bootstrap resamples where the rule fires again; low
+    // confidence is a proposal (gold tag, "proposed"), never the red of an established flag
+    Rectangle {
+        width: root.w-stab;
+        if root.data.stability-kind == 1 || root.data.stability-kind == 2: Tag {
+            x: Theme.space-md;
+            y: (parent.height - self.height) / 2;
+            text: root.data.stability;
+            tone: root.data.stability-tone;
+        }
+        if root.data.stability-kind == 3: Text {
+            x: Theme.space-md;
+            height: parent.height;
+            text: root.data.stability;
+            font-size: Theme.text-xs;
+            color: Theme.ink-3;
+            vertical-alignment: center;
+        }
+        if root.data.stability-kind == 0: Text {
+            x: Theme.space-md;
+            height: parent.height;
+            text: "—";
+            color: Theme.ink-3;
+            vertical-alignment: center;
+        }
+    }
     // the pill sits outside any layout, so its capped width cannot feed back into the row; a long
     // engine message is elided inside the cell (the row's label carries it whole)
     flag-cell := Rectangle {
@@ -510,6 +537,7 @@ export component ResultsScreen inherits Rectangle {
     property <length> w-ci: root.narrow ? 116px : 124px;
     property <length> w-band: root.narrow ? 124px : 136px;
     property <length> w-spark: root.narrow ? 88px : 92px;
+    property <length> w-stab: root.narrow ? 104px : 116px;
     // focus returns to the button that opened the bar, however the bar closes
     property <bool> bar-open: ResultsVM.export-open;
     changed bar-open => {
@@ -590,10 +618,24 @@ export component ResultsScreen inherits Rectangle {
                 }
             }
         }
-        if !ResultsVM.available: EmptyState {
+        if !ResultsVM.available: VerticalLayout {
             vertical-stretch: 1;
-            title: "No results yet";
-            text: "Results appear once every sheet of the exam is recognised and scored.";
+            alignment: center;
+            spacing: Theme.space-md;
+            EmptyState {
+                title: ResultsVM.empty-title;
+                text: ResultsVM.empty-text;
+            }
+            if ResultsVM.empty-to-setup: HorizontalLayout {
+                alignment: center;
+                PrimaryButton {
+                    text: "Confirm the key in Setup";
+                    clicked => {
+                        SetupVM.ks-open = true;
+                        App.navigate(Page.setup);
+                    }
+                }
+            }
         }
         if ResultsVM.available: VerticalLayout {
             vertical-stretch: 1;
@@ -732,9 +774,10 @@ export component ResultsScreen inherits Rectangle {
                                         color: Theme.ink;
                                     }
                                     Text {
-                                        text: "Corrected item–rest r (primary) with 95 % CI · flagged items first, ranked per §12.2 · key hidden by default";
+                                        text: "Corrected item–rest r with 95 % CI · high-confidence flags first · stability: bootstrap share · key hidden";
                                         font-size: Theme.text-xs;
                                         color: Theme.ink-2;
+                                        overflow: elide;
                                     }
                                 }
                                 Centered {
@@ -776,6 +819,10 @@ export component ResultsScreen inherits Rectangle {
                                 TableHeaderCell {
                                     text: root.narrow || ResultsVM.option-labels.length == 0 ? "Options" : "Options " + ResultsVM.option-labels[0] + "–" + ResultsVM.option-labels[ResultsVM.option-labels.length - 1];
                                     width: root.w-spark;
+                                }
+                                TableHeaderCell {
+                                    text: "Stability";
+                                    width: root.w-stab;
                                 }
                                 TableHeaderCell {
                                     text: "Flag";

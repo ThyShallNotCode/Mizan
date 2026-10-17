@@ -400,6 +400,7 @@ fn backend(a: &Args) -> Result<(Built, bool), String> {
             let req = GradeRequest {
                 definition: def.clone(),
                 inputs: g.inputs.clone(),
+                key_sheets: Vec::new(),
                 options: GradeOptions {
                     threads: g.threads,
                     project_dir: Some(out.join("project.omrproj")),

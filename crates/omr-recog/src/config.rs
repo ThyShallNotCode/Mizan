@@ -11,7 +11,7 @@ use omr_forms::hash::{hex, sha384_canonical};
 use serde::{Deserialize, Serialize};
 
 /// The configuration version string stamped into the hash.
-pub const LEGACY_CONFIG_VERSION: &str = "omr-recog/legacy-bitonal/1";
+pub const LEGACY_CONFIG_VERSION: &str = "omr-recog/legacy-bitonal/3";
 
 /// The whole legacy-form recognition configuration.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,6 +147,87 @@ pub struct RegistrationConfig {
     pub support_radius_px: u32,
     /// Fewer supporting matches: the bubble is UNREADABLE (REG-003 Region) (*initial*).
     pub min_support: u32,
+    /// Shift-sensitive verification (§8.4): the blank-form pixels (at 1/4) whose value differs
+    /// from a one-pitch shift of themselves by at least this many gray levels are the
+    /// non-periodic content that tells a lattice region from its aliases (*initial*).
+    pub verify_contrast: u32,
+    /// At most this many such points per region and shift axis (evenly strided).
+    pub verify_points: u32,
+    /// An axis with fewer points than this is not tested.
+    pub verify_min_points: u32,
+    /// The aligned correlation must beat both one-pitch shifts of every region by this much
+    /// (thousandths), else the alignment is not verified (*initial*: the 143 real IAU pages beat
+    /// them by ≥ 0.33; misregistered phone photos lose by ≥ 0.30).
+    pub verify_margin_milli: u32,
+    /// The aligned correlation of every tested axis must reach this (thousandths) (*initial*).
+    pub verify_floor_milli: u32,
+    /// Printed-ring support: no one-pitch shift may have more detected rings under the
+    /// template bubbles than the alignment, beyond this tolerance.
+    pub verify_ring_tolerance: u32,
+    /// Local verification (adversarial verification, 2026-10-17): the answer blocks are also
+    /// checked band by band of this many rows (one by default) on their question numbers, so a
+    /// page whose lower part moved by whole rows against its upper part (a fold, a torn and
+    /// taped sheet, an ADF feed stall or slip) cannot pass on the part that still matches.
+    /// `0` turns the row check off.
+    #[serde(default)]
+    pub verify_window_rows: u32,
+    /// A band's content is compared with the content of the rows up to this many rows away.
+    #[serde(default)]
+    pub verify_window_shift: u32,
+    /// At most this many non-periodic points per band (evenly strided).
+    #[serde(default)]
+    pub verify_window_points: u32,
+    /// A band with fewer points (or fewer on the page) is not tested.
+    #[serde(default)]
+    pub verify_window_min_points: u32,
+    /// A band of answer rows whose page content fits another row's question number better than
+    /// its own by at least this much (thousandths) … (*initial*: the 143 real IAU pages ≤ 0.22;
+    /// a fold or a feed stall ≥ 0.5)
+    #[serde(default)]
+    pub verify_window_margin_milli: u32,
+    /// … with that other row correlating at least this much (thousandths) is positive evidence
+    /// that part of the page moved by whole rows: the page is refused (REG-003) (*initial*).
+    #[serde(default)]
+    pub verify_window_evidence_milli: u32,
+    /// A row whose own content correlates no more than this (thousandths) is missing from the
+    /// page: its bubbles are UNREADABLE (REG-003 Region) (*initial*: the real pages ≥ 0.13).
+    #[serde(default)]
+    pub verify_window_floor_milli: i32,
+    /// The same for a gray capture (a photo's band correlations are noisier).
+    #[serde(default)]
+    pub verify_window_gray_floor_milli: i32,
+    /// Pyramid level of the band test (2: 1/2, else 1/4).
+    #[serde(default)]
+    pub verify_window_level: u32,
+    /// Column checks of the answer blocks on scanner pages (their option letters): each column
+    /// against the columns up to this many options away (`0` turns them off). Photos are not
+    /// column-checked (their letters are too blurred to tell apart reliably).
+    #[serde(default)]
+    pub verify_column_shift: u32,
+    /// Quadratic ICP thresholds after a one-pitch correction, and the camera path's final rounds.
+    pub refine_icp_mpx: Vec<u32>,
+    /// Camera path (§8.10 adapted): try it when the scanner path fails or is not verified.
+    pub camera_path: bool,
+    /// Camera path: the template's option and row pitch (x, y) for the affine initialisation
+    /// from the measured horizontal and vertical pitch vectors.
+    pub camera_pitch_mpx: [u32; 2],
+    /// Camera path: vertical pitch search range (page px).
+    pub row_pitch_mpx: [u32; 2],
+    /// Camera path: ICP grows outwards from the template centre over these radii (template
+    /// px), fitting a projective initialisation of the quadratic warp.
+    pub camera_radii_px: Vec<u32>,
+    /// Camera path: nearest-neighbour thresholds per growth step.
+    pub camera_icp_mpx: Vec<u32>,
+    /// Camera path: RANSAC inlier threshold of the homography fits.
+    pub camera_ransac_mpx: u32,
+    /// Gray captures: half-size of the closing square of the paper background (§8.5;
+    /// full-resolution px, ≈ one bubble diameter, so the square spans ≈ two).
+    pub background_radius_px: u32,
+    /// Gray-or-bitonal test on every n-th row (bitonal captures keep `B = 255`, §8.5).
+    pub capture_row_step: u32,
+    /// Paper levels under the bubbles varying more than this (coefficient of variation,
+    /// per-mille): CAP-005 WARN (§8.9 lamp CV > 0.15).
+    pub illumination_cv_warn_permille: u32,
 }
 
 impl Default for RegistrationConfig {
@@ -193,6 +274,32 @@ impl Default for RegistrationConfig {
             anisotropy_warn_permille: 20,
             support_radius_px: 350,
             min_support: 2,
+            verify_contrast: 80,
+            verify_points: 300,
+            verify_min_points: 40,
+            verify_margin_milli: 150,
+            verify_floor_milli: 250,
+            verify_ring_tolerance: 2,
+            verify_window_rows: 1,
+            verify_window_shift: 6,
+            verify_window_points: 200,
+            verify_window_min_points: 24,
+            verify_window_margin_milli: 350,
+            verify_window_evidence_milli: 600,
+            verify_window_floor_milli: 0,
+            verify_window_gray_floor_milli: -500,
+            verify_window_level: 2,
+            verify_column_shift: 4,
+            refine_icp_mpx: vec![12_000, 8_000, 6_000, 4_000, 3_000, 3_000],
+            camera_path: true,
+            camera_pitch_mpx: [50_400, 41_620],
+            row_pitch_mpx: [32_000, 48_000],
+            camera_radii_px: vec![450, 700, 950, 1_250, 100_000],
+            camera_icp_mpx: vec![10_000, 7_000],
+            camera_ransac_mpx: 3_000,
+            background_radius_px: 28,
+            capture_row_step: 16,
+            illumination_cv_warn_permille: 150,
         }
     }
 }
@@ -282,6 +389,16 @@ pub struct DecisionConfig {
     pub erasure_gap: u16,
     /// A runner-up above this logs MRK-003 `resolved_erasure` (0.10).
     pub residue_log: u16,
+    /// On a photographed page (camera capture, or registered on the camera path or with a
+    /// one-pitch correction), unfilled bubbles read darker than on a scanner (uneven light,
+    /// perspective blur: δ ≈ 0.10–0.14 on the real key photos), so a residue must also exceed
+    /// this quantile (per-mille) of the page's unmarked bubbles (every answer row's options
+    /// but its darkest) by `residue_log` (*initial*: 950, i.e. p95 + 0.10).
+    #[serde(
+        default = "default_photo_residue_quantile",
+        skip_serializing_if = "is_default_photo_residue_quantile"
+    )]
+    pub photo_residue_quantile_permille: u16,
     /// Page mark level: median top-1 δ over questions with top-1 ≥ this (0.25) …
     pub level_clear_min: u16,
     /// … clamped below (0.30) …
@@ -293,10 +410,23 @@ pub struct DecisionConfig {
     pub hysteresis: u16,
     /// Multiplier on `hysteresis` for bitonal input (§8.7 step 7: doubled).
     pub bitonal_hysteresis_factor: u16,
+    /// Multiplier on `hysteresis` for camera captures and pages registered on the camera path
+    /// (the phone slice is not calibrated, §8.10 step 7) (*initial*).
+    pub camera_hysteresis_factor: u16,
     /// Confident-multi review policy.
     pub multi_review: MultiReview,
     /// The erasure rule is on (§8.8; review-only in high-stakes mode regardless).
     pub erasure_rule: bool,
+}
+
+fn default_photo_residue_quantile() -> u16 {
+    950
+}
+
+// The default is left out of the canonical JSON, so configurations that never use it (own
+// forms) keep their hash.
+fn is_default_photo_residue_quantile(v: &u16) -> bool {
+    *v == default_photo_residue_quantile()
 }
 
 impl Default for DecisionConfig {
@@ -310,11 +440,13 @@ impl Default for DecisionConfig {
             erasure_rho_permille: 500,
             erasure_gap: 205,
             residue_log: 102,
+            photo_residue_quantile_permille: default_photo_residue_quantile(),
             level_clear_min: 256,
             level_min: 307,
             level_max: 1024,
             hysteresis: 8,
             bitonal_hysteresis_factor: 2,
+            camera_hysteresis_factor: 2,
             multi_review: MultiReview::Never,
             erasure_rule: true,
         }

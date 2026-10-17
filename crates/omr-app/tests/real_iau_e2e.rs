@@ -155,10 +155,12 @@ fn req_a1_real_iau_full_pipeline() {
                 )
             })
             .collect();
+    // The students' PDFs only (the folder also holds the instructors' key sheets).
     let mut pdfs: Vec<PathBuf> = std::fs::read_dir(&dir)
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| p.extension().is_some_and(|e| e == "pdf"))
+        .filter(|p| tag_of(&p.to_string_lossy()).is_some())
         .collect();
     pdfs.sort();
     let (cs, arti): (Vec<PathBuf>, Vec<PathBuf>) = pdfs

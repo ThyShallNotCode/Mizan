@@ -14,11 +14,13 @@ use crate::baseline::{self, Baseline};
 use crate::config::LegacyConfig;
 use crate::decide::{
     GroupDecision, GroupKind, decide_group, decision_logit, option_logits, page_level,
+    photo_residue_level,
 };
 use crate::exc;
 use crate::measure::{self, BubbleMeasure, Unreadable};
 use crate::register::{self, RefModel, Registration, RegistrationQuality};
 use omr_forms::legacy::{IAU_CCSIT_V1_BLANK_PNG, LegacyField, LegacyTemplate};
+use omr_imaging::Warp;
 use omr_imaging::{CaptureKind, GrayImage, QuadWarp};
 use omr_model::{
     ColumnState, Darkness, EngineManifest, Exception, IdColumnRead, IdGridRead, LogitMilli,
@@ -151,6 +153,12 @@ pub struct LegacyPageResult {
     pub exam: ChoiceRead,
     /// Page-level exceptions: REG-*, CAP-003 `bitonal`, MRK-015.
     pub exceptions: Vec<Exception>,
+    /// Decided as a phone photo (§8.10): a camera capture, or a page whose registration took
+    /// the camera path, needed a one-pitch correction or found the axes' scales more than the
+    /// anisotropy warning apart. The wider camera band applied; the phone slice is not
+    /// calibrated (§8.10 step 7), so the application sends such pages' answers to review.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub photo: bool,
 }
 
 /// The engine for one legacy template revision and configuration.
@@ -206,10 +214,13 @@ impl LegacyEngine {
             )));
         }
         let points = template.bubbles().iter().map(|b| b.centre).collect();
+        let (regions, row_labelled) = lattice_regions(&template);
         let rm = RefModel::new(
             points,
             template.bubble_radius_px(),
             &blank,
+            &regions,
+            &row_labelled,
             &config.registration,
         );
         let prior = measure::prior_inner(&blank, &rm, &config.measure);
@@ -259,6 +270,11 @@ impl LegacyEngine {
     pub fn stamp(&self, manifest: &mut EngineManifest) {
         manifest.template_sha384 = self.template_sha384.clone();
         manifest.config_sha384 = self.config_sha384.clone();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn rm_for_tests(&self) -> &RefModel {
+        &self.rm
     }
 
     /// The blank-form print coverage β_p⁰ per bubble (template order).
@@ -324,25 +340,72 @@ impl LegacyEngine {
     }
 
     /// Page stage: registration and measurement (pure; safe to run in parallel per page).
+    ///
+    /// Bitonal captures (1-bit or its coverage reduction, told from a sampled histogram) are
+    /// read in the §8.5 bitonal mode (`B = 255`, `K = 0`) exactly as validated on the real IAU
+    /// scans. Gray captures (gray scans, phone photos) are read against their paper background
+    /// `B` (closing + blur at 1/4), and their coarse correlation and verification levels are
+    /// flattened by it, so shadows, vignetting and colour casts neither shift the alignment nor
+    /// read as marks.
     pub fn measure_page(&self, page: &GrayImage) -> PageMeasurement {
-        let reg = self.register_page(page);
-        self.measure_registered(page, reg)
+        let pyr = self.pyramid(page);
+        let reg = register::register_with(page, &pyr, &self.rm, &self.config.registration);
+        self.measure_with(page, reg, pyr.background())
     }
 
     /// Page stage, first half: registration only.
     pub fn register_page(&self, page: &GrayImage) -> Registration {
-        register::register(page, &self.rm, &self.config.registration)
+        let pyr = self.pyramid(page);
+        register::register_with(page, &pyr, &self.rm, &self.config.registration)
     }
 
     /// Page stage, second half: snapping and measurement under a registration of `page`.
     pub fn measure_registered(&self, page: &GrayImage, reg: Registration) -> PageMeasurement {
+        if reg.quality.paper_normalised {
+            let pyr = self.pyramid(page);
+            self.measure_with(page, reg, pyr.background())
+        } else {
+            self.measure_with(page, reg, None)
+        }
+    }
+
+    /// The registration pyramid: flattened by the paper background for gray captures.
+    fn pyramid<'a>(&self, page: &'a GrayImage) -> register::Pyramid<'a> {
+        let cfg = &self.config.registration;
+        let kind = omr_imaging::classify_capture_sampled(page, cfg.capture_row_step as usize);
+        if kind.is_bitonal() {
+            register::Pyramid::new(page)
+        } else {
+            register::Pyramid::flattened(page, cfg.background_radius_px)
+        }
+    }
+
+    fn measure_with(
+        &self,
+        page: &GrayImage,
+        mut reg: Registration,
+        background: Option<&GrayImage>,
+    ) -> PageMeasurement {
         let bubbles = measure::measure(
             page,
             &reg,
             &self.rm,
             &self.config.registration,
             &self.config.measure,
+            background,
         );
+        if let (Some(bg), Some(w)) = (background, reg.warp.as_ref()) {
+            let levels: Vec<u8> = self
+                .rm
+                .points
+                .iter()
+                .map(|t| {
+                    let p = w.map(*t);
+                    omr_imaging::bilinear(bg, p.x / 4.0, p.y / 4.0, 255)
+                })
+                .collect();
+            reg.quality.illumination_cv = omr_imaging::illumination(&levels).cv;
+        }
         PageMeasurement {
             registration: reg.quality,
             warp: reg.warp,
@@ -423,7 +486,20 @@ impl LegacyEngine {
                 .hysteresis
                 .saturating_mul(effective.bitonal_hysteresis_factor);
         }
-        let cfg = &effective;
+        // Phone geometry: the camera slice is not calibrated (§8.10 step 7), so the ambiguity
+        // band widens. A photo is recognised by its capture (the application infers it from
+        // the file: a colour JPEG below 200 ppi, a camera's EXIF) or by its geometry: the
+        // camera path, a verified one-pitch correction, or anisotropy above the REG-004 warning.
+        let camera = req.capture.is_camera()
+            || m.registration.method.is_camera()
+            || m.registration.method == register::RegistrationMethod::LatticeCorrected
+            || m.registration.anisotropy.abs() * 1000.0
+                > f64::from(self.config.registration.anisotropy_warn_permille);
+        if camera {
+            effective.hysteresis = effective
+                .hysteresis
+                .saturating_mul(effective.camera_hysteresis_factor);
+        }
         let page = req.page.as_deref();
         let lq = if req.high_stakes {
             LogitMilli::HIGH_STAKES_LQ
@@ -433,15 +509,30 @@ impl LegacyEngine {
         let t = &self.template;
         let n_q = req.n_questions.min(t.question_count());
         let qgroups = t.groups(LegacyField::Answers);
-        // Page level from readable questions.
+        // Page level from readable questions, and on a photographed page the distribution of
+        // its unmarked bubbles (every row's options but the darkest).
+        let photo = camera;
         let mut tops = Vec::new();
+        let mut unmarked = Vec::new();
         for r in qgroups.iter().take(usize::from(n_q)) {
             let r = r.clone();
             if self.unreadable_in(m, r.clone()).is_empty() {
-                let d = self.deltas(m, baseline, r);
+                let mut d = self.deltas(m, baseline, r);
                 tops.push(d.iter().copied().max().unwrap_or(0));
+                if photo {
+                    d.sort_unstable();
+                    d.pop();
+                    unmarked.extend(d);
+                }
             }
         }
+        // C2: on a photo the absolute residue level (0.10) sits inside the unmarked bubbles'
+        // own spread, so every answer would carry MRK-003 and the key summary would highlight
+        // every row; a residue must stand out from the page's unmarked bubbles instead.
+        if photo {
+            effective.residue_log = photo_residue_level(&mut unmarked, &effective);
+        }
+        let cfg = &effective;
         let level = page_level(tops, cfg);
 
         let mut questions = Vec::with_capacity(usize::from(n_q));
@@ -462,8 +553,34 @@ impl LegacyEngine {
                 });
                 continue;
             }
-            let d = self.deltas(m, baseline, r);
+            let d = self.deltas(m, baseline, r.clone());
             let dec = decide_group(&d, level, cfg, req.high_stakes);
+            // Ring visibility (§8.6): an unmarked bubble shows its printed ring. A row read as
+            // blank where no ring of the row was seen is not on the page where the alignment
+            // puts it (covered, cut or folded away): unreadable, never blank.
+            if dec.kind == GroupKind::Blank
+                && m.bubbles
+                    .get(r.clone())
+                    .is_some_and(|b| b.iter().all(|x| !x.snapped))
+            {
+                all_blank = false;
+                questions.push(QuestionOutcome {
+                    question: q,
+                    response: Response::Unreadable {
+                        bubbles: (0..r.len() as u8).collect(),
+                    },
+                    auto_accepted: false,
+                    logit: LogitMilli(0),
+                    exceptions: vec![
+                        exc::region("REG-003", Severity::Error, page, Some(q), None).with_detail(
+                            "question: no printed bubble ring of this row is visible where the \
+                             alignment puts it (covered, cut or folded away); unreadable, never \
+                             blank",
+                        ),
+                    ],
+                });
+                continue;
+            }
             if !(dec.accepted && dec.kind == GroupKind::Blank) {
                 all_blank = false;
             }
@@ -560,6 +677,16 @@ impl LegacyEngine {
                     .with_detail("bitonal capture: fill-fraction mode; rescan in 8-bit gray"),
             );
         }
+        let cv = m.registration.illumination_cv;
+        if m.registered()
+            && cv * 1000.0 > f64::from(self.config.registration.illumination_cv_warn_permille)
+        {
+            exceptions.push(exc::page("CAP-005", Severity::Warn).with_detail(format!(
+                "uneven light: the paper level under the bubbles varies by {:.0} % (CV); read \
+                 against the paper background, but rescan or retake in even light",
+                cv * 100.0
+            )));
+        }
         if all_blank {
             exceptions.push(
                 exc::booklet("MRK-015", Severity::Error, page)
@@ -577,8 +704,51 @@ impl LegacyEngine {
             version: choice(LegacyField::Version),
             exam: choice(LegacyField::Exam),
             exceptions,
+            photo: camera,
         }
     }
+}
+
+/// The template's lattice regions for the shift-sensitive verification (§8.4): every field
+/// but the answers is one region, and the answers split into their printed blocks (questions
+/// whose first option lies within one option pitch horizontally of the previous question's).
+/// Also, per region, whether its rows are labelled outside the bubbles (the answer blocks'
+/// question numbers), which the row-by-row check reads; the header grids' rows are told apart
+/// only inside their bubbles, under the students' marks and handwriting.
+fn lattice_regions(t: &LegacyTemplate) -> (Vec<Vec<usize>>, Vec<bool>) {
+    let mut regions = Vec::new();
+    let groups = t.groups(LegacyField::Answers);
+    let mut block: Vec<usize> = Vec::new();
+    let mut last_x: Option<f64> = None;
+    let pitch = groups
+        .first()
+        .and_then(|g| {
+            let b = t.bubbles();
+            (g.len() >= 2).then(|| (b[g.start + 1].centre.x - b[g.start].centre.x).abs())
+        })
+        .unwrap_or(50.0);
+    for g in groups {
+        let x = t.bubbles()[g.start].centre.x;
+        if last_x.is_some_and(|lx| (x - lx).abs() > pitch) && !block.is_empty() {
+            regions.push(std::mem::take(&mut block));
+        }
+        block.extend(g.clone());
+        last_x = Some(x);
+    }
+    if !block.is_empty() {
+        regions.push(block);
+    }
+    let answers = regions.len();
+    for f in LegacyField::ALL {
+        if f != LegacyField::Answers {
+            let r = t.field_range(f);
+            if !r.is_empty() {
+                regions.push(r.collect());
+            }
+        }
+    }
+    let labelled = (0..regions.len()).map(|r| r < answers).collect();
+    (regions, labelled)
 }
 
 fn gcd_u32(mut a: u32, mut b: u32) -> u32 {

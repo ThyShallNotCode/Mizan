@@ -20,6 +20,10 @@ fn sba4(label: &str) -> MasterItem {
     MasterItem::sba(label, 4, pts(1, 1))
 }
 
+fn sba5(label: &str) -> MasterItem {
+    MasterItem::sba(label, 5, pts(1, 1))
+}
+
 fn single(v: &[u8]) -> Vec<L1Response> {
     v.iter().map(|&o| L1Response::Single(o)).collect()
 }
@@ -574,6 +578,45 @@ fn req_a8_publish_validation_codes() {
     let f6 = FormMap::single_form(items);
     let k6 = KeyVersion::new((0..6).map(|_| KeyEntry::single(2, 4)).collect());
     assert!(k6.validate(&f6).iter().any(|e| e.code == "SCO-027"));
+    // C10: a letter pattern names the version and p for terminals and screens, never the key's
+    // letter counts (those stay in the stored detail and the owner's key summary); an option
+    // never keyed suggests fewer options.
+    let items: Vec<MasterItem> = (0..30).map(|i| sba5(&format!("Q{i}"))).collect();
+    let f28 = FormMap::single_form(items);
+    let letter = |i: u32| match i {
+        0..12 => 0u8,
+        12..24 => 1,
+        24..27 => 2,
+        _ => 3,
+    };
+    let k28 = KeyVersion::new((0..30).map(|i| KeyEntry::single(letter(i), 5)).collect());
+    let pats = k28.letter_patterns(&f28);
+    let dist = pats
+        .iter()
+        .find(|p| matches!(p, omr_scoring::LetterPattern::Distribution { .. }))
+        .expect("A and B 12 times each, E never, over 30 five-option items: χ² p < 0.01");
+    assert!(
+        dist.detail().contains("[12, 12, 3, 3, 0]"),
+        "{}",
+        dist.detail()
+    );
+    let t = dist.public_text("A");
+    assert!(
+        t.starts_with("SCO-027 version A: key letter distribution unlikely (p = "),
+        "{t}"
+    );
+    assert!(t.contains("--options 4"), "{t}");
+    assert!(!t.contains('['), "no letter counts on screen: {t}");
+    let e = k28
+        .validate(&f28)
+        .into_iter()
+        .find(|e| e.sub_reason.as_deref() == Some("letter_distribution"))
+        .unwrap();
+    assert_eq!(
+        e.detail,
+        dist.detail(),
+        "the stored detail keeps the counts"
+    );
     // Unequal M_i in a choice group -> SCO-004 `choice_group`.
     let mut items = vec![sba4("Q1"), sba4("Q2")];
     items[1].max_points = pts(2, 1);

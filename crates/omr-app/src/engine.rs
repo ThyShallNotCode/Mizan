@@ -106,6 +106,11 @@ pub struct PageRead {
     pub id_geom: Vec<GroupGeom>,
     /// Form/version choice geometry.
     pub form_geom: Option<GroupGeom>,
+    /// A phone photo (§8.10): recognised from the file or from its geometry (legacy engine,
+    /// `LegacyPageResult::photo`). The phone slice is not calibrated (§8.10 step 7), so a
+    /// student's answers on such a page go to review (MRK-001 `uncalibrated_capture`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub photo: bool,
 }
 
 /// Page-stage output of either engine.
@@ -530,7 +535,14 @@ impl Recognizer {
                     registered: m.registered(),
                     page_no: 1,
                     theta_sel: theta_sel(&cfg, r.level),
-                    hysteresis: cfg.hysteresis,
+                    // The band the decision used: wider on a photo (§8.10 step 7).
+                    hysteresis: if r.photo {
+                        cfg.hysteresis
+                            .saturating_mul(cfg.camera_hysteresis_factor.max(1))
+                    } else {
+                        cfg.hysteresis
+                    },
+                    photo: r.photo,
                     questions: r.questions,
                     student_id: Some(r.student_number),
                     form_choice: Some(r.version),
@@ -636,6 +648,7 @@ impl Recognizer {
                     exam_type: None,
                     code_form: code.map(|c| c.form),
                     code_serial: code.map(|c| c.serial.0),
+                    photo: false,
                     exceptions: r.exceptions,
                     registration: json!({
                         "engine": "own",

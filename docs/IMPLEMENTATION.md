@@ -33,7 +33,16 @@ cases, the adversarial suite `omr-app/tests/adversarial.rs`, the gated real-data
 university, with methods and caveats, is [`docs/EVIDENCE.md`](EVIDENCE.md); the figures, with
 the digest of the code that was built, are in
 [`docs/evidence/acceptance.json`](evidence/acceptance.json). Not proven yet: scoring on the real
-exams (no answer keys supplied) and any platform other than Linux.
+exams (no answer keys supplied then) and any platform other than Linux. The instructors' keys
+arrived afterwards: scoring on the two real exams with them, and with their key sheets, is
+proven by `omr-app/tests/real_iau_scored.rs` (EVIDENCE §4). A second adversarial verification
+then reproduced the photo registration fix (F1), the key sheets and flag stability, fixed six more
+defects (a fold or feed stall read rows off, four key-sheet cases, flag stability missing from the
+exports) and reran the real-data rows (EVIDENCE §3.1.1, `acceptance.json` `real_data.second_round`).
+A third round (EVIDENCE §3.1.2, `real_data.third_round`) made a confident probable mis-key block
+release until the instructor decides it, made flag stability depend on content only, sent
+answers on photographed student sheets to review, gave key sheets read after grading the audited
+path, and re-measured throughput.
 
 | ID | Status | Measured (shared 4-vCPU container) |
 |---|---|---|
@@ -47,7 +56,7 @@ exams (no answer keys supplied) and any platform other than Linux.
 | A8 | Pass | 17 scoring oracle tests |
 | A9 | Pass | 12 outcome oracle tests |
 | A10 | Pass | 0 unknown exception codes in 241 source files; UNREADABLE never EMPTY through scoring; 15 adversarial tests give each hostile input its Appendix A code (11 defects fixed) |
-| A11 | Pass | `crates/shell-slint/tests/req_a11.rs` (13 tests, demo data) and `req_a11_real.rs` (7 tests over omr-app: review and release, New exam, key replacement, live grading, added batches, a tampered project); screenshots in `docs/design/screens/` and `docs/design/screens/real/`. Headless only: never run in a real window or on Windows |
+| A11 | Pass | `crates/shell-slint/tests/req_a11.rs` (13 tests, demo data) and `req_a11_real.rs` (10 tests over omr-app: review and release, New exam (also with key sheets), key replacement, key sheets read in Setup and confirmed through the audited path, flag stability in Results, live grading, added batches, a tampered project); screenshots in `docs/design/screens/` and `docs/design/screens/real/` (the key-sheet screens `setup-keysheet`, `scan-keysheet` included). Headless only: never run in a real window or on Windows |
 
 ## 2. Scope
 
@@ -57,9 +66,15 @@ exams (no answer keys supplied) and any platform other than Linux.
 - Image ingest (JPEG/PNG/TIFF) and PDF image-XObject extraction (§7.3).
 - The recognition pipeline (§8.2–§8.8), classical cascade (see the deferred list for the CNN).
 - Bubbled-ID identity with roster reconciliation (§9.2, §9.5–§9.6, Saudi rules).
-- Scoring (§10.1–§10.6).
+- Scoring (§10.1–§10.6), with key sources: a key file, an inferred key (never releasable) and
+  teacher-filled key sheets (§10.1: read by the same recognizer, named with `--key-sheet` or
+  found in the stack by their marker student number, held until the instructor confirms the
+  rendered key summary).
 - CLO engine (§11.1–§11.4, §11.7 tables).
-- CTT item analysis (§12.1–§12.2).
+- CTT item analysis (§12.1–§12.2) with flag stability (§12.2–§12.3: bootstrap shares and
+  percentile CIs of r_ir below N = 1,000, Fisher-z above); a probable mis-key at normal
+  confidence (SCO-001 ERROR) is a review item that blocks release until the instructor changes
+  the key, accepts a second answer, voids the item or keeps the key with a reason and a note.
 - SQLite project store with a SHA-384 hash-chained event log (§14.2–§14.4): the session snapshot bound to the chain (`SnapshotSaved`), projections replayed against their events on open, checkpoints signed with a per-device ECDSA P-384 key and kept outside the project (truncation, re-chained logs and older copies refused with SYS-011), reviewer notes stored by salted reference so they can be erased.
 - Privacy controls of §14.2–§14.4 and §19: project folders and exports owner-only (0700/0600), sync and network folders refused (SYS-015), student numbers masked in CLI output unless revealed, reveals and crop exports recorded in the audit log.
 - CSV/XLSX/HTML exports (§16.3, §17), listed in a manifest signed with the device key; the release step (§13.4: `ResultsReleased`, superseded by any later change) gates the Blackboard grade-center upload.
@@ -73,7 +88,6 @@ exams (no answer keys supplied) and any platform other than Linux.
 - Typst rendering (§6.2): the MVP renders through SVG behind the same API.
 - TWAIN/eSCL capture agents (§7.1) and hot-folder watching; the MVP imports files and folders (`omr grade`, `omr add`, the desktop's New exam and Add scans).
 - SVG and PNG sheet output (§6.2); `omr sheet render` writes PDF.
-- A teacher-filled key sheet as the key source (§10.2, Remark's Quick Grade): keys come from a key file or are inferred (never releasable).
 - Packaging, installers and the Windows/macOS builds (§24): the MVP has been built and tested on Linux only, and the desktop app has run headless (testing backend and software-rendered screenshots), never in a real window.
 - Streaming ingest (§7.4) and the per-run decode budget and per-page watchdog (§22.3–§22.4): files are size-checked before they are read and images by their header before they are decoded, but each input file is read whole into memory.
 - The read-access log (§19.5 `access_log`): reveals of student numbers and crop exports are audit events; views in the desktop app are not logged.
@@ -83,7 +97,14 @@ exams (no answer keys supplied) and any platform other than Linux.
 - The DOCX filling of official NCAAA blanks (§11.7): the MVP emits the TP-154 tables as XLSX/CSV/HTML.
 - Encryption at rest and the key hierarchy (§19.2); the MVP uses plain SQLite and owner-only files, with hooks noted.
 - The AI pack (§18).
-- Phone capture (§7.6).
+- Phone capture (§7.6) and the phone slice's own calibration (§8.10 step 7): live capture,
+  bursts and on-device gates are not built. Photos given as files are read (the CS 522 key
+  photos read 58 of 58): a page is a camera capture when its file says so (a colour JPEG placed
+  below 200 ppi, a camera's EXIF) or its registration does (camera path, one-pitch correction,
+  anisotropy above 2 %), which widens the decision band; because the slice is not calibrated,
+  every answer on a photographed **student** sheet goes to review (MRK-001
+  `uncalibrated_capture`), and key-sheet photos are confirmed by the instructor as every key
+  sheet is.
 
 ## 3. Crates and ownership
 

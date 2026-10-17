@@ -264,6 +264,35 @@ pub fn summary_json(p: &ExamProject) -> Value {
         .iter()
         .filter(|p| p.refusal.as_ref().is_some_and(|e| e.code == "COL-003"))
         .count();
+    // The item analysis's exam notes (§12.3 small N: SCO-023; α: SCO-018) and its flag counts
+    // by code (a probable mis-key at normal confidence is SCO-001 and queued; a low-confidence
+    // one SCO-002 `proposed_miskey`, not blocking). Flag details stay in the item analysis.
+    let analysis = p.analytics().map(|a| {
+        let mut flags: BTreeMap<String, usize> = BTreeMap::new();
+        for e in a
+            .exceptions
+            .iter()
+            .filter(|e| e.code == "SCO-001" || e.code == "SCO-002")
+        {
+            let k = match &e.sub_reason {
+                Some(r) => format!("{} {r}", e.code),
+                None => e.code.clone(),
+            };
+            *flags.entry(k).or_default() += 1;
+        }
+        json!({
+            "notes": a.exceptions.iter().filter(|e| e.code == "SCO-018" || e.code == "SCO-023").map(|e| json!({
+                "code": e.code,
+                "severity": format!("{:?}", e.severity).to_uppercase(),
+                "detail": e.detail,
+            })).collect::<Vec<_>>(),
+            "flags_by_code": flags,
+            "flag_stability": a.stability.as_ref().map(|st| json!({
+                "method": format!("{:?}", st.method),
+                "resamples": st.resamples,
+            })),
+        })
+    });
     json!({
         "exam": s.definition.title,
         "template": s.definition.template.id(),
@@ -271,9 +300,12 @@ pub fn summary_json(p: &ExamProject) -> Value {
         "forms": s.definition.forms,
         "key": match &s.key {
             None => "none",
+            Some(_) if s.key_unconfirmed() => "key sheets, NOT CONFIRMED",
             Some(k) if k.inferred => "INFERRED",
+            Some(_) if s.key_sheets.any() && !s.key_sheets.superseded => "key sheets, confirmed",
             Some(_) => "provided",
         },
+        "key_sheets": s.key_sheets.sheets.len(),
         "pages": {
             "total": s.pages.len(),
             "read": count(PageStatus::Read),
@@ -282,6 +314,7 @@ pub fn summary_json(p: &ExamProject) -> Value {
             "duplicate": count(PageStatus::Duplicate) - rescans,
             "rescan_superseded": rescans,
             "blank": count(PageStatus::Blank),
+            "key_sheet": count(PageStatus::KeySheet),
         },
         "booklets": s.booklets.len(),
         // Roster students without a booklet (provisional while an identity item is open).
@@ -292,6 +325,8 @@ pub fn summary_json(p: &ExamProject) -> Value {
         "open_items_by_code": by_code,
         "open_blocking": s.open_blocking(),
         "release_blocked": s.release_blocked(),
+        "miskey_check": if s.flags.computing() { "computing" } else { "done" },
+        "item_analysis": analysis,
         "released": s.release.as_ref().map(|r| json!({
             "at_utc": r.at_utc,
             "score_run": r.score_run,
@@ -592,7 +627,9 @@ pub fn write_all(p: &ExamProject, dir: &Path) -> Result<ExportSummary, AppError>
     };
     let m = meta(p, &title);
     let t0 = std::time::Instant::now();
-    let analytics = p.analytics();
+    // Item analysis with flag stability (§12.2): the bootstrap job runs here, off the ≤ 50 ms
+    // regrade path, so the exported flags carry their stability and low-confidence labels.
+    let analytics = p.analytics_with_stability();
     let outcomes = p.outcomes();
     let analysis_ms = t0.elapsed().as_secs_f64() * 1e3;
     if let Some(sc) = &p.scoring
@@ -720,8 +757,9 @@ pub fn write_all(p: &ExamProject, dir: &Path) -> Result<ExportSummary, AppError>
         };
         files.push((format!("report{sfx}.html"), html.into_bytes()));
     }
-    // Effective key.
-    if let Some(k) = &s.key {
+    // Effective key (an unconfirmed key-sheet key is not a key yet: its summary is written
+    // instead, for the instructor to confirm).
+    if let Some(k) = s.key.as_ref().filter(|_| !s.key_unconfirmed()) {
         let mut out = String::new();
         if inferred {
             out.push_str(INFERRED_BANNER);
@@ -749,6 +787,14 @@ pub fn write_all(p: &ExamProject, dir: &Path) -> Result<ExportSummary, AppError>
             out.push_str("\r\n");
         }
         files.push((format!("key{sfx}.csv"), out.into_bytes()));
+    }
+    // The key summary of the key sheets (§10.1), with the crops the instructor checks.
+    if let Some(sum) = p.key_sheet_summary(true) {
+        let next = format!("omr key confirm --project {}", dir.display());
+        files.push((
+            crate::keysheet::SUMMARY_FILE.into(),
+            crate::keysheet::summary_html(&sum, &next).into_bytes(),
+        ));
     }
     let js =
         |v: Value| serde_json::to_vec_pretty(&v).map_err(|e| AppError::Internal(e.to_string()));

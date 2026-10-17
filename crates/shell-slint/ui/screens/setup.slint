@@ -5,10 +5,10 @@ import {
     Theme, Tone, Severity, Card, TopBar, StatusBar, PrimaryButton, SecondaryButton, StatusPill, Tag,
     MeterBar, SeverityGlyph, FocusRing, Breadcrumb, TableRow, TableHeaderCell, GhostButton,
 } from "../theme.slint";
-import { App, SetupVM, MapRow, MapCell } from "../state.slint";
+import { App, SetupVM, MapRow, MapCell, KsRow, KsScan } from "../state.slint";
 import {
     Icons, ThemeToggle, Centered, SectionLabel, StatusText, KVLine, EditCell, StepIndicator,
-    EmptyState, MessageText, TextField,
+    EmptyState, MessageText, TextField, Segment, SegmentGroup,
 } from "../widgets.slint";
 import { ListView, ScrollView } from "std-widgets.slint";
 
@@ -186,12 +186,59 @@ component MappingRow inherits Rectangle {
 }
 
 component MatrixCard inherits Card {
-    title: "Answer key and CLO mapping";
-    subtitle: SetupVM.mapping-mode + " · digits type a weight, empty = no mapping · the gold corner marks a note";
     inset: 0;
     // set by the screen from the window width (never from the card's own width: no layout loop)
     in property <length> clo-width: 72px;
+    in property <bool> narrow;
     VerticalLayout {
+        // title, and the key's other sources: the instructor's filled answer sheets (§10.1)
+        HorizontalLayout {
+            padding: Theme.space-lg;
+            padding-bottom: Theme.space-md;
+            spacing: Theme.space-sm;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Theme.space-2xs;
+                alignment: start;
+                Text {
+                    text: "Answer key and CLO mapping";
+                    font-size: Theme.text-lg;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.ink;
+                    overflow: elide;
+                }
+                Text {
+                    text: SetupVM.mapping-mode + " · digits type a weight, empty = no mapping · the gold corner marks a note";
+                    font-size: Theme.text-xs;
+                    color: Theme.ink-2;
+                    wrap: word-wrap;
+                }
+            }
+            if SetupVM.has-keysheets: VerticalLayout {
+                alignment: start;
+                SecondaryButton {
+                    text: SetupVM.ks-pending ? "Key sheets · confirm" : "Key sheets";
+                    accessible-description: "Shows the key read from the key sheets";
+                    clicked => {
+                        SetupVM.key-open = false;
+                        SetupVM.ks-open = true;
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: start;
+                SecondaryButton {
+                    text: root.narrow ? "Read key sheet…" : "Read key from answer sheet…";
+                    enabled: SetupVM.can-read-keysheets;
+                    accessible-label: "Read key from answer sheet…";
+                    accessible-description: "Reads the key from the instructor's filled answer sheets and shows it for your confirmation";
+                    clicked => {
+                        SetupVM.key-open = false;
+                        SetupVM.ks-bar-open = !SetupVM.ks-bar-open;
+                    }
+                }
+            }
+        }
         // column-group header
         Rectangle {
             height: 24px;
@@ -552,6 +599,460 @@ component KeyBar inherits Rectangle {
     }
 }
 
+
+// Read the key from the instructor's filled answer sheets (§10.1): key-sheet files, read by the
+// same recognizer as the students' sheets and shown for confirmation; nothing changes until then.
+component KeySheetBar inherits Rectangle {
+    background: Theme.surface-raised;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    init => {
+        field.focus();
+    }
+    FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                SetupVM.ks-bar-open = false;
+                return accept;
+            }
+            return reject;
+        }
+        HorizontalLayout {
+            padding-left: Theme.space-xl;
+            padding-right: Theme.space-xl;
+            padding-top: Theme.space-sm;
+            padding-bottom: Theme.space-sm;
+            spacing: Theme.space-md;
+            Text {
+                text: "Key from answer sheets";
+                font-size: Theme.text-md;
+                font-weight: Theme.weight-semibold;
+                color: Theme.ink;
+                vertical-alignment: center;
+            }
+            field := TextField {
+                horizontal-stretch: 1;
+                label: "Key-sheet files";
+                placeholder: "Scans or photos of the filled key sheets (student number all 0 or all 9, version bubbled); ; between several";
+                text <=> SetupVM.ks-path;
+                mono: true;
+                accepted(v) => {
+                    if (v != "") {
+                        SetupVM.ks-read(v);
+                    }
+                }
+            }
+            Centered {
+                PrimaryButton {
+                    text: "Read key sheets";
+                    key-hint: "Enter";
+                    enabled: SetupVM.ks-path != "";
+                    accessible-description: "Reads the key from the sheets and shows it for your confirmation; nothing changes until you confirm";
+                    clicked => {
+                        SetupVM.ks-read(SetupVM.ks-path);
+                    }
+                }
+            }
+            Centered {
+                GhostButton {
+                    text: "Cancel";
+                    clicked => {
+                        SetupVM.ks-bar-open = false;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A small exclusive choice on a key-sheet row (an option letter, "Accept A|C", "Void").
+component PickChip inherits Rectangle {
+    in property <string> text;
+    in property <string> label;
+    in property <bool> selected;
+    callback clicked();
+    height: 24px;
+    width: max(28px, pick-text.preferred-width + 14px);
+    border-radius: Theme.radius-sm;
+    background: root.selected ? Theme.primary : ta.has-hover ? Theme.surface-hover : Theme.surface-raised;
+    border-width: 1px;
+    border-color: root.selected ? Theme.primary : Theme.border-strong;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.label;
+    accessible-checkable: true;
+    accessible-checked: root.selected;
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        clicked => {
+            fs.focus();
+            root.clicked();
+        }
+    }
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    pick-text := Text {
+        text: root.text;
+        font-family: Theme.font-mono;
+        font-size: Theme.text-xs;
+        font-weight: Theme.weight-semibold;
+        color: root.selected ? Theme.on-primary : Theme.ink;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+    FocusRing {
+        active: fs.has-focus;
+        corner: Theme.radius-sm;
+    }
+}
+
+// One question of the key read from key sheets: the bubble row as scanned (straightened, the
+// marks outlined in the paper colours), what it reads, what it gives the key, and, on a row that
+// waits for the instructor, the choices.
+component KeySheetRowView inherits Rectangle {
+    in property <KsRow> data;
+    in property <image> crop;
+    in property <int> index;
+    in property <length> crop-w;
+    in property <length> read-w;
+    height: 58px;
+    background: root.data.highlight ? (root.data.open ? Theme.warning-soft : Theme.accent-soft) : mod(root.index, 2) == 1 ? Theme.surface-sunken.with-alpha(0.45) : transparent;
+    accessible-role: AccessibleRole.list-item;
+    accessible-label: root.data.label;
+    // the highlight is also a shape: a bar on the inline-start edge (never colour alone)
+    if root.data.highlight: Rectangle {
+        x: 0;
+        width: 3px;
+        height: parent.height;
+        background: root.data.open ? Theme.warning : Theme.accent;
+    }
+    HorizontalLayout {
+        padding-left: Theme.space-md;
+        padding-right: Theme.space-md;
+        spacing: Theme.space-md;
+        Text {
+            width: 40px;
+            text: root.data.q;
+            font-family: Theme.font-mono;
+            font-size: Theme.text-sm;
+            font-weight: Theme.weight-semibold;
+            color: Theme.ink;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+        Centered {
+            Rectangle {
+                width: root.crop-w;
+                height: 46px;
+                border-radius: Theme.radius-sm;
+                background: Theme.scan-backdrop;
+                clip: true;
+                if root.data.has-crop: Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: root.crop;
+                    image-fit: contain;
+                    accessible-role: none;
+                }
+                if !root.data.has-crop: Text {
+                    text: "no image";
+                    font-size: Theme.text-2xs;
+                    color: Theme.ink-3;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+            }
+        }
+        Text {
+            width: root.read-w;
+            text: root.data.read;
+            font-family: Theme.font-mono;
+            font-size: Theme.text-md;
+            font-weight: Theme.weight-semibold;
+            color: root.data.open ? Theme.warning : Theme.ink;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            alignment: center;
+            spacing: 3px;
+            if root.data.open: HorizontalLayout {
+                spacing: 4px;
+                alignment: start;
+                for o[oi] in SetupVM.ks-option-labels: PickChip {
+                    text: o;
+                    label: root.data.q + " version " + SetupVM.ks-version-letter + " answer " + o;
+                    selected: root.data.pick == o;
+                    clicked => {
+                        SetupVM.ks-choose(root.index, oi);
+                    }
+                }
+                if root.data.marked != "": PickChip {
+                    text: "Accept " + root.data.marked;
+                    label: root.data.q + " version " + SetupVM.ks-version-letter + " accept " + root.data.marked;
+                    selected: root.data.pick == root.data.marked;
+                    clicked => {
+                        SetupVM.ks-choose(root.index, -2);
+                    }
+                }
+                PickChip {
+                    text: "Void";
+                    label: root.data.q + " version " + SetupVM.ks-version-letter + " void";
+                    selected: root.data.pick == "*";
+                    clicked => {
+                        SetupVM.ks-choose(root.index, -1);
+                    }
+                }
+            }
+            if !root.data.open: HorizontalLayout {
+                spacing: Theme.space-sm;
+                alignment: start;
+                Text {
+                    text: "Key " + root.data.answer;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.text-sm;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.primary;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+                if root.data.key-now != "": Centered {
+                    Tag {
+                        text: root.data.key-now;
+                        tone: Tone.accent;
+                    }
+                }
+            }
+            if root.data.detail != "": Text {
+                text: root.data.detail;
+                font-size: Theme.text-2xs;
+                color: Theme.ink-2;
+                overflow: elide;
+                accessible-role: none;
+            }
+        }
+        Centered {
+            width: 140px;
+            HorizontalLayout {
+                alignment: start;
+                StatusPill {
+                    text: root.data.status;
+                    tone: root.data.status-tone;
+                    max-pill-width: 140px;
+                    accessible-role: none;
+                }
+            }
+        }
+    }
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.border;
+    }
+}
+
+// The key-sheet scans of the version shown (and those that give no key, with why).
+component KeySheetScansCard inherits Card {
+    title: "Key sheets";
+    subtitle: SetupVM.ks-source;
+    vertical-stretch: 1;
+    ScrollView {
+        vertical-stretch: 1;
+        min-height: 64px;
+        preferred-height: 64px;
+        content-width: self.visible-width;
+        VerticalLayout {
+            spacing: Theme.space-md;
+            alignment: start;
+            for k in SetupVM.ks-scans: VerticalLayout {
+                spacing: 2px;
+                Text {
+                    text: k.label;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.text-xs;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.ink;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: k.origin + (k.version != "" ? " · version " + k.version : "") + (k.id-read != "" ? " · ID grid " + k.id-read : "");
+                    font-size: Theme.text-2xs;
+                    color: Theme.ink-2;
+                    wrap: word-wrap;
+                }
+                if k.registration != "": Text {
+                    text: k.registration;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.text-2xs;
+                    color: Theme.ink-3;
+                    wrap: word-wrap;
+                }
+                if k.refusal != "": HorizontalLayout {
+                    spacing: Theme.space-xs;
+                    VerticalLayout {
+                        padding-top: 2px;
+                        SeverityGlyph {
+                            severity: Severity.error;
+                            size: 10px;
+                        }
+                    }
+                    Text {
+                        horizontal-stretch: 1;
+                        text: k.refusal;
+                        font-size: Theme.text-2xs;
+                        color: Theme.error;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+            for n in SetupVM.ks-notes: Text {
+                text: n;
+                font-size: Theme.text-2xs;
+                color: Theme.ink-2;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+// The confirmation (§10.1: the instructor MUST confirm the rendered key; never auto-accepted).
+component KeySheetConfirmCard inherits Card {
+    title: SetupVM.ks-confirmed ? "Confirmed" : "Confirm the key";
+    subtitle: SetupVM.ks-version-status;
+    vertical-stretch: 0;
+    VerticalLayout {
+        spacing: Theme.space-sm;
+        PrimaryButton {
+            text: SetupVM.ks-confirm-label;
+            enabled: SetupVM.ks-can-confirm;
+            accessible-description: SetupVM.ks-can-confirm ? SetupVM.ks-consequence : SetupVM.ks-version-status;
+            clicked => {
+                SetupVM.ks-confirm(false);
+            }
+        }
+        if SetupVM.ks-versions.length > 1: SecondaryButton {
+            text: "Confirm every version";
+            enabled: SetupVM.ks-can-confirm-all;
+            accessible-description: SetupVM.ks-consequence;
+            clicked => {
+                SetupVM.ks-confirm(true);
+            }
+        }
+        Text {
+            text: SetupVM.ks-consequence;
+            font-size: Theme.text-2xs;
+            color: Theme.ink-2;
+            wrap: word-wrap;
+        }
+        if SetupVM.ks-preview: GhostButton {
+            text: "Put aside";
+            accessible-description: "Drops the key read from these files; the exam's key is unchanged";
+            clicked => {
+                SetupVM.ks-discard();
+            }
+        }
+        GhostButton {
+            text: "Key and CLO mapping";
+            accessible-description: "Back to the answer key and CLO mapping matrix";
+            clicked => {
+                SetupVM.ks-open = false;
+            }
+        }
+    }
+}
+
+// The key read from key sheets, version by version.
+component KeySheetCard inherits Card {
+    in property <bool> narrow;
+    inset: 0;
+    property <length> crop-w: root.narrow ? 196px : 236px;
+    VerticalLayout {
+        HorizontalLayout {
+            padding: Theme.space-lg;
+            padding-bottom: Theme.space-md;
+            spacing: Theme.space-md;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Theme.space-2xs;
+                alignment: start;
+                Text {
+                    text: "Key from answer sheets · " + SetupVM.ks-version-title;
+                    font-size: Theme.text-lg;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.ink;
+                    overflow: elide;
+                }
+                Text {
+                    text: "Each row as scanned beside what it gives the key; highlighted rows need your decision (never accepted on their own)";
+                    font-size: Theme.text-xs;
+                    color: Theme.ink-2;
+                    wrap: word-wrap;
+                }
+            }
+            if SetupVM.ks-versions.length > 0: VerticalLayout {
+                alignment: start;
+                SegmentGroup {
+                    for v[i] in SetupVM.ks-versions: Segment {
+                        text: v.label;
+                        label: v.a11y;
+                        selected: v.selected;
+                        clicked => {
+                            SetupVM.ks-select-version(i);
+                        }
+                    }
+                }
+            }
+        }
+        TableRow {
+            header: true;
+            TableHeaderCell {
+                text: "Q";
+                width: 40px + Theme.space-md;
+            }
+            TableHeaderCell {
+                text: "Sheet as scanned";
+                width: root.crop-w + Theme.space-md;
+            }
+            TableHeaderCell {
+                text: "Reads";
+                width: 56px + Theme.space-md;
+                align: center;
+            }
+            TableHeaderCell {
+                text: "Key entry";
+                horizontal-stretch: 1;
+            }
+            TableHeaderCell {
+                text: "Status";
+                width: 140px + Theme.space-md;
+            }
+        }
+        ListView {
+            vertical-stretch: 1;
+            for r[i] in SetupVM.ks-rows: KeySheetRowView {
+                data: r;
+                crop: SetupVM.ks-crops[i];
+                index: i;
+                crop-w: root.crop-w;
+                read-w: 56px;
+            }
+        }
+    }
+}
+
 export component SetupScreen inherits VerticalLayout {
     in property <length> win-w: 1440px;
     in property <length> win-h: 900px;
@@ -571,27 +1072,32 @@ export component SetupScreen inherits VerticalLayout {
             StepIndicator {
                 number: 1;
                 text: "Template";
+                compact: root.narrow;
                 state: 1;
             }
             StepIndicator {
                 number: 2;
                 text: "Forms and key";
+                compact: root.narrow;
                 state: SetupVM.key-published ? 1 : 2;
             }
             StepIndicator {
                 number: 3;
                 text: "CLO mapping";
+                compact: root.narrow;
                 state: SetupVM.lints.length > 0 || SetupVM.clos.length == 0 ? 2 : 1;
             }
             // without a roster no identity is matched: shown as a warning, never as done
             StepIndicator {
                 number: 4;
                 text: "Roster";
+                compact: root.narrow;
                 state: SetupVM.has-roster ? 1 : 2;
             }
             StepIndicator {
                 number: 5;
                 text: "Policies";
+                compact: root.narrow;
                 state: 1;
             }
         }
@@ -609,6 +1115,7 @@ export component SetupScreen inherits VerticalLayout {
                     enabled: SetupVM.can-replace-key;
                     accessible-description: "Replaces the whole answer key from a key file: a new key version, rescored and audited";
                     clicked => {
+                        SetupVM.ks-bar-open = false;
                         SetupVM.key-open = !SetupVM.key-open;
                     }
                 }
@@ -619,12 +1126,28 @@ export component SetupScreen inherits VerticalLayout {
         }
     }
     if SetupVM.available && SetupVM.key-open: KeyBar { }
+    if SetupVM.available && SetupVM.ks-bar-open: KeySheetBar { }
     if !SetupVM.available: EmptyState {
         vertical-stretch: 1;
         title: "No setup for this exam yet";
         text: "Choose a template to start.";
     }
-    if SetupVM.available: HorizontalLayout {
+    if SetupVM.available && SetupVM.has-keysheets && SetupVM.ks-open: HorizontalLayout {
+        vertical-stretch: 1;
+        padding: Theme.space-xl;
+        spacing: Theme.space-lg;
+        KeySheetCard {
+            horizontal-stretch: 1;
+            narrow: root.narrow;
+        }
+        VerticalLayout {
+            width: root.right-w;
+            spacing: Theme.space-lg;
+            KeySheetConfirmCard { }
+            KeySheetScansCard { }
+        }
+    }
+    if SetupVM.available && !(SetupVM.has-keysheets && SetupVM.ks-open): HorizontalLayout {
         vertical-stretch: 1;
         padding: Theme.space-xl;
         spacing: Theme.space-lg;
@@ -637,6 +1160,7 @@ export component SetupScreen inherits VerticalLayout {
         MatrixCard {
             horizontal-stretch: 1;
             clo-width: root.clo-w;
+            narrow: root.narrow;
         }
         VerticalLayout {
             width: root.right-w;

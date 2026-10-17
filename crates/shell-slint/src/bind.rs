@@ -10,7 +10,7 @@ use slint::{
     ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
 };
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 // ------------------------------------------------------------------------------------ helpers
@@ -301,6 +301,14 @@ struct State {
     sel_row: usize,
     sel_col: usize,
     search_request: i32,
+    /// Key from key sheets: the version shown (index into the summary's versions) and the
+    /// instructor's decisions on its rows, taken here and sent with the confirmation
+    /// (form, 1-based question) → `B`, `A|C` or `*`.
+    ks_version: usize,
+    ks_picks: BTreeMap<(usize, u32), String>,
+    /// The exam whose key summary was last shown on its own (a held exam opens Setup on its
+    /// key summary once; the instructor may then go back to the matrix).
+    ks_seen: Option<ExamId>,
 }
 
 /// The shell controller: owns the backend handle and keeps the UI globals in sync.
@@ -345,6 +353,9 @@ impl Shell {
                 sel_row: 17,
                 sel_col: 3,
                 search_request: 0,
+                ks_version: 0,
+                ks_picks: BTreeMap::new(),
+                ks_seen: None,
             }),
             timer: RefCell::new(None),
         });
@@ -398,6 +409,8 @@ impl Shell {
             if changed {
                 self.refresh_scan();
                 self.refresh_dashboard();
+                // flag stability (§12.2) arrives from a background job
+                self.refresh_results();
             }
             return changed;
         }
@@ -452,6 +465,9 @@ impl Shell {
                 st.lane = Lane::Marks;
                 st.sel_row = 0;
                 st.sel_col = 0;
+                st.ks_version = 0;
+                st.ks_picks.clear();
+                self.ui().global::<s::SetupVM>().set_ks_open(false);
             }
             st.exam = Some(exam.clone());
         }
@@ -531,6 +547,19 @@ impl Shell {
         let me = self.clone();
         su.on_replace_key(move |path| me.replace_key(&path));
         let me = self.clone();
+        su.on_ks_read(move |path| me.read_key_sheets(&path));
+        let me = self.clone();
+        su.on_ks_select_version(move |i| {
+            me.st.borrow_mut().ks_version = i.max(0) as usize;
+            me.refresh_keysheets();
+        });
+        let me = self.clone();
+        su.on_ks_choose(move |row, opt| me.key_sheet_choose(row, opt));
+        let me = self.clone();
+        su.on_ks_confirm(move |all| me.confirm_key_sheets(all));
+        let me = self.clone();
+        su.on_ks_discard(move || me.discard_key_sheets());
+        let me = self.clone();
         su.on_set_key(move |row, v, t| me.set_key(row as usize, v as usize, &t));
         let me = self.clone();
         su.on_set_weight(move |row, c, t| me.set_weight(row as usize, c as usize, &t));
@@ -554,7 +583,11 @@ impl Shell {
         sc.on_open_code(move |code| me.open_code(&code));
         let me = self.clone();
         sc.on_open_sheet(move |serial, code| {
-            if code.is_empty() {
+            if code.starts_with("KEY") {
+                // the instructor's key sheet: its key summary in Setup
+                me.ui().global::<s::SetupVM>().set_ks_open(true);
+                me.navigate(s::Page::Setup);
+            } else if code.is_empty() {
                 me.say(
                     format!(
                         "Sheet {serial}: the page viewer is not built yet; its review items open from the codes on the right"
@@ -760,6 +793,7 @@ impl Shell {
             key: ex.get_new_key().to_string(),
             roster: ex.get_new_roster().to_string(),
             clo: ex.get_new_clo().to_string(),
+            key_sheets: ex.get_new_key_sheets().to_string(),
         };
         let r = self.backend.borrow_mut().create_exam(&form);
         match r {
@@ -775,6 +809,7 @@ impl Shell {
                 ex.set_new_key(SharedString::new());
                 ex.set_new_roster(SharedString::new());
                 ex.set_new_clo(SharedString::new());
+                ex.set_new_key_sheets(SharedString::new());
                 self.select_exam(&exam);
                 self.navigate(s::Page::Scan);
                 self.say(what, s::Tone::Info);
@@ -812,6 +847,153 @@ impl Shell {
                 self.refresh_setup();
                 self.refresh_results();
                 self.refresh_dashboard();
+            }
+            Err(e) => self.say(e.to_string(), s::Tone::Warning),
+        }
+    }
+
+    /// Reads the typed key-sheet files (the instructor's filled answer sheets) and shows the
+    /// key they give for confirmation; nothing in the exam changes yet.
+    fn read_key_sheets(&self, text: &str) {
+        let Some(exam) = self.exam() else { return };
+        let paths = scan_paths(text);
+        let r = self.backend.borrow_mut().read_key_sheets(&exam, &paths);
+        match r {
+            Ok(what) => {
+                {
+                    let mut st = self.st.borrow_mut();
+                    st.ks_version = 0;
+                    st.ks_picks.clear();
+                }
+                let ui = self.ui();
+                let su = ui.global::<s::SetupVM>();
+                su.set_ks_bar_open(false);
+                su.set_ks_path(SharedString::new());
+                su.set_ks_open(true);
+                self.say(what, s::Tone::Info);
+                self.refresh_setup();
+            }
+            Err(e) => self.say(e.to_string(), s::Tone::Warning),
+        }
+    }
+
+    /// The instructor's decision on a key-sheet row that waits for one: option `opt`
+    /// (0-based), `-1` void, `-2` every option marked on the sheet. Choosing it again takes it
+    /// back. Sent with the confirmation, never on its own.
+    fn key_sheet_choose(&self, row: i32, opt: i32) {
+        let Some(exam) = self.exam() else { return };
+        let Some(sum) = self.backend.borrow().key_sheets(&exam) else {
+            return;
+        };
+        let vi = self
+            .st
+            .borrow()
+            .ks_version
+            .min(sum.versions.len().saturating_sub(1));
+        let Some(v) = sum.versions.get(vi) else {
+            return;
+        };
+        let Some(r) = usize::try_from(row).ok().and_then(|i| v.rows.get(i)) else {
+            return;
+        };
+        let letter = |o: u8| char::from(b'A' + o).to_string();
+        let answer = match opt {
+            -1 => "*".to_string(),
+            -2 => r
+                .marked
+                .iter()
+                .map(|&o| letter(o))
+                .collect::<Vec<_>>()
+                .join("|"),
+            o if o >= 0 => letter(o as u8),
+            _ => return,
+        };
+        if answer.is_empty() {
+            return;
+        }
+        {
+            let mut st = self.st.borrow_mut();
+            let k = (v.form, r.question);
+            if st.ks_picks.get(&k) == Some(&answer) {
+                st.ks_picks.remove(&k);
+            } else {
+                st.ks_picks.insert(k, answer.clone());
+            }
+        }
+        let word = match answer.as_str() {
+            "*" => "void (nobody is marked on it)".to_string(),
+            a if a.contains('|') => format!("{} all accepted", a.replace('|', " or ")),
+            a => a.to_string(),
+        };
+        self.say(
+            format!(
+                "Version {} question {}: {word}; recorded when you confirm",
+                v.version, r.question
+            ),
+            s::Tone::Info,
+        );
+        self.refresh_keysheets();
+    }
+
+    /// Confirms the key read from key sheets: the version shown, or every version waiting.
+    fn confirm_key_sheets(&self, all: bool) {
+        let Some(exam) = self.exam() else { return };
+        let Some(sum) = self.backend.borrow().key_sheets(&exam) else {
+            return;
+        };
+        let vi = self
+            .st
+            .borrow()
+            .ks_version
+            .min(sum.versions.len().saturating_sub(1));
+        let Some(v) = sum.versions.get(vi) else {
+            return;
+        };
+        let version = (!all).then_some(v.form);
+        let decisions: Vec<b::KeyRowDecision> = self
+            .st
+            .borrow()
+            .ks_picks
+            .iter()
+            .filter(|((f, _), _)| version.is_none_or(|x| x == *f))
+            .map(|((f, q), a)| b::KeyRowDecision {
+                version: *f,
+                question: *q,
+                answer: a.clone(),
+            })
+            .collect();
+        let r = self
+            .backend
+            .borrow_mut()
+            .confirm_key_sheets(&exam, version, &decisions);
+        match r {
+            Ok(what) => {
+                {
+                    let mut st = self.st.borrow_mut();
+                    st.ks_picks
+                        .retain(|(f, _), _| version.is_some_and(|x| x != *f));
+                }
+                self.say(what, s::Tone::Success);
+                // the key may now be in force: every screen shows the scored exam
+                self.refresh_all();
+                let first = self.st.borrow().order.first().copied();
+                self.select_item(first);
+            }
+            Err(e) => self.say(e.to_string(), s::Tone::Warning),
+        }
+    }
+
+    /// Puts aside key-sheet files read and not confirmed.
+    fn discard_key_sheets(&self) {
+        let Some(exam) = self.exam() else { return };
+        let r = self.backend.borrow_mut().discard_key_sheets(&exam);
+        match r {
+            Ok(what) => {
+                self.st.borrow_mut().ks_picks.clear();
+                let still = self.backend.borrow().key_sheets(&exam).is_some();
+                self.ui().global::<s::SetupVM>().set_ks_open(still);
+                self.say(what, s::Tone::Info);
+                self.refresh_setup();
             }
             Err(e) => self.say(e.to_string(), s::Tone::Warning),
         }
@@ -1062,6 +1244,12 @@ impl Shell {
 
     fn open_code(&self, code: &str) {
         let Some(exam) = self.exam() else { return };
+        // the key-sheet hold is lifted by confirming the key in Setup, never in the queue
+        if code == "SCO-003" && self.backend.borrow().hold(&exam).is_some() {
+            self.ui().global::<s::SetupVM>().set_ks_open(true);
+            self.navigate(s::Page::Setup);
+            return;
+        }
         for lane in Lane::ALL {
             let q = self.backend.borrow().review_queue(&exam, lane);
             if let Some(id) = q
@@ -1824,7 +2012,11 @@ impl Shell {
             .exam()
             .and_then(|e| self.backend.borrow().exam_setup(&e));
         su.set_available(setup.is_some());
-        let Some(setup) = setup else { return };
+        let Some(setup) = setup else {
+            su.set_has_keysheets(false);
+            su.set_ks_open(false);
+            return;
+        };
         let t = &setup.template;
         su.set_template_id(ss(&t.id));
         su.set_template_kind(ss(match t.kind {
@@ -1991,6 +2183,237 @@ impl Shell {
             su.set_sel_weight(ss(fmt_weight(cell.and_then(|c| c.weight))));
             su.set_sel_note(ss(cell.map_or("", |c| c.note.as_str())));
         }
+        su.set_ks_option_labels(model(t.option_labels.iter().map(ss).collect()));
+        self.refresh_keysheets();
+    }
+
+    /// The key read from key sheets (§10.1), as the instructor checks and confirms it: one
+    /// version at a time, each row's scan beside what it gives the key, the rows that wait for
+    /// a decision highlighted with what to do.
+    fn refresh_keysheets(&self) {
+        let ui = self.ui();
+        let su = ui.global::<s::SetupVM>();
+        let exam = self.exam();
+        su.set_can_read_keysheets(
+            exam.as_ref()
+                .is_some_and(|e| self.backend.borrow().can_replace_key(e)),
+        );
+        let sum = exam
+            .as_ref()
+            .and_then(|e| self.backend.borrow().key_sheets(e));
+        su.set_has_keysheets(sum.is_some());
+        let Some(sum) = sum else {
+            su.set_ks_open(false);
+            return;
+        };
+        // the key sheets of a held exam (or files just read) are what Setup is about until
+        // confirmed: shown on their own the first time the exam is
+        if (sum.pending || sum.preview) && self.st.borrow().ks_seen != exam {
+            self.st.borrow_mut().ks_seen = exam.clone();
+            su.set_ks_open(true);
+        }
+        let vi = {
+            let mut st = self.st.borrow_mut();
+            st.ks_version = st.ks_version.min(sum.versions.len().saturating_sub(1));
+            st.ks_version
+        };
+        let picks = self.st.borrow().ks_picks.clone();
+        su.set_ks_source(ss(&sum.source));
+        su.set_ks_preview(sum.preview);
+        su.set_ks_pending(sum.pending);
+        su.set_ks_consequence(ss(&sum.consequence));
+        let undecided = |v: &b::KeySheetVersion| {
+            v.rows
+                .iter()
+                .filter(|r| r.status.open() && !picks.contains_key(&(v.form, r.question)))
+                .count()
+        };
+        su.set_ks_versions(model(
+            sum.versions
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let state = if v.confirmed.is_some() {
+                        "confirmed".to_string()
+                    } else {
+                        match undecided(v) {
+                            0 => "ready to confirm".to_string(),
+                            1 => "1 to decide".to_string(),
+                            n => format!("{n} to decide"),
+                        }
+                    };
+                    s::KsVersion {
+                        label: ss(format!("Version {} · {state}", v.version)),
+                        open: undecided(v) as i32,
+                        confirmed: v.confirmed.is_some(),
+                        selected: i == vi,
+                        a11y: ss(format!("Key sheets version {}, {state}", v.version)),
+                    }
+                })
+                .collect(),
+        ));
+        su.set_ks_version(vi as i32);
+        let mut notes: Vec<SharedString> = sum
+            .other_versions
+            .iter()
+            .map(|(v, from)| {
+                ss(format!(
+                    "Version {v}: no key sheet; its key comes from {from}"
+                ))
+            })
+            .collect();
+        notes.extend(sum.notes.iter().map(ss));
+        su.set_ks_notes(model(notes));
+        let scan_row = |k: &b::KeySheetScan| s::KsScan {
+            label: ss(&k.label),
+            origin: ss(&k.origin),
+            id_read: ss(&k.id_read),
+            version: ss(&k.version),
+            registration: ss(&k.registration),
+            refusal: ss(k.refusal.as_deref().unwrap_or("")),
+        };
+        let Some(v) = sum.versions.get(vi) else {
+            // no usable key sheet: only the refusals and what to do
+            su.set_ks_version_title(ss("No key read"));
+            su.set_ks_version_status(ss(
+                "No key sheet gives a key: see why beside each sheet, rescan it, or replace the \
+                 key from a key file",
+            ));
+            su.set_ks_rows(model(Vec::new()));
+            su.set_ks_crops(model(Vec::new()));
+            su.set_ks_scans(model(sum.unusable.iter().map(scan_row).collect()));
+            su.set_ks_confirm_label(ss("Confirm"));
+            su.set_ks_can_confirm(false);
+            su.set_ks_can_confirm_all(false);
+            su.set_ks_confirmed(false);
+            return;
+        };
+        su.set_ks_version_letter(ss(&v.version));
+        su.set_ks_scans(model(
+            v.sheets
+                .iter()
+                .chain(sum.unusable.iter())
+                .map(scan_row)
+                .collect(),
+        ));
+        let left = undecided(v);
+        let decided_here = v
+            .rows
+            .iter()
+            .filter(|r| picks.contains_key(&(v.form, r.question)))
+            .count();
+        su.set_ks_version_title(ss(format!(
+            "Version {} · {} questions",
+            v.version,
+            v.rows.len()
+        )));
+        su.set_ks_version_status(ss(match (&v.confirmed, left) {
+            (Some(by), _) => format!("Confirmed: {by}"),
+            (None, 0) if decided_here > 0 => format!(
+                "Every row read or decided ({decided_here} by you): check them against the \
+                 sheet, then confirm"
+            ),
+            (None, 0) => {
+                "Every row read clearly: check them against the sheet, then confirm".to_string()
+            }
+            (None, 1) => "1 highlighted row needs your decision before you confirm".to_string(),
+            (None, n) => format!("{n} highlighted rows need your decision before you confirm"),
+        }));
+        su.set_ks_confirmed(v.confirmed.is_some());
+        su.set_ks_confirm_label(ss(format!("Confirm version {}", v.version)));
+        su.set_ks_can_confirm(v.confirmed.is_none() && left == 0);
+        let waiting: Vec<&b::KeySheetVersion> = sum
+            .versions
+            .iter()
+            .filter(|x| x.confirmed.is_none())
+            .collect();
+        su.set_ks_can_confirm_all(
+            sum.versions.len() > 1
+                && !waiting.is_empty()
+                && waiting.iter().all(|x| undecided(x) == 0),
+        );
+        let labels: Vec<String> = su
+            .get_ks_option_labels()
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        let letter = |o: u8| {
+            labels
+                .get(usize::from(o))
+                .cloned()
+                .unwrap_or_else(|| char::from(b'A' + o).to_string())
+        };
+        su.set_ks_rows(model(
+            v.rows
+                .iter()
+                .map(|r| {
+                    let pick = picks
+                        .get(&(v.form, r.question))
+                        .cloned()
+                        .unwrap_or_default();
+                    let marked = if r.status == b::KeyRowStatus::MultiMark && r.marked.len() > 1 {
+                        r.marked
+                            .iter()
+                            .map(|&o| letter(o))
+                            .collect::<Vec<_>>()
+                            .join("|")
+                    } else {
+                        String::new()
+                    };
+                    let tone = match r.status {
+                        b::KeyRowStatus::Read => s::Tone::Success,
+                        b::KeyRowStatus::Decided => s::Tone::Accent,
+                        b::KeyRowStatus::Blank | b::KeyRowStatus::Disagree => s::Tone::Error,
+                        _ => s::Tone::Warning,
+                    };
+                    let gives = if r.status.open() {
+                        if pick.is_empty() {
+                            "needs your decision".to_string()
+                        } else {
+                            format!("your answer {pick}, recorded when you confirm")
+                        }
+                    } else if r.answer.is_empty() {
+                        "gives no key entry".to_string()
+                    } else {
+                        format!("key {}", r.answer)
+                    };
+                    s::KsRow {
+                        q: ss(format!("Q{:02}", r.question)),
+                        read: ss(&r.read),
+                        answer: ss(if r.answer.is_empty() {
+                            "—"
+                        } else {
+                            &r.answer
+                        }),
+                        status: ss(r.status.label()),
+                        status_tone: tone,
+                        open: r.status.open(),
+                        highlight: r.status != b::KeyRowStatus::Read,
+                        pick: ss(&pick),
+                        marked: ss(&marked),
+                        detail: ss(&r.detail),
+                        key_now: ss(r.key_file.as_ref().map_or(String::new(), |k| {
+                            format!("exam's key now: {}", if k.is_empty() { "–" } else { k })
+                        })),
+                        has_crop: r.crop.is_some(),
+                        label: ss(format!(
+                            "Question {} version {}: the sheet reads {}, {}, {gives}",
+                            r.question,
+                            v.version,
+                            r.read,
+                            r.status.label()
+                        )),
+                    }
+                })
+                .collect(),
+        ));
+        let blank = blank_sheet();
+        su.set_ks_crops(model(
+            v.rows
+                .iter()
+                .map(|r| r.crop.as_ref().map_or_else(|| blank.clone(), image))
+                .collect(),
+        ));
     }
 
     // -------------------------------------------------------------------------- refresh: scan
@@ -2103,14 +2526,52 @@ impl Shell {
                         (3, String::new(), b::Severity::Info, "reading".into())
                     }
                     b::ThumbState::Queued => (4, String::new(), b::Severity::Info, "queued".into()),
+                    // the instructor's key sheet: never a student (§10.1)
+                    b::ThumbState::KeySheet {
+                        version,
+                        confirmed,
+                        refused,
+                    } => (
+                        if *refused { 6 } else { 5 },
+                        if version.is_empty() {
+                            "KEY".to_string()
+                        } else {
+                            format!("KEY {version}")
+                        },
+                        if *refused {
+                            b::Severity::Error
+                        } else {
+                            b::Severity::Info
+                        },
+                        format!(
+                            "{}not a student, {}",
+                            if version.is_empty() {
+                                String::new()
+                            } else {
+                                format!("version {version}, ")
+                            },
+                            if *refused {
+                                "gives no key: open Setup for why"
+                            } else if *confirmed {
+                                "its key is confirmed"
+                            } else {
+                                "its key waits for your confirmation in Setup"
+                            }
+                        ),
+                    ),
                 };
+                let is_key = matches!(t.state, b::ThumbState::KeySheet { .. });
                 s::Thumb {
                     serial: ss(&t.serial),
                     state,
                     code: ss(code),
                     severity: severity(sev),
                     variant: i as i32,
-                    label: ss(format!("Sheet {}, {word}", t.serial)),
+                    label: ss(if is_key {
+                        format!("Key sheet {}, {word}", t.serial)
+                    } else {
+                        format!("Sheet {}, {word}", t.serial)
+                    }),
                 }
             })
             .collect();
@@ -2126,6 +2587,7 @@ impl Shell {
         sc.set_rejected_count(ss(thousands(p.sheets.rejected)));
         sc.set_review_count(ss(thousands(p.sheets.review)));
         sc.set_auto_count(ss(thousands(p.sheets.auto)));
+        sc.set_key_sheet_count(p.sheets.key_sheets as i32);
         sc.set_pausable(p.pausable);
         sc.set_can_add(p.append.allowed && !p.running);
         sc.set_add_note(ss(&p.append.note));
@@ -2653,9 +3115,27 @@ impl Shell {
     fn refresh_results(&self) {
         let ui = self.ui();
         let rs = ui.global::<s::ResultsVM>();
-        let r = self.exam().and_then(|e| self.backend.borrow().results(&e));
+        let exam = self.exam();
+        let r = exam.as_ref().and_then(|e| self.backend.borrow().results(e));
         rs.set_available(r.is_some());
-        let Some(r) = r else { return };
+        let Some(r) = r else {
+            // why there is nothing to show, and where to go (a held key, §10.1)
+            match exam.as_ref().and_then(|e| self.backend.borrow().hold(e)) {
+                Some(why) => {
+                    rs.set_empty_title(ss("Results wait for the key"));
+                    rs.set_empty_text(ss(why));
+                    rs.set_empty_to_setup(true);
+                }
+                None => {
+                    rs.set_empty_title(ss("No results yet"));
+                    rs.set_empty_text(ss(
+                        "Results appear once every sheet of the exam is recognised and scored.",
+                    ));
+                    rs.set_empty_to_setup(false);
+                }
+            }
+            return;
+        };
         let st = &r.stats;
         rs.set_key_label(ss(&r.key_label));
         rs.set_students(ss(thousands(st.students)));
@@ -2749,17 +3229,23 @@ impl Shell {
             "N = {} · {:.0} % bins · mean {:.1} % (▲) · pass mark {:.0} % with ±1.96 SEM",
             st.students, r.histogram.bin_width, r.histogram.mean, r.histogram.pass_mark
         )));
-        // Flagged items first, worst flag first, stable before "proposed" (§12.2 "sort by rank,
-        // then stability"; the backend lists each item's flags in rank order), then by question.
+        // Flagged items first: mis-key and flawed-item flags (ranks 1–4) with high confidence,
+        // then those of low confidence "(proposed)", then the informational ones; within each
+        // by rank, then stability (§12.2 "sort by rank, then stability"; the backend lists each
+        // item's flags in rank order), then by question.
+        let share = |f: &b::ItemFlag| match &f.stability {
+            b::FlagStability::High { share, .. } | b::FlagStability::Low { share, .. } => {
+                share.unwrap_or(1.0)
+            }
+            _ => 1.0,
+        };
         let flag_rank = |it: &b::ItemStats| match it.flags.first() {
-            None => (3u8, 0u8),
+            None => (2u8, 0u8, u8::MAX, 0i64),
             Some(f) => (
-                match f.tone {
-                    b::Tone::Error => 0,
-                    b::Tone::Warning => 1,
-                    _ => 2,
-                },
+                u8::from(f.rank > 4),
                 u8::from(!f.stable),
+                f.rank,
+                -((share(f) * 1000.0).round() as i64),
             ),
         };
         let mut items: Vec<&b::ItemStats> = r.items.iter().collect();
@@ -2781,6 +3267,33 @@ impl Shell {
                             t
                         })
                         .unwrap_or_default();
+                    let pct = |s: &Option<f64>| s.map(|x| format!("{:.0} %", x * 100.0));
+                    // (cell text, tone, kind, words for the row's label)
+                    let (stab, stab_tone, stab_kind, stab_words) = match flag.map(|f| &f.stability)
+                    {
+                        Some(b::FlagStability::High { share, note }) => (
+                            pct(share).unwrap_or_else(|| "high".into()),
+                            s::Tone::Success,
+                            1,
+                            format!("high confidence: {note}"),
+                        ),
+                        Some(b::FlagStability::Low { share, note }) => (
+                            match pct(share) {
+                                Some(p) => format!("{p} · proposed"),
+                                None => "proposed".into(),
+                            },
+                            s::Tone::Accent,
+                            2,
+                            format!("low confidence, proposed: {note}"),
+                        ),
+                        Some(b::FlagStability::Computing) => (
+                            "computing…".into(),
+                            s::Tone::Neutral,
+                            3,
+                            "stability computing".into(),
+                        ),
+                        _ => (String::new(), s::Tone::Neutral, 0, String::new()),
+                    };
                     let q = if it.label.is_empty() {
                         format!("Q{:02}", it.question)
                     } else {
@@ -2803,15 +3316,33 @@ impl Shell {
                         shares: model(it.option_shares.iter().map(|&x| x as f32).collect()),
                         keyed: it.keyed.map_or(-1, |k| k as i32),
                         flag: ss(&flag_text),
-                        flag_tone: flag.map_or(s::Tone::Neutral, |f| tone(f.tone)),
+                        // a low-confidence flag is a proposal (gold, DESIGN §3.2), never the
+                        // red of an established mis-key
+                        flag_tone: flag.map_or(s::Tone::Neutral, |f| {
+                            if f.stable {
+                                tone(f.tone)
+                            } else if f.rank <= 4 {
+                                s::Tone::Accent
+                            } else {
+                                tone(f.tone)
+                            }
+                        }),
                         has_flag: flag.is_some(),
+                        stability: ss(&stab),
+                        stability_tone: stab_tone,
+                        stability_kind: stab_kind,
                         selected: false,
                         label: ss(format!(
-                            "{q}, p {p}, r {r}, {band}{}",
+                            "{q}, p {p}, r {r}, {band}{}{}",
                             if flag_text.is_empty() {
                                 String::new()
                             } else {
                                 format!(", {flag_text}")
+                            },
+                            if stab_words.is_empty() {
+                                String::new()
+                            } else {
+                                format!(", {stab_words}")
                             }
                         )),
                     }
@@ -3032,6 +3563,13 @@ impl Shell {
         ui.global::<s::ResultsVM>().set_export_open(exports);
         ui.global::<s::ExamsVM>()
             .set_new_open(new_exam && self.backend.borrow().can_create_exam());
+    }
+
+    /// Shows (or hides) Setup's key summary of the key read from key sheets.
+    pub fn show_key_sheets(&self, open: bool) {
+        let ui = self.ui();
+        let su = ui.global::<s::SetupVM>();
+        su.set_ks_open(open && su.get_has_keysheets());
     }
 
     pub fn select_cell(&self, row: usize, col: usize) {

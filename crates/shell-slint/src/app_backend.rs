@@ -59,6 +59,8 @@ pub type Spawn = Box<dyn Fn(Box<dyn FnOnce() + Send>) -> Result<(), String>>;
 pub struct GradeRequest {
     pub definition: ExamDefinition,
     pub inputs: Vec<PathBuf>,
+    /// Files named as key sheets (§10.1): graded with the exam, held until confirmed.
+    pub key_sheets: Vec<PathBuf>,
     pub options: GradeOptions,
 }
 
@@ -73,16 +75,22 @@ pub fn run_grading(req: GradeRequest, tx: Sender<JobEvent>) {
     };
     let outcome = match &req.options.project_dir {
         None => Err("internal: a desktop grading run needs a project folder".to_string()),
-        Some(dir) => ExamProject::grade(&req.definition, &req.inputs, &req.options, &progress)
-            .and_then(|p| p.close())
-            .map(|()| dir.clone())
-            .map_err(|e| {
-                format!(
-                    "{e} (exit code {}). Fix the input and start again; `omr grade` prints \
+        Some(dir) => ExamProject::grade_with_key_sheets(
+            &req.definition,
+            &req.inputs,
+            &req.key_sheets,
+            &req.options,
+            &progress,
+        )
+        .and_then(|p| p.close())
+        .map(|()| dir.clone())
+        .map_err(|e| {
+            format!(
+                "{e} (exit code {}). Fix the input and start again; `omr grade` prints \
                          the same message",
-                    e.exit_code()
-                )
-            }),
+                e.exit_code()
+            )
+        }),
     };
     let _ = tx.send(JobEvent::Finished(outcome));
 }
@@ -224,6 +232,25 @@ struct Opened {
     outcomes: RefCell<Option<Option<b::Outcomes>>>,
     /// Page thumbnails by page index (pages never change after grading).
     thumbs: RefCell<BTreeMap<usize, Option<b::CropImage>>>,
+    /// Key-sheet files read for this exam and not confirmed yet (nothing in the exam changes
+    /// until the confirmation replaces its key).
+    preview: Option<Preview>,
+    /// The key-sheet summary (with its row crops), cached until the next change.
+    keysheets: RefCell<Option<Option<b::KeySheetSummary>>>,
+    /// Flag stability (§12.2) of a score run: its run ID and the stability job's report.
+    stability: RefCell<Option<(String, omr_analytics::StabilityReport)>>,
+}
+
+/// Key-sheet files read in memory for an exam (`omr key read`): the recognizer's reading, held
+/// until the instructor confirms it.
+struct Preview {
+    p: ExamProject,
+    /// The files as given, for the summary and the audit note.
+    files: Vec<String>,
+    /// Their paths: at the confirmation they are added to the exam as named key sheets
+    /// (`ExamProject::add_key_sheets`), so the originals are stored and the key version names
+    /// them (C7).
+    paths: Vec<PathBuf>,
 }
 
 impl Opened {
@@ -236,6 +263,9 @@ impl Opened {
             results: RefCell::new(None),
             outcomes: RefCell::new(None),
             thumbs: RefCell::new(BTreeMap::new()),
+            preview: None,
+            keysheets: RefCell::new(None),
+            stability: RefCell::new(None),
         }
     }
 
@@ -244,6 +274,7 @@ impl Opened {
         self.items.borrow_mut().clear();
         *self.results.borrow_mut() = None;
         *self.outcomes.borrow_mut() = None;
+        *self.keysheets.borrow_mut() = None;
     }
 
     fn writable(&self) -> Result<(), BackendError> {
@@ -272,6 +303,15 @@ pub struct AppBackend {
     spawn: Option<Spawn>,
     /// Exams reloaded since [`Backend::take_reloaded`] was last called.
     reloaded: Vec<ExamId>,
+    /// Flag-stability jobs running on the spawner's threads (§12.3: a background job, never on
+    /// the synchronous regrade path): exam, score-run ID and the channel of its report.
+    stability_jobs: RefCell<Vec<StabilityJob>>,
+}
+
+struct StabilityJob {
+    exam: ExamId,
+    run_id: String,
+    rx: Receiver<omr_analytics::StabilityReport>,
 }
 
 fn app_err(e: AppError) -> BackendError {
@@ -309,6 +349,7 @@ impl AppBackend {
             default: None,
             spawn: None,
             reloaded: Vec::new(),
+            stability_jobs: RefCell::new(Vec::new()),
         }
     }
 
@@ -465,6 +506,8 @@ impl AppBackend {
         });
         i.key = path(&form.key);
         i.infer_key = i.key.is_none();
+        // key sheets named in the form: read with the exam, held until confirmed in Setup
+        let key_sheets = crate::bind::scan_paths(&form.key_sheets);
         i.roster = path(&form.roster);
         i.clo = path(&form.clo);
         i.title = text(&form.title);
@@ -476,6 +519,7 @@ impl AppBackend {
         let req = GradeRequest {
             definition: definition.clone(),
             inputs,
+            key_sheets: key_sheets.clone(),
             options: GradeOptions {
                 threads: 0,
                 project_dir: Some(dir.join("project.omrproj")),
@@ -498,7 +542,10 @@ impl AppBackend {
             }
         }
         self.default = Some(exam.clone());
-        let key = if i.infer_key {
+        let key = if !key_sheets.is_empty() {
+            "; the key is read from the key sheets and waits for your confirmation in Setup \
+             (nothing is scored until then)"
+        } else if i.infer_key {
             "; no key file, so the key is inferred and the results stay provisional until you \
              replace it in Setup"
         } else {
@@ -620,6 +667,103 @@ impl AppBackend {
         let r = f(o);
         o.changed();
         r
+    }
+
+    /// Makes sure the flag stability of `exam`'s current score run is known or being computed
+    /// (§12.2, §12.3): a background job on the binary's threads, never on the synchronous
+    /// regrade path; without a spawner (headless tests) it runs here, once per score run.
+    fn ensure_stability(&self, exam: &ExamId) {
+        let Some((run_id, known)) = self.with(exam, Opened::stability_state).flatten() else {
+            return;
+        };
+        if known
+            || self
+                .stability_jobs
+                .borrow()
+                .iter()
+                .any(|j| &j.exam == exam && j.run_id == run_id)
+        {
+            return;
+        }
+        let Some((run_id, data, flags)) = self.with(exam, Opened::stability_input).flatten() else {
+            return;
+        };
+        if let Some(spawn) = &self.spawn
+            && flags.iter().any(|f| f.rank() <= 4)
+        {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let work: Box<dyn FnOnce() + Send> = Box::new(move || {
+                let report = omr_analytics::stability_job(
+                    &data,
+                    &flags,
+                    &omr_analytics::AnalyticsConfig::default(),
+                );
+                let _ = tx.send(report);
+            });
+            if spawn(work).is_ok() {
+                self.stability_jobs.borrow_mut().push(StabilityJob {
+                    exam: exam.clone(),
+                    run_id,
+                    rx,
+                });
+                return;
+            }
+        }
+        // no thread to run it on (or nothing to assess): here, once per score run
+        let Some((run_id, data, flags)) = self.with(exam, Opened::stability_input).flatten() else {
+            return;
+        };
+        let report =
+            omr_analytics::stability_job(&data, &flags, &omr_analytics::AnalyticsConfig::default());
+        if let Some(o) = self.opened.borrow_mut().get_mut(exam) {
+            o.set_stability(run_id, report.clone());
+            o.judge(report);
+        }
+    }
+
+    /// Folds finished stability jobs (`wait`: blocks until every running one has reported).
+    fn drain_stability(&self, wait: bool) -> bool {
+        let jobs = std::mem::take(&mut *self.stability_jobs.borrow_mut());
+        let mut changed = false;
+        let mut still = Vec::new();
+        for j in jobs {
+            let got = if wait {
+                j.rx.recv().map_err(|_| TryRecvError::Disconnected)
+            } else {
+                j.rx.try_recv()
+            };
+            match got {
+                Ok(report) => {
+                    if let Some(o) = self.opened.borrow_mut().get_mut(&j.exam) {
+                        o.set_stability(j.run_id.clone(), report.clone());
+                        o.judge(report);
+                        changed = true;
+                    }
+                }
+                Err(TryRecvError::Empty) => still.push(j),
+                // the job died: its flags read "not assessed" for this run, never retried in
+                // a loop
+                Err(TryRecvError::Disconnected) => {
+                    if let Some(o) = self.opened.borrow().get(&j.exam) {
+                        o.set_stability(
+                            j.run_id.clone(),
+                            omr_analytics::StabilityReport {
+                                method: omr_analytics::StabilityMethod::Bootstrap,
+                                n: 0,
+                                resamples: 0,
+                                run_id: j.run_id.clone(),
+                                seed: String::new(),
+                                flags: Vec::new(),
+                                item_ci: Vec::new(),
+                            },
+                        );
+                        changed = true;
+                    }
+                }
+            }
+        }
+        self.stability_jobs.borrow_mut().extend(still);
+        changed
     }
 
     /// Folds the worker's events; returns true when anything changed.
@@ -938,6 +1082,143 @@ fn crop(c: &vm::CropImage) -> b::CropImage {
     }
 }
 
+/// What to do about a page whose alignment with the blank form could not be verified (REG-003
+/// ERROR: a bubble lattice can also match one row or column away, so nothing on the page was
+/// read): the core's remedy (R10).
+fn alignment_remedy() -> &'static str {
+    omr_app::review::remedy("REG-003").unwrap_or("rescan the sheet flat and add the new scan")
+}
+
+/// The page-level REG-003 ERROR of a page read on an alignment that could not be verified, if
+/// any (a region-level REG-003 only makes its bubbles unreadable).
+fn alignment_refusal(p: &omr_app::model::PageState) -> Option<&omr_model::Exception> {
+    refusal_in(&p.read.as_ref()?.exceptions)
+}
+
+fn refusal_in(ex: &[omr_model::Exception]) -> Option<&omr_model::Exception> {
+    ex.iter().find(|e| {
+        e.code == "REG-003" && e.severity >= AppSeverity::Error && e.scope == omr_model::Scope::Page
+    })
+}
+
+/// The activity line of a page read on no verified alignment, with what to do (R10).
+fn alignment_notice(serial: &str) -> String {
+    format!(
+        "REG-003 {serial} · not read: alignment with the blank form not verified · {}",
+        alignment_remedy()
+    )
+}
+
+/// What a confirmation of the exam's own key sheets did, in the desktop's words.
+fn confirmed_message(r: &omr_app::keysheet::KeyConfirmReport) -> String {
+    let mut m = if !r.held {
+        format!(
+            "Key confirmed: key version {} published from the key sheets with your name; the \
+             exam is scored",
+            r.key_version.unwrap_or(1)
+        )
+    } else if r.waiting.is_empty() {
+        format!(
+            "Version {} confirmed and recorded with your name. The exam stays held: a key sheet \
+             could not be read (see Key sheets); rescan it, or replace the key from a key file",
+            r.confirmed.join(" and ")
+        )
+    } else {
+        format!(
+            "Version {} confirmed and recorded with your name; version {} {} for your \
+             confirmation: nothing is scored until then",
+            r.confirmed.join(" and "),
+            r.waiting.join(" and "),
+            if r.waiting.len() == 1 {
+                "waits"
+            } else {
+                "wait"
+            }
+        )
+    };
+    if !r.warnings.is_empty() {
+        m.push_str(&format!(". Check: {}", r.warnings.join("; ")));
+    }
+    m
+}
+
+/// A key-sheet row crop with its mark overlays drawn on the paper (one image per row).
+fn marked_crop(c: &omr_app::crops::Crop) -> b::CropImage {
+    let plain = b::CropImage {
+        width: c.width,
+        height: c.height,
+        rgba: c.rgba.clone(),
+    };
+    let marks: Vec<crate::crops::MarkOverlay> = c
+        .bubbles
+        .iter()
+        .map(|o| crate::crops::MarkOverlay {
+            cx: o.cx,
+            cy: o.cy,
+            r: o.r,
+            state: mark_state(o.state),
+        })
+        .collect();
+    crate::crops::with_marks(&plain, &marks)
+}
+
+/// The stability of one flag from the stability job's report (§12.2): rules of ranks 1–4 are
+/// assessed; "computing…" until the job has reported.
+fn flag_stability(
+    f: &omr_analytics::ItemFlag,
+    report: Option<&omr_analytics::StabilityReport>,
+) -> b::FlagStability {
+    if f.rank() > 4 {
+        return b::FlagStability::NotAssessed;
+    }
+    let Some(r) = report else {
+        return b::FlagStability::Computing;
+    };
+    match r
+        .flags
+        .iter()
+        .find(|s| s.item == f.item && s.rule == f.rule && s.option == f.option)
+    {
+        None => b::FlagStability::NotAssessed,
+        Some(s) if s.low_confidence => b::FlagStability::Low {
+            share: s.share,
+            note: s.describe(r.resamples),
+        },
+        Some(s) => b::FlagStability::High {
+            share: s.share,
+            note: s.describe(r.resamples),
+        },
+    }
+}
+
+fn key_row_status(s: omr_app::keysheet::RowStatus) -> b::KeyRowStatus {
+    use omr_app::keysheet::RowStatus as R;
+    match s {
+        R::Read => b::KeyRowStatus::Read,
+        R::Decided => b::KeyRowStatus::Decided,
+        R::MultiMark => b::KeyRowStatus::MultiMark,
+        R::Blank => b::KeyRowStatus::Blank,
+        R::NotPrinted => b::KeyRowStatus::NotPrinted,
+        R::Uncertain => b::KeyRowStatus::Uncertain,
+        R::Disagree => b::KeyRowStatus::Disagree,
+    }
+}
+
+/// Two key entries say the same (`A|C` = `C,A`; a marked inferred entry compares by its
+/// letters).
+fn same_entry(a: &str, b: &str) -> bool {
+    let norm = |s: &str| {
+        let s = s.trim_end_matches(" (inferred)");
+        let mut v: Vec<char> = s
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '*')
+            .collect();
+        v.sort_unstable();
+        v
+    };
+    norm(a) == norm(b)
+}
+
 fn title_of(code: &str) -> String {
     omr_model::exceptions::lookup(code).map_or_else(String::new, |d| d.title.to_string())
 }
@@ -1042,7 +1323,8 @@ fn of_app(d: &AppDecision, k: ItemKind, candidates: &[String], forms: &[String])
             )
         }
         AppDecision::NotOnRoster => b::Decision::NotOnRoster,
-        AppDecision::Acknowledge => b::Decision::Acknowledge,
+        // keeping or voiding a probable mis-key (SCO-001) reads as the item's acknowledgement
+        AppDecision::Acknowledge | AppDecision::Void => b::Decision::Acknowledge,
     }
 }
 
@@ -1307,6 +1589,213 @@ impl Opened {
         }
     }
 
+    /// The key read from key sheets (§10.1): files read for this exam and not confirmed yet,
+    /// else the exam's own key sheets. Cached with its crops until the next change.
+    fn key_summary(&self) -> Option<b::KeySheetSummary> {
+        if let Some(hit) = self.keysheets.borrow().as_ref() {
+            return hit.clone();
+        }
+        let made = self.make_key_summary();
+        *self.keysheets.borrow_mut() = Some(made.clone());
+        made
+    }
+
+    /// The exam's key entry for (form, 0-based question) now, as `B`, `A|C`, `*` or empty;
+    /// `INFERRED` keys are marked so.
+    fn current_entry(&self, form: usize, q: usize) -> Option<String> {
+        let k = self.p.session.key.as_ref()?;
+        let cells = k.forms.get(if k.shared_items { 0 } else { form })?;
+        let t = cells.get(q)?.text();
+        Some(if k.inferred && !t.is_empty() {
+            format!("{t} (inferred)")
+        } else {
+            t
+        })
+    }
+
+    fn make_key_summary(&self) -> Option<b::KeySheetSummary> {
+        let (p, preview) = match &self.preview {
+            Some(pv) => (&pv.p, Some(pv)),
+            None => (&self.p, None),
+        };
+        let sum = p.key_sheet_summary(true)?;
+        let forms = &p.session.definition.forms;
+        let scan = |k: &omr_app::keysheet::KeySheetInfo| b::KeySheetScan {
+            label: k.label.clone(),
+            origin: if preview.is_some() {
+                "read from the file".into()
+            } else if k.declared {
+                "named as a key sheet".into()
+            } else {
+                "found in the stack".into()
+            },
+            id_read: k.id_read.clone(),
+            version: k.version_text.clone(),
+            registration: k.registration.clone(),
+            digest: format!(
+                "sha384 {}…{}",
+                k.sha384.get(..6).unwrap_or(""),
+                k.sha384
+                    .get(k.sha384.len().saturating_sub(4)..)
+                    .unwrap_or("")
+            ),
+            refusal: k.refusal.clone(),
+        };
+        let versions = sum
+            .versions
+            .iter()
+            .map(|v| {
+                let form = forms.iter().position(|f| f == &v.version).unwrap_or(0);
+                b::KeySheetVersion {
+                    version: v.version.clone(),
+                    form,
+                    sheets: v.sheets.iter().map(scan).collect(),
+                    rows: v
+                        .rows
+                        .iter()
+                        .map(|r| {
+                            let q = r.question as usize - 1;
+                            // the exam's own key when it differs: from the core for its key
+                            // sheets, from the exam's current key for files read in preview
+                            let key_file = match preview {
+                                None => r.key_file.clone(),
+                                Some(_) => self
+                                    .current_entry(form, q)
+                                    .filter(|now| !same_entry(now, &r.answer)),
+                            };
+                            let marked: Vec<u8> = r
+                                .crop
+                                .as_ref()
+                                .map(|c| {
+                                    c.bubbles
+                                        .iter()
+                                        .enumerate()
+                                        .filter(|(_, b)| {
+                                            matches!(
+                                                b.state,
+                                                OverlayState::Filled | OverlayState::Ambiguous
+                                            )
+                                        })
+                                        .map(|(i, _)| i as u8)
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            b::KeySheetRow {
+                                question: r.question,
+                                read: r.read.clone(),
+                                answer: r.answer.clone(),
+                                status: key_row_status(r.status),
+                                detail: r.detail.clone(),
+                                key_file,
+                                fills: r.fills.clone(),
+                                marked,
+                                crop: r.crop.as_ref().map(marked_crop),
+                            }
+                        })
+                        .collect(),
+                    open: v.open as u32,
+                    confirmed: v.confirmed.as_ref().map(|(by, at)| {
+                        format!(
+                            "confirmed by {} · {}",
+                            by.trim_start_matches("principal:"),
+                            snapshot_label(at)
+                        )
+                    }),
+                }
+            })
+            .collect();
+        let source = match preview {
+            Some(pv) => format!(
+                "Read from {} · not confirmed: the exam's key is unchanged until you confirm",
+                match pv.files.as_slice() {
+                    [one] => one.clone(),
+                    many => format!("{} key-sheet files", many.len()),
+                }
+            ),
+            None if sum.superseded => {
+                "Key sheets graded with the exam · a key file replaced their key".into()
+            }
+            None if sum.pending => {
+                "Key sheets graded with the exam · not confirmed: nothing is scored until you \
+                 confirm"
+                    .into()
+            }
+            None => "Key sheets graded with the exam · confirmed".into(),
+        };
+        let consequence = match preview {
+            Some(_) => "Confirming replaces the exam's key with this one (a new key version, \
+                        recorded with your name and the key-sheet files) and rescores the exam."
+                .to_string(),
+            None => "Confirming records your confirmation with your name and the key-sheet \
+                     scans; when the last version is confirmed the key is published and the \
+                     exam is scored."
+                .to_string(),
+        };
+        Some(b::KeySheetSummary {
+            source,
+            preview: preview.is_some(),
+            pending: sum.pending,
+            superseded: sum.superseded,
+            versions,
+            unusable: sum.unusable.iter().map(scan).collect(),
+            other_versions: sum.other_versions.clone(),
+            consequence,
+            notes: sum.notes.clone(),
+        })
+    }
+
+    /// The analysis input and the synchronous flags of the current score run, for the
+    /// stability job (§12.2).
+    fn stability_input(
+        &self,
+    ) -> Option<(
+        String,
+        omr_analytics::AnalysisData,
+        Vec<omr_analytics::ItemFlag>,
+    )> {
+        let s = self.p.scoring.as_ref()?;
+        let run = s.run.as_ref().ok()?;
+        let data = omr_analytics::AnalysisData::from_run(run, &s.prep.matrix);
+        let flags = omr_analytics::analyze(&data, &omr_analytics::AnalyticsConfig::default()).flags;
+        Some((run.run_id.clone(), data, flags))
+    }
+
+    /// The current score run's ID, and whether its flag stability is known.
+    fn stability_state(&self) -> Option<(String, bool)> {
+        let run = self.p.scoring.as_ref()?.run.as_ref().ok()?;
+        let known = self
+            .stability
+            .borrow()
+            .as_ref()
+            .is_some_and(|(id, _)| id == &run.run_id);
+        Some((run.run_id.clone(), known))
+    }
+
+    /// Stores a stability report for `run_id`; the results are rebuilt with it.
+    fn set_stability(&self, run_id: String, report: omr_analytics::StabilityReport) {
+        *self.stability.borrow_mut() = Some((run_id, report));
+        *self.results.borrow_mut() = None;
+    }
+
+    /// Hands a stability report to the core, which judges the probable mis-keys of the score
+    /// run for the release gate (§12.2: a confident one becomes an SCO-001 review item that
+    /// blocks release until decided). A read-only exam keeps "computing…".
+    fn judge(&mut self, report: omr_analytics::StabilityReport) {
+        if self.read_only.is_none() && self.p.set_flag_stability(report).is_ok() {
+            self.changed();
+        }
+    }
+
+    /// The flag stability of the current run, when the job has reported.
+    fn current_stability(&self) -> Option<omr_analytics::StabilityReport> {
+        let run = self.p.scoring.as_ref()?.run.as_ref().ok()?;
+        self.stability
+            .borrow()
+            .as_ref()
+            .filter(|(id, _)| id == &run.run_id)
+            .map(|(_, r)| r.clone())
+    }
+
     /// A page thumbnail (decoded from the stored original once, then cached).
     fn thumbnail(&self, page: usize) -> Option<b::CropImage> {
         if let Some(hit) = self.thumbs.borrow().get(&page) {
@@ -1347,6 +1836,19 @@ impl Opened {
 
     fn thumb_state(&self, page: usize, by_page: &Worst, by_booklet: &Worst) -> b::ThumbState {
         let pg = &self.p.session.pages[page];
+        // the instructor's key sheet is never a student sheet (§10.1)
+        if pg.status == PageStatus::KeySheet {
+            let ks = &self.p.session.key_sheets;
+            let sheet = ks.sheets.iter().find(|k| k.pages.contains(&page));
+            return b::ThumbState::KeySheet {
+                version: sheet.map_or_else(String::new, |k| k.form_text.clone()),
+                confirmed: sheet
+                    .and_then(|k| k.form)
+                    .is_some_and(|f| ks.is_confirmed(f))
+                    || ks.superseded,
+                refused: sheet.is_none_or(|k| !k.usable()),
+            };
+        }
         if let Some(e) = &pg.refusal {
             return b::ThumbState::Rejected {
                 code: e.code.clone(),
@@ -1423,6 +1925,15 @@ impl Opened {
         for e in &s.batch_exceptions {
             *codes.entry((e.code.clone(), e.severity)).or_default() += 1;
         }
+        // the key-sheet hold (SCO-003 BLOCKER) is lifted in Setup, never in the queue, but it
+        // holds the whole batch: listed with the codes
+        for e in s
+            .exam_exceptions
+            .iter()
+            .filter(|e| e.sub_reason.as_deref() == Some(omr_app::keysheet::HOLD))
+        {
+            *codes.entry((e.code.clone(), e.severity)).or_default() += 1;
+        }
         let mut exceptions: Vec<b::CodeCount> = codes
             .into_iter()
             .map(|((code, sv), count)| b::CodeCount {
@@ -1448,15 +1959,20 @@ impl Opened {
             match self.thumb_state(p, &by_page, &by_booklet) {
                 b::ThumbState::Auto => sheets.auto += 1,
                 b::ThumbState::Rejected { .. } => sheets.rejected += 1,
+                b::ThumbState::KeySheet { .. } => sheets.key_sheets += 1,
                 _ => sheets.review += 1,
             }
         }
-        // the highest serials first ("latest"), then pages outside any booklet
+        // the instructor's key sheets first (never students), then the highest serials
+        // ("latest"), then pages outside any booklet
         let mut pages: Vec<usize> = (0..s.pages.len())
             .filter(|&p| !matches!(s.pages[p].status, PageStatus::Duplicate | PageStatus::Blank))
             .collect();
         pages.sort_by_key(|&p| {
-            std::cmp::Reverse((s.pages[p].booklet.map(|bk| s.booklets[bk].serial), p))
+            (
+                s.pages[p].status != PageStatus::KeySheet,
+                std::cmp::Reverse((s.pages[p].booklet.map(|bk| s.booklets[bk].serial), p)),
+            )
         });
         let thumbnails = pages
             .into_iter()
@@ -1554,19 +2070,39 @@ impl Opened {
             .count() as u32;
         // pages the engine handled on its own are listed only when there are any (the column
         // must leave room for the activity log at 1280 × 800)
+        let key_sheets = s
+            .pages
+            .iter()
+            .filter(|p| p.status == PageStatus::KeySheet)
+            .count() as u32;
+        let unaligned = s
+            .pages
+            .iter()
+            .filter(|p| alignment_refusal(p).is_some())
+            .count() as u32;
         let handled = [
-            ("Duplicates ignored (CAP-011)", duplicates),
-            ("Blank backs dropped (CAP-012)", blank),
-            ("Read turned upright (REG-002)", turned),
+            (
+                "Key sheets, not students (§10.1)",
+                key_sheets,
+                b::Tone::Neutral,
+            ),
+            (
+                "Not read: alignment unverified (REG-003)",
+                unaligned,
+                b::Tone::Warning,
+            ),
+            ("Duplicates ignored (CAP-011)", duplicates, b::Tone::Neutral),
+            ("Blank backs dropped (CAP-012)", blank, b::Tone::Neutral),
+            ("Read turned upright (REG-002)", turned, b::Tone::Neutral),
         ];
-        let shown = handled.into_iter().filter(|(_, n)| *n > 0);
-        for (at, (label, n)) in (3..).zip(shown) {
+        let shown = handled.into_iter().filter(|(_, n, _)| *n > 0);
+        for (at, (label, n, tone)) in (3..).zip(shown) {
             reconciliation.insert(
                 at,
                 b::ReconLine {
                     label: label.into(),
                     value: n.to_string(),
-                    tone: b::Tone::Neutral,
+                    tone,
                 },
             );
         }
@@ -1651,6 +2187,41 @@ impl Opened {
     fn page_notices(&self) -> Vec<String> {
         let s = &self.p.session;
         let mut out = Vec::new();
+        // the instructor's key sheets: listed as such, never as students (§10.1)
+        let ks = &s.key_sheets;
+        for k in &ks.sheets {
+            let Some(&first) = k.pages.first() else {
+                continue;
+            };
+            let state = match (&k.refusal, k.form) {
+                (Some(why), _) => format!("gives no key: {why}"),
+                (None, None) => "gives no key: its version is not one of this exam's".into(),
+                (None, Some(_)) if ks.superseded => "replaced by a key file".into(),
+                (None, Some(f)) if ks.is_confirmed(f) => "key confirmed".into(),
+                (None, Some(_)) => "key waits for your confirmation in Setup".into(),
+            };
+            out.push(format!(
+                "KEY {} · key sheet{} · {} · {state}",
+                self.serial_of_page(first),
+                if k.form_text.is_empty() {
+                    String::new()
+                } else {
+                    format!(" version {}", k.form_text)
+                },
+                if k.declared {
+                    "named"
+                } else {
+                    "found in the stack"
+                },
+            ));
+        }
+        // pages read on no alignment at all (REG-003 ERROR): nothing on them was read, and
+        // what to do about it (R10)
+        for (i, pg) in s.pages.iter().enumerate() {
+            if alignment_refusal(pg).is_some() {
+                out.push(alignment_notice(&self.serial_of_page(i)));
+            }
+        }
         for (i, pg) in s.pages.iter().enumerate() {
             let notices = pg
                 .read
@@ -1868,12 +2439,26 @@ impl Opened {
                 neighbours: Vec::new(),
             }
         });
-        let notice = v.notice.as_ref().map(|n| b::NoticeEvidence {
-            headline: n.headline.clone(),
-            lines: n.lines.clone(),
-            consequence: n.consequence.clone(),
+        // a page refused on an unverified alignment says what to do (R10), in the core's words
+        let unaligned = it.code == "REG-003"
+            && it.severity >= AppSeverity::Error
+            && it
+                .page
+                .and_then(|p| s.pages.get(p))
+                .is_some_and(|p| alignment_refusal(p).is_some());
+        let notice = v.notice.as_ref().map(|n| {
+            let mut lines = n.lines.clone();
+            if unaligned && !n.headline.contains("rescan") {
+                lines.push(("What to do".into(), alignment_remedy().into()));
+            }
+            b::NoticeEvidence {
+                headline: n.headline.clone(),
+                lines,
+                consequence: n.consequence.clone(),
+            }
         });
-        let reasons: Vec<String> = if it.kind == ItemKind::Notice {
+        // a probable mis-key (SCO-001) is kept only with a reason and a note (§12.2)
+        let reasons: Vec<String> = if it.kind == ItemKind::Notice && it.flag.is_none() {
             Vec::new()
         } else {
             omr_app::review::reasons_for(it.kind, it.lane)
@@ -1988,6 +2573,12 @@ impl Opened {
         let s = &self.p.session;
         let def = &s.definition;
         let analytics = self.p.analytics();
+        // flag stability (§12.2): the core's own report when it ran the job, else the job this
+        // backend ran for the current score run; "computing…" until one has reported
+        let stability = analytics
+            .as_ref()
+            .and_then(|a| a.stability.clone())
+            .or_else(|| self.current_stability());
         let test = analytics.as_ref().and_then(|a| a.tests.first());
         let alpha = v.alpha.map(|a| a.0);
         let sem_points = test.and_then(|t| t.sem);
@@ -2033,17 +2624,29 @@ impl Opened {
                             keyed: i.options.iter().find(|o| o.keyed).and_then(|o| o.option),
                             flags: flags
                                 .into_iter()
-                                .map(|f| b::ItemFlag {
-                                    message: f.message.clone(),
-                                    code: f.rule.code().map(str::to_string),
-                                    tone: match f.rank() {
-                                        1 => b::Tone::Error,
-                                        2..=4 => b::Tone::Warning,
-                                        _ => b::Tone::Info,
-                                    },
-                                    stable: f.confidence
-                                        == omr_analytics::miskey::Confidence::Normal
-                                        && f.stability.is_none_or(|x| x >= 0.5),
+                                .map(|f| {
+                                    let stab = flag_stability(f, stability.as_ref());
+                                    b::ItemFlag {
+                                        // the rule's statement; the stability account is its
+                                        // own column (the core may have appended it)
+                                        message: f
+                                            .message
+                                            .split(" — low confidence (proposed)")
+                                            .next()
+                                            .unwrap_or_default()
+                                            .to_string(),
+                                        code: f.rule.code().map(str::to_string),
+                                        tone: match f.rank() {
+                                            1 => b::Tone::Error,
+                                            2..=4 => b::Tone::Warning,
+                                            _ => b::Tone::Info,
+                                        },
+                                        stable: f.confidence
+                                            == omr_analytics::miskey::Confidence::Normal
+                                            && !matches!(stab, b::FlagStability::Low { .. }),
+                                        rank: f.rank(),
+                                        stability: stab,
+                                    }
                                 })
                                 .collect(),
                         }
@@ -2850,6 +3453,7 @@ impl Backend for AppBackend {
     }
 
     fn results(&self, exam: &ExamId) -> Option<b::Results> {
+        self.ensure_stability(exam);
         self.with(exam, |o| o.results(exam)).flatten()
     }
 
@@ -2956,6 +3560,272 @@ impl Backend for AppBackend {
         })
     }
 
+    fn key_sheets(&self, exam: &ExamId) -> Option<b::KeySheetSummary> {
+        self.with(exam, Opened::key_summary).flatten()
+    }
+
+    fn hold(&self, exam: &ExamId) -> Option<String> {
+        self.with(exam, |o| {
+            o.p.session.key_unconfirmed().then(|| {
+                "The key read from the key sheets is not confirmed: nothing is scored until you \
+                 confirm it in Setup (Key from answer sheets)"
+                    .to_string()
+            })
+        })
+        .flatten()
+    }
+
+    fn read_key_sheets(
+        &mut self,
+        exam: &ExamId,
+        inputs: &[PathBuf],
+    ) -> Result<String, BackendError> {
+        if inputs.is_empty() {
+            return Err(BackendError::Invalid(
+                "Give the key-sheet files: scans or photos of the instructor's filled answer \
+                 sheets (student number bubbled all 0 or all 9, the version bubbled), ; between \
+                 several"
+                    .into(),
+            ));
+        }
+        self.with_mut(exam, |o| {
+            let def = o.p.session.definition.clone();
+            // read by omr-app with the exam's own recognizer (R2: key-blind; R4: its I/O and
+            // thread pool), in memory: nothing is written to the exam yet
+            let p = omr_app::keysheet::read_key_sheets(&def, inputs, 0).map_err(app_err)?;
+            let files: Vec<String> = inputs
+                .iter()
+                .map(|i| {
+                    i.file_name()
+                        .map_or_else(|| i.display().to_string(), |n| n.to_string_lossy().into())
+                })
+                .collect();
+            let Some(sum) = p.key_sheet_summary(false) else {
+                return Err(BackendError::Invalid(format!(
+                    "No page of {} could be read as a key sheet: check that the files are scans \
+                     or photos of this exam's answer sheet",
+                    files.join(", ")
+                )));
+            };
+            let msg = if sum.versions.is_empty() {
+                format!(
+                    "No key could be read from {}: {}",
+                    files.join(", "),
+                    sum.unusable
+                        .iter()
+                        .filter_map(|k| k.refusal.as_deref())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )
+            } else {
+                let open: usize = sum.versions.iter().map(|v| v.open).sum();
+                format!(
+                    "Read the key of version {} from {}: {}; nothing changes until you confirm",
+                    sum.versions
+                        .iter()
+                        .map(|v| v.version.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" and "),
+                    files.join(", "),
+                    match open {
+                        0 => "every row read clearly, check them against the sheet".to_string(),
+                        1 => "1 row needs your decision".to_string(),
+                        n => format!("{n} rows need your decision"),
+                    }
+                )
+            };
+            o.preview = Some(Preview {
+                p,
+                files,
+                paths: inputs.to_vec(),
+            });
+            Ok(msg)
+        })
+    }
+
+    fn confirm_key_sheets(
+        &mut self,
+        exam: &ExamId,
+        version: Option<usize>,
+        decisions: &[b::KeyRowDecision],
+    ) -> Result<String, BackendError> {
+        let operator = self.operator.clone();
+        self.with_mut(exam, |o| {
+            let summary = o.key_summary().ok_or_else(|| {
+                BackendError::Invalid(
+                    "This exam has no key sheets to confirm: read them with Read key from answer \
+                     sheet…"
+                        .into(),
+                )
+            })?;
+            let forms = o.p.session.definition.forms.clone();
+            let targets: Vec<&b::KeySheetVersion> = summary
+                .versions
+                .iter()
+                .filter(|v| v.confirmed.is_none() && version.is_none_or(|f| v.form == f))
+                .collect();
+            if targets.is_empty() {
+                return Err(BackendError::Invalid(match version {
+                    Some(f) => format!(
+                        "Version {} has no key from key sheets waiting for confirmation",
+                        forms.get(f).map_or("?", String::as_str)
+                    ),
+                    None if summary.superseded => {
+                        "A key file replaced the key sheets: there is nothing to confirm".into()
+                    }
+                    None => "Every version read from the key sheets is confirmed already".into(),
+                }));
+            }
+            // every row that waits for the instructor needs a decision first (named here in
+            // the desktop's words; the core names the command line's)
+            let missing: Vec<String> = targets
+                .iter()
+                .flat_map(|v| {
+                    v.rows
+                        .iter()
+                        .filter(|r| r.status.open())
+                        .filter(|r| {
+                            !decisions
+                                .iter()
+                                .any(|d| d.version == v.form && d.question == r.question)
+                        })
+                        .map(|r| {
+                            format!(
+                                "version {} question {} ({})",
+                                v.version,
+                                r.question,
+                                r.status.label()
+                            )
+                        })
+                })
+                .collect();
+            if !missing.is_empty() {
+                return Err(BackendError::Invalid(format!(
+                    "Decide {} first: choose the answer in its row (an option, Accept both, or \
+                     Void), then confirm",
+                    missing.join(", ")
+                )));
+            }
+            let decs: Vec<omr_app::model::KeyRowDecision> = decisions
+                .iter()
+                .filter(|d| targets.iter().any(|v| v.form == d.version) && d.question > 0)
+                .map(|d| omr_app::model::KeyRowDecision {
+                    form: d.version,
+                    question: d.question as usize - 1,
+                    answer: d.answer.clone(),
+                })
+                .collect();
+            let Some(pv) = o.preview.as_mut() else {
+                // the exam's own key sheets: the core records the confirmation and, with the
+                // last version, publishes the key and scores the exam
+                let r =
+                    o.p.confirm_key_sheets(version, decs, None)
+                        .map_err(app_err)?;
+                return Ok(confirmed_message(&r));
+            };
+            let r =
+                pv.p.confirm_key_sheets(version, decs, None)
+                    .map_err(app_err)?;
+            if r.held {
+                return Ok(format!(
+                    "Version {} checked; {} still {} for your confirmation. The exam's key \
+                     changes when every version read is confirmed",
+                    r.confirmed.join(" and "),
+                    r.waiting.join(" and "),
+                    if r.waiting.len() == 1 {
+                        "waits"
+                    } else {
+                        "wait"
+                    }
+                ));
+            }
+            // every version read is confirmed in the preview: the key sheets join the exam as
+            // named key sheets (their originals stored with the scans, the exam graded again
+            // with them) and the exam's own confirmation publishes the key version that names
+            // them and the instructor (§10.1, C7), with the decisions taken in the preview
+            let def = o.p.session.definition.clone();
+            let covered: Vec<usize> = pv.p.session.key_sheets.forms();
+            for (fi, f) in def.forms.iter().enumerate() {
+                if covered.contains(&fi) {
+                    continue;
+                }
+                if !o.p.session.key.as_ref().is_some_and(|k| !k.inferred) {
+                    return Err(BackendError::Invalid(format!(
+                        "Version {f} has no key sheet among these files and the exam has no \
+                         confirmed key for it (its key is {}): read version {f}'s key sheet \
+                         too, or replace the whole key from a key file",
+                        if o.p.session.key.is_some() {
+                            "INFERRED"
+                        } else {
+                            "missing"
+                        }
+                    )));
+                }
+            }
+            let decided: Vec<omr_app::model::KeyRowDecision> =
+                pv.p.session.key_sheets.decisions.clone();
+            let paths = pv.paths.clone();
+            let files = pv.files.join(", ");
+            let opts = GradeOptions {
+                threads: 0,
+                project_dir: None,
+                snapshot_utc: None,
+                operator: operator.clone(),
+                max_pages: None,
+            };
+            o.p.add_key_sheets(&paths, &opts, &|_| {})
+                .map_err(app_err)?;
+            o.preview = None;
+            // read again with the exam's own baselines: a row that now needs a decision is
+            // decided in Setup's Key from answer sheets (the exam stays held until then)
+            let r = match o.p.confirm_key_sheets(None, decided, None) {
+                Ok(r) => r,
+                Err(e) => {
+                    return Ok(format!(
+                        "The key sheets from {files} were added to the exam and wait for your \
+                         confirmation in Key from answer sheets: {e}"
+                    ));
+                }
+            };
+            if r.held {
+                return Ok(format!(
+                    "The key sheets from {files} were added to the exam; {} still {} for your \
+                     confirmation in Key from answer sheets",
+                    r.waiting.join(" and "),
+                    if r.waiting.len() == 1 {
+                        "waits"
+                    } else {
+                        "wait"
+                    }
+                ));
+            }
+            let v = o.p.session.key.as_ref().map_or(0, |k| k.version);
+            let mut m = format!(
+                "Key version {v} in force: read from {files} (stored with the exam's scans), \
+                 confirmed by you; the exam was graded again with them"
+            );
+            if !r.warnings.is_empty() {
+                m.push_str(&format!(". Check: {}", r.warnings.join("; ")));
+            }
+            if let Some(why) = o.p.session.release_blocked() {
+                m.push_str(&format!(". Release is still blocked: {why}"));
+            }
+            Ok(m)
+        })
+    }
+
+    fn discard_key_sheets(&mut self, exam: &ExamId) -> Result<String, BackendError> {
+        self.with_mut(exam, |o| match o.preview.take() {
+            Some(pv) => Ok(format!(
+                "Put aside the key read from {}: the exam's key is unchanged",
+                pv.files.join(", ")
+            )),
+            None => Err(BackendError::Invalid(
+                "No key-sheet files were read for this exam".into(),
+            )),
+        })
+    }
+
     fn release(&mut self, exam: &ExamId) -> Result<String, BackendError> {
         self.with_mut(exam, |o| {
             let out = o.dir.parent().map(Path::to_path_buf).ok_or_else(|| {
@@ -2993,7 +3863,12 @@ impl Backend for AppBackend {
     }
 
     fn pump(&mut self) -> bool {
-        self.drain_job()
+        let analysed = self.drain_stability(false);
+        self.drain_job() || analysed
+    }
+
+    fn settle(&mut self) -> bool {
+        self.drain_stability(true)
     }
 
     fn take_reloaded(&mut self) -> Vec<ExamId> {
@@ -3073,6 +3948,90 @@ mod tests {
             of_app(&AppDecision::Form(0), ItemKind::Form, &c, &f),
             b::Decision::Option(1)
         );
+    }
+
+    #[test]
+    fn an_unverified_alignment_is_named_with_its_remedy() {
+        use omr_model::{Exception, Scope, Severity};
+        let refused = Exception::must("REG-003", Severity::Error, Scope::Page).with_detail(
+            "alignment with the blank form not verified (a bubble lattice can match one row or \
+             column away); nothing on this page is read",
+        );
+        let corrected = Exception::must("REG-003", Severity::Warn, Scope::Page)
+            .with_detail("corrected and verified against the blank form");
+        let region = Exception::must("REG-003", Severity::Error, Scope::Region);
+        assert!(refusal_in(std::slice::from_ref(&refused)).is_some());
+        // a verified correction (WARN) and an unreadable region are not page refusals
+        assert!(refusal_in(&[corrected, region]).is_none());
+        let line = alignment_notice("3fa2·1");
+        assert!(line.starts_with("REG-003 3fa2·1 · not read"), "{line}");
+        // R10: what to do, never a guess from this page
+        assert!(
+            line.contains("rescan the sheet flat") && line.contains("never key"),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn flag_stability_is_read_from_the_job_report() {
+        use omr_analytics::{FlagStability, ItemFlag, Rule, StabilityMethod, StabilityReport};
+        let flag = |rule: Rule| ItemFlag {
+            item: 3,
+            master: 3,
+            label: "A-Q04".into(),
+            rule,
+            option: Some(1),
+            message: "Probable mis-key: B".into(),
+            confidence: omr_analytics::Confidence::Normal,
+            stability: None,
+        };
+        let miskey = flag(Rule::ProbableMiskey);
+        assert_eq!(flag_stability(&miskey, None), b::FlagStability::Computing);
+        let report = |low: bool, share: f64| StabilityReport {
+            method: StabilityMethod::Bootstrap,
+            n: 92,
+            resamples: 1000,
+            run_id: "run".into(),
+            seed: String::new(),
+            flags: vec![FlagStability {
+                item: 3,
+                master: 3,
+                label: "A-Q04".into(),
+                rule: Rule::ProbableMiskey,
+                option: Some(1),
+                share: Some(share),
+                share_mc: None,
+                ci_ends: Some((true, !low)),
+                low_confidence: low,
+            }],
+            item_ci: Vec::new(),
+        };
+        assert!(matches!(
+            flag_stability(&miskey, Some(&report(false, 0.97))),
+            b::FlagStability::High { share: Some(s), .. } if (s - 0.97).abs() < 1e-12
+        ));
+        match flag_stability(&miskey, Some(&report(true, 0.31))) {
+            b::FlagStability::Low { share, note } => {
+                assert_eq!(share, Some(0.31));
+                assert!(
+                    note.contains("31 %") && note.contains("upper end"),
+                    "{note}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        // a flag the job does not assess (rank > 4) is never "computing"
+        let easy = flag(Rule::LittleInformation);
+        assert!(easy.rank() > 4);
+        assert_eq!(flag_stability(&easy, None), b::FlagStability::NotAssessed);
+    }
+
+    #[test]
+    fn key_entries_compare_by_their_letters() {
+        assert!(same_entry("A|C", "C,A"));
+        assert!(same_entry("B (inferred)", "B"));
+        assert!(!same_entry("B", "D"));
+        assert!(same_entry("*", "*"));
     }
 
     #[test]

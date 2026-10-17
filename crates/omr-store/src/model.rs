@@ -22,7 +22,7 @@ use omr_outcomes::MappingSet;
 use omr_scoring::{Form, FormMap, KeyVersion, MasterItem, PolicyVersion, ScoreRun};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
 macro_rules! str_enum {
@@ -714,6 +714,22 @@ impl Tx<'_> {
         actor: &Actor,
         reason: Option<Reason>,
     ) -> Result<String> {
+        self.put_key_version_from(exam, key, actor, reason, None)
+    }
+
+    /// [`Self::put_key_version`] with the key's provenance in the event payload, e.g. a key read
+    /// from key sheets: `{"source": "key_sheet", "scans": [{"sha384": …, "page": 1, "form":
+    /// "A"}]}` (§10.1: the instructor confirmed it; the acting principal is the event's actor).
+    /// Members `n`, `parent` and `payload_sha384` stay the engine's; provenance carries no key
+    /// content and no PII (the payload guards apply).
+    pub fn put_key_version_from(
+        &mut self,
+        exam: &ExamId,
+        key: &KeyVersion,
+        actor: &Actor,
+        reason: Option<Reason>,
+        provenance: Option<&Map<String, Value>>,
+    ) -> Result<String> {
         require_human(actor, "a key version")?;
         let id = exam.to_string();
         let payload = serde_json::to_vec(key)?;
@@ -740,12 +756,19 @@ impl Tx<'_> {
                 key.version
             )));
         }
+        let mut body = Map::new();
+        for (k, v) in provenance.into_iter().flatten() {
+            body.insert(k.clone(), v.clone());
+        }
+        body.insert("n".into(), json!(key.version));
+        body.insert("parent".into(), json!(parent));
+        body.insert("payload_sha384".into(), json!(sha));
         let mut ev = NewEvent::new(
             "KeyVersionPublished",
             "exam",
             &id,
             actor.clone(),
-            json!({"n": key.version, "parent": parent, "payload_sha384": sha}),
+            Value::Object(body),
         );
         ev.reason = reason;
         let rec = self.append_event(&ev)?;

@@ -5,7 +5,6 @@ use crate::ctt::{ItemStats, OptionStats, SmallN};
 use crate::data::AnalysisData;
 use omr_model::{Exception, Scope, Severity};
 use omr_scoring::key::letter;
-use omr_scoring::stats::SplitMix64;
 use serde::{Deserialize, Serialize};
 
 /// Thresholds of the §12.1–§12.2 rules (all configurable).
@@ -95,7 +94,28 @@ impl Rule {
             _ => None,
         }
     }
+
+    /// The spec's message for the rule (§12.2 table), naming the option concerned, e.g.
+    /// "Probable mis-key: D", "Top group prefers C", "Possibly two correct answers (D)".
+    pub fn message(self, option: Option<u8>) -> String {
+        let o = opt(option);
+        match self {
+            Rule::ProbableMiskey => format!("Probable mis-key: {o}"),
+            Rule::MiskeyedOption => format!("Probable mis-keyed option: {o}"),
+            Rule::TopGroupPrefers => format!("Top group prefers {o}"),
+            Rule::DistractorOutperformsKey => format!("Distractor outperforms key: {o}"),
+            Rule::TwoCorrect => format!("Possibly two correct answers ({o})"),
+            Rule::TooHardOrGuessed => "Too hard or guessed".into(),
+            Rule::LowDiscrimination => "Low discrimination".into(),
+            Rule::NonFunctioningDistractor => format!("Non-functioning distractor {o}"),
+            Rule::LittleInformation => "Little information".into(),
+        }
+    }
 }
+
+/// Sub-reason of the SCO-002 WARN that a rank-1 flag becomes while it is low confidence
+/// *(proposed)* or "possible — insufficient data" (§12.2, §12.3): shown, never blocking.
+pub const PROPOSED_MISKEY: &str = "proposed_miskey";
 
 /// How much a flag can be trusted at this N (§12.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -134,6 +154,23 @@ impl ItemFlag {
     pub fn rank(&self) -> u8 {
         self.rule.rank()
     }
+
+    /// The Appendix A code the flag raises: SCO-001 (ERROR, acknowledge) for a rank-1 flag at
+    /// normal confidence; a rank-1 flag that is low confidence *(proposed)* or "possible —
+    /// insufficient data" is a non-blocking SCO-002 WARN ([`PROPOSED_MISKEY`]: Appendix A
+    /// gives SCO-001 no WARN); ranks 2–4 SCO-002; ranks 5–6 none.
+    pub fn code(&self) -> Option<&'static str> {
+        match (self.rule.code(), self.confidence) {
+            (Some("SCO-001"), Confidence::Low | Confidence::InsufficientData) => Some("SCO-002"),
+            (c, _) => c,
+        }
+    }
+
+    /// True for a rank-1 flag at normal confidence: a probable mis-key the instructor must
+    /// acknowledge before release (§12.2: SCO-001 ERROR).
+    pub fn is_confident_miskey(&self) -> bool {
+        self.code() == Some("SCO-001")
+    }
 }
 
 fn opt(o: Option<u8>) -> String {
@@ -145,9 +182,28 @@ fn opt(o: Option<u8>) -> String {
 pub fn detect(data: &AnalysisData, stats: &[ItemStats], cfg: &AnalyticsConfig) -> Vec<ItemFlag> {
     let mut flags = Vec::new();
     for st in stats {
+        detect_item(data, st, cfg, &mut flags);
+    }
+    flags.sort_by(|a, b| {
+        a.rank()
+            .cmp(&b.rank())
+            .then(a.item.cmp(&b.item))
+            .then(a.rule.cmp(&b.rule))
+    });
+    flags
+}
+
+/// The §12.2 rules for one item's statistics, appended to `flags` (unsorted).
+pub(crate) fn detect_item(
+    data: &AnalysisData,
+    st: &ItemStats,
+    cfg: &AnalyticsConfig,
+    flags: &mut Vec<ItemFlag>,
+) {
+    {
         let it = &data.items[st.item];
         if st.tier == SmallN::Minimal || it.options == 0 {
-            continue; // counts, p and option distribution only
+            return; // counts, p and option distribution only
         }
         let mut push = |rule: Rule, option: Option<u8>, message: String| {
             let rank = rule.rank();
@@ -326,19 +382,13 @@ pub fn detect(data: &AnalysisData, stats: &[ItemStats], cfg: &AnalyticsConfig) -
             );
         }
     }
-    flags.sort_by(|a, b| {
-        a.rank()
-            .cmp(&b.rank())
-            .then(a.item.cmp(&b.item))
-            .then(a.rule.cmp(&b.rule))
-    });
-    flags
 }
 
-/// Bootstrap flag stability (§12.2, §12.3): the share of `b` resamples of examinees in which
-/// each flag's rule fires again for the same item and option; seeded from the run ID.
-/// Flags below 50 % become low-confidence. Re-sorts by rank, then stability (descending).
-/// Cost ≈ b × N × Σm cell operations: the app runs it as a background job for N < 1,000.
+/// Bootstrap flag stability (§12.2, §12.3) with `b` resamples whatever N (tests and
+/// diagnostics; the app runs [`crate::stability::stability_job`], which picks the bootstrap or
+/// the Fisher-z rule by N): fills each rank 1–4 flag's share, marks a flag low-confidence
+/// *(proposed)* when the share is below 50 % or the rule fails at one end of its 95 % CI, and
+/// re-sorts by rank, then stability (descending). Seeded from the run ID.
 pub fn flag_stability(
     data: &AnalysisData,
     flags: &mut [ItemFlag],
@@ -348,89 +398,34 @@ pub fn flag_stability(
     if flags.is_empty() || data.n == 0 || b == 0 {
         return;
     }
-    let mut rng = SplitMix64::from_run(&data.run_id, "flag_stability");
-    let mut hits = vec![0usize; flags.len()];
-    for _ in 0..b {
-        let rows: Vec<usize> = (0..data.n)
-            .map(|_| rng.below(data.n as u64) as usize)
-            .collect();
-        let sample = resample(data, &rows);
-        let st = crate::ctt::item_stats(&sample, cfg.upper_fraction);
-        let again = detect(&sample, &st, cfg);
-        for (k, f) in flags.iter().enumerate() {
-            if again
-                .iter()
-                .any(|g| g.item == f.item && g.rule == f.rule && g.option == f.option)
-            {
-                hits[k] += 1;
-            }
-        }
-    }
-    for (f, h) in flags.iter_mut().zip(hits) {
-        let s = h as f64 / b as f64;
-        f.stability = Some(s);
-        if s < 0.5 && f.confidence == Confidence::Normal {
-            f.confidence = Confidence::Low;
-        }
-    }
-    flags.sort_by(|a, b| {
-        a.rank()
-            .cmp(&b.rank())
-            .then(
-                b.stability
-                    .unwrap_or(0.0)
-                    .total_cmp(&a.stability.unwrap_or(0.0)),
-            )
-            .then(a.item.cmp(&b.item))
-    });
-}
-
-fn resample(data: &AnalysisData, rows: &[usize]) -> AnalysisData {
-    let n = rows.len();
-    let k = data.items.len();
-    let pick = |v: &Vec<f64>| -> Vec<f64> {
-        (0..k)
-            .flat_map(|i| rows.iter().map(move |&e| (i, e)))
-            .map(|(i, e)| v[i * data.n + e])
-            .collect()
-    };
-    AnalysisData {
-        items: data.items.clone(),
-        n,
-        u: pick(&data.u),
-        x: pick(&data.x),
-        choice: (0..k)
-            .flat_map(|i| rows.iter().map(move |&e| data.choice[i * data.n + e]))
-            .collect(),
-        status: (0..k)
-            .flat_map(|i| rows.iter().map(move |&e| data.status[i * data.n + e]))
-            .collect(),
-        penalties: data.penalties,
-        run_id: data.run_id.clone(),
-    }
+    let report = crate::stability::stability_with(data, flags, cfg, Some(b));
+    crate::stability::apply_to_flags(flags, &report);
 }
 
 /// Exceptions for the flags (SCO-001 ERROR, SCO-002 WARN; Exam scope), one per flag that
-/// carries a code, targeted at the master item and master option.
+/// carries a code ([`ItemFlag::code`]: a rank-1 flag that is low confidence is SCO-002
+/// `proposed_miskey`), targeted at the master item and master option.
 pub fn flag_exceptions(flags: &[ItemFlag]) -> Vec<Exception> {
     flags
         .iter()
         .filter_map(|f| {
-            let code = f.rule.code()?;
+            let code = f.code()?;
             let sev = if code == "SCO-001" {
                 Severity::Error
             } else {
                 Severity::Warn
             };
-            Some(
-                Exception::must(code, sev, Scope::Exam)
-                    .with_target(omr_model::exceptions::Target {
-                        question: u16::try_from(f.master).ok(),
-                        bubble: f.option,
-                        ..Default::default()
-                    })
-                    .with_detail(format!("{}: {}", f.label, f.message)),
-            )
+            let mut e = Exception::must(code, sev, Scope::Exam)
+                .with_target(omr_model::exceptions::Target {
+                    question: u16::try_from(f.master).ok(),
+                    bubble: f.option,
+                    ..Default::default()
+                })
+                .with_detail(format!("{}: {}", f.label, f.message));
+            if f.rank() == 1 && code == "SCO-002" {
+                e = e.with_sub_reason(PROPOSED_MISKEY);
+            }
+            Some(e)
         })
         .collect()
 }
@@ -448,5 +443,35 @@ mod tests {
         assert_eq!(Rule::NonFunctioningDistractor.rank(), 6);
         assert_eq!(opt(None), "omit");
         assert_eq!(opt(Some(2)), "C");
+        assert_eq!(Rule::ProbableMiskey.message(Some(3)), "Probable mis-key: D");
+        assert_eq!(
+            Rule::TopGroupPrefers.message(Some(2)),
+            "Top group prefers C"
+        );
+        assert_eq!(
+            Rule::TwoCorrect.message(Some(1)),
+            "Possibly two correct answers (B)"
+        );
+        let mut f = ItemFlag {
+            item: 0,
+            master: 0,
+            label: "Q1".into(),
+            rule: Rule::ProbableMiskey,
+            option: Some(1),
+            message: String::new(),
+            confidence: Confidence::Normal,
+            stability: None,
+        };
+        assert_eq!(f.code(), Some("SCO-001"));
+        assert!(f.is_confident_miskey());
+        f.confidence = Confidence::Low;
+        assert_eq!(f.code(), Some("SCO-002"), "a proposed mis-key never blocks");
+        let e = &flag_exceptions(&[f.clone()])[0];
+        assert_eq!(
+            (e.code.as_str(), e.severity, e.sub_reason.as_deref()),
+            ("SCO-002", Severity::Warn, Some(PROPOSED_MISKEY))
+        );
+        f.confidence = Confidence::InsufficientData;
+        assert!(!f.is_confident_miskey());
     }
 }

@@ -323,12 +323,26 @@ pub enum CaptureKind {
         /// The box factor that produced it (2, 3 or 4).
         factor: u8,
     },
+    /// A camera (phone) photo of the sheet, gray or colour converted to gray: perspective,
+    /// anisotropic scale and uneven light are expected (§7.6, §8.10). The pixels alone do not
+    /// tell a photo from a gray scan, so [`classify_capture`] never returns it: the caller sets
+    /// it from the source (device profile, EXIF), and recognition also detects camera geometry
+    /// itself.
+    Camera,
 }
 
 impl CaptureKind {
     /// True for bitonal originals, reduced or not (CAP-003 `bitonal`).
     pub fn is_bitonal(self) -> bool {
-        !matches!(self, CaptureKind::Gray)
+        matches!(
+            self,
+            CaptureKind::Bitonal | CaptureKind::ReducedBitonal { .. }
+        )
+    }
+
+    /// True for a camera capture.
+    pub fn is_camera(self) -> bool {
+        matches!(self, CaptureKind::Camera)
     }
 }
 
@@ -390,7 +404,37 @@ pub fn ink_coverage(img: &GrayImage) -> InkCoverage {
 /// Classifies a page by its histogram: two levels → bitonal; only the coverage levels of an
 /// `f × f` box over a bitonal original (≥ 99.9 % of pixels, ≥ 3 levels used) → reduced bitonal.
 pub fn classify_capture(img: &GrayImage) -> CaptureKind {
-    let hist = img.histogram();
+    classify_histogram(&img.histogram())
+}
+
+/// [`classify_capture`] on every `row_step`-th row only (rows 0, `row_step`, …): a cheap test
+/// for the page stage, which must tell a bitonal original (exact `B = 255, K = 0` mode, §8.5)
+/// from a gray capture without a full histogram pass. A step of 0 or 1 is the full histogram.
+pub fn classify_capture_sampled(img: &GrayImage, row_step: usize) -> CaptureKind {
+    // Four interleaved counters: runs of equal pixels (paper) would otherwise serialise every
+    // increment on the same counter.
+    let mut h4 = [[0u64; 256]; 4];
+    for y in (0..img.height()).step_by(row_step.max(1)) {
+        let row = img.row(y);
+        let mut quads = row.chunks_exact(4);
+        for q in &mut quads {
+            h4[0][usize::from(q[0])] += 1;
+            h4[1][usize::from(q[1])] += 1;
+            h4[2][usize::from(q[2])] += 1;
+            h4[3][usize::from(q[3])] += 1;
+        }
+        for &v in quads.remainder() {
+            h4[0][usize::from(v)] += 1;
+        }
+    }
+    let mut hist = [0u64; 256];
+    for (v, a) in hist.iter_mut().enumerate() {
+        *a = h4[0][v] + h4[1][v] + h4[2][v] + h4[3][v];
+    }
+    classify_histogram(&hist)
+}
+
+fn classify_histogram(hist: &[u64; 256]) -> CaptureKind {
     let total: u64 = hist.iter().sum();
     if total == 0 {
         return CaptureKind::Gray;

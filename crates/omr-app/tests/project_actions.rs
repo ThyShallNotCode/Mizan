@@ -201,6 +201,7 @@ fn c5_the_real_key_replaces_an_inferred_key_and_the_blocker_clears() {
             .all(|e| e.code != "SCO-003")
     );
     resolve_all(&mut p);
+    p.judge_flags().unwrap();
     assert_eq!(p.session.release_blocked(), None, "nothing blocks any more");
     for bi in 0..p.session.booklets.len() {
         let k = sheet_no(&p, bi);

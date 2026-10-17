@@ -49,6 +49,9 @@ pub struct Shot {
     /// Open the screen's bar: Add scans on Scan, Exports on Results, the New-exam form on
     /// Exams.
     pub bar: bool,
+    /// Show the first exam whose key comes from key sheets (§10.1): on Setup its key summary,
+    /// on Scan its batch with the key sheets listed as such.
+    pub keysheet: bool,
 }
 
 /// Every screen, plus the identity and blind-verify review frames.
@@ -61,6 +64,7 @@ pub const SHOTS: &[Shot] = &[
         cell: None,
         override_choice: false,
         bar: false,
+        keysheet: false,
     },
     Shot {
         name: "setup",
@@ -71,6 +75,7 @@ pub const SHOTS: &[Shot] = &[
         cell: Some((17, 3)),
         override_choice: false,
         bar: false,
+        keysheet: false,
     },
     Shot {
         name: "scan",
@@ -80,6 +85,7 @@ pub const SHOTS: &[Shot] = &[
         cell: None,
         override_choice: false,
         bar: false,
+        keysheet: false,
     },
     Shot {
         name: "review",
@@ -89,6 +95,7 @@ pub const SHOTS: &[Shot] = &[
         cell: None,
         override_choice: false,
         bar: false,
+        keysheet: false,
     },
     Shot {
         name: "review-identity",
@@ -98,6 +105,7 @@ pub const SHOTS: &[Shot] = &[
         cell: None,
         override_choice: false,
         bar: false,
+        keysheet: false,
     },
     Shot {
         name: "review-blind",
@@ -107,6 +115,7 @@ pub const SHOTS: &[Shot] = &[
         cell: None,
         override_choice: false,
         bar: false,
+        keysheet: false,
     },
     Shot {
         name: "results",
@@ -116,6 +125,7 @@ pub const SHOTS: &[Shot] = &[
         cell: None,
         override_choice: false,
         bar: false,
+        keysheet: false,
     },
     Shot {
         name: "outcomes",
@@ -125,6 +135,7 @@ pub const SHOTS: &[Shot] = &[
         cell: None,
         override_choice: false,
         bar: false,
+        keysheet: false,
     },
     Shot {
         name: "settings",
@@ -134,6 +145,7 @@ pub const SHOTS: &[Shot] = &[
         cell: None,
         override_choice: false,
         bar: false,
+        keysheet: false,
     },
 ];
 
@@ -150,6 +162,7 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
             cell: None,
             override_choice: false,
             bar: false,
+            keysheet: false,
         },
         Shot {
             name: "setup",
@@ -159,6 +172,7 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
             cell: None,
             override_choice: false,
             bar: false,
+            keysheet: false,
         },
         Shot {
             name: "scan",
@@ -168,6 +182,7 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
             cell: None,
             override_choice: false,
             bar: false,
+            keysheet: false,
         },
     ];
     let exam = backend.default_exam();
@@ -195,6 +210,7 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
                 cell: None,
                 override_choice: false,
                 bar: false,
+                keysheet: false,
             });
         }
     }
@@ -207,6 +223,7 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
             cell: None,
             override_choice: true,
             bar: false,
+            keysheet: false,
         });
     }
     for (name, page, bar) in [
@@ -225,9 +242,38 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
             cell: None,
             override_choice: false,
             bar,
+            keysheet: false,
         });
     }
+    // an exam graded with its key sheets: the key summary to confirm, and its batch
+    if key_sheet_exam(backend).is_some() {
+        for (name, page) in [
+            ("setup-keysheet", s::Page::Setup),
+            ("scan-keysheet", s::Page::Scan),
+        ] {
+            shots.push(Shot {
+                name,
+                page,
+                exam: None,
+                review: None,
+                cell: None,
+                override_choice: false,
+                bar: false,
+                keysheet: true,
+            });
+        }
+    }
     shots
+}
+
+/// The first exam of the dashboard whose key comes from key sheets.
+pub fn key_sheet_exam(backend: &dyn Backend) -> Option<ExamId> {
+    backend
+        .dashboard()
+        .exams
+        .into_iter()
+        .map(|e| e.id)
+        .find(|id| backend.key_sheets(id).is_some())
 }
 
 /// The smallest window every screen must still fit (DESIGN §9: "works down to 1280×800").
@@ -276,9 +322,18 @@ pub fn write_png(path: &Path, pixels: &[Rgb8Pixel], width: u32, height: u32) -> 
 
 /// Puts the shell into the state of `shot`.
 pub fn stage<B: Backend + ?Sized>(shell: &Shell, backend: &RefCell<B>, shot: &Shot) {
-    let Some(exam) = shot
-        .exam
-        .map(|e| ExamId(e.into()))
+    let wanted = if shot.keysheet {
+        let b = backend.borrow();
+        b.dashboard()
+            .exams
+            .into_iter()
+            .map(|e| e.id)
+            .find(|id| b.key_sheets(id).is_some())
+    } else {
+        None
+    };
+    let Some(exam) = wanted
+        .or_else(|| shot.exam.map(|e| ExamId(e.into())))
         .or_else(|| backend.borrow().default_exam())
     else {
         shell.navigate(shot.page);
@@ -312,6 +367,7 @@ pub fn stage<B: Backend + ?Sized>(shell: &Shell, backend: &RefCell<B>, shot: &Sh
             }
         }
     }
+    shell.show_key_sheets(shot.keysheet);
     if shot.page == s::Page::Setup {
         let cell = shot.cell.or_else(|| {
             let setup = backend.borrow().exam_setup(&exam)?;
@@ -373,6 +429,11 @@ pub fn render_shots(
         ui.global::<s::Theme>().set_dark(dark);
         for shot in shots.iter().filter(|s| wanted(s.name)) {
             stage(&shell, &*backend, shot);
+            // background analyses (flag stability) report before the capture: a screenshot
+            // never catches "computing…"
+            if backend.borrow_mut().settle() {
+                shell.refresh_all();
+            }
             let pixels = capture(&window);
             let path = dir.join(format!(
                 "{}-{}{suffix}.png",

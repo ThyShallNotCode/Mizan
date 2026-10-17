@@ -667,6 +667,10 @@ fn counts(p: &ExamProject) -> SeverityCounts {
             Severity::Blocker => c.blocker += 1,
         }
     }
+    // the key-sheet hold is lifted by confirming the key, not in the queue: one BLOCKER
+    if p.session.key_unconfirmed() {
+        c.blocker += 1;
+    }
     // batch-scope findings are not queued; each counts at its own severity (an INFO note such
     // as MRK-016 `prior_model` is no warning, CR-18)
     for e in &p.session.batch_exceptions {
@@ -683,6 +687,9 @@ fn counts(p: &ExamProject) -> SeverityCounts {
 fn key_label(p: &ExamProject) -> String {
     match &p.session.key {
         None => "No key".into(),
+        Some(k) if p.session.key_unconfirmed() => {
+            format!("Key v{} · from key sheets · NOT CONFIRMED", k.version)
+        }
         Some(k) if k.inferred => format!("Key v{} · INFERRED", k.version),
         Some(k) if p.session.released() => format!("Key v{} · released", k.version),
         Some(k) => format!("Key v{} · in force", k.version),
@@ -863,7 +870,7 @@ impl ExamProject {
             template,
             keys,
             key_status: key_label(self),
-            key_published: s.key.as_ref().is_some_and(|k| !k.inferred),
+            key_published: s.key.as_ref().is_some_and(|k| !k.inferred) && !s.key_unconfirmed(),
             clos,
             mapping_split: split,
             mapping,
@@ -1274,6 +1281,21 @@ impl ExamProject {
         readiness.push((
             provisional == 0,
             format!("{provisional} provisional totals"),
+        ));
+        // §12.2: the probable mis-keys of the current results are judged and queued.
+        let miskeys = s
+            .review
+            .items
+            .iter()
+            .filter(|i| i.is_open() && i.code == "SCO-001")
+            .count();
+        readiness.push((
+            !s.flags.computing() && miskeys == 0,
+            if s.flags.computing() {
+                "Mis-key check (§12.2 flag stability): computing…".into()
+            } else {
+                format!("{miskeys} probable mis-keys (SCO-001) to decide")
+            },
         ));
         let unattributed = s
             .pages

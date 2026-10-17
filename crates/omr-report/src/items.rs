@@ -55,19 +55,33 @@ pub fn alpha_band_name(b: AlphaBand) -> &'static str {
     }
 }
 
-/// A flag as a short label, e.g. `SCO-001 ProbableMiskey (D)`.
+/// A flag as a short label with the spec's message (§12.2), e.g. `SCO-001 Probable mis-key:
+/// D`; with its flag stability once the job has run: `SCO-002 Probable mis-key: D (proposed)
+/// [fires in 31 % of bootstrap resamples]` (a low-confidence rank-1 flag is the non-blocking
+/// SCO-002 `proposed_miskey`, [`ItemFlag::code`]).
 pub fn flag_label(f: &ItemFlag) -> String {
-    let code = f.rule.code().map(|c| format!("{c} ")).unwrap_or_default();
-    let opt = f
-        .option
-        .map(|o| format!(" ({})", option_code(u32::from(o))))
-        .unwrap_or_default();
+    let code = f.code().map(|c| format!("{c} ")).unwrap_or_default();
     let conf = match f.confidence {
         Confidence::Normal => "",
-        Confidence::Low => " [low confidence]",
-        Confidence::InsufficientData => " [possible, insufficient data]",
+        Confidence::Low => " (proposed)",
+        Confidence::InsufficientData => " (possible, insufficient data)",
     };
-    format!("{code}{:?}{opt}{conf}", f.rule)
+    let stability = f
+        .stability
+        .map(|s| format!(" [fires in {:.0} % of bootstrap resamples]", s * 100.0))
+        .unwrap_or_default();
+    format!("{code}{}{conf}{stability}", f.rule.message(f.option))
+}
+
+/// The 1-based place of each item's highest flag of ranks 1–4 in the ranked list (§12.2: by
+/// rank, then stability, then item), by data item; items without such a flag are absent.
+pub fn flag_order(report: &AnalyticsReport) -> std::collections::BTreeMap<usize, usize> {
+    let mut out = std::collections::BTreeMap::new();
+    for f in report.flags.iter().filter(|f| f.rank() <= 4) {
+        let next = out.len() + 1;
+        out.entry(f.item).or_insert(next);
+    }
+    out
 }
 
 fn f3(x: Option<f64>) -> Cell {
@@ -99,6 +113,8 @@ impl ItemAnalysis<'_> {
             "r_ir",
             "r_ir CI low",
             "r_ir CI high",
+            "r_ir bootstrap CI low",
+            "r_ir bootstrap CI high",
             "Discrimination",
         ]
         .iter()
@@ -109,7 +125,10 @@ impl ItemAnalysis<'_> {
         if self.show_key {
             header.push("Key".into());
         }
+        header.push("Flag order".into());
         header.push("Flags".into());
+        let order = flag_order(self.report);
+        let boot = self.report.stability.as_ref();
         let rows = self
             .report
             .items
@@ -125,6 +144,8 @@ impl ItemAnalysis<'_> {
                     f3(s.r_ir),
                     f3(s.r_ir_ci.map(|x| x.0)),
                     f3(s.r_ir_ci.map(|x| x.1)),
+                    f3(boot.and_then(|b| b.r_ir_ci(s.item)).map(|x| x.0)),
+                    f3(boot.and_then(|b| b.r_ir_ci(s.item)).map(|x| x.1)),
                     Cell::opt_text(s.discrimination.map(band_name)),
                 ];
                 for o in 0..k {
@@ -157,15 +178,22 @@ impl ItemAnalysis<'_> {
                     .filter(|f| f.item == s.item)
                     .map(flag_label)
                     .collect();
+                c.push(match order.get(&s.item) {
+                    Some(&k) => Cell::Int(k as i64),
+                    None => Cell::text(""),
+                });
                 c.push(Cell::text(flags.join("; ")));
                 Row::new(c)
             })
             .collect();
-        let mut widths = vec![8.0, 6.0, 16.0, 7.0, 7.0, 7.0, 7.0, 9.0, 9.0, 14.0];
+        let mut widths = vec![
+            8.0, 6.0, 16.0, 7.0, 7.0, 7.0, 7.0, 9.0, 9.0, 11.0, 11.0, 14.0,
+        ];
         widths.extend(std::iter::repeat_n(7.0, k + 1));
         if self.show_key {
             widths.push(5.0);
         }
+        widths.push(7.0);
         widths.push(50.0);
         Sheet {
             name: "Items".into(),
@@ -174,7 +202,13 @@ impl ItemAnalysis<'_> {
             rows,
             notes: vec![
                 "p = difficulty; D = upper-lower 27% (hidden below N = 50); r_pb uncorrected \
-                 point-biserial; r_ir corrected item-rest r with Fisher-z 95% CI (§12.1)."
+                 point-biserial; r_ir corrected item-rest r with Fisher-z 95% CI (§12.1) and, \
+                 below N = 1,000, the percentile 95% CI over 1,000 bootstrap resamples (§12.3; \
+                 blank when r_ir is undefined in more than 10% of them)."
+                    .into(),
+                "Flags: §12.2 messages; flag order = rank, then stability. A probable mis-key \
+                 (SCO-001) must be acknowledged before release; one marked (proposed) is low \
+                 confidence (SCO-002, not blocking)."
                     .into(),
                 "Advisory statistics: nothing here changes a score (§12).".into(),
             ],
@@ -272,10 +306,14 @@ impl ItemAnalysis<'_> {
                 Row::new(vec![
                     Cell::text(f.label.clone()),
                     Cell::Int(i64::from(f.rank())),
-                    Cell::opt_text(f.rule.code()),
-                    Cell::text(format!("{:?}", f.rule)),
+                    Cell::opt_text(f.code()),
+                    Cell::text(f.rule.message(f.option)),
                     Cell::opt_text(f.option.map(|o| option_code(u32::from(o)).to_string())),
-                    Cell::text(format!("{:?}", f.confidence)),
+                    Cell::text(match f.confidence {
+                        Confidence::Normal => "normal",
+                        Confidence::Low => "low (proposed)",
+                        Confidence::InsufficientData => "possible, insufficient data",
+                    }),
                     f3(f.stability),
                     // These messages name the keyed option ("… B keyed, D not"; "two correct
                     // answers: B and D"): hidden with the key (§19.3).
@@ -315,5 +353,76 @@ impl ItemAnalysis<'_> {
             self.meta,
             &[self.items_sheet(), self.tests_sheet(), self.flags_sheet()],
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn flag(item: usize, rule: Rule, confidence: Confidence, stability: Option<f64>) -> ItemFlag {
+        ItemFlag {
+            item,
+            master: item,
+            label: format!("Q{}", item + 1),
+            rule,
+            option: Some(3),
+            message: String::new(),
+            confidence,
+            stability,
+        }
+    }
+
+    #[test]
+    fn flag_labels_carry_the_spec_messages_and_the_proposed_label() {
+        // C12: the spec's messages (§12.2), never Rust enum names; a low-confidence rank-1
+        // flag is the non-blocking SCO-002 and reads "(proposed)".
+        let f = flag(0, Rule::ProbableMiskey, Confidence::Normal, Some(1.0));
+        assert_eq!(
+            flag_label(&f),
+            "SCO-001 Probable mis-key: D [fires in 100 % of bootstrap resamples]"
+        );
+        let f = flag(0, Rule::ProbableMiskey, Confidence::Low, Some(0.31));
+        assert_eq!(
+            flag_label(&f),
+            "SCO-002 Probable mis-key: D (proposed) [fires in 31 % of bootstrap resamples]"
+        );
+        let f = flag(2, Rule::TopGroupPrefers, Confidence::Normal, None);
+        assert_eq!(flag_label(&f), "SCO-002 Top group prefers D");
+        let f = flag(2, Rule::TwoCorrect, Confidence::Normal, None);
+        assert_eq!(flag_label(&f), "SCO-002 Possibly two correct answers (D)");
+        let f = flag(2, Rule::LowDiscrimination, Confidence::Normal, None);
+        assert_eq!(flag_label(&f), "Low discrimination");
+        for r in [
+            Rule::ProbableMiskey,
+            Rule::TopGroupPrefers,
+            Rule::TwoCorrect,
+            Rule::NonFunctioningDistractor,
+        ] {
+            assert!(!flag_label(&flag(0, r, Confidence::Normal, None)).contains(&format!("{r:?}")));
+        }
+    }
+
+    #[test]
+    fn flag_order_follows_rank_then_the_flags_order() {
+        let report = AnalyticsReport {
+            items: vec![],
+            tests: vec![],
+            // Already ranked by the analysis: rank, then stability, then item.
+            flags: vec![
+                flag(4, Rule::ProbableMiskey, Confidence::Normal, Some(0.99)),
+                flag(1, Rule::ProbableMiskey, Confidence::Low, Some(0.40)),
+                flag(4, Rule::TopGroupPrefers, Confidence::Normal, Some(0.9)),
+                flag(7, Rule::TwoCorrect, Confidence::Normal, Some(0.7)),
+                flag(9, Rule::LowDiscrimination, Confidence::Normal, None),
+            ],
+            exceptions: vec![],
+            stability: None,
+        };
+        let o = flag_order(&report);
+        assert_eq!(o.get(&4), Some(&1));
+        assert_eq!(o.get(&1), Some(&2));
+        assert_eq!(o.get(&7), Some(&3));
+        assert_eq!(o.get(&9), None, "rank 5–6 notes are not ordered");
     }
 }

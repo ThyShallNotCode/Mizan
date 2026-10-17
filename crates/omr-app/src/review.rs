@@ -102,8 +102,12 @@ pub enum Decision {
     NotOnRoster,
     /// The booklet's form (index into the definition's forms).
     Form(u8),
-    /// Seen; accept the core's handling.
+    /// Seen; accept the core's handling. On a probable mis-key (SCO-001): keep the key, with a
+    /// reason and a note.
     Acknowledge,
+    /// Void the item (a probable mis-key, SCO-001; §10.5 drop by default): its key entry
+    /// becomes `*` in a new key version.
+    Void,
 }
 
 impl Decision {
@@ -130,11 +134,12 @@ impl Decision {
                 forms.get(usize::from(*f)).cloned().unwrap_or_default()
             ),
             Decision::Acknowledge => "acknowledged".into(),
+            Decision::Void => "void the item".into(),
         }
     }
 
     /// Parses CLI text: `A`…, `1`…, `blank`, `multi:A+C`, `unreadable`, `student:ID`,
-    /// `not-on-roster`, `form:B`, `ack`.
+    /// `not-on-roster`, `form:B`, `ack`, `void`.
     pub fn parse(s: &str, options: u8, forms: &[String]) -> Option<Decision> {
         let t = s.trim();
         let lower = t.to_ascii_lowercase();
@@ -142,7 +147,9 @@ impl Decision {
             "blank" | "empty" | "none" => return Some(Decision::Blank),
             "unreadable" | "rescan" => return Some(Decision::Unreadable),
             "not-on-roster" | "notonroster" | "n" => return Some(Decision::NotOnRoster),
-            "ack" | "acknowledge" => return Some(Decision::Acknowledge),
+            "ack" | "acknowledge" | "keep" => return Some(Decision::Acknowledge),
+            "void" | "*" => return Some(Decision::Void),
+            "multi" => return Some(Decision::Multi(Vec::new())),
             _ => {}
         }
         if let Some(rest) = lower.strip_prefix("multi:") {
@@ -254,6 +261,22 @@ pub struct ReviewItem {
     pub store_exceptions: Vec<i64>,
     /// Number of times deferred (orders deferred items last).
     pub deferrals: u32,
+    /// The probable mis-key an SCO-001 item is about (§12.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flag: Option<KeyFlagRef>,
+}
+
+/// The subject of a probable mis-key item (SCO-001, §12.2): which key entry and which option.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyFlagRef {
+    /// Master item of the score run.
+    pub master: usize,
+    /// The form whose key entry it is (0-based); `None` when every form shares the item.
+    pub form: Option<usize>,
+    /// Printed question (0-based).
+    pub question: u16,
+    /// The option d the flag names (0-based).
+    pub option: u8,
 }
 
 impl ReviewItem {
@@ -610,6 +633,18 @@ pub fn remedy(code: &str) -> Option<&'static str> {
             "check that the page is this exam's answer sheet; rescan it flat and upright, or \
              acknowledge it as not exam material"
         }
+        // The page's alignment with the blank form was not verified (one lattice pitch
+        // ambiguous, part of the page moved, too few bubbles matched): nothing on it is read.
+        "REG-003" => {
+            "rescan the sheet flat on the scanner glass (a phone photo: the whole sheet in view, \
+             taken from straight above, evenly lit) and add the new scan; never key its answers \
+             from this page"
+        }
+        "REG-004" => {
+            "check that the sheet is this exam's form printed at 100 % (no \"fit to page\", not \
+             a photocopy) and rescan it flat and straight, or grade it with its own template; \
+             never key its answers from this page"
+        }
         "IDN-001" | "IDN-002" => {
             "grade the sheet in the exam it belongs to (or rescan it if the page code is \
              damaged), or acknowledge it as not exam material"
@@ -620,6 +655,21 @@ pub fn remedy(code: &str) -> Option<&'static str> {
         }
         _ => return None,
     })
+}
+
+/// What to do about an item-level (region or row) REG-003: a row whose printed rings are not
+/// where the alignment puts them (covered, cut or folded away) is unreadable (R10).
+pub const REG_ROW_REMEDY: &str = "rescan the sheet flat (unfolded, nothing covering the \
+     bubbles) and add the new scan, or decide the answer from the paper sheet itself; never from \
+     a crop that does not show the row's printed question number";
+
+/// [`remedy`] for an exception at its scope: a region- or item-level REG-003 gets the row
+/// remedy, everything else the page-level one.
+pub fn remedy_of(e: &Exception) -> Option<&'static str> {
+    match (e.code.as_str(), e.scope) {
+        ("REG-003", omr_model::Scope::Region | omr_model::Scope::Item) => Some(REG_ROW_REMEDY),
+        (c, _) => remedy(c),
+    }
 }
 
 fn title(code: &str) -> String {
@@ -659,6 +709,7 @@ pub fn build_queue(
         resolution: None,
         store_exceptions: Vec::new(),
         deferrals: 0,
+        flag: None,
     };
     // Marks: one item per pending question.
     for (bi, b) in session.booklets.iter().enumerate() {
@@ -702,6 +753,11 @@ pub fn build_queue(
                 Lane::of(&e.code)
             };
             let mut it = blank_item(lane, ItemKind::Mark, &e);
+            if e.code.starts_with("REG-")
+                && let Some(r) = remedy_of(&e)
+            {
+                it.detail = format!("{}; {r}", it.detail);
+            }
             it.booklet = Some(bi);
             it.page = Some(qs.page);
             it.question = Some(q as u16);
@@ -823,7 +879,8 @@ pub fn build_queue(
         let mut ex: Vec<&Exception> = Vec::new();
         match p.status {
             PageStatus::Refused => ex.extend(p.refusal.iter()),
-            PageStatus::Duplicate | PageStatus::Blank => {}
+            // Key sheets are confirmed through the key summary, never in the review queue.
+            PageStatus::Duplicate | PageStatus::Blank | PageStatus::KeySheet => {}
             PageStatus::Read | PageStatus::Unattributed => {
                 if let Some(r) = &p.read {
                     ex.extend(r.exceptions.iter().filter(|e| {
@@ -858,7 +915,7 @@ pub fn build_queue(
             let has_fix = ["rescan", "remove", "acknowledge", "again"]
                 .iter()
                 .any(|w| it.detail.contains(w));
-            if let Some(r) = remedy(&e.code)
+            if let Some(r) = remedy_of(e)
                 && !has_fix
             {
                 it.detail = format!("{}; {r}", it.detail);
@@ -871,17 +928,153 @@ pub fn build_queue(
         }
     }
     // Exam scope: the inferred key and other exam-level blockers.
-    for e in session
-        .exam_exceptions
-        .iter()
-        .filter(|e| e.severity >= Severity::Error)
-    {
+    // The key-sheet hold (SCO-003 `key_sheet_unconfirmed`) is lifted only by the instructor's
+    // confirmation of the key summary (`omr key confirm`), never by acknowledging an item.
+    for e in session.exam_exceptions.iter().filter(|e| {
+        e.severity >= Severity::Error && e.sub_reason.as_deref() != Some(crate::keysheet::HOLD)
+    }) {
         let mut it = blank_item(Lane::of(&e.code), ItemKind::Notice, e);
         it.suggestion = Some(Decision::Acknowledge);
         it.group_key = group_key(&e.code, e.sub_reason.as_deref(), "exam", None, 0);
         push(it);
     }
     items
+}
+
+/// The resolutions of a probable mis-key (§12.2 one-click resolutions), for its detail. The
+/// key's own letter is never named (the queue is printed on terminals).
+fn miskey_actions(d: &str) -> String {
+    format!(
+        "decide it: change the key to {d} (decision {d}), accept either the key or {d} \
+         (decision multi), void the item (decision void), or keep the key with a reason code and \
+         a note (decision ack --reason … --note …); flags never re-key on their own, and a key \
+         change is an audited key version"
+    )
+}
+
+/// Keeps the queue's probable mis-key items (SCO-001, §12.2) in step with the item analysis
+/// of the current score run (`report`, with its flag stability merged; `None` when there is
+/// nothing to judge: no key, an inferred or unconfirmed key). Every rank-1 flag at normal
+/// confidence ([`omr_analytics::ItemFlag::is_confident_miskey`]) has a Scoring-lane item
+/// (ERROR, Exam scope, sub-reason `<item>:<option>`): a new one is queued open; one withdrawn
+/// earlier is re-opened; a decided one stays decided. An open item whose flag no longer fires
+/// with confidence (the key or the responses changed) is withdrawn (resolved without a
+/// decision). Low-confidence flags are never queued: they stay the non-blocking SCO-002
+/// `proposed_miskey` of the item analysis. Returns true when the queue changed.
+pub fn sync_flag_items(s: &mut Session, report: Option<&omr_analytics::AnalyticsReport>) -> bool {
+    let n = usize::from(s.definition.questions);
+    let options = s.definition.option_labels();
+    let letter = |o: u8| {
+        options
+            .get(usize::from(o))
+            .cloned()
+            .unwrap_or_else(|| char::from(b'A' + o.min(25)).to_string())
+    };
+    // (sub-reason, subject, detail) of every confident probable mis-key.
+    let mut want: Vec<(String, KeyFlagRef, String)> = Vec::new();
+    if let (Some(rep), Some(key)) = (report, s.key.as_ref()) {
+        for f in rep.flags.iter().filter(|f| f.is_confident_miskey()) {
+            let Some(d) = f.option else {
+                continue;
+            };
+            let (form, q) = if key.shared_items {
+                (None, f.master)
+            } else {
+                (Some(f.master / n.max(1)), f.master % n.max(1))
+            };
+            let stability = rep
+                .stability
+                .as_ref()
+                .and_then(|st| {
+                    st.flags
+                        .iter()
+                        .find(|x| x.item == f.item && x.rule == f.rule && x.option == f.option)
+                        .map(|x| format!(" ({})", x.describe(st.resamples)))
+                })
+                .unwrap_or_default();
+            want.push((
+                format!("{}:{}", f.label, letter(d)),
+                KeyFlagRef {
+                    master: f.master,
+                    form,
+                    question: q as u16,
+                    option: d,
+                },
+                format!(
+                    "{}: {}{stability}; {}",
+                    f.label,
+                    f.rule.message(Some(d)),
+                    miskey_actions(&letter(d))
+                ),
+            ));
+        }
+    }
+    let mut changed = false;
+    for it in s
+        .review
+        .items
+        .iter_mut()
+        .filter(|i| i.code == "SCO-001" && i.flag.is_some())
+    {
+        match want
+            .iter()
+            .position(|w| it.sub_reason.as_deref() == Some(w.0.as_str()))
+        {
+            Some(k) => {
+                let (_, flag, detail) = want.remove(k);
+                let withdrawn = it.state == ItemState::Resolved && it.resolution.is_none();
+                if withdrawn {
+                    it.state = ItemState::Open;
+                    changed = true;
+                }
+                if it.is_open() && (it.detail != detail || it.flag.as_ref() != Some(&flag)) {
+                    it.detail = detail;
+                    it.flag = Some(flag);
+                    changed = true;
+                }
+            }
+            None if it.is_open() => {
+                it.state = ItemState::Resolved;
+                it.resolution = None;
+                it.detail = format!(
+                    "{} (withdrawn: no longer a probable mis-key with confidence in the current \
+                     results)",
+                    it.detail.split(" (withdrawn:").next().unwrap_or_default()
+                );
+                changed = true;
+            }
+            None => {}
+        }
+    }
+    for (sub, flag, detail) in want {
+        let id = s.review.items.len() as u64 + 1;
+        let e = Exception::must("SCO-001", Severity::Error, omr_model::Scope::Exam)
+            .with_sub_reason(sub.clone());
+        s.review.items.push(ReviewItem {
+            id,
+            lane: Lane::Scoring,
+            kind: ItemKind::Notice,
+            code: e.code.clone(),
+            sub_reason: Some(sub.clone()),
+            severity: e.severity,
+            title: title("SCO-001"),
+            detail,
+            booklet: None,
+            page: None,
+            question: Some(flag.question),
+            suggestion: None,
+            fills: Vec::new(),
+            group_key: group_key("SCO-001", Some(&sub), "exam", None, 0),
+            crop: None,
+            state: ItemState::Open,
+            resolution: None,
+            store_exceptions: Vec::new(),
+            deferrals: 0,
+            flag: Some(flag),
+        });
+        changed = true;
+    }
+    changed
 }
 
 #[cfg(test)]
@@ -900,6 +1093,58 @@ mod tests {
         assert_eq!(Lane::of("REG-001"), Lane::Capture);
         assert_eq!(Lane::of("REG-003"), Lane::Marks);
         assert_eq!(Lane::of("SCO-005"), Lane::Scoring);
+    }
+
+    /// The codes a source file raises at ERROR or BLOCKER: each `"XXX-NNN"` literal followed,
+    /// within the same constructor call, by `Severity::Error` or `Severity::Blocker`.
+    fn blocking_codes(src: &str, prefix: &str) -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        let pat = format!("\"{prefix}");
+        let mut from = 0;
+        while let Some(i) = src[from..].find(&pat) {
+            let at = from + i + 1;
+            let code = &src[at..(at + 7).min(src.len())];
+            let tail: String = src[at..].chars().take(120).collect();
+            let call = tail.split(')').next().unwrap_or("");
+            if code.len() == 7
+                && (call.contains("Severity::Error") || call.contains("Severity::Blocker"))
+            {
+                out.insert(code.to_string());
+            }
+            from = at;
+        }
+        out
+    }
+
+    #[test]
+    fn every_blocking_registration_code_has_a_remedy() {
+        // C6 (R10): what an operator does about every page or row that legacy registration
+        // refuses or makes unreadable; the desktop shell takes the same text from here.
+        let mut codes = blocking_codes(include_str!("../../omr-recog/src/register.rs"), "REG-");
+        codes.extend(blocking_codes(
+            include_str!("../../omr-recog/src/legacy.rs"),
+            "REG-",
+        ));
+        assert!(
+            codes.contains("REG-001") && codes.contains("REG-003") && codes.contains("REG-004"),
+            "{codes:?}"
+        );
+        for c in &codes {
+            let r = remedy(c).unwrap_or_else(|| panic!("{c} has no remedy"));
+            assert!(
+                r.contains("rescan") || r.contains("acknowledge"),
+                "{c}: {r}"
+            );
+            let def = omr_model::exceptions::lookup(c).unwrap();
+            for &scope in def.scopes {
+                let sev = *def.severities.last().unwrap();
+                let e = omr_model::Exception::must(c, sev, scope);
+                assert!(remedy_of(&e).is_some(), "{c} at {scope:?}");
+            }
+        }
+        assert!(remedy("REG-003").unwrap().contains("never key"));
+        let row = omr_model::Exception::must("REG-003", Severity::Error, omr_model::Scope::Region);
+        assert_eq!(remedy_of(&row), Some(REG_ROW_REMEDY));
     }
 
     #[test]

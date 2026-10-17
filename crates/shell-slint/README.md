@@ -17,6 +17,7 @@ cargo run -p shell-slint -- --demo --theme dark               # invented demo da
 cargo run -p shell-slint -- --workspace W --screenshot docs/design/screens/real   # every screen
 cargo run -p shell-slint -- --workspace W --screenshot D --size 1280x800 --shots review,results
 cargo run -p shell-slint --example synthetic_exam -- W         # the synthetic IAU workspace
+cargo run -p shell-slint -- --workspace W --screenshot D --size 1280x800 --shots setup-keysheet
 cargo test -p shell-slint                                      # unit + A11 tests (demo and real)
 ```
 
@@ -50,9 +51,12 @@ results, outcomes and settings (`docs/design/screens/`). The real screens
 midterm's second batch, with its REG-002 and CAP-012 page notices), scan-add (the Add scans
 bar), one review frame per lane with open items (review, review-identity, review-scoring),
 review-override (an answer that overrides the suggestion, waiting for its reason), results,
-results-export (the Exports bar), outcomes, settings and exams-new (the New-exam form); there is no blind-verify frame because
-omr-app draws no blind sample yet. With `--grade` the shots are taken once grading has
-finished.
+results-export (the Exports bar), outcomes, settings, exams-new (the New-exam form), and, when
+the workspace holds an exam graded with key sheets, setup-keysheet (its key summary to confirm)
+and scan-keysheet (its batch, the key sheets listed as such); there is no blind-verify frame
+because omr-app draws no blind sample yet. With `--grade` the shots are taken once grading has
+finished; background analyses (flag stability) report before each capture
+(`Backend::settle`), so no shot catches "computing…".
 
 The window size reaches the screens as a copy that `app.slint` writes when the platform
 resizes the window (`changed width`), never as a binding: binding `win-w: root.width` closed a
@@ -61,7 +65,8 @@ that Slint 1.18 reported 99 times as deprecated and liable to panic.
 
 Every screen fits 1440 × 900 nominal and the 1280 × 800 minimum (DESIGN §9). `app.slint` hands
 each screen the window size (set by the platform, never by the content, so there is no layout
-loop): below 1400 px side columns narrow and the exam drawer overlays the table; below 880 px the
+loop): below 1400 px side columns narrow, the exam drawer overlays the table and the setup
+stepper shows step numbers only (the labels keep the names); below 880 px the
 review keyboard legend gives way and long lists scroll. `req_a11_every_screen_fits_nominal_and_minimum_windows`
 asserts it.
 
@@ -112,6 +117,70 @@ with what to wait for, the review queue says it is being graded, the dashboard r
 activity log gains the report line (`batch-2 · 4 files · … · 1 decision kept`) and the shell
 drops its review selection (item IDs are new: `Backend::take_reloaded`).
 
+**Key from answer sheets** (§10.1, CR-11). The instructor's filled answer sheet can be the key;
+it is read by the same key-blind recognizer and is **never** accepted on its own:
+- *An exam graded with its key sheets* (`omr grade --key-sheet`, or found in the stack by the
+  marker rule) is held (SCO-003 BLOCKER `key_sheet_unconfirmed`): nothing is scored. Setup opens
+  on its key summary; Results says "Results wait for the key" and leads there; Scan lists the
+  hold with the codes. The key tag reads the core's "Key v1 · from key sheets · NOT CONFIRMED"
+  until the confirmation.
+- *Read key from answer sheet…* (the answer-key card in Setup) opens key-sheet files for an exam
+  that already has a key (an inferred one, say): `omr_app::keysheet::read_key_sheets` reads them
+  in memory with the exam's recognizer and the summary is shown labelled "Read from … · not
+  confirmed: the exam's key is unchanged until you confirm"; *Put aside* drops them.
+- The summary shows one version at a time (segments "Version A · 3 to decide"): each question's
+  bubble row as scanned, straightened along its own axis (`rectified_row`), with the marks
+  outlined in the paper colours of DESIGN §4 (drawn into the image, `crops::with_marks`, so a
+  row is one image and one AT node), what the sheet reads (`B+E?`), the key entry it gives and
+  its status. Rows that wait for the instructor (several marks SCO-027, no mark, an option not
+  used, not read clearly, two sheets that disagree) are highlighted (tint and an inline-start
+  bar) with what to do, and offer the options, *Accept A|C* on a several-marks row, and *Void*;
+  decisions are taken there and sent with the confirmation.
+- *Confirm version A* (or *Confirm every version*) is enabled once every highlighted row is
+  decided. For the exam's own key sheets it calls `ExamProject::confirm_key_sheets`: the
+  confirmation is recorded with the operator and the scans' SHA-384 (`KeySheetVersionConfirmed`,
+  then `KeyVersionPublished { source: key_sheet }` with the last version), the hold lifts and the
+  exam is scored. For files read in Setup the in-memory reading is confirmed the same way, then
+  the confirmed key replaces the exam's (`replace_key`, reason `ADJUDICATION` with a note naming
+  the key-sheet files, pages and SHA-384 prefixes and the operator); a version without a key
+  sheet keeps the exam's key, unless that key is inferred (refused: read that version's sheet
+  too, or replace the key from a file). A sheet whose grid shows no key-sheet marker (a student's
+  sheet, or one registered a row off reading `1111111111`) gives no key and says why.
+- Scan lists key sheets as key sheets, never as students: gold-framed thumbnails labelled
+  `KEY A` (a refused one in error tone), a *Key sheets N* pill, a reconciliation line
+  "Key sheets, not students (§10.1)" (booklets count students only), and an activity line per
+  sheet (`KEY cf13·1 · key sheet version A · named · key waits for your confirmation in Setup`);
+  a key-sheet thumbnail opens the summary.
+
+**Alignment refusals** (REG-003 ERROR, F1): a page whose alignment with the blank form cannot be
+verified (a bubble lattice can match one row or column away, so nothing on it was read) is
+counted in the reconciliation ("Not read: alignment unverified (REG-003)"), listed in the activity
+log with its remedy, and its review notice gains a *What to do* line: rescan flat (a phone photo:
+whole sheet in view, from straight above, evenly lit) and add the new scan, never key its
+answers from that page: the core's text (`omr_app::review::remedy("REG-003")`, R10).
+
+**Flag stability** (§12.2, §12.3). Results' item analysis has a *Stability* column: the share of
+1,000 bootstrap resamples in which the flag's rule fires again (`omr_analytics::stability_job`,
+seeded from the analysis content). High confidence shows the share in a success tag; low
+confidence (not above 50 % beyond Monte Carlo noise, or failing at one end of its 95 % CI) reads "31 % · proposed" in gold, the flag pill
+turns gold and ends "(proposed)", and the row's label carries the job's account ("fires in 31 %
+of 1,000 bootstrap resamples; fails at the upper end of its 95 % CI"). Rows sort mis-key and
+flawed-item flags (ranks 1–4) of high confidence first, then those of low confidence, then the
+informational ones, each by rank then share (the spec's "sort by rank, then stability", with
+confidence ahead of rank so a proposed mis-key never sits above an established flag). The job
+runs off the synchronous regrade path, on a thread the binary's spawner starts, once per score
+run ("computing…" until it reports; `pump` folds it in); without a spawner (headless tests) it
+runs in place. When omr-app's `analytics()` carries its own stability report, that one is used.
+When the job reports, the shell hands it to the core (`ExamProject::set_flag_stability`), which
+judges the probable mis-keys for the release gate: a confident one becomes a Scoring-lane
+SCO-001 review item (ERROR) that blocks *Release results…* until it is decided, and until the
+job has reported the release checklist reads "Mis-key check … computing…". In Review, the item's
+letter keys change the key to that option, `M` accepts the key or the flagged option, and `A`
+keeps the key, asking for a reason code and a note (voiding is done with `omr review resolve
+--decision void` or by setting the key entry to `*` in Setup).
+The what-if preview stays as before: the SCO-001 help and *What-if preview* (Ctrl+P) point to a
+key change in Setup, which can be undone there.
+
 **Page notices**: pages read turned (REG-002: portrait scans of the landscape form, pages fed
 upside down) and blank backs dropped (CAP-012) never reach the queue; the finished batch lists
 them in the activity log (`REG-002 0047 · portrait, read turned 90° ccw`) and counts them in the
@@ -137,7 +206,8 @@ command; page thumbnails are decoded once from the stored originals.
 | Setup | `setup_vm` (template, keys, CLOs, mapping, lints); edits through `set_key`, `set_mapping_weight`, `set_mapping_note` |
 | Scan | live: `vm::ProgressTracker` over the worker's `Progress` events; finished: the session (timings, pages, open items by code, batch exceptions, reconciliation counts, real page thumbnails) |
 | Review | `review_queue_vm` / `review_item_vm`: real crops and overlays, engine suggestion with its fill and margin, group, notice evidence; identity candidates joined with the roster; form items as the version bubbles |
-| Results | `results_vm` plus `analytics()` (α, SEM, item flags with codes, rank and stability, keyed option) |
+| Results | `results_vm` plus `analytics()` (α, SEM, item flags with codes, rank, keyed option) and the stability job's report; `hold()` for an exam waiting for its key |
+| Setup · key sheets | `key_sheet_summary(true)` of the exam, or of key-sheet files read with `keysheet::read_key_sheets`; `confirm_key_sheets`, `replace_key` |
 | Outcomes | `outcomes()` (μ, π and their CIs, verdict, policy and version) and `outcomes_vm` (TP-154 B.1 cells) |
 
 Decisions map one to one: options are `Decision::Option(n)`; on identity items a candidate `n`
@@ -188,8 +258,11 @@ The doc comments in `backend.rs` are authoritative:
 - `ReadinessCheck::target` says where a readiness action leads (review lane, scan, setup,
   outcomes); setup lints use Appendix A codes (SCO-011 split weights, SCO-013 unmapped item,
   SCO-014 thin evidence, SCO-032 unapproved mapping);
-- item-analysis rows may arrive in any order: the shell lists flagged items first (worst flag,
-  stable before "proposed", then question).
+- item-analysis rows may arrive in any order: the shell lists flagged items first (ranks 1–4 of
+  high confidence, then of low confidence "proposed", then the informational flags; each by
+  rank, then share, then question);
+- key-sheet rows never auto-accept: a row that is not one confidently read option has no key
+  entry until the instructor decides it, and the confirmation names any row left undecided.
 
 ## Synthetic exam and evidence
 
@@ -200,7 +273,10 @@ names (IDs start with 9), four CLOs with split weights and an Arabic note. The m
 items: 10 light marks (MRK-001), a double mark (MRK-002, `multi_review = always`), a blank
 version bubble (SCO-005, form inferred), a number not on the roster and a faint ID digit
 (IDN-004), plus a mis-key on form A Q12 that item analysis flags. A second exam (CS 212 Quiz 2,
-24 sheets) is graded with an inferred key. No real scan, name or student number is used.
+24 sheets) is graded with an inferred key. A third (CS 214 Final, 24 sheets) is graded with the
+instructor's synthetic key sheets named and no key file (held): version A (student number
+`0000000000`) carries a double mark, an empty row and a faint mark, version B (`9999999999`) is
+clean. No real scan, name, student number or key is used.
 
 | Test | What it proves |
 |---|---|
@@ -211,9 +287,16 @@ version bubble (SCO-005, form inferred), a number not on the roster and a faint 
 | `req_a11_real_backend_empty_workspace_never_panics` | an empty workspace: every screen and key, empty states |
 | `req_a11_real_backend_replaces_the_key_from_setup_and_names_a_tampered_project` | an inferred key replaced from Setup (*Replace key…*, the key file, *Replace and rescore*): the key is in force and no longer INFERRED; a snapshot edited outside the app is refused with SYS-011 and the remedy, never "close the other program" |
 | `req_a11_real_backend_creates_an_exam_from_the_new_exam_form` | *New exam* on a workspace: a question count that is not a number and a missing key file are refused with what to type, nothing started; then the scans graded with an inferred key into a new folder of the workspace, followed on the Scan screen, and the exam opens |
+| `req_a11_real_backend_new_exam_reads_the_named_key_sheets` | *New exam* with the instructor's key sheets in its *Key sheets* field: they are read with the exam as stored key sheets (six students graded, two key sheets), the run held until *Confirm every version* in Setup, then scored; the key version names both key-sheet scans (C7) |
+| `req_a11_real_backend_confirms_the_key_from_key_sheets` | the synthetic final graded with its key sheets: held (no results; Results' empty state leads to Setup); Scan lists both key sheets as key sheets, not students (thumbnail labels, reconciliation, activity); Setup opens on the summary with the three rows of version A highlighted (several marks, no mark, not read clearly) and every row's crop; *Confirm version A* stays disabled until each is decided through its labels (the intended answer, *Void*, the answer); A confirmed alone keeps the hold; *Confirm version B* publishes the key and scores the exam; both confirmations recorded with the operator and the scans; the scores equal grading the same students with the same key as a file |
+| `req_a11_real_backend_reads_a_key_from_answer_sheets_in_setup` | an inferred-key quiz: *Read key from answer sheet…* with a student's sheet gives no key (no marker) and *Put aside* leaves the key unchanged; with the two key sheets the summary is shown and nothing changes until *Confirm every version*, which puts the instructor's key in force (no longer INFERRED, every entry equal to the sheets) |
 | `req_a11_demo_data_is_marked_on_every_screen` (demo file) | the DEMO DATA mark on every screen, release refused on demo data, and New exam saying how to open real exams |
 | `req_a11_blind_items_never_show_a_leaked_engine_reading` (demo file) | a backend that sends the engine's reading with blind items: the frame, the sparkline and Enter never show or commit it |
 | `req_a11.rs` (demo) | the review flow, keyboard paths, labels, layouts and screens on the demo backend |
+
+The review-flow test also checks the item analysis: form A Q12 (the planted mis-key) is flagged
+with high confidence by the stability job and its row comes first; every "proposed" flag comes
+after the high-confidence ones and its pill ends "(proposed)".
 
 On the shared 4-vCPU container the two real tests take about 10 s together (test profile;
 rendering and grading 68 sheets included). The synthetic workspace graded at 47–81 pages/s with

@@ -255,6 +255,113 @@ impl KeyVersion {
             }
         }
         // Printed-letter patterns per form (single-key SBA positions only).
+        for pat in self.letter_patterns(forms) {
+            ex.push(sco027(pat.detail()).with_sub_reason(pat.sub_reason()));
+        }
+        ex
+    }
+}
+
+/// A printed-letter pattern of one form's key (SCO-027, §10.1 publish checks).
+#[derive(Clone, Debug, PartialEq)]
+pub enum LetterPattern {
+    /// A run of `len` identical key letters ending at printed position `end` (1-based).
+    Run {
+        /// Form.
+        form: omr_model::FormCode,
+        /// Run length.
+        len: usize,
+        /// Last position of the run (1-based).
+        end: usize,
+    },
+    /// A key letter distribution with χ² p < 0.01 over the items with `m` options.
+    Distribution {
+        /// Form.
+        form: omr_model::FormCode,
+        /// Key letters counted per option (A first).
+        counts: Vec<u64>,
+        /// Options of the items counted.
+        m: u8,
+        /// χ² statistic.
+        chi2: f64,
+        /// Its p-value.
+        p: f64,
+    },
+}
+
+impl LetterPattern {
+    /// The form it is about.
+    pub fn form(&self) -> omr_model::FormCode {
+        match self {
+            LetterPattern::Run { form, .. } | LetterPattern::Distribution { form, .. } => *form,
+        }
+    }
+
+    /// Sub-reason of its SCO-027.
+    pub fn sub_reason(&self) -> &'static str {
+        match self {
+            LetterPattern::Run { .. } => "letter_run",
+            LetterPattern::Distribution { .. } => "letter_distribution",
+        }
+    }
+
+    /// The full detail (the letter counts included), for the store and the owner's key
+    /// summary.
+    pub fn detail(&self) -> String {
+        match self {
+            LetterPattern::Run { form, len, end } => format!(
+                "form {}: run of {len} identical key letters ending at position {end}",
+                form.0
+            ),
+            LetterPattern::Distribution {
+                form,
+                counts,
+                m,
+                chi2,
+                p,
+            } => format!(
+                "form {}: key letter distribution {counts:?} over {} items with {m} options is \
+                 unlikely (χ² = {chi2:.2}, p = {p:.4})",
+                form.0,
+                counts.iter().sum::<u64>()
+            ),
+        }
+    }
+
+    /// A line safe for a terminal or a shared screen: no key letter and no letter counts,
+    /// the version named by its label (C10). An option never keyed on items with `m` options
+    /// suggests the exam uses fewer options than the sheet prints.
+    pub fn public_text(&self, version: &str) -> String {
+        match self {
+            LetterPattern::Run { len, end, .. } => format!(
+                "SCO-027 version {version}: {len} identical key letters in a row (ending at \
+                 question {end}); check the key summary"
+            ),
+            LetterPattern::Distribution { counts, m, p, .. } => {
+                let mut t = format!(
+                    "SCO-027 version {version}: key letter distribution unlikely (p = {p:.3}); \
+                     check the key summary"
+                );
+                if counts.contains(&0) && *m > 2 {
+                    t.push_str(&format!(
+                        "; one option is never keyed: if the exam uses {} options, grade with \
+                         --options {}",
+                        m - 1,
+                        m - 1
+                    ));
+                }
+                t
+            }
+        }
+    }
+}
+
+impl KeyVersion {
+    /// The printed-letter patterns of every form's key (single-key SBA positions only): runs of
+    /// ≥ 5 identical letters and a letter distribution with χ² p < 0.01 per option count
+    /// (expected count ≥ 5 per letter).
+    pub fn letter_patterns(&self, forms: &FormMap) -> Vec<LetterPattern> {
+        let mut out = Vec::new();
         for (f, form) in forms.forms.iter().enumerate() {
             let pk = self.printed_key(forms, f);
             let letters: Vec<Option<(u8, u8)>> = form
@@ -287,11 +394,11 @@ impl KeyVersion {
                 }
                 if run >= 5 && !flagged_run {
                     flagged_run = true;
-                    ex.push(sco027(format!(
-                        "form {}: run of {run} identical key letters ending at position {}",
-                        form.code.0,
-                        j + 1
-                    )));
+                    out.push(LetterPattern::Run {
+                        form: form.code,
+                        len: run,
+                        end: j + 1,
+                    });
                 }
             }
             // χ² letter distribution per option count m (expected count ≥ 5 per letter).
@@ -311,15 +418,17 @@ impl KeyVersion {
                 let chi2: f64 = counts.iter().map(|&o| (o as f64 - e).powi(2) / e).sum();
                 let p = chi2_sf(chi2, f64::from(m) - 1.0);
                 if p < 0.01 {
-                    ex.push(sco027(format!(
-                        "form {}: key letter distribution {:?} over {n} items with {m} options \
-                         is unlikely (χ² = {chi2:.2}, p = {p:.4})",
-                        form.code.0, counts
-                    )));
+                    out.push(LetterPattern::Distribution {
+                        form: form.code,
+                        counts,
+                        m,
+                        chi2,
+                        p,
+                    });
                 }
             }
         }
-        ex
+        out
     }
 }
 

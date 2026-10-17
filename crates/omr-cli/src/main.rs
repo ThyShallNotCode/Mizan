@@ -4,13 +4,17 @@
 //! omr templates
 //! omr sheet render --spec spec.json --out sheets.pdf [--copies N]
 //! omr grade <inputs…> --template iau-ccsit-v1 | --spec spec.json --questions N
-//!           [--key key.csv | --infer-key] [--roster roster.csv|.xlsx] [--clo clo.csv] --out DIR
+//!           [--key key.csv | --infer-key] [--key-sheet FILE …] [--roster roster.csv|.xlsx]
+//!           [--clo clo.csv] --out DIR
 //! omr add --project DIR <more inputs…>        (a later batch; review decisions carry over)
 //! omr review list --project DIR [--lane marks] [--json]
 //! omr review resolve --project DIR --item ID (--decision B [--reason CODE [--note T]] | --defer
 //!                    | --escalate | --rescan | --undo)
 //! omr key replace --project DIR --key key.csv [--reason CODE]
 //! omr key set --project DIR [--form A] --question N --answer B [--reason CODE]
+//! omr key read <key sheets…> --template iau-ccsit-v1 --questions N [--forms A,B] --out DIR
+//! omr key summary --project DIR [--out FILE]
+//! omr key confirm --project DIR [--version A] [--answer 7=B …]
 //! omr release --project DIR [--reason CODE [--note T]]
 //! omr export --project DIR [--out DIR] [--blackboard-column ID]
 //! omr bench <corpus-dir> --template … --questions N [--threads 1,2,4] [--first 30]
@@ -68,8 +72,10 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ReviewCmd,
     },
-    /// Answer key of a graded exam: replace it (e.g. the real key after `--infer-key`) or
-    /// correct one entry; an audited regrade with a new key version.
+    /// Answer keys: read teacher-filled key sheets into a key file with a summary to check,
+    /// confirm the key read from key sheets in a graded exam, replace a graded exam's key
+    /// (e.g. the real key after `--infer-key`) or correct one entry (an audited regrade with a
+    /// new key version).
     Key {
         #[command(subcommand)]
         cmd: KeyCmd,
@@ -162,6 +168,11 @@ struct ExamArgs {
     /// sheets the printed ID grid's, iau for 10 digits else digits:N).
     #[arg(long)]
     id_scheme: Option<String>,
+    /// Key-sheet marker digits, comma separated (default 0,9): a sheet whose every
+    /// student-number column is bubbled with one of them and that bubbles its version is a key
+    /// sheet, never a student; `none` turns detection in the stack off.
+    #[arg(long, default_value = "0,9")]
+    key_sheet_marker: String,
     /// Exam title.
     #[arg(long, default_value = "Exam")]
     title: String,
@@ -186,6 +197,11 @@ struct GradeArgs {
     /// Infer each form's key from the modal confident responses (never releasable).
     #[arg(long)]
     infer_key: bool,
+    /// A teacher-filled key sheet (scan or PDF; repeat for each file): read by the same
+    /// recognizer, never graded as a student, held until you confirm its key (`omr key
+    /// confirm`). Key sheets inside the scans are found by the marker rule too.
+    #[arg(long = "key-sheet")]
+    key_sheet: Vec<PathBuf>,
     /// Roster CSV or XLSX (student_id, name, section).
     #[arg(long)]
     roster: Option<PathBuf>,
@@ -265,7 +281,9 @@ enum ReviewCmd {
         /// Item ID (from `review list`); not needed for `--undo`.
         #[arg(long)]
         item: Option<u64>,
-        /// A, B…, blank, multi:A+C, unreadable, student:ID, not-on-roster, form:B, ack.
+        /// A, B…, blank, multi:A+C, unreadable, student:ID, not-on-roster, form:B, ack. A
+        /// probable mis-key (SCO-001): a letter (change the key to it), multi (accept the key
+        /// or the flagged option), void, or ack with --reason and --note (keep the key).
         #[arg(long)]
         decision: Option<String>,
         /// Apply the decision to the item's whole group.
@@ -301,14 +319,74 @@ enum ReviewCmd {
 
 #[derive(Subcommand)]
 enum KeyCmd {
-    /// Replaces the whole key from a key file (same layouts as `grade --key`).
+    /// Reads teacher-filled key sheets on their own (every sheet given is a key sheet) and
+    /// writes `key.csv` (the `--key` layout; a row not read clearly is left empty, never
+    /// guessed) and `key_summary.html` (per version, each question's read answer beside its
+    /// rectified bubble row; rows to check highlighted). Exit 5 when a sheet cannot be read or
+    /// a row needs your decision.
+    Read {
+        /// Key-sheet files or folders (PDF, JPEG, PNG, TIFF).
+        #[arg(required = true)]
+        inputs: Vec<PathBuf>,
+        #[command(flatten)]
+        exam: ExamArgs,
+        /// Output folder for key.csv and key_summary.html (created private).
+        #[arg(long)]
+        out: PathBuf,
+        /// Worker threads (0 = all cores).
+        #[arg(long, default_value_t = 0)]
+        threads: usize,
+    },
+    /// Writes the key summary of a graded exam's key sheets (HTML) and lists the rows that
+    /// need your decision.
+    Summary {
+        /// Graded output folder or its `project.omrproj`.
+        #[arg(long)]
+        project: PathBuf,
+        /// HTML file to write (default: key_sheet_summary.html in the exam folder).
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Confirms the key read from key sheets (after checking the key summary): the hold
+    /// lifts, the key is published (audited, naming the scans and you) and the exam is scored.
+    Confirm {
+        /// Graded output folder or its `project.omrproj`.
+        #[arg(long)]
+        project: PathBuf,
+        /// Confirm one version only (default: every version read and not yet confirmed).
+        #[arg(long)]
+        version: Option<String>,
+        /// Decide a row first: `7=B`, `7=A|C` (both accepted), `7=*` (void); `A:7=B` names the
+        /// version. Repeat for each row.
+        #[arg(long, allow_hyphen_values = true)]
+        answer: Vec<String>,
+        /// Reason code (optional).
+        #[arg(long)]
+        reason: Option<String>,
+        /// Note for the reason.
+        #[arg(long, requires = "reason")]
+        note: Option<String>,
+        /// Acting principal (the instructor).
+        #[arg(long, default_value = "principal:instructor")]
+        operator: String,
+        /// Skip re-exporting.
+        #[arg(long)]
+        no_export: bool,
+    },
+    /// Replaces the whole key from a key file (same layouts as `grade --key`), or from the
+    /// instructor's key sheets (`--from-key-sheets`: stored with the exam's scans, held until
+    /// you confirm the key summary with `omr key confirm`, which records them as the key's
+    /// source).
     Replace {
         /// Graded output folder or its `project.omrproj`.
         #[arg(long)]
         project: PathBuf,
         /// Answer key CSV.
-        #[arg(long)]
-        key: PathBuf,
+        #[arg(long, required_unless_present = "from_key_sheets")]
+        key: Option<PathBuf>,
+        /// Key-sheet files (filled answer sheets): added to the exam as named key sheets.
+        #[arg(long, num_args = 1.., conflicts_with = "key")]
+        from_key_sheets: Vec<PathBuf>,
         /// Reason code (default KEY_ERROR).
         #[arg(long)]
         reason: Option<String>,
@@ -478,6 +556,25 @@ fn definition(a: &ExamArgs, key_forms: Option<Vec<String>>) -> Result<ExamDefini
                 )));
             }
         },
+    };
+    d.key_sheets = match a.key_sheet_marker.trim() {
+        "none" | "off" => omr_app::KeySheetRule::off(),
+        m => {
+            let markers = m
+                .split(',')
+                .map(|t| match t.trim().as_bytes() {
+                    [c] if c.is_ascii_digit() => Ok(c - b'0'),
+                    _ => Err(usage(format!(
+                        "--key-sheet-marker {m}: give digits separated by commas (e.g. 0,9), or \
+                         none"
+                    ))),
+                })
+                .collect::<Result<Vec<u8>, AppError>>()?;
+            omr_app::KeySheetRule {
+                markers,
+                ..omr_app::KeySheetRule::default()
+            }
+        }
     };
     d.page_code_key_hex = key_hex;
     d.exam_id = d.derived_exam_id();
@@ -742,7 +839,8 @@ fn cmd_grade(g: GradeArgs) -> Result<(), AppError> {
         }
     };
     let t0 = Instant::now();
-    let mut p = ExamProject::grade(&def, &g.inputs, &opts, &progress)?;
+    let mut p =
+        ExamProject::grade_with_key_sheets(&def, &g.inputs, &g.key_sheet, &opts, &progress)?;
     if own {
         omr_app::keys::claim_exam(&def.exam_id, &g.out.join("project.omrproj"))?;
     }
@@ -779,7 +877,13 @@ fn cmd_grade(g: GradeArgs) -> Result<(), AppError> {
         t.threads,
         t.first_result_ms
     );
+    print_key_sheets(&p, &g.out);
     match s.release_blocked() {
+        Some(why) if s.key_unconfirmed() => println!(
+            "release blocked: {why}; next: open {} and run omr key confirm --project {}",
+            g.out.join(omr_app::keysheet::SUMMARY_FILE).display(),
+            shell_arg(&g.out)
+        ),
         Some(why) => println!(
             "release blocked: {why}; next: omr review list --project {}",
             shell_arg(&g.out)
@@ -792,6 +896,58 @@ fn cmd_grade(g: GradeArgs) -> Result<(), AppError> {
     print_page_problems(&p);
     println!("wrote {} file(s) to {}", sum.files.len(), g.out.display());
     p.close()
+}
+
+/// The key sheets of an exam: how many, which versions, what waits for the instructor (the
+/// key itself is in the summary page, not on the terminal).
+fn print_key_sheets(p: &ExamProject, out: &Path) {
+    let Some(sum) = p.key_sheet_summary(false) else {
+        return;
+    };
+    let ks = &p.session.key_sheets;
+    println!(
+        "key sheets: {} ({} named, {} found in the stack); taken out of the students",
+        ks.sheets.len(),
+        ks.sheets.iter().filter(|k| k.declared).count(),
+        ks.sheets.iter().filter(|k| !k.declared).count()
+    );
+    for v in &sum.versions {
+        let state = match (&v.confirmed, v.open) {
+            (Some((by, at)), _) => format!("confirmed by {by} at {at}"),
+            (None, 0) => "every row read; NOT CONFIRMED".into(),
+            (None, n) => format!(
+                "NOT CONFIRMED; {n} row(s) need your decision (questions {})",
+                v.rows
+                    .iter()
+                    .filter(|r| r.status.open())
+                    .map(|r| r.question.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        println!(
+            "  version {}: {} questions, {state}",
+            v.version,
+            v.rows.len()
+        );
+    }
+    for k in &sum.unusable {
+        println!(
+            "  NOT USED: {}",
+            k.refusal.as_deref().unwrap_or("version unknown")
+        );
+    }
+    for n in &sum.notes {
+        println!("  note: {n}");
+    }
+    if sum.pending {
+        println!(
+            "  nothing is scored until you confirm the key: check {}, then omr key confirm \
+             --project {}",
+            out.join(omr_app::keysheet::SUMMARY_FILE).display(),
+            shell_arg(out)
+        );
+    }
 }
 
 /// Pages held out of grading (capture, registration, foreign sheets), each with its file, the
@@ -873,6 +1029,15 @@ fn cmd_review(cmd: ReviewCmd) -> Result<(), AppError> {
                 );
             } else {
                 let labels = p.session.definition.option_labels();
+                if p.session.key_unconfirmed() {
+                    println!(
+                        "HOLD SCO-003 BLOCKER: the key read from the key sheets is not \
+                         confirmed; nothing is scored. Check the key summary (omr key summary \
+                         --project {}), then omr key confirm --project {}",
+                        shell_arg(&project),
+                        shell_arg(&project)
+                    );
+                }
                 println!("{} open item(s)", items.len());
                 for it in items {
                     let b = it.booklet.map(|b| &p.session.booklets[b]);
@@ -1084,11 +1249,195 @@ fn cmd_export(project: &Path, out: Option<&Path>, column: Option<&str>) -> Resul
     p.close()
 }
 
+/// `--answer` values: `7=B` or `A:7=B` (version named), resolved against the versions read
+/// from key sheets and `--version`.
+fn parse_answers(
+    p: &ExamProject,
+    version: Option<usize>,
+    answers: &[String],
+) -> Result<Vec<omr_app::model::KeyRowDecision>, AppError> {
+    let forms = &p.session.definition.forms;
+    let ks = &p.session.key_sheets;
+    let waiting: Vec<usize> = ks
+        .forms()
+        .into_iter()
+        .filter(|f| !ks.is_confirmed(*f))
+        .collect();
+    let find = |v: &str| {
+        forms
+            .iter()
+            .position(|x| x.eq_ignore_ascii_case(v.trim()))
+            .ok_or_else(|| {
+                usage(format!(
+                    "version {v}: the exam's versions are {}",
+                    forms.join(", ")
+                ))
+            })
+    };
+    answers
+        .iter()
+        .map(|a| {
+            let (lhs, answer) = a.split_once('=').ok_or_else(|| {
+                usage(format!(
+                    "--answer {a}: write QUESTION=ANSWER, e.g. 7=B, 7=A|C or 7=*"
+                ))
+            })?;
+            let (form, q) = match lhs.split_once(':') {
+                Some((v, q)) => (find(v)?, q),
+                None => match (version, waiting.as_slice()) {
+                    (Some(v), _) => (v, lhs),
+                    (None, [only]) => (*only, lhs),
+                    _ => {
+                        return Err(usage(format!(
+                            "--answer {a}: several versions wait for confirmation; name the \
+                             version (A:{a}) or pass --version"
+                        )));
+                    }
+                },
+            };
+            let question: usize = q
+                .trim()
+                .trim_start_matches(['Q', 'q'])
+                .parse()
+                .ok()
+                .filter(|n| *n >= 1)
+                .ok_or_else(|| usage(format!("--answer {a}: {q} is not a question number")))?;
+            Ok(omr_app::model::KeyRowDecision {
+                form,
+                question: question - 1,
+                answer: answer.trim().to_string(),
+            })
+        })
+        .collect()
+}
+
 fn cmd_key(cmd: KeyCmd) -> Result<(), AppError> {
     match cmd {
-        KeyCmd::Replace {
+        KeyCmd::Read {
+            inputs,
+            exam: e,
+            out,
+            threads,
+        } => {
+            let mut def = definition(&e, None)?;
+            def.validate()?;
+            omr_app::keys::export_dir(&out)?;
+            let p = omr_app::keysheet::read_key_sheets(&def, &inputs, threads)?;
+            let sum = p.key_sheet_summary(true).ok_or_else(|| {
+                AppError::Input("no sheet could be read from the key-sheet files".into())
+            })?;
+            def = p.session.definition.clone();
+            let html = omr_app::keysheet::summary_html(
+                &sum,
+                &format!(
+                    "omr grade <scans> --template … --questions {} --key {}",
+                    def.questions,
+                    shell_arg(&out.join("key.csv"))
+                ),
+            );
+            omr_app::keys::write_private(&out.join("key_summary.html"), html.as_bytes())?;
+            let mut problems = Vec::new();
+            for v in &sum.versions {
+                println!(
+                    "version {}: {} key sheet(s), {} questions, {} row(s) need your decision",
+                    v.version,
+                    v.sheets.len(),
+                    v.rows.len(),
+                    v.open
+                );
+                if v.open > 0 {
+                    problems.push(format!(
+                        "version {}: questions {} need your decision",
+                        v.version,
+                        v.rows
+                            .iter()
+                            .filter(|r| r.status.open())
+                            .map(|r| r.question.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+            }
+            for k in &sum.unusable {
+                let why = k.refusal.clone().unwrap_or_default();
+                println!("NOT USED: {why}");
+                problems.push(why);
+            }
+            let missing: Vec<&String> = def
+                .forms
+                .iter()
+                .filter(|f| !sum.versions.iter().any(|v| &v.version == *f))
+                .collect();
+            if !missing.is_empty() && !sum.versions.is_empty() {
+                println!(
+                    "no key sheet read for version(s) {}",
+                    missing
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            match p.key_sheet_csv() {
+                Some(csv) => {
+                    omr_app::keys::write_private(&out.join("key.csv"), csv.as_bytes())?;
+                    println!(
+                        "wrote {} and {}: check every row of the summary before grading with \
+                         --key",
+                        out.join("key.csv").display(),
+                        out.join("key_summary.html").display()
+                    );
+                    println!(
+                        "this is a preview, not an audited confirmation: no exam stores these \
+                         sheets or records your confirmation. To make them an exam's key with \
+                         their originals kept, grade with --key-sheet FILE, or add them to a \
+                         graded exam: omr key replace --project <exam> --from-key-sheets FILE…, \
+                         then omr key confirm"
+                    );
+                }
+                None => println!(
+                    "wrote {}; no key.csv: no key sheet could be read",
+                    out.join("key_summary.html").display()
+                ),
+            }
+            if problems.is_empty() {
+                Ok(())
+            } else {
+                Err(AppError::Scoring(format!(
+                    "the key is not complete: {}; see {}",
+                    problems.join("; "),
+                    out.join("key_summary.html").display()
+                )))
+            }
+        }
+        KeyCmd::Summary { project, out } => {
+            let dir = project_dir(&project);
+            let p = ExamProject::open(&dir, "principal:viewer")?;
+            let sum = p.key_sheet_summary(true).ok_or_else(|| {
+                AppError::NotFound(
+                    "this exam has no key sheets (grade with --key-sheet FILE, or bubble the \
+                     key sheet's student number all 0 and its version)"
+                        .into(),
+                )
+            })?;
+            let exam_dir = dir.parent().map(Path::to_path_buf).unwrap_or_default();
+            let f = out.unwrap_or_else(|| exam_dir.join(omr_app::keysheet::SUMMARY_FILE));
+            if let Some(parent) = f.parent().filter(|d| !d.as_os_str().is_empty()) {
+                omr_app::keys::export_dir(parent)?;
+            }
+            let html = omr_app::keysheet::summary_html(
+                &sum,
+                &format!("omr key confirm --project {}", shell_arg(&project)),
+            );
+            omr_app::keys::write_private(&f, html.as_bytes())?;
+            print_key_sheets(&p, &exam_dir);
+            println!("wrote {}", f.display());
+            p.close()
+        }
+        KeyCmd::Confirm {
             project,
-            key,
+            version,
+            answer,
             reason,
             note,
             operator,
@@ -1097,6 +1446,96 @@ fn cmd_key(cmd: KeyCmd) -> Result<(), AppError> {
             let dir = project_dir(&project);
             let mut p = ExamProject::open(&dir, &operator)?;
             p.set_actor(&operator, "Instructor");
+            let forms = p.session.definition.forms.clone();
+            let v = match &version {
+                None => None,
+                Some(v) => Some(
+                    forms
+                        .iter()
+                        .position(|x| x.eq_ignore_ascii_case(v.trim()))
+                        .ok_or_else(|| {
+                            usage(format!(
+                                "--version {v}: the exam's versions are {}",
+                                forms.join(", ")
+                            ))
+                        })?,
+                ),
+            };
+            let decisions = parse_answers(&p, v, &answer)?;
+            let r =
+                p.confirm_key_sheets(v, decisions, reason_of(reason.as_deref(), note.as_deref()))?;
+            println!("confirmed the key of version(s) {}", r.confirmed.join(", "));
+            for w in &r.warnings {
+                println!("  warning: {w}");
+            }
+            match r.key_version {
+                Some(k) => println!(
+                    "key version {k} published (source: key sheets, confirmed by {operator}); the \
+                     exam was scored"
+                ),
+                None if !r.waiting.is_empty() => println!(
+                    "still waiting: version(s) {}; nothing is scored until every key sheet is \
+                     confirmed",
+                    r.waiting.join(", ")
+                ),
+                None => {
+                    println!("the run stays held: a key sheet could not be read (omr key summary)")
+                }
+            }
+            if !no_export {
+                reexport(&mut p, &dir)?;
+            }
+            match p.session.release_blocked() {
+                Some(why) => println!(
+                    "release blocked: {why}; next: omr review list --project {}",
+                    shell_arg(&project)
+                ),
+                None => println!(
+                    "ready to release: omr release --project {}",
+                    shell_arg(&project)
+                ),
+            }
+            p.close()
+        }
+        KeyCmd::Replace {
+            project,
+            key,
+            from_key_sheets,
+            reason,
+            note,
+            operator,
+            no_export,
+        } => {
+            let dir = project_dir(&project);
+            let mut p = ExamProject::open(&dir, &operator)?;
+            p.set_actor(&operator, "Instructor");
+            if !from_key_sheets.is_empty() {
+                // The audited path (§10.1): the key sheets are stored with the scans, the run
+                // is held, and `omr key confirm` publishes the key naming them.
+                let opts = GradeOptions {
+                    threads: 0,
+                    project_dir: None,
+                    snapshot_utc: None,
+                    operator: operator.clone(),
+                    max_pages: None,
+                };
+                let r = p.add_key_sheets(&from_key_sheets, &opts, &|_| {})?;
+                println!(
+                    "{}: {} key-sheet file(s) added to the exam (their originals are stored with \
+                     the scans)",
+                    r.batch, r.files
+                );
+                let out = dir
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| dir.clone());
+                if !no_export {
+                    reexport(&mut p, &dir)?;
+                }
+                print_key_sheets(&p, &out);
+                return p.close();
+            }
+            let key = key.ok_or_else(|| usage("give --key FILE or --from-key-sheets FILE…"))?;
             let def = &p.session.definition;
             let (forms, points) =
                 exam::read_key_file(&read_file(&key)?, &def.forms, def.questions, def.options)?;

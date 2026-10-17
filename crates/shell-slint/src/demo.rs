@@ -1973,6 +1973,7 @@ impl BatchProgress {
             auto: self.pages_done.saturating_sub(review + rejected),
             review,
             rejected,
+            key_sheets: 0,
         };
         self
     }
@@ -2429,6 +2430,13 @@ fn cs211_results(setup: &ExamSetup) -> (Results, Outcomes) {
                     code: Some("SCO-001".into()),
                     tone: Tone::Error,
                     stable: true,
+                    rank: 1,
+                    stability: FlagStability::High {
+                        share: Some(0.993),
+                        note: "fires in 99 % of 1,000 bootstrap resamples; holds at both ends \
+                               of its 95 % CI"
+                            .into(),
+                    },
                 });
             }
             7 => {
@@ -2438,7 +2446,14 @@ fn cs211_results(setup: &ExamSetup) -> (Results, Outcomes) {
                     message: "Top group prefers C".into(),
                     code: Some("SCO-002".into()),
                     tone: Tone::Warning,
-                    stable: true,
+                    stable: false,
+                    rank: 2,
+                    stability: FlagStability::Low {
+                        share: Some(0.41),
+                        note: "fires in 41 % of 1,000 bootstrap resamples; fails at the lower \
+                               end of its 95 % CI"
+                            .into(),
+                    },
                 });
             }
             3 => {
@@ -2449,6 +2464,8 @@ fn cs211_results(setup: &ExamSetup) -> (Results, Outcomes) {
                     code: None,
                     tone: Tone::Info,
                     stable: true,
+                    rank: 5,
+                    stability: FlagStability::NotAssessed,
                 });
             }
             15 => {
@@ -2459,6 +2476,8 @@ fn cs211_results(setup: &ExamSetup) -> (Results, Outcomes) {
                     code: None,
                     tone: Tone::Info,
                     stable: false,
+                    rank: 6,
+                    stability: FlagStability::NotAssessed,
                 });
             }
             21 => {
@@ -2468,6 +2487,8 @@ fn cs211_results(setup: &ExamSetup) -> (Results, Outcomes) {
                     code: None,
                     tone: Tone::Info,
                     stable: true,
+                    rank: 7,
+                    stability: FlagStability::NotAssessed,
                 });
             }
             _ => {}

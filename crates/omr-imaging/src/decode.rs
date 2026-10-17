@@ -133,6 +133,99 @@ fn decode_reader<R: std::io::BufRead + std::io::Seek>(
     })
 }
 
+/// A colour JPEG below this resolution is taken for a phone photo (§8.10): scanners deliver
+/// 200–600 dpi; a phone photo of an A4 sheet lands at ≈ 120–160 ppi.
+pub const PHOTO_MAX_DPI: u32 = 200;
+
+/// True when a page image is taken for a phone photo from its file: a colour JPEG whose
+/// resolution (the PDF placement; image files have none we trust) is known and below
+/// [`PHOTO_MAX_DPI`]. EXIF camera tags decide image files ([`jpeg_from_camera`]).
+pub fn photo_capture(colour_jpeg: bool, dpi: Option<u32>) -> bool {
+    colour_jpeg && dpi.is_some_and(|d| d < PHOTO_MAX_DPI)
+}
+
+/// True when a JPEG carries a camera's EXIF exposure data (an Exif IFD with an exposure time,
+/// f-number, ISO or focal length: tags 0x829A, 0x829D, 0x8827, 0x920A), as phones and cameras
+/// write and scanners do not. Bytes that are not a JPEG with EXIF give false.
+pub fn jpeg_from_camera(bytes: &[u8]) -> bool {
+    exif_tiff(bytes).is_some_and(|t| exif_camera_tags(t).unwrap_or(false))
+}
+
+/// The TIFF structure inside a JPEG's APP1 `Exif` segment, if any (segments before SOS).
+fn exif_tiff(bytes: &[u8]) -> Option<&[u8]> {
+    if !bytes.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
+    let mut i = 2;
+    while i + 4 <= bytes.len() {
+        if bytes[i] != 0xFF {
+            return None;
+        }
+        let marker = bytes[i + 1];
+        if marker == 0xD8 || (0xD0..=0xD7).contains(&marker) || marker == 0x01 {
+            i += 2;
+            continue;
+        }
+        if marker == 0xDA || marker == 0xD9 {
+            return None;
+        }
+        let len = usize::from(u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]));
+        let end = (i + 2 + len).min(bytes.len());
+        if len < 2 {
+            return None;
+        }
+        let seg = &bytes[i + 4..end];
+        if marker == 0xE1 && seg.starts_with(b"Exif\0\0") {
+            return Some(&seg[6..]);
+        }
+        i = end;
+    }
+    None
+}
+
+fn exif_camera_tags(t: &[u8]) -> Option<bool> {
+    let le = match t.get(..2)? {
+        b"II" => true,
+        b"MM" => false,
+        _ => return None,
+    };
+    let u16_at = |o: usize| -> Option<u16> {
+        let b = t.get(o..o + 2)?;
+        Some(if le {
+            u16::from_le_bytes([b[0], b[1]])
+        } else {
+            u16::from_be_bytes([b[0], b[1]])
+        })
+    };
+    let u32_at = |o: usize| -> Option<u32> {
+        let b = t.get(o..o + 4)?;
+        Some(if le {
+            u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+        } else {
+            u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+        })
+    };
+    // The tags of one IFD at `off` (bounded: at most 512 entries).
+    let tags = |off: usize| -> Option<Vec<(u16, u32)>> {
+        let n = usize::from(u16_at(off)?).min(512);
+        (0..n)
+            .map(|k| {
+                let e = off + 2 + 12 * k;
+                Some((u16_at(e)?, u32_at(e + 8)?))
+            })
+            .collect()
+    };
+    let ifd0 = tags(u32_at(4)? as usize)?;
+    let camera = |tag: u16| matches!(tag, 0x829A | 0x829D | 0x8827 | 0x920A);
+    if ifd0.iter().any(|(tag, _)| camera(*tag)) {
+        return Some(true);
+    }
+    let Some(&(_, exif_off)) = ifd0.iter().find(|(tag, _)| *tag == 0x8769) else {
+        return Some(false);
+    };
+    Some(tags(exif_off as usize)?.iter().any(|(tag, _)| camera(*tag)))
+}
+
 /// True when a JPEG's marker structure runs to its end-of-image marker (EOI, `FF D9`).
 /// Segments are skipped by their lengths (an EXIF thumbnail's own EOI sits inside APP1 and is
 /// never seen) and entropy-coded data up to the next marker (stuffed `FF 00`, restart markers
@@ -483,6 +576,57 @@ fn to_luma(img: DynamicImage) -> Result<GrayImage, ImagingError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A JPEG prefix with an APP1 Exif segment whose Exif IFD holds `tag` (little-endian).
+    fn exif_jpeg(tag: u16) -> Vec<u8> {
+        let mut t: Vec<u8> = b"II*\0".to_vec();
+        t.extend(8u32.to_le_bytes()); // IFD0 at 8
+        t.extend(1u16.to_le_bytes()); // one entry: the Exif IFD pointer
+        t.extend(0x8769u16.to_le_bytes());
+        t.extend(4u16.to_le_bytes()); // LONG
+        t.extend(1u32.to_le_bytes());
+        t.extend(26u32.to_le_bytes()); // Exif IFD at 26
+        t.extend(0u32.to_le_bytes()); // no next IFD
+        t.extend(1u16.to_le_bytes());
+        t.extend(tag.to_le_bytes());
+        t.extend(3u16.to_le_bytes());
+        t.extend(1u32.to_le_bytes());
+        t.extend(100u32.to_le_bytes());
+        t.extend(0u32.to_le_bytes());
+        let mut seg = b"Exif\0\0".to_vec();
+        seg.extend(t);
+        let mut j = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        j.extend(((seg.len() + 2) as u16).to_be_bytes());
+        j.extend(seg);
+        j.extend([0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9]);
+        j
+    }
+
+    #[test]
+    fn camera_exif_and_photo_resolution_mark_a_phone_capture() {
+        // C3: a phone photo is recognised from its file, never left a scanner capture.
+        assert!(jpeg_from_camera(&exif_jpeg(0x829A)), "exposure time");
+        assert!(jpeg_from_camera(&exif_jpeg(0x920A)), "focal length");
+        // A scanner's EXIF (e.g. resolution or software only) is not a camera's.
+        assert!(!jpeg_from_camera(&exif_jpeg(0x0131)));
+        assert!(!jpeg_from_camera(&[0xFF, 0xD8, 0xFF, 0xD9]));
+        assert!(!jpeg_from_camera(b"not a jpeg"));
+        // Truncated or hostile EXIF never panics.
+        let j = exif_jpeg(0x829A);
+        for cut in 0..j.len() {
+            let _ = jpeg_from_camera(&j[..cut]);
+        }
+        assert!(photo_capture(true, Some(142)));
+        assert!(!photo_capture(true, Some(200)));
+        assert!(
+            !photo_capture(false, Some(142)),
+            "a gray scan is a scanner page"
+        );
+        assert!(
+            !photo_capture(true, None),
+            "an unknown resolution decides nothing"
+        );
+    }
 
     fn png_bytes(img: image::DynamicImage) -> Vec<u8> {
         let mut out = Vec::new();

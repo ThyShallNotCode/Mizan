@@ -757,7 +757,7 @@ impl StoreWriter {
         // Identity run and decisions; booklet, batch and exam exceptions.
         let mut raised: BTreeMap<(usize, String), Vec<i64>> = BTreeMap::new();
         let mut missing: BTreeMap<(usize, usize), Vec<i64>> = BTreeMap::new();
-        let mut exam_rows: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+        let mut exam_rows: BTreeMap<(String, Option<String>), Vec<i64>> = BTreeMap::new();
         self.project
             .decision(|tx| {
                 tx.create_identity_run(&IdentityRunRecord {
@@ -803,7 +803,10 @@ impl StoreWriter {
                     .chain(&session.exam_exceptions)
                 {
                     let id = tx.raise_exception(e, &Actor::engine("pipeline"))?;
-                    exam_rows.entry(e.code.clone()).or_default().push(id);
+                    exam_rows
+                        .entry((e.code.clone(), e.sub_reason.clone()))
+                        .or_default()
+                        .push(id);
                 }
                 if let Some(Ok(run)) = scoring.map(|s| &s.run) {
                     tx.put_score_run(&exam, run, &me)?;
@@ -812,6 +815,47 @@ impl StoreWriter {
                 Ok(())
             })
             .map_err(store_err)?;
+        // Key sheets (§10.1) keep their reading in the run too (the confirmed key names their
+        // scans), recorded after the students' rows so that those rows are numbered as in a
+        // run without key sheets.
+        let key_pages: Vec<&crate::model::PageState> = session
+            .pages
+            .iter()
+            .filter(|p| p.status == PageStatus::KeySheet)
+            .collect();
+        for chunk in key_pages.chunks(omr_store::project::BULK_GROUP_PAGES) {
+            self.project
+                .bulk(|tx| {
+                    for p in chunk {
+                        match &p.read {
+                            Some(r) => {
+                                tx.record_page_recognition(
+                                    &recog_run,
+                                    &PageRecognition {
+                                        page_id: p.page_id.clone(),
+                                        registration: r.registration.clone(),
+                                        questions: r
+                                            .questions
+                                            .iter()
+                                            .filter(|q| usize::from(q.question) < n_q)
+                                            .cloned()
+                                            .collect(),
+                                        exceptions: r.exceptions.clone(),
+                                    },
+                                )?;
+                            }
+                            // A key sheet that could not be read keeps its refusal.
+                            None => {
+                                if let Some(e) = &p.refusal {
+                                    tx.raise_exception(e, &Actor::engine("ingest"))?;
+                                }
+                            }
+                        }
+                    }
+                    Ok(())
+                })
+                .map_err(store_err)?;
+        }
         // Map open exception rows to review items.
         let open = self
             .project
@@ -882,10 +926,21 @@ impl StoreWriter {
                         .get(&(b, it.code.clone()))
                         .cloned()
                         .unwrap_or_default(),
-                    _ => exam_rows.get(&it.code).cloned().unwrap_or_default(),
+                    _ => exam_rows
+                        .get(&(it.code.clone(), it.sub_reason.clone()))
+                        .cloned()
+                        .unwrap_or_default(),
                 },
             };
         }
+        // The key-sheet hold is lifted by the instructor's confirmation, not by a queue item.
+        session.key_sheets.hold_rows = exam_rows
+            .get(&(
+                "SCO-003".to_string(),
+                Some(crate::keysheet::HOLD.to_string()),
+            ))
+            .cloned()
+            .unwrap_or_default();
         // Resolutions carried over from the earlier run resolve the new run's rows.
         if prior.is_some() {
             let carried: Vec<i64> = session
@@ -1159,6 +1214,32 @@ impl StoreWriter {
                 tx.put_key_version(&exam, key, &me, Some(reason.clone()))
                     .map(|_| ())
             })
+            .map_err(store_err)
+    }
+
+    /// Publishes a key version with its provenance in the `KeyVersionPublished` event (a key
+    /// confirmed from key sheets: source, scans, operator; §10.1).
+    pub fn put_key_version_from(
+        &mut self,
+        key: &omr_scoring::KeyVersion,
+        reason: Option<&Reason>,
+        provenance: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<(), AppError> {
+        let me = self.actor.clone();
+        let exam = self.exam;
+        self.project
+            .decision(|tx| {
+                tx.put_key_version_from(&exam, key, &me, reason.cloned(), Some(provenance))
+                    .map(|_| ())
+            })
+            .map_err(store_err)
+    }
+
+    /// Stores an outcome mapping set (§11.2), as a graded exam with a key does.
+    pub fn put_mapping_set(&mut self, m: &omr_outcomes::MappingSet) -> Result<(), AppError> {
+        let me = self.actor.clone();
+        self.project
+            .decision(|tx| tx.put_mapping_set(m, &me).map(|_| ()))
             .map_err(store_err)
     }
 

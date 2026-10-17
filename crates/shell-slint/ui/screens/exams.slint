@@ -547,6 +547,15 @@ component NewExamBar inherits Rectangle {
             }
             HorizontalLayout {
                 spacing: Theme.space-md;
+                FormField {
+                    horizontal-stretch: 1;
+                    label: "Key sheets";
+                    placeholder: "the instructor's filled answer sheets, ; between several (optional; confirmed in Setup)";
+                    text <=> ExamsVM.new-key-sheets;
+                }
+            }
+            HorizontalLayout {
+                spacing: Theme.space-md;
                 alignment: end;
                 GhostButton {
                     text: "Cancel";

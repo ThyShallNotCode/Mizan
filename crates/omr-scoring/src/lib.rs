@@ -27,6 +27,7 @@ pub mod form;
 pub mod grade;
 pub mod item;
 pub mod key;
+pub mod key_sheet;
 pub mod l3;
 pub mod l4;
 pub mod num;
@@ -44,7 +45,8 @@ pub use error::ScoringError;
 pub use form::{Form, FormMap, FormPosition};
 pub use grade::{A1Column, GradeBand, GradeOutcome, GradeScale, StatusCode};
 pub use item::{ItemKind, MAX_OPTIONS, MasterItem, SelectMode, mask_of, options_of};
-pub use key::{KeyEntry, KeyVersion};
+pub use key::{KeyEntry, KeyVersion, LetterPattern};
+pub use key_sheet::SheetCell;
 pub use l3::{CompiledKey, ItemScoreMatrix, ItemState};
 pub use l4::{
     Adjustments, AssessmentStatus, Counted, Curve, IndividualOverride, SectionScore, StudentResult,

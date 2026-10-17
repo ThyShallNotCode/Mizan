@@ -38,6 +38,7 @@ fn page_to_template() -> QuadWarp {
             2.5,
             1.0,
         ],
+        den: [0.0; 2],
     }
 }
 

@@ -28,6 +28,7 @@ pub mod export;
 pub mod infer;
 pub mod ingest;
 pub mod keys;
+pub mod keysheet;
 pub mod model;
 pub mod outcomes;
 pub mod pipeline;
@@ -38,8 +39,8 @@ pub mod vm;
 
 pub use app::{ApplyOutcome, ExamProject};
 pub use exam::{
-    CloDefinition, CloMapping, DomainLetter, ExamDefinition, FormKey, IdSchemeChoice, KeySource,
-    MultiReviewPolicy, OutcomeSetup, PolicyChoice, RosterStudent, TemplateChoice,
+    CloDefinition, CloMapping, DomainLetter, ExamDefinition, FormKey, IdSchemeChoice, KeySheetRule,
+    KeySource, MultiReviewPolicy, OutcomeSetup, PolicyChoice, RosterStudent, TemplateChoice,
 };
 pub use pipeline::{GradeOptions, Progress, ProvisionalPage};
 pub use review::{Action, Decision, ItemKind, ItemState, Lane, ReviewItem};

@@ -4,14 +4,15 @@
 //! bubbles hide their ring and keep the predicted centre). With `R_local = R₀ × local scale`
 //! (the length of the warp's x-derivative), `inner` is the mean darkness `1 − v/255` over the
 //! disk `r ≤ 0.72 R_local` and `core` over `r ≤ 0.45 R_local`, both quantised to
-//! [`Darkness`] (1/1024). A bubble is UNREADABLE — never empty — when registration failed, its
+//! [`Darkness`] (1/1024); gray captures are read against their paper background `B` instead of
+//! 255 (`D = (B − I)/B`, §8.5 with `K = 0`). A bubble is UNREADABLE — never empty — when registration failed, its
 //! disk leaves the image (CAP-009), it is smaller than 20 px (CAP-002), or its local warp is not
 //! trustworthy — too few matched bubbles nearby, or a local scale outside the 0.80–1.10 page
 //! band (REG-003, Region).
 
 use crate::config::{MeasureConfig, RegistrationConfig};
 use crate::register::{RefModel, Registration};
-use omr_imaging::{GrayImage, PointGrid, Warp, disk_sum};
+use omr_imaging::{GrayImage, PointGrid, Warp, bilinear, disk_sum, disk_sum_paper};
 use omr_model::{Darkness, PointPx};
 use serde::{Deserialize, Serialize};
 
@@ -64,12 +65,15 @@ impl BubbleMeasure {
     }
 }
 
+/// `background`: the paper level at 1/4 resolution for gray captures (darkness relative to
+/// it, §8.5 with K = 0); `None` for bitonal captures (B = 255, the validated bitonal mode).
 pub(crate) fn measure(
     page: &GrayImage,
     reg: &Registration,
     rm: &RefModel,
     rcfg: &RegistrationConfig,
     mcfg: &MeasureConfig,
+    background: Option<&GrayImage>,
 ) -> Vec<BubbleMeasure> {
     let unread = |p: PointPx, cause| BubbleMeasure {
         centre: p,
@@ -101,9 +105,15 @@ pub(crate) fn measure(
     let fi = f64::from(mcfg.inner_permille) / 1000.0;
     let fc = f64::from(mcfg.core_permille) / 1000.0;
     let min_d = f64::from(mcfg.min_diameter_mpx) / 1000.0;
+    let band = if background.is_some() && reg.quality.scale.is_finite() && reg.quality.scale > 0.0 {
+        reg.quality.scale
+    } else {
+        1.0
+    };
     rm.points
         .iter()
-        .map(|t| {
+        .enumerate()
+        .map(|(j, t)| {
             let p = warp.map(*t);
             let px = warp.map(PointPx {
                 x: t.x + 1.0,
@@ -118,9 +128,11 @@ pub(crate) fn measure(
                 return unread(p, Unreadable::TooSmall);
             }
             // A local scale outside the band a page may have at all means the warp is
-            // extrapolating, not measuring: UNREADABLE (REG-003), never a reading.
-            if s * 1000.0 < f64::from(rcfg.scale_warn_permille[0])
-                || s * 1000.0 > f64::from(rcfg.scale_warn_permille[1])
+            // extrapolating, not measuring: UNREADABLE (REG-003), never a reading. On a gray
+            // capture (a photo: perspective and anisotropy) the band is relative to the page's
+            // own scale.
+            if s * 1000.0 < f64::from(rcfg.scale_warn_permille[0]) * band
+                || s * 1000.0 > f64::from(rcfg.scale_warn_permille[1]) * band
             {
                 return unread(p, Unreadable::NoSupport);
             }
@@ -133,17 +145,26 @@ pub(crate) fn measure(
                 Some((k, _)) => (ring_pts[k], true),
                 None => (p, false),
             };
-            let inner = disk_sum(page, centre.x, centre.y, fi * r_local);
-            let core = disk_sum(page, centre.x, centre.y, fc * r_local);
+            let paper = background
+                .map(|bg| bilinear(bg, centre.x / 4.0, centre.y / 4.0, 255))
+                .unwrap_or(255)
+                .max(1);
+            let inner = disk_sum_paper(page, centre.x, centre.y, fi * r_local, paper);
+            let core = disk_sum_paper(page, centre.x, centre.y, fc * r_local, paper);
             if inner.clipped() || inner.count == 0 {
                 return unread(centre, Unreadable::OutsideImage);
+            }
+            // Its lattice region could not be verified against the blank form (the page shows
+            // too little of it): never read on an unverified alignment.
+            if reg.unverified.get(j).copied().unwrap_or(false) {
+                return unread(centre, Unreadable::NoSupport);
             }
             BubbleMeasure {
                 centre,
                 snapped,
                 radius_px: r_local,
-                inner: Darkness(inner.darkness_q10()),
-                core: Darkness(core.darkness_q10()),
+                inner: Darkness(inner.darkness_q10_of(paper)),
+                core: Darkness(core.darkness_q10_of(paper)),
                 unreadable: None,
             }
         })

@@ -334,6 +334,28 @@ pub fn registration_metrics(runs: &[PageRun], n_template: usize) -> Value {
         .iter()
         .map(|r| r.measurement.registration.alias_margin)
         .collect();
+    let mut verify: Vec<f64> = runs
+        .iter()
+        .map(|r| r.measurement.registration.verify_margin)
+        .collect();
+    let mut band: Vec<f64> = runs
+        .iter()
+        .map(|r| r.measurement.registration.window_margin)
+        .collect();
+    let mut band_floor: Vec<f64> = runs
+        .iter()
+        .map(|r| r.measurement.registration.window_floor)
+        .collect();
+    let bands_failed: u32 = runs
+        .iter()
+        .map(|r| r.measurement.registration.windows_failed)
+        .sum();
+    let mut methods: BTreeMap<String, u32> = BTreeMap::new();
+    for r in runs {
+        *methods
+            .entry(format!("{:?}", r.measurement.registration.method))
+            .or_default() += 1;
+    }
     let mut radius: BTreeMap<String, u32> = BTreeMap::new();
     for r in runs {
         *radius
@@ -378,6 +400,11 @@ pub fn registration_metrics(runs: &[PageRun], n_template: usize) -> Value {
         "unreadable_bubbles": unreadable,
         "unreadable_by_field_cause": unreadable_by,
         "matched": quantiles(&mut matched),
+        "verify_margin": quantiles(&mut verify),
+        "band_margin": quantiles(&mut band),
+        "band_floor": quantiles(&mut band_floor),
+        "bands_failed": bands_failed,
+        "method": methods,
         "rms_px": quantiles(&mut rms),
         "scale": quantiles(&mut scale),
         "abs_rotation_deg": quantiles(&mut rot),
@@ -595,6 +622,11 @@ pub fn evaluate() -> Option<Value> {
     {
         cfg.decision.hysteresis = v;
     }
+    if std::env::var_os("OMR_EVAL_FORCE_CAMERA").is_some() {
+        // Diagnostics: an unreachable coarse alias margin fails the scanner path, so every page
+        // is registered (and verified) on the camera path.
+        cfg.registration.alias_min_margin_milli = 2_000;
+    }
     if std::env::var("OMR_EVAL_FALLBACK").is_ok_and(|v| v == "field_median") {
         cfg.baseline.fallback = omr_recog::BaselineFallback::FieldMedian;
     }
@@ -648,6 +680,12 @@ pub fn evaluate() -> Option<Value> {
         "decisions_single_page_prior": score(&runs, &res_single, &reference),
         "baseline_fallback_positions": pooled.source.iter().filter(|s| matches!(s, omr_recog::BaselineSource::Fallback)).count(),
     });
+    out["digests"] = json!({
+        "measurements": measurement_digest(&runs),
+        "decisions_pooled_batch": decision_digest(&res_pooled),
+        "decisions_per_file_batch": decision_digest(&res_slice),
+        "decisions_single_page_prior": decision_digest(&res_single),
+    });
     if let Some(meas) = read_json(&dir.join("measurements.json")) {
         out["vs_prototype_centres"] = compare_centres(&engine, &runs, &meas);
     }
@@ -658,4 +696,69 @@ pub fn evaluate() -> Option<Value> {
         std::fs::write(&path, serde_json::to_vec_pretty(&out).unwrap()).expect("write metrics");
     }
     Some(out)
+}
+
+/// FNV-1a 64 over a byte stream (an order-sensitive fingerprint, not a security hash).
+fn fnv(h: &mut u64, bytes: &[u8]) {
+    for &b in bytes {
+        *h ^= u64::from(b);
+        *h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+}
+
+/// A fingerprint of every bubble measurement (centre, snap, radius, darkness, unreadable cause)
+/// of every page: equal digests mean bit-identical measurements (aggregate only, no data).
+pub fn measurement_digest(runs: &[PageRun]) -> String {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for r in runs {
+        fnv(&mut h, r.tag.as_bytes());
+        fnv(&mut h, &r.page.to_le_bytes());
+        for b in &r.measurement.bubbles {
+            fnv(&mut h, &b.centre.x.to_bits().to_le_bytes());
+            fnv(&mut h, &b.centre.y.to_bits().to_le_bytes());
+            fnv(&mut h, &[u8::from(b.snapped)]);
+            fnv(&mut h, &b.radius_px.to_bits().to_le_bytes());
+            fnv(&mut h, &b.inner.0.to_le_bytes());
+            fnv(&mut h, &b.core.0.to_le_bytes());
+            fnv(&mut h, format!("{:?}", b.unreadable).as_bytes());
+        }
+    }
+    format!("{h:016x}")
+}
+
+/// A fingerprint of every decision (responses, routing, question exceptions, ID/section/date
+/// columns and review flags, choices, page-exception codes; not the registration diagnostics).
+pub fn decision_digest(results: &[LegacyPageResult]) -> String {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for r in results {
+        fnv(&mut h, &r.level.0.to_le_bytes());
+        for q in &r.questions {
+            fnv(
+                &mut h,
+                format!("{:?}{}{}", q.response, q.auto_accepted, q.logit.0).as_bytes(),
+            );
+            for e in &q.exceptions {
+                fnv(
+                    &mut h,
+                    format!("{}{:?}{:?}", e.code, e.severity, e.sub_reason).as_bytes(),
+                );
+            }
+        }
+        for g in [&r.student_number, &r.section, &r.date] {
+            fnv(&mut h, format!("{:?}{:?}", g.read, g.review).as_bytes());
+        }
+        for c in [&r.gender, &r.version, &r.exam] {
+            fnv(
+                &mut h,
+                format!("{:?}{}{}", c.response, c.confident, c.logit.0).as_bytes(),
+            );
+        }
+        for e in &r.exceptions {
+            fnv(
+                &mut h,
+                format!("{}{:?}{:?}", e.code, e.severity, e.sub_reason).as_bytes(),
+            );
+        }
+    }
+    format!("{h:016x}")
 }

@@ -15,8 +15,8 @@ use omr_model::Response;
 use shell_slint::app_backend::{AppBackend, GradeRequest, JobEvent, Spawn, run_grading};
 use shell_slint::backend::{Backend, Decision, ExamId, ItemId, Lane, ReviewAction, ReviewKind};
 use shell_slint::bind::Shell;
-use shell_slint::ui::{App, AppWindow, ExamsVM, Page, ResultsVM, ReviewVM, ScanVM, Theme};
-use slint::ComponentHandle;
+use shell_slint::ui::{App, AppWindow, ExamsVM, Page, ResultsVM, ReviewVM, ScanVM, SetupVM, Theme};
+use slint::{ComponentHandle, Model};
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
@@ -172,6 +172,43 @@ fn req_a11_real_backend_review_flow_rescores_results() {
     let results0 = h.app.borrow().results(&h.exam).expect("results");
     assert_eq!(results0.stats.students, MIDTERM.sheets as u32);
     assert_eq!(results0.stats.roster, MIDTERM.sheets as u32 + 2);
+    // item analysis (§12.2): the planted mis-key (form A Q12: nobody chose the printed key, the
+    // top group prefers the taught answer) is flagged with high confidence by the
+    // flag-stability job, and its row comes first; any flag of low confidence reads
+    // "(proposed)" in gold, after the high-confidence ones
+    let planted = results0
+        .items
+        .iter()
+        .find(|i| i.label == format!("A-Q{:02}", synth::MISKEY_Q + 1))
+        .expect("form A Q12");
+    let flag = planted.flags.first().expect("flagged");
+    assert!(
+        matches!(flag.code.as_deref(), Some("SCO-001" | "SCO-002")),
+        "{flag:?}"
+    );
+    assert!(
+        matches!(&flag.stability, shell_slint::backend::FlagStability::High { share: Some(s), .. } if *s >= 0.5),
+        "{flag:?}"
+    );
+    tab(ui, "Results").invoke_accessible_default_action();
+    let rows = ui.global::<ResultsVM>().get_items();
+    let first = rows.row_data(0).expect("an item row");
+    assert!(
+        first.label.starts_with("A-Q12,")
+            && first.label.contains("SCO-00")
+            && first.label.contains("high confidence: fires in"),
+        "{}",
+        first.label
+    );
+    let mut seen_low = false;
+    for r in rows.iter() {
+        if r.stability_kind == 2 {
+            seen_low = true;
+            assert!(r.flag.ends_with("(proposed)"), "{}", r.flag);
+        } else if seen_low && r.stability_kind == 1 {
+            panic!("a high-confidence flag after a proposed one: {}", r.label);
+        }
+    }
     let open0 = h.open_items();
     assert!(open0 >= 10, "the synthetic mix leaves review work: {open0}");
     tab(ui, &format!("Review, {open0} open")).invoke_accessible_default_action();
@@ -959,6 +996,7 @@ fn req_a11_real_backend_grades_live_through_pump() {
     let req = GradeRequest {
         definition: def.clone(),
         inputs: vec![scans],
+        key_sheets: Vec::new(),
         options: omr_app::GradeOptions {
             threads: 2,
             project_dir: Some(dir.path().join("live-quiz/project.omrproj")),
@@ -1141,4 +1179,511 @@ fn req_a11_real_backend_creates_an_exam_from_the_new_exam_form() {
         results.key_label
     );
     assert!(h.app.borrow().can_create_exam(), "the next exam can start");
+}
+
+/// C7: the New exam form's *Key sheets* field. The instructor's key sheets named there are read
+/// with the exam as key sheets (never graded as students), their originals stored, the run held
+/// until the key is confirmed in Setup; the confirmation publishes a key version whose source is
+/// the key sheets, naming both scans.
+#[test]
+fn req_a11_real_backend_new_exam_reads_the_named_key_sheets() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let spec = synth::Spec {
+        sheets: 6,
+        ..synth::BARE
+    };
+    let scans = synth::write_scans(&spec, &dir.path().join("scans"));
+    let keys = synth::write_key_sheets(&spec, &dir.path().join("keys"), false);
+    let ws = dir.path().join("exams");
+    std::fs::create_dir_all(&ws).expect("workspace");
+    let (spawn, held) = held_spawner();
+    let mut app = AppBackend::workspace(&ws, "principal:a11-instructor");
+    app.set_spawner(spawn);
+    let h = harness_for(app, ExamId("none".into()));
+    let ui = &h.ui;
+    tall(ui);
+    one(ui, "New exam").invoke_accessible_default_action();
+    one(ui, "Scan files or folders").set_accessible_value(scans.to_str().unwrap());
+    one(ui, "Exam title").set_accessible_value(spec.title);
+    one(ui, "Course code").set_accessible_value(spec.course_code);
+    one(ui, "Number of questions").set_accessible_value("30");
+    one(ui, "Form letters").set_accessible_value("A, B");
+    let both = format!(
+        "{};{}",
+        keys[0].to_str().unwrap(),
+        keys[1].to_str().unwrap()
+    );
+    one(ui, "Key sheets").set_accessible_value(&both);
+    one(ui, "Grade exam").invoke_accessible_default_action();
+    let msg = ui.global::<App>().get_message().to_string();
+    assert!(
+        msg.contains("Grading 6 scan files") && msg.contains("read from the key sheets"),
+        "{msg}"
+    );
+    run_held(&h, &held);
+    assert_eq!(h.app.borrow().grading_error(), None);
+    let exam = h.app.borrow().default_exam().expect("the new exam");
+    let state = |h: &Harness| {
+        h.app
+            .borrow()
+            .with_project(&exam, |p| {
+                let ks = &p.session.key_sheets;
+                (
+                    ks.sheets.len(),
+                    ks.sheets.iter().all(|k| k.declared && k.usable()),
+                    p.session.booklets.len(),
+                    p.session.key_unconfirmed(),
+                    p.scoring.is_some(),
+                )
+            })
+            .expect("project")
+    };
+    assert_eq!(
+        state(&h),
+        (2, true, 6, true, false),
+        "two named key sheets, six students, held until confirmed"
+    );
+    // confirmed in Setup, as the message says
+    h.shell.navigate(Page::Setup);
+    let su = ui.global::<SetupVM>();
+    assert!(su.get_has_keysheets());
+    one(ui, "Confirm every version").invoke_accessible_default_action();
+    let msg = ui.global::<App>().get_message().to_string();
+    assert!(
+        msg.contains("Key confirmed") && msg.contains("published from the key sheets"),
+        "{msg}"
+    );
+    let (sheets, declared, booklets, unconfirmed, scored) = state(&h);
+    assert_eq!((sheets, declared, booklets), (2, true, 6));
+    assert!(!unconfirmed && scored, "scored once the key is confirmed");
+    let provenance = h
+        .app
+        .borrow()
+        .with_project(&exam, |p| {
+            let ev: Vec<_> = p
+                .store()
+                .expect("store")
+                .events()
+                .expect("events")
+                .into_iter()
+                .filter(|e| {
+                    e.event_type == "KeyVersionPublished" && e.payload["source"] == "key_sheet"
+                })
+                .collect();
+            let n = ev
+                .last()
+                .and_then(|e| e.payload["scans"].as_array().map(Vec::len))
+                .unwrap_or(0);
+            (ev.len(), n)
+        })
+        .expect("project");
+    assert_eq!(provenance, (1, 2), "the key version names both key sheets");
+}
+
+/// The labels of the key-sheet rows of the version shown ("Question 7 version A: …"), from
+/// the view-model (a list view instantiates only the rows in view).
+fn key_rows(ui: &AppWindow) -> Vec<String> {
+    ui.global::<SetupVM>()
+        .get_ks_rows()
+        .iter()
+        .map(|r| r.label.to_string())
+        .collect()
+}
+
+/// A window tall enough for every key-sheet row to be instantiated, so each row's choices can
+/// be driven through their labels.
+fn tall(ui: &AppWindow) {
+    ui.window().set_size(slint::PhysicalSize::new(1440, 2400));
+}
+
+/// §10.1 (CR-11): an exam graded with the instructor's key sheets (named, no key file) is held
+/// until the key is confirmed, and the confirmation is taken in Setup through accessible
+/// labels. The key sheets are listed on Scan as key sheets, never as students; Results says
+/// why there is nothing yet and leads to Setup; the three rows of version A that wait for a
+/// decision (two marks, no mark, a faint mark) are highlighted and block the confirmation
+/// until each is decided; version A is confirmed alone (still held), then version B lifts the
+/// hold. The confirmation is recorded with the operator and the scans, and the scores equal
+/// grading the same students with the same key as a file.
+#[test]
+fn req_a11_real_backend_confirms_the_key_from_key_sheets() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let spec = synth::Spec {
+        sheets: 12,
+        ..synth::FINAL
+    };
+    let built = synth::build_with_key_sheets(&spec, dir.path());
+    let h =
+        harness(AppBackend::project(&built.exam_dir, "principal:a11-instructor").expect("open"));
+    let ui = &h.ui;
+    tall(ui);
+
+    // held: nothing is scored; Results says why and leads to Setup
+    assert!(h.app.borrow().results(&h.exam).is_none());
+    let hold = h.app.borrow().hold(&h.exam).expect("held");
+    assert!(hold.contains("not confirmed"), "{hold}");
+    tab(ui, "Results").invoke_accessible_default_action();
+    assert!(!ui.global::<ResultsVM>().get_available());
+    assert_eq!(
+        ui.global::<ResultsVM>().get_empty_title(),
+        "Results wait for the key"
+    );
+    one(ui, "Confirm the key in Setup").invoke_accessible_default_action();
+    assert_eq!(ui.global::<App>().get_page(), Page::Setup);
+
+    // Scan: the two key sheets are listed as key sheets, never as students
+    h.shell.navigate(Page::Scan);
+    let keys: Vec<String> = with_prefix(ui, "Key sheet ")
+        .into_iter()
+        .map(|(l, _)| l)
+        .collect();
+    assert_eq!(keys.len(), 2, "{keys:?}");
+    for v in ["A", "B"] {
+        assert!(
+            keys.iter()
+                .any(|l| l.contains(&format!("version {v}, not a student"))
+                    && l.contains("waits for your confirmation")),
+            "{keys:?}"
+        );
+    }
+    assert!(with_prefix(ui, "Sheet ").len() <= spec.sheets);
+    let recon: Vec<(String, String)> = ui
+        .global::<ScanVM>()
+        .get_recon()
+        .iter()
+        .map(|kv| (kv.label.to_string(), kv.value.to_string()))
+        .collect();
+    assert!(
+        recon.contains(&("Key sheets, not students (§10.1)".into(), "2".into())),
+        "{recon:?}"
+    );
+    assert!(
+        recon.contains(&("Booklets".into(), spec.sheets.to_string())),
+        "{recon:?}"
+    );
+    assert_eq!(ui.global::<ScanVM>().get_key_sheet_count(), 2);
+    let activity: Vec<String> = ui
+        .global::<ScanVM>()
+        .get_activity()
+        .iter()
+        .map(|a| a.to_string())
+        .collect();
+    assert_eq!(
+        activity.iter().filter(|a| a.starts_with("KEY ")).count(),
+        2,
+        "{activity:?}"
+    );
+
+    // Setup opens on the key summary of the held exam; version A's three rows wait
+    h.shell.navigate(Page::Setup);
+    let su = ui.global::<SetupVM>();
+    assert!(su.get_ks_open() && su.get_ks_pending());
+    assert!(
+        su.get_ks_source().contains("not confirmed"),
+        "{}",
+        su.get_ks_source()
+    );
+    let rows = key_rows(ui);
+    assert_eq!(rows.len(), usize::from(synth::QUESTIONS), "{rows:?}");
+    let waiting: Vec<&String> = rows
+        .iter()
+        .filter(|l| l.contains("needs your decision"))
+        .collect();
+    assert_eq!(waiting.len(), 3, "{waiting:?}");
+    let row = |q: u16| {
+        rows.iter()
+            .find(|l| l.starts_with(&format!("Question {} version A:", q + 1)))
+            .cloned()
+            .unwrap_or_default()
+    };
+    assert!(
+        row(synth::KEY_SHEET_MULTI).contains("several marks"),
+        "{}",
+        row(synth::KEY_SHEET_MULTI)
+    );
+    assert!(
+        row(synth::KEY_SHEET_BLANK).contains("no mark"),
+        "{}",
+        row(synth::KEY_SHEET_BLANK)
+    );
+    assert!(
+        row(synth::KEY_SHEET_FAINT).contains("needs your decision"),
+        "{}",
+        row(synth::KEY_SHEET_FAINT)
+    );
+    // every row carries its scan, straightened, with the marks outlined
+    let sum = h.app.borrow().key_sheets(&h.exam).expect("summary");
+    assert!(
+        sum.versions[0]
+            .rows
+            .iter()
+            .all(|r| r.crop.as_ref().is_some_and(|c| c.width > 2 * c.height))
+    );
+    // confirming waits for the three decisions
+    let confirm = one(ui, "Confirm version A");
+    assert_eq!(confirm.accessible_enabled(), Some(false));
+    confirm.invoke_accessible_default_action();
+    assert!(
+        h.app.borrow().results(&h.exam).is_none(),
+        "nothing confirmed yet"
+    );
+    // the instructor decides: the intended answer for the double mark and the faint mark,
+    // void for the empty row
+    let k = |q: u16| letter(synth::key(&spec, 0, q));
+    let q = |x: u16| format!("Q{:02}", x + 1);
+    one(
+        ui,
+        &format!(
+            "{} version A answer {}",
+            q(synth::KEY_SHEET_MULTI),
+            k(synth::KEY_SHEET_MULTI)
+        ),
+    )
+    .invoke_accessible_default_action();
+    one(ui, &format!("{} version A void", q(synth::KEY_SHEET_BLANK)))
+        .invoke_accessible_default_action();
+    one(
+        ui,
+        &format!(
+            "{} version A answer {}",
+            q(synth::KEY_SHEET_FAINT),
+            k(synth::KEY_SHEET_FAINT)
+        ),
+    )
+    .invoke_accessible_default_action();
+    assert!(
+        key_rows(ui)
+            .iter()
+            .all(|l| !l.contains("needs your decision"))
+    );
+    let confirm = one(ui, "Confirm version A");
+    assert_eq!(confirm.accessible_enabled(), Some(true));
+    confirm.invoke_accessible_default_action();
+    let msg = ui.global::<App>().get_message().to_string();
+    assert!(
+        msg.contains("Version A confirmed") && msg.contains("B waits"),
+        "{msg}"
+    );
+    assert!(
+        h.app.borrow().results(&h.exam).is_none(),
+        "still held until B"
+    );
+
+    // version B: every row read; confirming it publishes the key and scores the exam
+    one(ui, "Key sheets version B, ready to confirm").invoke_accessible_default_action();
+    assert_eq!(su.get_ks_version_letter(), "B");
+    one(ui, "Confirm version B").invoke_accessible_default_action();
+    let msg = ui.global::<App>().get_message().to_string();
+    assert!(
+        msg.contains("Key confirmed") && msg.contains("published"),
+        "{msg}"
+    );
+    let r = h.app.borrow().results(&h.exam).expect("scored");
+    assert_eq!(r.stats.students, spec.sheets as u32);
+    assert!(r.key_label.contains("in force"), "{}", r.key_label);
+    assert!(h.app.borrow().hold(&h.exam).is_none());
+    // the confirmation is recorded with the operator and the key-sheet scans
+    let (confirmations, voided) = h
+        .app
+        .borrow()
+        .with_project(&h.exam, |p| {
+            let ks = &p.session.key_sheets;
+            let c: Vec<(String, usize)> = ks
+                .confirmed
+                .iter()
+                .map(|c| (c.by.clone(), c.scans.len()))
+                .collect();
+            let k = p.session.key.as_ref().expect("key");
+            (
+                c,
+                k.forms[0][usize::from(synth::KEY_SHEET_BLANK)] == omr_app::model::KeyCell::Void,
+            )
+        })
+        .expect("project");
+    assert_eq!(
+        confirmations,
+        vec![
+            ("principal:a11-instructor".to_string(), 1),
+            ("principal:a11-instructor".to_string(), 1)
+        ]
+    );
+    assert!(voided, "the empty row was voided as decided");
+    // the scores equal grading the same students with the same key as a file
+    let mut def = synth::definition(&spec);
+    def.key = omr_app::KeySource::Provided {
+        forms: (0..2)
+            .map(|f| omr_app::FormKey {
+                form: ["A", "B"][f].into(),
+                answers: (0..synth::QUESTIONS)
+                    .map(|q| {
+                        if f == 0 && q == synth::KEY_SHEET_BLANK {
+                            "*".to_string()
+                        } else {
+                            letter(synth::key(&spec, f, q))
+                        }
+                    })
+                    .collect(),
+            })
+            .collect(),
+    };
+    def.exam_id = def.derived_exam_id();
+    let filed = dir.path().join("with-key-file/project.omrproj");
+    grade(
+        &def,
+        &dir.path().join(format!("scans-{}", spec.folder)),
+        &filed,
+    );
+    let other = ExamProject::open_read_only(&filed).expect("reopen");
+    let pct = |p: &ExamProject| -> Vec<String> {
+        let sc = p.scoring.as_ref().expect("scoring");
+        let run = sc.run.as_ref().expect("run");
+        run.students
+            .iter()
+            .map(|s| format!("{:?}", s.final_pct))
+            .collect()
+    };
+    let ours = h.app.borrow().with_project(&h.exam, pct).expect("project");
+    assert_eq!(
+        ours,
+        pct(&other),
+        "the same scores as with the key as a file"
+    );
+}
+
+/// §10.1 in Setup: "Read key from answer sheet…" reads the instructor's key-sheet files for an
+/// exam graded with an inferred key, shows the key they give (nothing changes yet) and, once
+/// confirmed, makes them the exam's own key sheets (C7: their originals stored with the scans,
+/// the key version published with the key sheets as its source and the instructor's name), no
+/// longer INFERRED. A student's sheet named as a key sheet gives no key: its grid shows no
+/// key-sheet marker (never a wrong key).
+#[test]
+fn req_a11_real_backend_reads_a_key_from_answer_sheets_in_setup() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let spec = synth::Spec {
+        sheets: 8,
+        ..synth::QUIZ
+    };
+    let scans = synth::write_scans(&spec, &dir.path().join("scans"));
+    let project = dir.path().join("quiz/project.omrproj");
+    grade(&synth::definition(&spec), &scans, &project);
+    let keys = synth::write_key_sheets(&spec, &dir.path().join("keys"), false);
+    let h = harness(AppBackend::project(&project, "principal:a11-instructor").expect("open"));
+    let ui = &h.ui;
+    tall(ui);
+    let su = ui.global::<SetupVM>();
+    let inferred = |h: &Harness| {
+        h.app
+            .borrow()
+            .results(&h.exam)
+            .expect("results")
+            .key_label
+            .to_uppercase()
+            .contains("INFERRED")
+    };
+    assert!(inferred(&h));
+    h.shell.navigate(Page::Setup);
+    assert!(!su.get_has_keysheets());
+
+    // a student's sheet named as a key sheet: refused, the key is untouched
+    one(ui, "Read key from answer sheet…").invoke_accessible_default_action();
+    assert!(su.get_ks_bar_open());
+    one(ui, "Key-sheet files").set_accessible_value(scans.join("scan-000.jpg").to_str().unwrap());
+    one(ui, "Read key sheets").invoke_accessible_default_action();
+    let msg = ui.global::<App>().get_message().to_string();
+    assert!(msg.contains("No key could be read"), "{msg}");
+    assert!(su.get_ks_open());
+    assert_eq!(su.get_ks_scans().row_count(), 1);
+    assert_ne!(su.get_ks_scans().row_data(0).unwrap().refusal, "");
+    assert_eq!(
+        one(ui, "Confirm").accessible_enabled(),
+        Some(false),
+        "nothing to confirm"
+    );
+    one(ui, "Put aside").invoke_accessible_default_action();
+    assert!(ui.global::<App>().get_message().contains("unchanged"));
+    assert!(inferred(&h));
+
+    // the instructor's two key sheets
+    one(ui, "Read key from answer sheet…").invoke_accessible_default_action();
+    let both = format!(
+        "{};{}",
+        keys[0].to_str().unwrap(),
+        keys[1].to_str().unwrap()
+    );
+    one(ui, "Key-sheet files").set_accessible_value(&both);
+    one(ui, "Read key sheets").invoke_accessible_default_action();
+    let msg = ui.global::<App>().get_message().to_string();
+    assert!(
+        msg.contains("version A and B") && msg.contains("nothing changes until you confirm"),
+        "{msg}"
+    );
+    assert!(su.get_ks_open() && su.get_ks_preview());
+    assert!(
+        su.get_ks_source().contains("not confirmed"),
+        "{}",
+        su.get_ks_source()
+    );
+    assert!(inferred(&h), "nothing changes before the confirmation");
+    let rows = key_rows(ui);
+    assert_eq!(rows.len(), usize::from(synth::QUESTIONS));
+    assert!(rows.iter().all(|l| l.contains(", read, key ")), "{rows:?}");
+    one(ui, "Confirm every version").invoke_accessible_default_action();
+    let msg = ui.global::<App>().get_message().to_string();
+    assert!(
+        msg.contains("in force") && msg.contains("confirmed by you"),
+        "{msg}"
+    );
+    assert!(!inferred(&h), "the key is the instructor's now");
+    assert!(
+        su.get_has_keysheets(),
+        "the key sheets are the exam's own now, shown confirmed"
+    );
+    // C7: the audited path, as with key sheets graded with the exam: the key version names its
+    // source and every key-sheet scan, whose original the project stores.
+    let provenance = h
+        .app
+        .borrow()
+        .with_project(&h.exam, |p| {
+            let ev = p
+                .store()
+                .expect("store")
+                .events()
+                .expect("events")
+                .into_iter()
+                .filter(|e| {
+                    e.event_type == "KeyVersionPublished" && e.payload["source"] == "key_sheet"
+                })
+                .collect::<Vec<_>>();
+            let scans = ev
+                .last()
+                .and_then(|e| e.payload["scans"].as_array().cloned())
+                .unwrap_or_default();
+            (ev.len(), scans.len(), p.session.key_sheets.sheets.len())
+        })
+        .expect("project");
+    assert_eq!(
+        provenance,
+        (1, 2, 2),
+        "one key version from both key sheets"
+    );
+    let key: Vec<Vec<String>> = h
+        .app
+        .borrow()
+        .with_project(&h.exam, |p| {
+            let k = p.session.key.as_ref().expect("key");
+            k.forms
+                .iter()
+                .map(|f| f.iter().map(omr_app::model::KeyCell::text).collect())
+                .collect()
+        })
+        .expect("project");
+    for (f, answers) in key.iter().enumerate().take(2) {
+        for (q, a) in answers.iter().enumerate() {
+            assert_eq!(
+                *a,
+                letter(synth::key(&spec, f, q as u16)),
+                "form {f} Q{}",
+                q + 1
+            );
+        }
+    }
 }

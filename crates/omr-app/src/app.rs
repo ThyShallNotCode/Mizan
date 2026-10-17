@@ -77,6 +77,8 @@ pub struct ExamProject {
     sources: Mutex<BTreeMap<usize, Arc<SourceFile>>>,
     pages: Mutex<Vec<(usize, Arc<GrayImage>)>>,
     recognizer: Mutex<Option<Arc<Recognizer>>>,
+    /// The flag-stability job's result (§12.2) for the score run it was computed on.
+    stability: Mutex<Option<omr_analytics::StabilityReport>>,
 }
 
 /// Booklets per snapshot chunk file (`booklets-NNNNN.json`): a review action rewrites the
@@ -240,6 +242,7 @@ impl ExamProject {
         let result = crate::pipeline::grade(def, inputs, opts, progress).and_then(|g| {
             let mut p = Self::from_graded(g);
             p.save()?;
+            p.judge_flags()?;
             Ok(p)
         });
         if result.is_err()
@@ -248,6 +251,59 @@ impl ExamProject {
             let _ = std::fs::remove_dir_all(dir);
         }
         result
+    }
+
+    /// [`Self::grade`] with key-sheet files (§10.1, `omr grade --key-sheet`): every sheet in
+    /// `key_sheets` is a key sheet, read by the same recognizer and held for the instructor's
+    /// confirmation ([`Self::confirm_key_sheets`]); nothing is scored from it until then.
+    pub fn grade_with_key_sheets(
+        def: &ExamDefinition,
+        inputs: &[PathBuf],
+        key_sheets: &[PathBuf],
+        opts: &GradeOptions,
+        progress: &(dyn Fn(&Progress) + Sync),
+    ) -> Result<Self, AppError> {
+        if key_sheets.is_empty() {
+            return Self::grade(def, inputs, opts, progress);
+        }
+        let fresh = opts.project_dir.as_ref().filter(|d| !d.exists()).cloned();
+        if let Some(parent) = fresh
+            .as_deref()
+            .and_then(Path::parent)
+            .filter(|d| !d.as_os_str().is_empty() && !d.exists())
+        {
+            crate::keys::create_private_dir(parent)?;
+        }
+        let result =
+            crate::pipeline::grade_with_key_sheets(def, inputs, key_sheets, opts, progress)
+                .and_then(|g| {
+                    let mut p = Self::from_graded(g);
+                    p.save()?;
+                    p.judge_flags()?;
+                    Ok(p)
+                });
+        if result.is_err()
+            && let Some(dir) = fresh
+        {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        result
+    }
+
+    /// Makes the originals of an exam graded in memory available for page images and crops
+    /// (no project store holds them), matched by SHA-384.
+    pub(crate) fn prefill_sources(&self, files: Vec<SourceFile>) {
+        let mut cache = self.sources.lock().expect("sources lock");
+        for f in files {
+            if let Some(i) = self
+                .session
+                .sources
+                .iter()
+                .position(|s| s.sha384 == f.sha384)
+            {
+                cache.insert(i, Arc::new(f));
+            }
+        }
     }
 
     /// Wraps a pipeline result.
@@ -264,6 +320,7 @@ impl ExamProject {
             sources: Mutex::new(BTreeMap::new()),
             pages: Mutex::new(Vec::new()),
             recognizer: Mutex::new(None),
+            stability: Mutex::new(None),
         }
     }
 
@@ -382,6 +439,7 @@ impl ExamProject {
             sources: Mutex::new(BTreeMap::new()),
             pages: Mutex::new(Vec::new()),
             recognizer: Mutex::new(None),
+            stability: Mutex::new(None),
         })
     }
 
@@ -424,6 +482,7 @@ impl ExamProject {
             sources: Mutex::new(BTreeMap::new()),
             pages: Mutex::new(Vec::new()),
             recognizer: Mutex::new(None),
+            stability: Mutex::new(None),
         })
     }
 
@@ -475,6 +534,9 @@ impl ExamProject {
     /// is completed on the next open; a snapshot edited outside the app no longer opens
     /// (SYS-011). Nothing is written when nothing changed.
     pub fn save(&mut self) -> Result<(), AppError> {
+        // The release gate's mis-key check follows the score run (§12.2): a new run reads
+        // "computing…" until `judge_flags` has run for it.
+        self.session.flags.current_run = self.current_run_id();
         let Some(st) = self.store.as_mut() else {
             return Ok(());
         };
@@ -640,6 +702,11 @@ impl ExamProject {
         let Some(item) = self.session.review.item(item_id) else {
             return false;
         };
+        // A probable mis-key (SCO-001) is never kept without the instructor's reason (§12.2:
+        // "keep with a note"); a key change carries KEY_ERROR by default.
+        if item.flag.is_some() {
+            return matches!(decision, Decision::Acknowledge);
+        }
         let Some(sugg) = &item.suggestion else {
             return false;
         };
@@ -735,6 +802,25 @@ impl ExamProject {
             return Err(AppError::Review(format!(
                 "item {item_id} is already resolved (use undo to re-open it)"
             )));
+        }
+        if item.flag.is_some() {
+            if matches!(action, Action::ApplyToGroup { .. }) {
+                return Err(AppError::Review(format!(
+                    "item {item_id} is a probable mis-key (SCO-001): decide it on its own"
+                )));
+            }
+            if let Action::Resolve {
+                decision: Decision::Acknowledge,
+                ..
+            } = &action
+                && reason.as_ref().is_none_or(|r| r.note.trim().is_empty())
+            {
+                return Err(AppError::Review(format!(
+                    "keeping the key of item {item_id}, a probable mis-key (SCO-001), needs a \
+                     reason code and a note saying why (§12.2), e.g. --reason ADJUDICATION --note \
+                     \"checked with the instructor: the key is right\""
+                )));
+            }
         }
         let mut changes = Vec::new();
         // A group member that refuses the decision after others took it (e.g. one student
@@ -1095,6 +1181,89 @@ impl ExamProject {
                 }
                 self.rescore_booklet(bi, was_scored)?;
             }
+            ItemKind::Notice if item.flag.is_some() => {
+                // A probable mis-key (§12.2): change the key to an option, accept the key or d,
+                // void the item, or keep the key (with a reason and a note, checked above).
+                let fl = item.flag.clone().expect("checked");
+                let (form, q, d) = (fl.form.unwrap_or(0), usize::from(fl.question), fl.option);
+                let labels = def.option_labels();
+                let letter = |o: u8| {
+                    labels
+                        .get(usize::from(o))
+                        .cloned()
+                        .unwrap_or_else(|| (o + 1).to_string())
+                };
+                let cur = self
+                    .session
+                    .key
+                    .as_ref()
+                    .and_then(|k| k.forms.get(form))
+                    .and_then(|f| f.get(q))
+                    .cloned()
+                    .ok_or_else(|| AppError::Review("the exam has no key entry for it".into()))?;
+                let cell = match &decision {
+                    Decision::Option(o) if *o < def.options => Some(KeyCell::Options(vec![*o])),
+                    Decision::Multi(v) => {
+                        let mut both = match &cur {
+                            KeyCell::Options(k) => k.clone(),
+                            _ => Vec::new(),
+                        };
+                        both.push(d);
+                        both.sort_unstable();
+                        both.dedup();
+                        let mut given = v.clone();
+                        given.sort_unstable();
+                        given.dedup();
+                        if !given.is_empty() && given != both {
+                            return Err(AppError::Review(format!(
+                                "accepting a second answer accepts the key or {}: decide `multi` \
+                                 without options",
+                                letter(d)
+                            )));
+                        }
+                        Some(KeyCell::Options(both))
+                    }
+                    Decision::Void => Some(KeyCell::Void),
+                    Decision::Acknowledge => None,
+                    other => {
+                        return Err(AppError::Review(format!(
+                            "{} does not decide a probable mis-key: change the key to an option \
+                             (a letter), accept the key or {} (multi), void the item (void), or \
+                             keep the key with a reason and a note (ack)",
+                            other.text(&labels, &def.forms),
+                            letter(d)
+                        )));
+                    }
+                };
+                match cell {
+                    Some(c) if c == cur => {
+                        return Err(AppError::Review(
+                            "that is the key in force: to keep it, acknowledge (ack) with a \
+                             reason code and a note"
+                                .into(),
+                        ));
+                    }
+                    Some(c) => {
+                        let r = why(if c == KeyCell::Void {
+                            "ITEM_VOIDED_FLAWED"
+                        } else {
+                            "KEY_ERROR"
+                        });
+                        self.change_key_entry(form, q, c, &r)?;
+                    }
+                    None => {
+                        if let Some(st) = self.store.as_mut() {
+                            st.event_with_reason(
+                                "ReviewItemAcknowledged",
+                                "review_item",
+                                &item.id.to_string(),
+                                json!({"code": item.code, "sub_reason": item.sub_reason}),
+                                &why("ADJUDICATION"),
+                            )?;
+                        }
+                    }
+                }
+            }
             ItemKind::Notice => {
                 if !matches!(decision, Decision::Acknowledge) {
                     return Err(AppError::Review(
@@ -1274,11 +1443,18 @@ impl ExamProject {
                 "form {form} question {question}"
             )));
         }
+        if self.session.key_unconfirmed() {
+            return Err(AppError::Review(format!(
+                "the key comes from key sheets that are not confirmed yet: decide question \
+                 {question} when you confirm them (omr key confirm --answer {question}={answer}), \
+                 or give the whole key as a file (omr key replace)"
+            )));
+        }
         let q = question as usize - 1;
         let cell: KeyCell = parse_key_entry(answer, def.options)
             .map_err(AppError::Review)?
             .into();
-        let Some(mut key) = self.session.key.clone() else {
+        let Some(key) = self.session.key.clone() else {
             return Err(AppError::Scoring(
                 "the exam has no key yet; supply the whole key first (omr key replace --key \
                  key.csv)"
@@ -1286,6 +1462,51 @@ impl ExamProject {
             ));
         };
         let was_missing = key.forms[form][q] == KeyCell::Missing;
+        let r = reason.unwrap_or_else(|| {
+            ReviewReason::code(if was_missing {
+                "CLERICAL_CORRECTION"
+            } else {
+                "KEY_ERROR"
+            })
+        });
+        let given = self.stored_reason(&r)?;
+        self.change_key_entry(form, q, cell, &given)?;
+        self.save()?;
+        Ok(())
+    }
+
+    /// One key entry changed (`form` 0-based, `q` 0-based) as a new key version: rescored
+    /// without re-projecting, published with its reason (`KeyEntryChanged`), the release
+    /// superseded; not saved. Shared items change on every form.
+    fn change_key_entry(
+        &mut self,
+        form: usize,
+        q: usize,
+        cell: KeyCell,
+        reason: &omr_store::Reason,
+    ) -> Result<u32, AppError> {
+        let def = self.session.definition.clone();
+        if self.session.key_unconfirmed() {
+            return Err(AppError::Review(format!(
+                "the key comes from key sheets that are not confirmed yet: decide question {} \
+                 when you confirm them (omr key confirm), or give the whole key as a file (omr \
+                 key replace)",
+                q + 1
+            )));
+        }
+        let Some(mut key) = self.session.key.clone() else {
+            return Err(AppError::Scoring(
+                "the exam has no key yet; supply the whole key first (omr key replace --key \
+                 key.csv)"
+                    .into(),
+            ));
+        };
+        if form >= key.forms.len() || q >= key.forms[form].len() {
+            return Err(AppError::NotFound(format!(
+                "form {form} question {}",
+                q + 1
+            )));
+        }
         if key.shared_items {
             for f in key.forms.iter_mut() {
                 f[q] = cell.clone();
@@ -1305,21 +1526,33 @@ impl ExamProject {
                 self.scoring = Scoring::build(&self.session)?;
             }
         }
-        let r = reason.unwrap_or_else(|| {
-            ReviewReason::code(if was_missing {
-                "CLERICAL_CORRECTION"
+        // A key read from key sheets and corrected after its confirmation: the correction is
+        // the instructor's decision on that row, so a later re-confirmation (a rescan of the
+        // key sheet in an appended batch drops the confirmation) keeps it, shown as decided,
+        // instead of reverting silently to what the sheet shows.
+        let ks = &mut self.session.key_sheets;
+        if ks.any() && !ks.superseded {
+            let text = key.forms[form][q].text();
+            let forms: Vec<usize> = if key.shared_items {
+                (0..key.forms.len()).collect()
             } else {
-                "KEY_ERROR"
-            })
-        });
-        self.publish_key(
+                vec![form]
+            };
+            for f in forms {
+                ks.decisions.push(crate::model::KeyRowDecision {
+                    form: f,
+                    question: q,
+                    answer: text.clone(),
+                });
+            }
+        }
+        self.publish_key_with(
             "KeyEntryChanged",
-            json!({"form": form as u64 + 1, "question": question, "key_version": key.version}),
-            &r,
+            json!({"form": form as u64 + 1, "question": q as u64 + 1, "key_version": key.version}),
+            reason,
         )?;
         self.after_release("key entry changed")?;
-        self.save()?;
-        Ok(())
+        Ok(key.version)
     }
 
     /// Publishes the key in force as a new key version with its reason (`KeyVersionPublished`,
@@ -1330,8 +1563,19 @@ impl ExamProject {
         payload: serde_json::Value,
         reason: &ReviewReason,
     ) -> Result<(), AppError> {
-        let exam = self.session.definition.exam_id.to_string();
         let r = self.stored_reason(reason)?;
+        self.publish_key_with(ty, payload, &r)
+    }
+
+    /// [`Self::publish_key`] with the reason in its store form.
+    fn publish_key_with(
+        &mut self,
+        ty: &str,
+        payload: serde_json::Value,
+        r: &omr_store::Reason,
+    ) -> Result<(), AppError> {
+        let exam = self.session.definition.exam_id.to_string();
+        let r = r.clone();
         if let Some(st) = self.store.as_mut() {
             if let Some(sc) = &self.scoring {
                 st.put_scoring_setup(sc)?;
@@ -1367,9 +1611,15 @@ impl ExamProject {
         let crate::exam::KeySource::Provided { forms } = &def.key else {
             unreachable!("set above");
         };
-        let version = self.session.key.as_ref().map_or(1, |k| k.version + 1);
+        let unconfirmed = self.session.key_unconfirmed();
+        // An unconfirmed key-sheet key was never published: the file's key takes its number.
+        let version = match &self.session.key {
+            Some(k) if unconfirmed => k.version,
+            Some(k) => k.version + 1,
+            None => 1,
+        };
         let mut key = crate::pipeline::provided_key(&def, forms, version)?;
-        if let Some(old) = &self.session.key {
+        if let Some(old) = self.session.key.as_ref().filter(|_| !unconfirmed) {
             if old.shared_items && !key.shared_items {
                 return Err(AppError::Scoring(
                     "the new key gives the forms different answers, but the exam was graded \
@@ -1400,6 +1650,17 @@ impl ExamProject {
         let mut session = self.session.clone();
         session.definition = def;
         session.key = Some(key.clone());
+        // A key file replaces key sheets (§10.1): the hold lifts, the sheets stay listed.
+        let hold_rows = if session.key_sheets.any() && !session.key_sheets.superseded {
+            session.key_sheets.superseded = true;
+            crate::keysheet::refresh_pending(&mut session.key_sheets);
+            session
+                .exam_exceptions
+                .retain(|e| e.sub_reason.as_deref() != Some(crate::keysheet::HOLD));
+            std::mem::take(&mut session.key_sheets.hold_rows)
+        } else {
+            Vec::new()
+        };
         refresh_inferred_forms(&mut session, &key);
         // Rescore first, then commit: a refused key leaves the exam untouched.
         let scoring = Scoring::build(&session)?;
@@ -1440,14 +1701,309 @@ impl ExamProject {
                 }
             }
         }
+        if !hold_rows.is_empty() {
+            let r = self.stored_reason(&reason)?;
+            if let Some(st) = self.store.as_mut() {
+                st.resolve(&hold_rows, &r, "key_file_replaces_key_sheets")?;
+            }
+        }
         self.publish_key(
             "KeyReplaced",
-            json!({"key_version": version, "forms": self.session.definition.forms.len(), "replaces_inferred": was_inferred}),
+            json!({"key_version": version, "forms": self.session.definition.forms.len(), "replaces_inferred": was_inferred, "replaces_key_sheets": !hold_rows.is_empty()}),
             &reason,
         )?;
         self.after_release("key replaced")?;
         self.save()?;
         Ok(())
+    }
+
+    /// The instructor confirms the key read from key sheets (§10.1: key-sheet responses are
+    /// never auto-accepted; the instructor MUST confirm the rendered key summary,
+    /// [`Self::key_sheet_summary`]). `version` confirms one version (form index), `None` every
+    /// version read and not yet confirmed. `decisions` settle rows first (several marks, blank,
+    /// an option not used, a mark not read confidently, sheets that disagree: `B`, `A|C` to
+    /// accept both explicitly, `*` to void); a version with a row left undecided is refused,
+    /// naming each row and what to write (R10).
+    ///
+    /// When the last waiting version is confirmed the hold (SCO-003 `key_sheet_unconfirmed`)
+    /// lifts: the key is published as a key version whose `KeyVersionPublished` event names the
+    /// source (`key_sheet`), every scan's SHA-384 and the confirming operator; inferred forms
+    /// are re-inferred under it and the exam is scored. A key sheet that cannot be read holds
+    /// the run until it is rescanned or a key file replaces the key ([`Self::replace_key`]).
+    pub fn confirm_key_sheets(
+        &mut self,
+        version: Option<usize>,
+        decisions: Vec<crate::model::KeyRowDecision>,
+        reason: Option<ReviewReason>,
+    ) -> Result<crate::keysheet::KeyConfirmReport, AppError> {
+        use crate::keysheet::{HOLD, key_cells, open_rows, refresh_pending};
+        if let Some(r) = &reason {
+            r.validate().map_err(AppError::Review)?;
+        }
+        let def = self.session.definition.clone();
+        let n = usize::from(def.questions);
+        if !self.session.key_unconfirmed() {
+            return Err(AppError::Review(
+                if self.session.key_sheets.any() {
+                    "the key from the key sheets is already confirmed (or a key file replaced \
+                     it); correct one entry with omr key set"
+                } else {
+                    "this exam has no key sheets to confirm"
+                }
+                .into(),
+            ));
+        }
+        let mut ks = self.session.key_sheets.clone();
+        let forms = ks.forms();
+        let name = |f: usize| def.forms.get(f).cloned().unwrap_or_default();
+        let targets: Vec<usize> = match version {
+            Some(v) if !forms.contains(&v) => {
+                return Err(AppError::Review(format!(
+                    "no readable key sheet for version {}: the versions read from key sheets are \
+                     {}",
+                    name(v),
+                    forms
+                        .iter()
+                        .map(|&f| name(f))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+            Some(v) if ks.is_confirmed(v) => {
+                return Err(AppError::Review(format!(
+                    "version {} is already confirmed",
+                    name(v)
+                )));
+            }
+            Some(v) => vec![v],
+            None => forms
+                .iter()
+                .copied()
+                .filter(|f| !ks.is_confirmed(*f))
+                .collect(),
+        };
+        if targets.is_empty() {
+            let why: Vec<String> = ks.sheets.iter().filter_map(|k| k.refusal.clone()).collect();
+            return Err(AppError::Review(format!(
+                "every readable key sheet is confirmed, but the run stays held: {}",
+                why.join("; ")
+            )));
+        }
+        for d in &decisions {
+            if !forms.contains(&d.form) || ks.is_confirmed(d.form) {
+                return Err(AppError::Review(format!(
+                    "--answer for version {}: only rows of a key-sheet version that is not \
+                     confirmed yet can be decided here (change a confirmed key with omr key set)",
+                    name(d.form)
+                )));
+            }
+            if d.question >= n {
+                return Err(AppError::Review(format!(
+                    "--answer {}: the exam has questions 1–{n}",
+                    d.question + 1
+                )));
+            }
+            match parse_key_entry(&d.answer, def.options) {
+                Ok(crate::exam::ParsedKey::Missing) => {
+                    return Err(AppError::Review(format!(
+                        "--answer {}={}: give an answer (B), several accepted answers (A|C) or \
+                         * to void the question",
+                        d.question + 1,
+                        d.answer
+                    )));
+                }
+                Ok(_) => {}
+                Err(m) => {
+                    return Err(AppError::Review(format!(
+                        "--answer {}={}: {m}",
+                        d.question + 1,
+                        d.answer
+                    )));
+                }
+            }
+        }
+        ks.decisions.extend(decisions.iter().cloned());
+        let mut open = Vec::new();
+        for &f in &targets {
+            for (q, why) in open_rows(&ks, f) {
+                open.push(format!(
+                    "version {} question {}: {why} (--answer {}=…)",
+                    name(f),
+                    q + 1,
+                    q + 1
+                ));
+            }
+        }
+        if !open.is_empty() {
+            return Err(AppError::Review(format!(
+                "the key cannot be confirmed yet: {} row(s) need your decision: {}. Decide each \
+                 one with --answer QUESTION=ANSWER (B; A|C to accept both; * to void){} and \
+                 confirm again",
+                open.len(),
+                open.join("; "),
+                if forms.len() > 1 && version.is_none() {
+                    " together with --version"
+                } else {
+                    ""
+                }
+            )));
+        }
+        let by = self.store.as_ref().map_or_else(
+            || "principal:instructor".to_string(),
+            |s| s.actor().id.clone(),
+        );
+        let at = crate::pipeline::now_utc();
+        for &f in &targets {
+            let scans: Vec<(String, u32)> = ks
+                .sheets
+                .iter()
+                .filter(|k| k.usable() && k.form == Some(f))
+                .flat_map(|k| k.pages.iter())
+                .map(|&pi| {
+                    let p = &self.session.pages[pi];
+                    (self.session.sources[p.source].sha384.clone(), p.index + 1)
+                })
+                .collect();
+            ks.confirmed.push(crate::model::KeyConfirmation {
+                form: f,
+                by: by.clone(),
+                at_utc: at.clone(),
+                scans,
+            });
+        }
+        refresh_pending(&mut ks);
+        let mut session = self.session.clone();
+        let mut key = session.key.clone().ok_or_else(|| {
+            AppError::Internal("a key-sheet key waits for confirmation but no key is set".into())
+        })?;
+        for &f in &targets {
+            if let Some(cells) = key_cells(&def, &ks, f)
+                && let Some(slot) = key.forms.get_mut(f)
+            {
+                *slot = cells;
+            }
+        }
+        let published: Vec<u32> = match self.store.as_ref() {
+            Some(st) => st
+                .reader()
+                .key_versions(&def.exam_id)
+                .map_err(crate::store::store_error)?,
+            None => Vec::new(),
+        };
+        let lifted = !ks.pending;
+        if lifted {
+            if !key.inferred {
+                key.shared_items = key.forms.iter().all(|c| *c == key.forms[0]);
+            }
+            if let Some(&top) = published.iter().max()
+                && key.version <= top
+            {
+                key.version = top + 1;
+            }
+        }
+        session.key_sheets = ks;
+        session.key = Some(key.clone());
+        let hold_rows = if lifted {
+            session
+                .exam_exceptions
+                .retain(|e| e.sub_reason.as_deref() != Some(HOLD));
+            refresh_inferred_forms(&mut session, &key);
+            std::mem::take(&mut session.key_sheets.hold_rows)
+        } else {
+            for e in session.exam_exceptions.iter_mut() {
+                if e.sub_reason.as_deref() == Some(HOLD) {
+                    *e = crate::keysheet::hold_exception(&def, &session.key_sheets);
+                }
+            }
+            Vec::new()
+        };
+        // Score first, then commit: a refused key leaves the exam untouched.
+        let scoring = Scoring::build(&session)?;
+        // The publish checks, printed and shown on screens: a letter pattern of the key
+        // (SCO-027) is named by version and p only, never by its letter counts (C10); the full
+        // detail is in the key summary page.
+        let warnings: Vec<String> = scoring
+            .as_ref()
+            .map(|sc| {
+                let mut w: Vec<String> = sc
+                    .key
+                    .validate(&sc.forms)
+                    .into_iter()
+                    .filter(|e| {
+                        !matches!(
+                            e.sub_reason.as_deref(),
+                            Some("letter_run" | "letter_distribution")
+                        )
+                    })
+                    .map(|e| format!("{} {:?}: {}", e.code, e.severity, e.detail))
+                    .collect();
+                w.extend(sc.key.letter_patterns(&sc.forms).iter().map(|pat| {
+                    let f = usize::from(pat.form().0).saturating_sub(1);
+                    pat.public_text(def.forms.get(f).map_or("?", String::as_str))
+                }));
+                w
+            })
+            .unwrap_or_default();
+        self.session = session;
+        self.scoring = scoring;
+        self.touch_all();
+        let confirm_reason = reason
+            .clone()
+            .unwrap_or_else(|| ReviewReason::code("ADJUDICATION"));
+        let r = self.stored_reason(&confirm_reason)?;
+        let stored_reason = match &reason {
+            Some(x) => Some(self.stored_reason(x)?),
+            None => None,
+        };
+        let exam = def.exam_id.to_string();
+        let provenance = crate::keysheet::provenance(&self.session, &by);
+        let mapping = def
+            .outcomes
+            .as_ref()
+            .zip(self.scoring.as_ref())
+            .map(|(o, sc)| {
+                crate::outcomes::mapping_set(
+                    &def,
+                    o,
+                    self.session.key.as_ref(),
+                    sc.forms.items.len(),
+                )
+            });
+        if let Some(st) = self.store.as_mut() {
+            let forms_json: Vec<String> = targets.iter().map(|&f| name(f)).collect();
+            if let Some(sc) = self.scoring.as_ref() {
+                st.put_scoring_setup(sc)?;
+                st.put_key_version_from(&sc.key, stored_reason.as_ref(), &provenance)?;
+                if let Some(m) = &mapping {
+                    st.put_mapping_set(m)?;
+                }
+            } else {
+                st.event_with_reason(
+                    "KeySheetVersionConfirmed",
+                    "exam",
+                    &exam,
+                    json!({"forms": forms_json, "source": "key_sheet", "pending": self.session.key_sheets.pending}),
+                    &r,
+                )?;
+            }
+            st.resolve(&hold_rows, &r, "key_sheet_confirmed")?;
+        }
+        self.after_release("key confirmed from key sheets")?;
+        self.save()?;
+        Ok(crate::keysheet::KeyConfirmReport {
+            confirmed: targets.iter().map(|&f| name(f)).collect(),
+            waiting: self
+                .session
+                .key_sheets
+                .forms()
+                .into_iter()
+                .filter(|f| !self.session.key_sheets.is_confirmed(*f))
+                .map(name)
+                .collect(),
+            held: self.session.key_sheets.pending,
+            key_version: lifted.then_some(key.version),
+            warnings,
+        })
     }
 
     /// Sets or clears (`None`) the weight of question `question` (1-based) toward CLO `clo`
@@ -1539,14 +2095,111 @@ impl ExamProject {
         self.save()
     }
 
-    /// Item analysis of the current run (§12).
+    /// Item analysis of the current run (§12): the synchronous path (≤ 50 ms, never a
+    /// bootstrap). Once the flag-stability job has run for this score run
+    /// ([`Self::flag_stability`], e.g. on a background thread after a key change), its result is
+    /// merged: each rank 1–4 flag carries its stability share, and a flag that fires in fewer
+    /// than half of the resamples or fails at one end of its CI is labelled low confidence
+    /// *(proposed)* (§12.2). Before that the flags carry no stability ("computing…").
     pub fn analytics(&self) -> Option<AnalyticsReport> {
         let s = self.scoring.as_ref()?;
         let run = s.run.as_ref().ok()?;
-        Some(omr_analytics::analyze(
-            &AnalysisData::from_run(run, &s.prep.matrix),
-            &AnalyticsConfig::default(),
-        ))
+        let data = AnalysisData::from_run(run, &s.prep.matrix);
+        let mut report = omr_analytics::analyze(&data, &AnalyticsConfig::default());
+        let cached = self
+            .stability
+            .lock()
+            .expect("stability lock")
+            .clone()
+            .filter(|st| st.run_id == data.run_id && st.n == data.n);
+        if let Some(st) = cached {
+            omr_analytics::apply_stability(&mut report, st);
+        }
+        Some(report)
+    }
+
+    /// The flag-stability job (§12.2 "Flag stability", §12.3 "Bootstrap") for the current
+    /// score run: N < 1,000 → the share of 1,000 bootstrap resamples (seeded from the score-run
+    /// ID, so the same run gives the same shares on any machine and thread count) in which each
+    /// rank 1–4 flag fires again; N ≥ 1,000 → both ends of the Fisher-z CI. Computed once per
+    /// score run and kept, so [`Self::analytics`] merges it; a key change or review decision
+    /// makes a new score run, and the job runs again on the next call. Off the ≤ 50 ms path:
+    /// the exports call it, and the desktop app may call it on a background thread.
+    pub fn flag_stability(&self) -> Option<omr_analytics::StabilityReport> {
+        let s = self.scoring.as_ref()?;
+        let run = s.run.as_ref().ok()?;
+        let data = AnalysisData::from_run(run, &s.prep.matrix);
+        if let Some(st) = self
+            .stability
+            .lock()
+            .expect("stability lock")
+            .as_ref()
+            .filter(|st| st.run_id == data.run_id && st.n == data.n)
+        {
+            return Some(st.clone());
+        }
+        let cfg = AnalyticsConfig::default();
+        let report = omr_analytics::analyze(&data, &cfg);
+        let st = omr_analytics::stability_job(&data, &report.flags, &cfg);
+        *self.stability.lock().expect("stability lock") = Some(st.clone());
+        Some(st)
+    }
+
+    /// Item analysis with flag stability merged (the exports): [`Self::flag_stability`], then
+    /// [`Self::analytics`].
+    pub fn analytics_with_stability(&self) -> Option<AnalyticsReport> {
+        self.flag_stability()?;
+        self.analytics()
+    }
+
+    /// The current score run's ID, when the exam is scored.
+    pub fn current_run_id(&self) -> Option<String> {
+        self.scoring
+            .as_ref()
+            .and_then(|s| s.run.as_ref().ok())
+            .map(|r| r.run_id.clone())
+    }
+
+    /// The release gate's mis-key check (§12.2, §8.1): the current score run's item analysis
+    /// with its flag stability ([`Self::analytics_with_stability`]; the bootstrap job runs here
+    /// when it has not run for this score run), then every probable mis-key at normal
+    /// confidence becomes (or stays) a Scoring-lane SCO-001 ERROR item that blocks release
+    /// until the instructor decides it ([`crate::review::sync_flag_items`]); a low-confidence
+    /// flag stays a non-blocking SCO-002 `proposed_miskey` of the item analysis. An inferred
+    /// or unconfirmed key is not judged. Until this has run for the current score run the
+    /// gate reads "computing…". The exports and the release run it; the desktop runs it when
+    /// its background stability job reports ([`Self::set_flag_stability`]).
+    pub fn judge_flags(&mut self) -> Result<(), AppError> {
+        let run = self.current_run_id();
+        if run.is_some() && self.session.flags.judged_run == run {
+            return Ok(());
+        }
+        let judged = self.session.key.as_ref().is_some_and(|k| !k.inferred)
+            && !self.session.key_unconfirmed();
+        let report = if judged {
+            self.analytics_with_stability()
+        } else {
+            None
+        };
+        crate::review::sync_flag_items(&mut self.session, report.as_ref());
+        self.session.flags.judged_run = run.clone();
+        self.session.flags.current_run = run;
+        self.save()
+    }
+
+    /// Takes the result of a flag-stability job run off this thread (the desktop's background
+    /// job, §12.3) for the score run it was computed on, then judges the flags
+    /// ([`Self::judge_flags`]) without running the job again. A report for an older score run
+    /// is ignored.
+    pub fn set_flag_stability(
+        &mut self,
+        report: omr_analytics::StabilityReport,
+    ) -> Result<(), AppError> {
+        if self.current_run_id().as_deref() != Some(report.run_id.as_str()) {
+            return Ok(());
+        }
+        *self.stability.lock().expect("stability lock") = Some(report);
+        self.judge_flags()
     }
 
     /// Learning outcomes of the current run (§11).
@@ -1669,6 +2322,13 @@ impl ExamProject {
         progress: &(dyn Fn(&Progress) + Sync),
     ) -> Result<crate::append::AppendReport, AppError> {
         use rayon::prelude::*;
+        if self.session.key_unconfirmed() {
+            return Err(AppError::Review(
+                "the key read from the key sheets is not confirmed: confirm it first (omr key \
+                 confirm), or give the key as a file (omr key replace), then add the scans"
+                    .into(),
+            ));
+        }
         let paths = ingest::collect_paths(inputs)?;
         let Some(store) = self.store.take() else {
             return Err(AppError::Store(
@@ -1780,7 +2440,57 @@ impl ExamProject {
         }
         self.bound = None;
         self.save()?;
+        self.judge_flags()?;
         Ok(report)
+    }
+
+    /// Key sheets added to a graded exam (§10.1, C7): the instructor's filled answer sheets,
+    /// named as key sheets (their SHA-384 join the definition's declared key sheets), are
+    /// graded with the exam as a later batch ([`Self::add_scans`]): their originals are stored
+    /// and hashed like every scan, they hold the run until the instructor confirms the rendered
+    /// key summary ([`Self::confirm_key_sheets`]), and the published key version names them
+    /// (`KeyVersionPublished { source: key_sheet, scans }`). A file already graded as a student
+    /// (one that bubbled the marker) is graded again as the key sheet. This is the audited path
+    /// for a key read from answer sheets after grading (the desktop's *Read key from answer
+    /// sheet…*); `keysheet::read_key_sheets` only previews.
+    pub fn add_key_sheets(
+        &mut self,
+        files: &[PathBuf],
+        opts: &GradeOptions,
+        progress: &(dyn Fn(&Progress) + Sync),
+    ) -> Result<crate::append::AppendReport, AppError> {
+        let paths = ingest::collect_paths(files)?;
+        let mut shas = Vec::new();
+        for p in &paths {
+            let f = SourceFile::read(p).map_err(|e| {
+                AppError::Input(format!(
+                    "key sheet {}: {e}; check the path or rescan the key sheet",
+                    p.display()
+                ))
+            })?;
+            shas.push(f.sha384);
+        }
+        let before = self.session.definition.key_sheets.declared.clone();
+        let declared = &mut self.session.definition.key_sheets.declared;
+        declared.extend(shas.iter().cloned());
+        declared.sort();
+        declared.dedup();
+        if let Some(st) = self.store.as_mut() {
+            let exam = self.session.definition.exam_id.to_string();
+            st.event(
+                "KeySheetsAdded",
+                "exam",
+                &exam,
+                json!({"files": paths.len(), "sha384": shas}),
+            )?;
+        }
+        match self.add_scans(&paths, opts, progress) {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                self.session.definition.key_sheets.declared = before;
+                Err(e)
+            }
+        }
     }
 
     /// Releases the results (§10.8, §13.4): refused while anything blocks release (an open
@@ -1793,6 +2503,9 @@ impl ExamProject {
         if let Some(r) = &reason {
             r.validate().map_err(AppError::Review)?;
         }
+        // The mis-key check of the current results (§12.2) runs first: a probable mis-key
+        // must be decided before release.
+        self.judge_flags()?;
         if let Some(why) = self.session.release_blocked() {
             return Err(AppError::Review(format!(
                 "release refused: {why}. Resolve the open items (omr review list) or supply the \
@@ -1957,6 +2670,8 @@ impl ExamProject {
     /// its store; the chain is checkpointed (signed, and kept outside the package).
     pub fn export(&mut self, dir: &Path) -> Result<crate::export::ExportSummary, AppError> {
         self.save()?;
+        // The item analysis the exports carry decides the mis-key check too (§12.2).
+        self.judge_flags()?;
         self.check_audited()?;
         // The manifest carries the signed checkpoint of the state it was written from.
         if let Some(st) = self.store.as_mut() {

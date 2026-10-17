@@ -43,6 +43,11 @@ pub enum PageStatus {
     /// A blank back or a page showing only bleed-through (CAP-012, INFO): dropped, never
     /// collated, attributed or queued (§7.5).
     Blank,
+    /// A key sheet (§10.1): the instructor's filled answer sheet, named with `--key-sheet` or
+    /// found in the stack by the key-sheet rule ([`crate::exam::KeySheetRule`]). Read by the
+    /// same recognizer, routed to the key store ([`Session::key_sheets`]), never a student
+    /// booklet and never in the students' batch statistics.
+    KeySheet,
 }
 
 /// One page.
@@ -241,6 +246,132 @@ impl KeyCell {
     }
 }
 
+/// One question of a key sheet as read (never auto-accepted, §10.1).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct KeySheetQuestion {
+    /// Recognition output (key-blind, as for any sheet).
+    pub recognized: QuestionOutcome,
+    /// Page index (into `Session::pages`) holding the question.
+    pub page: usize,
+    /// What the row gives the key (`omr-scoring` routing).
+    pub cell: omr_scoring::SheetCell,
+}
+
+/// A key sheet (§10.1): the instructor's filled answer sheet.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct KeySheet {
+    /// Pages (indices into `Session::pages`), template page order.
+    pub pages: Vec<usize>,
+    /// Named with `--key-sheet` (else found in the stack by the rule).
+    pub declared: bool,
+    /// The student-number grid as read (`0000000000`; `?` uncertain, `_` blank).
+    pub id_read: String,
+    /// The marker digit the grid shows, if it shows one.
+    pub marker: Option<u8>,
+    /// Version (index into the definition's forms), when declared on the sheet and used by
+    /// the exam.
+    pub form: Option<usize>,
+    /// What the version grid or page code shows (`A`, `` blank, `?` uncertain).
+    pub form_text: String,
+    /// Why the sheet cannot give a key (not readable, not registered, no marker, version not
+    /// declared or not one of the exam's): what happened and what to do (R10). A refused key
+    /// sheet holds the run until it is rescanned or the key comes from a file.
+    pub refusal: Option<String>,
+    /// Questions `0..n` (exam order); empty when refused before reading.
+    pub questions: Vec<KeySheetQuestion>,
+    /// Where the sheet is: its first page's file and page number (e.g. `scans.pdf page 31`).
+    #[serde(default)]
+    pub label: String,
+}
+
+impl KeySheet {
+    /// True when the sheet can give its version's key (read, marker, version).
+    pub fn usable(&self) -> bool {
+        self.refusal.is_none() && self.form.is_some()
+    }
+}
+
+/// The instructor's decision on one key-sheet row (`omr key confirm --answer 7=B`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyRowDecision {
+    /// Version (index into the definition's forms).
+    pub form: usize,
+    /// Question (0-based).
+    pub question: usize,
+    /// Entry: `B`, `A|C` (explicit multi-accept), `*` (void).
+    pub answer: String,
+}
+
+/// The instructor's confirmation of one version's key-sheet key.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyConfirmation {
+    /// Version (index into the definition's forms).
+    pub form: usize,
+    /// Confirming principal.
+    pub by: String,
+    /// When (RFC 3339 UTC).
+    pub at_utc: String,
+    /// The key-sheet scans confirmed: SHA-384 of the source file and the 1-based page.
+    pub scans: Vec<(String, u32)>,
+}
+
+/// Key sheets of an exam and their confirmation state (§10.1).
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+pub struct KeySheets {
+    /// Key sheets in canonical page order.
+    pub sheets: Vec<KeySheet>,
+    /// The instructor's decisions on rows, latest per (form, question).
+    pub decisions: Vec<KeyRowDecision>,
+    /// Confirmed versions.
+    pub confirmed: Vec<KeyConfirmation>,
+    /// True while the key in force comes (in part) from key sheets not yet confirmed: nothing
+    /// is scored, the run is held (SCO-003 BLOCKER, `key_sheet_unconfirmed`).
+    pub pending: bool,
+    /// A key file replaced the key-sheet key (`omr key replace`).
+    #[serde(default)]
+    pub superseded: bool,
+    /// Store rows of the hold, resolved at confirmation.
+    #[serde(default)]
+    pub hold_rows: Vec<i64>,
+    /// Notes on the rule (markers not used in the stack under the ID scheme or roster).
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+impl KeySheets {
+    /// True when the exam has key sheets.
+    pub fn any(&self) -> bool {
+        !self.sheets.is_empty()
+    }
+
+    /// True when version `form` is confirmed.
+    pub fn is_confirmed(&self, form: usize) -> bool {
+        self.confirmed.iter().any(|c| c.form == form)
+    }
+
+    /// Versions that have at least one usable key sheet, ascending.
+    pub fn forms(&self) -> Vec<usize> {
+        let mut v: Vec<usize> = self
+            .sheets
+            .iter()
+            .filter(|k| k.usable())
+            .filter_map(|k| k.form)
+            .collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
+
+    /// The instructor's decision on (form, question), if any.
+    pub fn decision(&self, form: usize, question: usize) -> Option<&str> {
+        self.decisions
+            .iter()
+            .rev()
+            .find(|d| d.form == form && d.question == question)
+            .map(|d| d.answer.as_str())
+    }
+}
+
 /// Wall-clock timings of a grading run (ms).
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct Timings {
@@ -302,7 +433,8 @@ pub struct Session {
     pub manifest: EngineManifest,
     /// Inputs.
     pub sources: Vec<SourceInfo>,
-    /// Pages in canonical order (source SHA-384, page index). Persisted once, apart from the
+    /// Pages in canonical order (source SHA-384, page index), key sheets (§10.1) after every
+    /// other page so the students' page indices never depend on them. Persisted once, apart from the
     /// session (`pages.json`): pages never change after grading, the session does with every
     /// review action.
     #[serde(skip, default)]
@@ -325,6 +457,34 @@ pub struct Session {
     /// The release of the results, if released.
     #[serde(default)]
     pub release: Option<Release>,
+    /// Key sheets read with the exam and their confirmation (§10.1).
+    #[serde(default)]
+    pub key_sheets: KeySheets,
+    /// Whether the mis-key flags (§12.2) of the current score run were judged and queued.
+    #[serde(default)]
+    pub flags: FlagGate,
+}
+
+/// The mis-key check of the release gate (§12.2, §8.1): every score run's probable mis-keys
+/// (rank 1, SCO-001 ERROR) are judged with their flag stability and queued for the
+/// instructor's acknowledgement before the results can be released. Until the check has run
+/// for the current score run (a review decision or a key change makes a new one), the gate
+/// reads "computing…" and blocks.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlagGate {
+    /// The current score run (set at every save).
+    #[serde(default)]
+    pub current_run: Option<String>,
+    /// The score run whose flags were last judged and queued (`ExamProject::judge_flags`).
+    #[serde(default)]
+    pub judged_run: Option<String>,
+}
+
+impl FlagGate {
+    /// True while the current score run's flags have not been judged yet.
+    pub fn computing(&self) -> bool {
+        self.current_run.is_some() && self.current_run != self.judged_run
+    }
 }
 
 impl Session {
@@ -344,18 +504,56 @@ impl Session {
             .count()
     }
 
+    /// True while the key in force comes from key sheets the instructor has not confirmed:
+    /// nothing is scored from it and release is refused (§10.1).
+    pub fn key_unconfirmed(&self) -> bool {
+        self.key_sheets.pending
+    }
+
     /// The release gate: `None` when releasable, otherwise the reason.
     pub fn release_blocked(&self) -> Option<String> {
         let mut why = Vec::new();
+        if self.key_unconfirmed() {
+            why.push(
+                "the key read from the key sheets is not confirmed (SCO-003 BLOCKER): check the \
+                 key summary (key_sheet_summary.html, or omr key summary) and confirm it (omr key \
+                 confirm); nothing is scored until then"
+                    .to_string(),
+            );
+        }
         if self.key.as_ref().is_some_and(|k| k.inferred) {
             why.push("key INFERRED from the sheets (SCO-003): never releasable".to_string());
         }
         let open = self.open_blocking();
         if open > 0 {
-            why.push(format!("{open} ERROR/BLOCKER open"));
+            let miskeys = self
+                .review
+                .items
+                .iter()
+                .filter(|i| i.is_open() && i.code == "SCO-001")
+                .count();
+            if miskeys > 0 {
+                why.push(format!(
+                    "{open} ERROR/BLOCKER open, {miskeys} of them a probable mis-key (SCO-001): \
+                     change the key, accept a second answer, void the item, or keep the key with \
+                     a reason and a note (omr review list --lane scoring)"
+                ));
+            } else {
+                why.push(format!("{open} ERROR/BLOCKER open"));
+            }
+        }
+        if self.flags.computing() && !self.key_unconfirmed() {
+            why.push(
+                "the item analysis of the current results has not checked for a probable \
+                 mis-key yet (§12.2 flag stability: computing…); it runs with the next export \
+                 (omr export) or release"
+                    .to_string(),
+            );
         }
         match &self.key {
             None => why.push("no answer key".into()),
+            // Rows still to decide are listed by the key summary and `omr key confirm`.
+            Some(_) if self.key_unconfirmed() => {}
             // A key entry left empty refuses the score run (SCO-003, key incomplete): nothing
             // is releasable until every question has its key or is voided.
             Some(k) => {

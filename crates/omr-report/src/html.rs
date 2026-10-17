@@ -10,7 +10,7 @@
 //! an ink line.
 
 use crate::error::ReportError;
-use crate::items::{band_name, flag_label};
+use crate::items::{band_name, flag_label, flag_order};
 use crate::meta::Language;
 use crate::results::ResultsTable;
 use crate::text::{exact_str, float_str, html_escape, option_code};
@@ -596,10 +596,27 @@ impl HtmlReport<'_> {
         let t = self.t();
         let _ = write!(
             h,
-            "<section class=\"card\" aria-labelledby=\"items-h\">\n<h2 id=\"items-h\">{}</h2>\n<div class=\"scroll\"><table>\n\
-             <thead><tr><th>Q</th><th class=\"num\">N</th><th class=\"num\">p</th><th class=\"num\">r<sub>ir</sub></th>\
-             <th>Discrimination</th><th>Options</th><th>Flags</th></tr></thead><tbody>\n",
+            "<section class=\"card\" aria-labelledby=\"items-h\">\n<h2 id=\"items-h\">{}</h2>\n",
             esc(t.items)
+        );
+        // Exam-level notes of the analysis (§12.3 small N, SCO-023; α, SCO-018).
+        for e in rep
+            .exceptions
+            .iter()
+            .filter(|e| e.code == "SCO-023" || e.code == "SCO-018")
+        {
+            let _ = writeln!(
+                h,
+                "<p class=\"sub\"><span class=\"mono\">{}</span> {}</p>",
+                esc(&e.code),
+                esc(&e.detail)
+            );
+        }
+        let order = flag_order(rep);
+        h.push_str(
+            "<div class=\"scroll\"><table>\n\
+             <thead><tr><th>Q</th><th class=\"num\">N</th><th class=\"num\">p</th><th class=\"num\">r<sub>ir</sub></th>\
+             <th>Discrimination</th><th>Options</th><th class=\"num\">Flag order</th><th>Flags</th></tr></thead><tbody>\n",
         );
         for s in &rep.items {
             let rir = match s.r_ir.and_then(|v| float_str(v, 2).map(|x| (v, x))) {
@@ -653,7 +670,7 @@ impl HtmlReport<'_> {
                 .iter()
                 .filter(|f| f.item == s.item)
                 .map(|f| {
-                    let cls = if f.rank() == 1 {
+                    let cls = if f.is_confident_miskey() {
                         "bad"
                     } else if f.rank() <= 4 {
                         "warn"
@@ -666,12 +683,16 @@ impl HtmlReport<'_> {
             let _ = writeln!(
                 h,
                 "<tr><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{rir}</td><td>{band}</td>\
-                 <td title=\"{}\">{spark}</td><td>{}</td></tr>",
+                 <td title=\"{}\">{spark}</td><td class=\"num\">{}</td><td>{}</td></tr>",
                 esc(&s.label),
                 s.n,
                 s.p.and_then(|p| float_str(p, 2))
                     .unwrap_or_else(|| "n/a".into()),
                 esc(&label.join(", ")),
+                order
+                    .get(&s.item)
+                    .map(|k| k.to_string())
+                    .unwrap_or_default(),
                 flags.join(" ")
             );
         }

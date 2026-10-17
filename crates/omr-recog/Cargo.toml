@@ -20,6 +20,7 @@ rxing = { workspace = true, features = ["decoders", "qrcode", "encoding_rs"] }
 [dev-dependencies]
 serde_json.workspace = true
 omr-sim.workspace = true
+omr-pdf.workspace = true
 omr-forms = { workspace = true, features = ["render"] }
 image.workspace = true
 rand.workspace = true

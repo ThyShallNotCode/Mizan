@@ -93,8 +93,9 @@ component ThumbTile inherits Rectangle {
     height: self.width * 1.12 + 22px;
     border-radius: Theme.radius-sm;
     background: Theme.surface-raised;
-    border-width: 1px;
-    border-color: root.t.state == 1 || root.t.state == 2 ? Theme.tone-fg(root.t.severity == Severity.warn ? Tone.warning : Tone.error) : Theme.border;
+    // the instructor's key sheet (5) is framed in gold and marked KEY: never a student
+    border-width: root.t.state == 5 || root.t.state == 6 ? 2px : 1px;
+    border-color: root.t.state == 1 || root.t.state == 2 || root.t.state == 6 ? Theme.tone-fg(root.t.severity == Severity.warn ? Tone.warning : Tone.error) : root.t.state == 5 ? Theme.accent : Theme.border;
     opacity: root.t.state == 4 ? 0.45 : 1;
     accessible-role: AccessibleRole.button;
     accessible-label: root.t.label;
@@ -127,7 +128,7 @@ component ThumbTile inherits Rectangle {
         accessible-role: none;
     }
     // rejected: desaturated veil; reading: static scan line (no motion when reduce-motion)
-    if root.t.state == 2: Rectangle {
+    if root.t.state == 2 || root.t.state == 6: Rectangle {
         x: 3px;
         y: 3px;
         width: parent.width - 6px;
@@ -157,14 +158,25 @@ component ThumbTile inherits Rectangle {
                 stroke-width: 1.5px;
                 commands: "M 1.2 6 A 4.8 4.8 0 1 1 10.8 6 A 4.8 4.8 0 1 1 1.2 6 Z M 3.6 6.2 L 5.3 7.9 L 8.5 4.4";
             }
-            if root.t.state == 1 || root.t.state == 2: SeverityGlyph {
+            if root.t.state == 1 || root.t.state == 2 || root.t.state == 6: SeverityGlyph {
                 severity: root.t.severity;
                 size: 9px;
                 accessible-role: none;
             }
-            if root.t.state >= 3: SeverityGlyph {
+            if root.t.state == 3 || root.t.state == 4: SeverityGlyph {
                 severity: Severity.info;
                 size: 9px;
+                accessible-role: none;
+            }
+            // a key: ring and bit (shape as well as the gold frame)
+            if root.t.state == 5: Path {
+                width: 11px;
+                height: 10px;
+                viewbox-width: 13;
+                viewbox-height: 12;
+                stroke: Theme.accent-ink;
+                stroke-width: 1.5px;
+                commands: "M 1 6 A 2.6 2.6 0 1 1 6.2 6 A 2.6 2.6 0 1 1 1 6 Z M 6.2 6 L 12.2 6 L 12.2 8.6 M 9.8 6 L 9.8 8";
                 accessible-role: none;
             }
         }
@@ -516,6 +528,12 @@ export component ScanScreen inherits Rectangle {
                                 StatusPill {
                                     text: "Rejected " + ScanVM.rejected-count;
                                     tone: Tone.error;
+                                }
+                            }
+                            if ScanVM.key-sheet-count > 0: Centered {
+                                StatusPill {
+                                    text: "Key sheets " + ScanVM.key-sheet-count;
+                                    tone: Tone.accent;
                                 }
                             }
                         }

@@ -11,10 +11,12 @@ decision is kept in a signed, hash-chained audit log in the exam's folder.
 command line and from the desktop app `omr-desktop`, on Linux.
 - What was measured, and how: [`docs/EVIDENCE.md`](docs/EVIDENCE.md). On 143 real IAU sheets
   the software made no silent error in 4,089 answers it accepted, and sent 7 to review.
-- **Not proven yet:** scoring on real exams (the answer keys of the real sheets have not been
-  supplied, so their keys were inferred), identity against a real roster, a side-by-side
-  comparison with Remark Office OMR, and Windows (the app has been built and run on Linux
-  only).
+- With the instructors' real keys, every fully scored booklet of the two real exams (137 of
+  143) scored exactly as an independent count of its marks against the key; the other 6 wait
+  only for their 7 questions in review. The keys read from the instructors' own key sheets
+  gave the same results, file for file.
+- **Not proven yet:** identity against a real roster, a side-by-side comparison with Remark
+  Office OMR, and Windows (the app has been built and run on Linux only).
 - What the MVP covers and what it defers: [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md).
   The full design: [`docs/TECHNICAL_DESIGN.md`](docs/TECHNICAL_DESIGN.md).
 
@@ -86,6 +88,44 @@ marked INFERRED and can never be released. When the real key arrives:
 omr key replace --project "$HOME/OMR Exams/cs211-midterm-1" --key key.csv
 ```
 
+### With a key sheet
+
+Fill one answer sheet per version with the right answers (the key sheet), bubble its student
+number all 0 (or all 9: numbers no IAU student has) and its version, and scan it with the
+students, anywhere in the stack, or give it on its own:
+
+```sh
+omr grade scans/cs211-midterm/ --template iau-ccsit-v1 --questions 30 \
+    --key-sheet key-A.pdf --key-sheet key-B.pdf --out "$HOME/OMR Exams/cs211-midterm-1"
+```
+
+A key sheet is never graded as a student, and its answers are never accepted on their own:
+nothing is scored until you open `key_sheet_summary.html` in the exam folder (each question's
+answer as read, beside the scanned bubble row; rows to check are highlighted) and confirm it:
+
+```sh
+omr key confirm --project "$HOME/OMR Exams/cs211-midterm-1"
+omr key confirm --project … --answer 7=B --answer '12=A|C'   # decide highlighted rows first
+```
+
+Each row of the summary shows the bubbles as scanned with the question number printed beside
+them: that number must match the question column (if not, the sheet was read a row off: do not
+confirm, rescan it flat). A key sheet that cannot be read reliably (for example a photo
+registered one bubble row off, whose student number then reads 1111111111) is refused and
+named, never used; so is a key sheet whose version is not bubbled, on an exam with several
+versions. If a version is given by more than one sheet found in the stack, the summary and the
+hold name every one of them, even when they agree: a student who bubbled all 0 by mistake and
+answered like the key reads the same as a key sheet. Check each one; if one is a student's,
+grade again naming the real key sheet (`--key-sheet key-A.pdf --key-sheet-marker none`) so
+that the student is graded. A correction made after confirming (`omr key set`) stays your
+decision when the key sheet is scanned again later (shown as "decided by you" in the next
+summary).
+
+Key sheets you get after grading join the exam the same audited way:
+`omr key replace --project … --from-key-sheets key-A.pdf key-B.pdf`, then `omr key confirm`.
+`omr key read key-A.pdf key-B.pdf --template iau-ccsit-v1 --questions 30 --out key/` only
+previews them: it writes `key/key.csv` and `key/key_summary.html` and records nothing.
+
 ### Later batches and the university's own sheets
 
 - Another section or another day: `omr add more-scans/ --project <exam folder>` grades the
@@ -116,6 +156,17 @@ omr review resolve --project … --undo
   `AMBIGUOUS_MARK`, `ERASURE_RESIDUE`, `ID_CORRECTION`; `OTHER` with `--note`).
 - A wrong key entry: `omr key set --project … --form A --question 7 --answer C`. Every change
   rescores the exam and is recorded with its reason.
+- A **probable mis-key** (SCO-001, Scoring lane): the item analysis found a question whose key
+  the strongest students contradict, with confidence (its bootstrap stability). It blocks
+  release until you decide it: the letter of the right answer (changes the key), `multi`
+  (accepts the key or the flagged answer), `void`, or `ack --reason ADJUDICATION --note "…"`
+  (keeps the key). A low-confidence flag (one student's choice, for example) is shown as
+  *(proposed)* in the item analysis and never blocks.
+- Phone photos of students' sheets are read, but the phone capture is not calibrated yet:
+  every answer on them waits for your confirmation (MRK-001 `uncalibrated_capture`). Scan
+  students' sheets on a scanner.
+- A key read from key sheets waits for `omr key confirm` (§2): until then `review list` shows
+  the hold first, and nothing is scored or releasable.
 
 ## 4. Release and upload
 
@@ -124,7 +175,8 @@ omr release --project "$HOME/OMR Exams/cs211-midterm-1"
 ```
 
 Release is your deliberate act. It is refused, naming each reason and the next command, while
-anything blocks it (open review items, an inferred or incomplete key). It then writes the exports
+anything blocks it (open review items, a probable mis-key not yet decided, an inferred or
+incomplete key). It then writes the exports
 again, now with `blackboard_grade_center.csv` (username and score only) for Blackboard's Grade
 Center upload. A later change (a review decision, a key change, an added batch) supersedes the
 release: the upload file is removed at the next export, until you release again.
@@ -147,7 +199,9 @@ omr-desktop --demo                            # invented demo data, marked DEMO 
   exam folder: the scans, the sheet (`iau-ccsit-v1`), the number of questions and, optionally,
   the key, roster and CLO files. Without a key file the key is inferred.
 - **Setup** shows the key, versions and CLO mapping; **Replace key…** loads the real key from
-  a file and rescores.
+  a file and rescores; **Read key from answer sheet…** reads the instructor's key sheets, shows
+  the key summary and, once you confirm, adds them to the exam (stored and audited like key
+  sheets graded with it). New exam also takes key sheets.
 - **Scan** follows grading live; **Add scans…** adds a later batch.
 - **Review** is keyboard-first: the number or letter keys choose an answer, Enter accepts the
   proposal, Ctrl+Z undoes; F1 lists every key.
@@ -161,7 +215,7 @@ line, or render the screens to PNG files with `omr-desktop --screenshot DIR`.
 
 | File | Layout |
 |---|---|
-| Answer key | CSV `question,A,B` (one column per version, optional `points` column), or `form,Q1,Q2,…`, or one column of answers. Entries: `B`, `A\|C` (either accepted), `*` (void), empty (missing). UTF-8, UTF-16 or Windows-1256; commas, semicolons or tabs, as Excel saves it |
+| Answer key | CSV `question,A,B` (one column per version, optional `points` column), or `form,Q1,Q2,…`, or one column of answers. Entries: `B`, `A\|C` (either accepted), `*` (void), empty (missing). UTF-8, UTF-16 or Windows-1256; commas, semicolons or tabs, as Excel saves it. Or a key sheet: an answer sheet filled by the instructor, student number all 0 or all 9 and the version bubbled (§2) |
 | Roster | CSV or `.xlsx` with a header row: `student_id` (or `ID`, `الرقم الجامعي`), `name`, `name_ar`, `section`. Student numbers that Excel damaged (`2250000001.0`, lost leading zeros) are repaired when nothing was lost; duplicates are refused naming the rows |
 | CLO mapping | CSV `clo,domain,title,plo,questions,weight,note`, with question lists such as `1-8,12` |
 
@@ -179,11 +233,11 @@ Examples: [`docs/examples/`](docs/examples/). More detail: [`crates/omr-cli/READ
 
 ## 8. Known limits
 
-- Scoring correctness on real IAU exams is not proven yet: it needs the real answer keys.
 - Windows and macOS are not built or tested, and there is no installer yet.
-- A teacher-filled key sheet cannot be used as the key yet (give a key file), the scanner's
-  hot folder is not watched (grade the folder when scanning ends), and `omr sheet render` writes
-  PDF only.
+- The scanner's hot folder is not watched (grade the folder when scanning ends), and
+  `omr sheet render` writes PDF only.
+- Phone photos: key sheets can be photographed (the instructor confirms them), but every answer
+  on a photographed student sheet goes to review until the phone capture is calibrated.
 - The project store is not encrypted at rest; keep exam folders on an encrypted university
   device.
 - Every input file is read into memory for the run; files over 2 GB are refused.

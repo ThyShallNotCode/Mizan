@@ -717,8 +717,8 @@
     "pass": true
   },
   "real_data": {
-    "conditions": "143 real IAU CCSIT sheets (restricted personal data, never committed); reference labels agent-adjudicated (two readers plus the prototype, disagreements adjudicated on 600-dpi zooms), not certification-grade; answer keys inferred (--infer-key) because the owner has not supplied them yet",
-    "not_proven": "scoring correctness on real exams (no answer keys), identity against a real roster (all runs rosterless), and any side-by-side comparison with Remark Office OMR",
+    "conditions": "143 real IAU CCSIT sheets (restricted personal data, never committed); reference labels agent-adjudicated (two readers plus the prototype, disagreements adjudicated on 600-dpi zooms), not certification-grade. full_pipeline and recognition_pooled_batch: the acceptance run, answer keys inferred (--infer-key) because the keys had not been supplied; second_round and third_round: the instructors' keys (verified by agents) and their key sheets",
+    "not_proven": "identity against a real roster (all runs rosterless), the instructors' own confirmation of their keys in the app, and any side-by-side comparison with Remark Office OMR",
     "full_pipeline": {
       "pages": 143,
       "questions": 4096,
@@ -815,6 +815,794 @@
         "min": 607.0,
         "p95": 648.0
       }
+    },
+    "second_round": {
+      "what": "Targeted reruns by the second adversarial verification (after the instructors' keys and key sheets arrived) on the code after its fixes: the real-data runs, the key sheets, flag stability and the synthetic photo and damaged-sheet cases. The A1-A11 rows above come from the full acceptance run on the earlier code and were not rerun (scripts/acceptance.sh needs a release rebuild of every crate and about an hour on this shared machine).",
+      "generated_utc": "2026-10-17T15:08:00Z",
+      "code": {
+        "code_sha256": "9162c7c50c338ff800c03022aa0c2aa7f197c4637a65b9bacbfa8d7495600419",
+        "files": 331,
+        "verify": "git ls-tree -r <commit> -- crates Cargo.toml Cargo.lock | grep -v '\\.md$' | sha256sum",
+        "note": "the working tree at the rerun, including the desktop shell work in progress by another agent"
+      },
+      "load_average": [
+        "load before: 2.35 2.75 3.83",
+        "load after: 3.89 3.33 3.76"
+      ],
+      "recognition": {
+        "pages": 143,
+        "questions": 4096,
+        "auto_accepted": 4089,
+        "silent_errors": 0,
+        "ar": 0.001708984375,
+        "student_number": {
+          "exact": 140,
+          "flagged": 3,
+          "wrong_unflagged": 0
+        },
+        "section": {
+          "exact": 142,
+          "flagged": 1,
+          "wrong_unflagged": 0
+        },
+        "version": {
+          "exact": 142,
+          "flagged": 1,
+          "wrong_unflagged": 0
+        },
+        "exam": {
+          "exact": 141,
+          "flagged": 2,
+          "wrong_unflagged": 0
+        },
+        "all_three_baseline_modes_silent_errors": [
+          0,
+          0,
+          0
+        ],
+        "measurements_and_decisions_bit_identical_to_previous_engine": true,
+        "failed_pages": 0,
+        "row_checks": {
+          "bands_failed": 0,
+          "worst_other_row_evidence": 0.22,
+          "threshold": 0.35,
+          "smallest_own_row_correlation": 0.136
+        },
+        "smallest_shift_verification_margin": 0.334
+      },
+      "full_pipeline": {
+        "pages": 143,
+        "questions": 4096,
+        "auto_accepted": 4089,
+        "silent_errors": 0,
+        "review": 7,
+        "ar": 0.001708984375,
+        "student_number": {
+          "exact": 138,
+          "flagged": 5,
+          "wrong_unflagged": 0
+        },
+        "form": {
+          "declared_correct": 140,
+          "inferred": 3,
+          "wrong": 0
+        },
+        "blank_pages": 0,
+        "wall_s": 2.82,
+        "pages_per_s": 50.7
+      },
+      "scored_with_real_keys": {
+        "booklets": 143,
+        "scored": 137,
+        "scored_equal_independent": 137,
+        "provisional": 6,
+        "provisional_differ_only_by_pending": 6,
+        "pending_questions": 7,
+        "auto_accepted": 4089,
+        "auto_accepted_differing_from_reference": 0,
+        "forms_checked": 141,
+        "forms_wrong": 0,
+        "forms_reference_blank": 2,
+        "other_status": 0,
+        "per_exam_booklets": {
+          "arti503": 51,
+          "cs522": 92
+        },
+        "note": "class statistics (mean, pass rate, KR-20) stay in the evaluation report outside the repository"
+      },
+      "key_sheets": {
+        "in_the_app": {
+          "arti503": {
+            "decision_files_identical": "7/7",
+            "found_in_stack": 2,
+            "in_stack_decision_files_identical": "7/7",
+            "rows_equal_to_key": 56,
+            "rows_read_wrong": 0,
+            "rows_to_decide": 0,
+            "sheets": 2,
+            "sheets_refused": 0,
+            "versions_read": 2
+          },
+          "cs522": {
+            "decision_files_identical": "7/7",
+            "found_in_stack": 2,
+            "in_stack_decision_files_identical": "7/7",
+            "rows_equal_to_key": 58,
+            "rows_read_wrong": 0,
+            "rows_to_decide": 0,
+            "sheets": 2,
+            "sheets_refused": 0,
+            "versions_read": 2
+          }
+        },
+        "recognizer_scanner_path": [
+          {
+            "file": "cs522_photos",
+            "page": 1,
+            "method": "LatticeCorrected",
+            "matched": 647,
+            "verify_margin": 0.5,
+            "equal_key": 29,
+            "questions": 29,
+            "auto_accepted_wrong": 0,
+            "id_ok": true,
+            "version_ok": true
+          },
+          {
+            "file": "cs522_photos",
+            "page": 2,
+            "method": "LatticeCorrected",
+            "matched": 649,
+            "verify_margin": 0.408,
+            "equal_key": 29,
+            "questions": 29,
+            "auto_accepted_wrong": 0,
+            "id_ok": true,
+            "version_ok": true
+          },
+          {
+            "file": "arti503_A_scan",
+            "page": 1,
+            "method": "Lattice",
+            "matched": 679,
+            "verify_margin": 0.485,
+            "equal_key": 28,
+            "questions": 28,
+            "auto_accepted_wrong": 0,
+            "id_ok": true,
+            "version_ok": true
+          },
+          {
+            "file": "arti503_B_scan",
+            "page": 1,
+            "method": "Lattice",
+            "matched": 677,
+            "verify_margin": 0.662,
+            "equal_key": 28,
+            "questions": 28,
+            "auto_accepted_wrong": 0,
+            "id_ok": true,
+            "version_ok": true
+          }
+        ],
+        "recognizer_forced_camera_path": [
+          {
+            "file": "cs522_photos",
+            "page": 1,
+            "method": "Camera",
+            "matched": 653,
+            "equal_key": 29,
+            "questions": 29,
+            "auto_accepted_wrong": 0,
+            "id_ok": true,
+            "version_ok": true
+          },
+          {
+            "file": "cs522_photos",
+            "page": 2,
+            "method": "Camera",
+            "matched": 650,
+            "equal_key": 29,
+            "questions": 29,
+            "auto_accepted_wrong": 0,
+            "id_ok": true,
+            "version_ok": true
+          },
+          {
+            "file": "arti503_A_scan",
+            "page": 1,
+            "method": "Camera",
+            "matched": 679,
+            "equal_key": 28,
+            "questions": 28,
+            "auto_accepted_wrong": 0,
+            "id_ok": true,
+            "version_ok": true
+          },
+          {
+            "file": "arti503_B_scan",
+            "page": 1,
+            "method": "Camera",
+            "matched": 677,
+            "equal_key": 28,
+            "questions": 28,
+            "auto_accepted_wrong": 0,
+            "id_ok": true,
+            "version_ok": true
+          }
+        ],
+        "omr_key_read": {
+          "arti503": {
+            "exit": 0,
+            "equal": 56,
+            "wrong": 0,
+            "empty": 0
+          },
+          "cs522": {
+            "exit": 0,
+            "equal": 58,
+            "wrong": 0,
+            "empty": 0
+          }
+        }
+      },
+      "f1_previous_engine_rebuilt": {
+        "what": "the engine of commit 793a014 rebuilt in a throw-away worktree and run on the CS 522 key photos (counts only)",
+        "cs522_photo_1": {
+          "matched": 447,
+          "of": 687,
+          "auto_accepted": 29,
+          "auto_accepted_wrong": 25,
+          "student_number_ok": false,
+          "version_ok": false
+        },
+        "cs522_photo_2": {
+          "matched": 580,
+          "of": 687,
+          "auto_accepted": 29,
+          "auto_accepted_wrong": 24,
+          "student_number_ok": false,
+          "version_ok": false
+        },
+        "arti503_scans": {
+          "answers_equal_key": "56/56"
+        }
+      },
+      "flag_stability": {
+        "arti503": {
+          "method": "Bootstrap",
+          "resamples": 1000,
+          "rank_1_4_flags": 8,
+          "rank_1_4_low_confidence": 8,
+          "sco001_flags": 7,
+          "sco001_low_confidence": 7
+        },
+        "cs522": {
+          "method": "Bootstrap",
+          "resamples": 1000,
+          "rank_1_4_flags": 10,
+          "rank_1_4_low_confidence": 9,
+          "sco001_flags": 4,
+          "sco001_low_confidence": 3
+        }
+      },
+      "synthetic": {
+        "photo_corpus_200": {
+          "photos": 200,
+          "refused": 3,
+          "questions": 5800,
+          "auto_accepted": 5617,
+          "silent_errors": 0,
+          "wrong_student_numbers": 0,
+          "wrong_versions": 0
+        },
+        "adversarial_photos_24_each": {
+          "rot180": {
+            "photos": 24,
+            "refused": 0,
+            "auto_accepted": 685,
+            "silent_errors": 0,
+            "reviews": 11
+          },
+          "skew12": {
+            "photos": 24,
+            "refused": 0,
+            "auto_accepted": 671,
+            "silent_errors": 0,
+            "reviews": 25
+          },
+          "aniso12": {
+            "photos": 24,
+            "refused": 1,
+            "auto_accepted": 621,
+            "silent_errors": 0,
+            "reviews": 75
+          },
+          "dark": {
+            "photos": 24,
+            "refused": 7,
+            "auto_accepted": 489,
+            "silent_errors": 0,
+            "reviews": 207
+          },
+          "bright": {
+            "photos": 24,
+            "refused": 4,
+            "auto_accepted": 571,
+            "silent_errors": 0,
+            "reviews": 125
+          },
+          "ppi100": {
+            "photos": 24,
+            "refused": 0,
+            "auto_accepted": 696,
+            "silent_errors": 0,
+            "reviews": 0
+          },
+          "shift": {
+            "photos": 24,
+            "refused": 0,
+            "auto_accepted": 685,
+            "silent_errors": 0,
+            "reviews": 11
+          },
+          "key0": {
+            "photos": 24,
+            "refused": 0,
+            "auto_accepted": 685,
+            "silent_errors": 0,
+            "reviews": 11
+          },
+          "key9": {
+            "photos": 24,
+            "refused": 0,
+            "auto_accepted": 684,
+            "silent_errors": 0,
+            "reviews": 12
+          },
+          "mostly0": {
+            "photos": 24,
+            "refused": 0,
+            "auto_accepted": 685,
+            "silent_errors": 0,
+            "reviews": 11
+          }
+        },
+        "damaged_sheets_24_each": {
+          "scanner: fold hiding 2 rows": {
+            "pages": 24,
+            "refused": 24,
+            "auto_accepted": 0,
+            "silent_errors": 0
+          },
+          "scanner: fold hiding 3 rows": {
+            "pages": 24,
+            "refused": 22,
+            "auto_accepted": 52,
+            "silent_errors": 0
+          },
+          "scanner: feed stall of 1 row": {
+            "pages": 24,
+            "refused": 24,
+            "auto_accepted": 0,
+            "silent_errors": 0
+          },
+          "scanner: feed stall of 2 rows": {
+            "pages": 24,
+            "refused": 24,
+            "auto_accepted": 0,
+            "silent_errors": 0
+          },
+          "scanner: fold hiding 2 options": {
+            "pages": 24,
+            "refused": 24,
+            "auto_accepted": 0,
+            "silent_errors": 0
+          },
+          "scanner: feed stall of 2 options": {
+            "pages": 24,
+            "refused": 24,
+            "auto_accepted": 0,
+            "silent_errors": 0
+          },
+          "photo: fold hiding 1 row": {
+            "pages": 24,
+            "refused": 24,
+            "auto_accepted": 0,
+            "silent_errors": 0
+          },
+          "photo: fold hiding 2 rows": {
+            "pages": 24,
+            "refused": 24,
+            "auto_accepted": 0,
+            "silent_errors": 0
+          },
+          "photo: fold hiding 3 rows": {
+            "pages": 24,
+            "refused": 22,
+            "auto_accepted": 52,
+            "silent_errors": 0
+          },
+          "photo: feed stall of 2 rows": {
+            "pages": 24,
+            "refused": 24,
+            "auto_accepted": 0,
+            "silent_errors": 0
+          }
+        },
+        "residual": "phone photos of a sheet folded vertically through an answer block hiding exactly two options: 3 of 24 simulated photos read with 22 silent errors (exploration; photos are not column-checked)"
+      },
+      "tests": [
+        "omr-recog::real_iau::req_a1_real_iau_sheets_zero_silent_errors",
+        "omr-recog::real_key_sheets::req_a1_real_key_sheets_read_exactly (also OMR_KEY_FORCE_CAMERA=1)",
+        "omr-app::real_iau_e2e::req_a1_real_iau_full_pipeline",
+        "omr-app::real_iau_scored::req_a8_real_iau_exams_score_with_the_real_keys",
+        "omr-cli::real_key_read",
+        "omr-analytics::real_iau_stability",
+        "omr-recog::photo_synth::req_a1_phone_photos_read_or_refused_never_silently_wrong",
+        "omr-recog::photo_adversarial (OMR_PHOTO_ADV_N=24)",
+        "omr-app::key_sheets (8 tests)",
+        "omr-app::flag_stability::exported_flags_carry_their_stability_and_low_confidence_label"
+      ],
+      "tests_failed": [],
+      "pass": true
+    },
+    "third_round": {
+      "what": "Targeted reruns by the third verification (findings C1-C12: the mis-key release gate, flag stability seeded from the content with bootstrap CIs of r_ir and a Monte Carlo margin, photos recognised from the file and sent to review, key-sheet provenance, remedies) on the code after its fixes: every gated real-data test in release, the synthetic photo suites with the production photo classification, and the throughput of the real PDFs against the acceptance-run binary. The other A1-A11 rows were not rerun.",
+      "generated_utc": "2026-10-17T16:40:00Z",
+      "code": {
+        "code_sha256": "8d3dd9cf827f425a464b3cd4a4c9db754b970cf97e5e70c91f825cded6baba9d",
+        "files": 332,
+        "verify": "git ls-tree -r <commit> -- crates Cargo.toml Cargo.lock | grep -v '\\.md$' | sha256sum",
+        "note": "the working tree after the third round (its formatting, a test-only unused import and one desktop test added after the reruns)"
+      },
+      "recognition": {
+        "pages": 143,
+        "questions": 4096,
+        "auto_accepted": 4089,
+        "silent_errors": 0,
+        "all_three_baseline_modes_silent_errors": [
+          0,
+          0,
+          0
+        ],
+        "measurements_and_decisions_bit_identical_to_previous_engine": true,
+        "legacy_config_version": "omr-recog/legacy-bitonal/3",
+        "ownform_path_refuses_all_143_legacy_pages": true
+      },
+      "full_pipeline": {
+        "pages": 143,
+        "questions": 4096,
+        "auto_accepted": 4089,
+        "silent_errors": 0,
+        "review": 7,
+        "ar": 0.001708984375,
+        "student_number": {
+          "exact": 138,
+          "flagged": 5,
+          "wrong_unflagged": 0
+        },
+        "form": {
+          "declared_correct": 140,
+          "inferred": 3,
+          "wrong": 0
+        },
+        "blank_pages": 0,
+        "photo_pages": 0,
+        "wall_s": 3.16,
+        "pages_per_s": 45.2
+      },
+      "scored_with_real_keys": {
+        "booklets": 143,
+        "scored": 137,
+        "scored_equal_independent": 137,
+        "provisional": 6,
+        "provisional_differ_only_by_pending": 6,
+        "pending_questions": 7,
+        "auto_accepted": 4089,
+        "auto_accepted_differing_from_reference": 0,
+        "forms_checked": 141,
+        "forms_wrong": 0,
+        "forms_reference_blank": 2,
+        "per_exam_booklets": {
+          "arti503": 51,
+          "cs522": 92
+        },
+        "note": "class statistics (mean, pass rate, KR-20) stay in the evaluation report outside the repository"
+      },
+      "key_sheets": {
+        "in_the_app": {
+          "arti503": {
+            "sheets": 2,
+            "versions_read": 2,
+            "rows_equal_to_key": 56,
+            "rows_read_wrong": 0,
+            "rows_to_decide": 0,
+            "decision_files_identical": "7/7",
+            "found_in_stack": 2,
+            "in_stack_decision_files_identical": "7/7"
+          },
+          "cs522": {
+            "sheets": 2,
+            "versions_read": 2,
+            "rows_equal_to_key": 58,
+            "rows_read_wrong": 0,
+            "rows_to_decide": 0,
+            "decision_files_identical": "7/7",
+            "found_in_stack": 2,
+            "in_stack_decision_files_identical": "7/7"
+          }
+        },
+        "omr_key_read": {
+          "arti503": {
+            "exit": 0,
+            "equal": 56,
+            "wrong": 0,
+            "empty": 0,
+            "rows_highlighted": 0
+          },
+          "cs522": {
+            "exit": 0,
+            "equal": 58,
+            "wrong": 0,
+            "empty": 0,
+            "rows_highlighted": 0,
+            "rows_highlighted_before_c2": 48
+          }
+        },
+        "recognizer_alone": {
+          "cs522_photo_pages": 2,
+          "answers_equal_key": "58/58",
+          "auto_accepted_wrong": 0,
+          "student_number_and_version_ok": true,
+          "arti503_scans_answers_equal_key": "56/56"
+        }
+      },
+      "flag_stability": {
+        "cs522": {
+          "method": "Bootstrap",
+          "resamples": 1000,
+          "rank_1_4_flags": 10,
+          "rank_1_4_low_confidence": 10,
+          "sco001_rule_flags": 4,
+          "sco001_rule_low_confidence": 4,
+          "miskey_review_items_queued": 0,
+          "items_with_bootstrap_r_ir_ci": "52/58"
+        },
+        "arti503": {
+          "method": "Bootstrap",
+          "resamples": 1000,
+          "rank_1_4_flags": 8,
+          "rank_1_4_low_confidence": 8,
+          "sco001_rule_flags": 7,
+          "sco001_rule_low_confidence": 7,
+          "miskey_review_items_queued": 0,
+          "items_with_bootstrap_r_ir_ci": "44/56"
+        },
+        "note": "the CS 522 flag that was confident in the second round fires in 51-52 % of 1,000 resamples, inside the Monte Carlo 95 % interval around 50 %, so it is now proposed (SCO-002); flags are identical whether the key comes from the file or the key sheets (seeded from the content)"
+      },
+      "synthetic": {
+        "photo_corpus_200": {
+          "photos": 200,
+          "decided_as_photo": 200,
+          "refused": 3,
+          "questions": 5800,
+          "auto_accepted": 5617,
+          "silent_errors": 0,
+          "review": 183,
+          "wrong_student_numbers": 0,
+          "wrong_versions": 0,
+          "erasure_residue_rows": 0,
+          "single_mark_rows": 5197
+        },
+        "adversarial_photos_6_each": {
+          "rot180": {
+            "photos": 6,
+            "refused": 0,
+            "auto_accepted": 174,
+            "silent_errors": 0,
+            "reviews": 0
+          },
+          "skew12": {
+            "photos": 6,
+            "refused": 0,
+            "auto_accepted": 168,
+            "silent_errors": 0,
+            "reviews": 6
+          },
+          "aniso12": {
+            "photos": 6,
+            "refused": 0,
+            "auto_accepted": 173,
+            "silent_errors": 0,
+            "reviews": 1
+          },
+          "dark": {
+            "photos": 6,
+            "refused": 1,
+            "auto_accepted": 145,
+            "silent_errors": 0,
+            "reviews": 29
+          },
+          "bright": {
+            "photos": 6,
+            "refused": 1,
+            "auto_accepted": 145,
+            "silent_errors": 0,
+            "reviews": 29
+          },
+          "ppi100": {
+            "photos": 6,
+            "refused": 0,
+            "auto_accepted": 174,
+            "silent_errors": 0,
+            "reviews": 0
+          },
+          "shift": {
+            "photos": 6,
+            "refused": 0,
+            "auto_accepted": 174,
+            "silent_errors": 0,
+            "reviews": 0
+          },
+          "key0": {
+            "photos": 6,
+            "refused": 0,
+            "auto_accepted": 174,
+            "silent_errors": 0,
+            "reviews": 0
+          },
+          "key9": {
+            "photos": 6,
+            "refused": 0,
+            "auto_accepted": 174,
+            "silent_errors": 0,
+            "reviews": 0
+          },
+          "mostly0": {
+            "photos": 6,
+            "refused": 0,
+            "auto_accepted": 174,
+            "silent_errors": 0,
+            "reviews": 0
+          }
+        },
+        "damaged_sheets_6_each": {
+          "scanner: fold hiding 2 rows": {
+            "pages": 6,
+            "refused": 6,
+            "auto_accepted": 0,
+            "silent_errors": 0
+          },
+          "scanner: fold hiding 3 rows": {
+            "pages": 6,
+            "refused": 5,
+            "auto_accepted": 26,
+            "silent_errors": 0
+          },
+          "scanner: feed stall of 1 row": {
+            "pages": 6,
+            "refused": 6,
+            "auto_accepted": 0,
+            "silent_errors": 0
+          },
+          "scanner: feed stall of 2 rows": {
+            "pages": 6,
+            "refused": 6,
+            "auto_accepted": 0,
+            "silent_errors": 0
+          },
+          "scanner: fold hiding 2 options": {
+            "pages": 6,
+            "refused": 6,
+            "auto_accepted": 0,
+            "silent_errors": 0
+          },
+          "scanner: feed stall of 2 options": {
+            "pages": 6,
+            "refused": 6,
+            "auto_accepted": 0,
+            "silent_errors": 0
+          },
+          "photo: fold hiding 1 row": {
+            "pages": 6,
+            "refused": 6,
+            "auto_accepted": 0,
+            "silent_errors": 0
+          },
+          "photo: fold hiding 2 rows": {
+            "pages": 6,
+            "refused": 6,
+            "auto_accepted": 0,
+            "silent_errors": 0
+          },
+          "photo: fold hiding 3 rows": {
+            "pages": 6,
+            "refused": 5,
+            "auto_accepted": 20,
+            "silent_errors": 0
+          },
+          "photo: feed stall of 2 rows": {
+            "pages": 6,
+            "refused": 6,
+            "auto_accepted": 0,
+            "silent_errors": 0
+          }
+        },
+        "note": "recognizer level; in the app every answer on a photographed student sheet goes to review (MRK-001 uncalibrated_capture)"
+      },
+      "bench_real_pdfs": {
+        "what": "omr bench on the 143 real pages, best of 2, three alternating rounds of the acceptance-run binary (dfdb776) and this code on the same machine",
+        "load_average": "0.9 at the start, 2.1 at the end",
+        "acceptance_run_code": {
+          "1_thread_recognition": [
+            17.8,
+            17.6,
+            19.3
+          ],
+          "4_threads_recognition": [
+            58.9,
+            63.7,
+            69.2
+          ],
+          "4_threads_full_pipeline": [
+            65.2,
+            63.0,
+            71.0
+          ],
+          "30_sheets_s": [
+            0.65,
+            0.64,
+            0.58
+          ],
+          "first_page_ms": [
+            140,
+            165,
+            136
+          ]
+        },
+        "this_code": {
+          "1_thread_recognition": [
+            17.5,
+            17.5,
+            17.1
+          ],
+          "4_threads_recognition": [
+            64.1,
+            62.3,
+            61.0
+          ],
+          "4_threads_full_pipeline": [
+            64.3,
+            62.9,
+            64.1
+          ],
+          "30_sheets_s": [
+            0.81,
+            0.93,
+            0.71
+          ],
+          "first_page_ms": [
+            231,
+            237,
+            218
+          ]
+        },
+        "units": "pages per second unless named"
+      },
+      "tests": [
+        "omr-recog::real_iau::req_a1_real_iau_sheets_zero_silent_errors",
+        "omr-recog::real_key_sheets::req_a1_real_key_sheets_read_exactly",
+        "omr-recog::ownform_real_iau",
+        "omr-app::real_iau_e2e::req_a1_real_iau_full_pipeline",
+        "omr-app::real_iau_scored::req_a8_real_iau_exams_score_with_the_real_keys",
+        "omr-cli::real_key_read::req_a8_real_key_sheets_read_as_the_verified_keys_or_are_refused",
+        "omr-analytics::real_iau_stability::real_exams_flag_stability_aggregates",
+        "omr-recog::photo_synth::req_a1_phone_photos_read_or_refused_never_silently_wrong",
+        "omr-recog::photo_adversarial (2 tests)"
+      ],
+      "tests_failed": [],
+      "pass": true
     }
   }
 }

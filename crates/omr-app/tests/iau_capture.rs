@@ -533,3 +533,89 @@ fn c3_bitonal_pdf_gray_jpeg_and_png_in_one_exam_each_get_their_baseline() {
     assert_eq!(cap003.len(), 1);
     assert_eq!(cap003[0].severity, Severity::Warn);
 }
+
+/// C3 (§8.10 step 7): a phone photo of a student's sheet, as a phone's PDF app stores it (an
+/// RGB JPEG placed at ≈ 150 ppi), is recognised as a camera capture from the file. The phone
+/// slice is not calibrated, so every answer on it is proposed for review (MRK-001
+/// `uncalibrated_capture`), never auto-accepted, and the batch says why (CAP-003
+/// `phone_uncalibrated`); the same sheet scanned in gray at 150 dpi is read as a scanner page.
+#[test]
+fn c3_phone_photos_of_students_sheets_go_to_review_until_the_phone_slice_is_calibrated() {
+    let dir = tempfile::tempdir().unwrap();
+    let e = iau();
+    let at150 = |k: u16| rescale(&sheet(&e, &marks(k), 90 + u64::from(k)), 3, 4);
+    let photo = write(
+        &dir.path().join("in"),
+        "photo.pdf",
+        &pdf(&[PdfImage::rgb_jpeg(&at150(0), 150.0)]),
+    );
+    let scan = write(
+        &dir.path().join("in"),
+        "scan.pdf",
+        &pdf(&[PdfImage::jpeg(&at150(1), 150.0)]),
+    );
+    let p = grade(
+        &definition("Phone"),
+        &[photo, scan],
+        &dir.path().join("out"),
+        1,
+    );
+    let s = &p.session;
+    assert_eq!(s.booklets.len(), 2);
+    for (bi, b) in s.booklets.iter().enumerate() {
+        let page = &s.pages[b.pages[0]];
+        let is_photo = source_of(&p, bi).starts_with("photo");
+        assert_eq!(
+            page.capture,
+            Some(if is_photo {
+                omr_imaging::CaptureKind::Camera
+            } else {
+                omr_imaging::CaptureKind::Gray
+            }),
+            "{}",
+            source_of(&p, bi)
+        );
+        let read = page.read.as_ref().unwrap();
+        assert_eq!(read.photo, is_photo);
+        let auto = b
+            .questions
+            .iter()
+            .filter(|q| q.status == ResponseStatus::Auto)
+            .count();
+        if is_photo {
+            assert_eq!(auto, 0, "nothing on a phone photo is accepted on its own");
+            for q in &b.questions {
+                assert!(
+                    q.recognized.exceptions.iter().any(|x| x.code == "MRK-001"
+                        && x.sub_reason.as_deref() == Some("uncalibrated_capture")),
+                    "{q:?}"
+                );
+            }
+            // The proposal is the reading: one key confirms it (the photo is sheet 0).
+            let k = 0;
+            for (q, qs) in b.questions.iter().enumerate() {
+                let want = match answer(k, q as u16) {
+                    Some(o) => Response::Single(o),
+                    None => Response::Blank,
+                };
+                assert_eq!(qs.current, want, "Q{}", q + 1);
+            }
+        } else {
+            assert!(auto >= usize::from(N) - 2, "the scanner page reads: {auto}");
+        }
+    }
+    assert!(
+        s.batch_exceptions.iter().any(|x| x.code == "CAP-003"
+            && x.severity == Severity::Warn
+            && x.sub_reason.as_deref() == Some("phone_uncalibrated")),
+        "{:?}",
+        s.batch_exceptions
+    );
+    assert!(
+        p.queue(None)
+            .iter()
+            .filter(|i| i.sub_reason.as_deref() == Some("uncalibrated_capture"))
+            .count()
+            >= usize::from(N) - 2
+    );
+}

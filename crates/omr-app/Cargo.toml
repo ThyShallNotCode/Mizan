@@ -33,6 +33,7 @@ hex.workspace = true
 image.workspace = true
 num-rational.workspace = true
 rand.workspace = true
+data-encoding.workspace = true
 
 [dev-dependencies]
 omr-sim.workspace = true

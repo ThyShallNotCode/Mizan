@@ -12,7 +12,16 @@ security and code review fixes (§3.2), with the real-data rows and the desktop 
 [`docs/evidence/acceptance.json`](evidence/acceptance.json), which holds the same figures with
 the name of every test that proves each row. Unless a section says otherwise, the data are
 **synthetic**: sheets generated with known answers, so the truth is exact by construction.
-The 143 real IAU answer sheets are reported separately in §4, as aggregates only.
+The 143 real IAU answer sheets are reported separately in §4, as aggregates only. The rows
+measured after the acceptance run (scoring with the instructors' keys, the key sheets, the
+photographed and damaged sheets, flag stability: §1's last three rows, §3.1.1, §4.1) come from
+targeted reruns by the second adversarial verification on the code after its fixes; they are
+recorded in `acceptance.json` under `real_data.second_round` with the digest of that code. A third
+round (§3.1.2: the mis-key release gate, flag stability by content, photos, key-sheet provenance)
+reran the real-data rows, the photo suites and the throughput of the real PDFs on its code
+(`real_data.third_round`). The other A1–A11 rows were not rerun (the full script needs a release
+rebuild of every crate and about an hour on this shared machine); the recognition engine changed
+since, but on the 143 real pages every measurement and decision is bit-identical (§4).
 
 ## 1. Summary
 
@@ -28,18 +37,27 @@ The 143 real IAU answer sheets are reported separately in §4, as aggregates onl
 | A8 | Scoring | 17 oracle tests equal hand computations | Exact match | Pass |
 | A9 | Outcomes (CLO/PLO, TP-154) | 12 oracle tests equal hand computations | Exact match | Pass |
 | A10 | Exceptions | 0 unknown codes in 241 source files; UNREADABLE never EMPTY in 6 targeted tests | Catalogue test + targeted tests | Pass |
-| A11 | Desktop UI | 20 tests (13 on demo data, 7 over the real core: review, release, New exam, key replacement, live grading); screenshots of every screen in both themes | Screens render; scripted review completes | Pass |
-| — | Scoring of the real IAU exams | **Not measured**: the answer keys have not been supplied, so the real runs infer the key and their scores are not evaluated (§4) | Scores equal those from the real key | **Not yet proven** |
+| A11 | Desktop UI | 23 tests (13 on demo data, 10 over the real core: review, release, New exam (with key sheets too), key replacement, key sheets read in Setup and confirmed, flag stability, live grading); screenshots of every screen in both themes, the key-sheet screens included | Screens render; scripted review completes | Pass |
+| — | Scoring of the real IAU exams (measured after the acceptance run, when the instructors' keys arrived) | With the real keys: **137 of 143** booklets scored, **each equal** to an independent count of the reference answers against the key (CS 522: 88 of 88, ARTI 503: 49 of 49); the other 6 are provisional and differ only by their 7 questions still in review (a pending question is never credited); **0 of 4,089** auto-accepted answers differ from the reference; forms wrong 0 of 141 | Scores equal those from the real key | **Pass** (`real_iau_scored.rs`, §4.1) |
+| — | Key sheets (CR-11; measured after the acceptance run) | The instructors' own key sheets read by the same key-blind recognizer: ARTI 503 (600-dpi scans) **56 of 56** answers and CS 522 (phone photos) **58 of 58** equal to the verified key, none wrong, none to decide; graded with the key sheets named, or found inside the students' stack, and confirmed: the **7 decision files byte-identical** to the key-file run for each exam. Adversarial cases (a blank, multi-marked or erased-and-changed row, a blank version bubble, two sheets that disagree, a key sheet mid-stack, a student who bubbles the marker, a correction after confirmation followed by a rescan) each held, highlighted or refused as designed; 4 defects found and fixed (§3.1.1). **Third round** (§3.1.2): 0 of 58 photo rows highlighted (48 before); each row crop shows its printed question number; every key sheet of a version found in the stack is named, so a full-marks student who bubbled the marker is never dropped silently; key sheets added from the desktop or `omr key replace --from-key-sheets` are stored and named by the key version, own forms included | A wrong key is never used; key-sheet answers never accepted on their own | **Pass** (`real_iau_scored.rs`, `omr-cli/tests/real_key_read.rs`, `omr-app/tests/key_sheets.rs`) |
+| — | Photographed and damaged sheets (F1 and the adversarial verification after it) | **F1, found by the owner's run:** both CS 522 key photos registered one bubble row too high and all 58 answers were auto-accepted, 49 of them wrong (reproduced on the previous engine: 447 and 580 of 687 bubbles matched, student number and version wrong). **Fixed** by a shift-sensitive verification against the blank form: both photos now read 58 of 58; 200 simulated photos and 10 adversarial photo profiles (upside down, 11–13° skew, 10–14 % anisotropy, very dark, overexposed, 100 ppi, key sheets) 0 silent errors. **Found in this verification:** a fold, a taped tear or an ADF feed stall moving part of a sheet by 2–3 rows was read rows off and auto-accepted; now refused (row and column checks), 0 silent errors on scanner pages and photos. **Third round:** a photo is recognised as one from its file (a colour JPEG below 200 ppi, a camera's EXIF) or its geometry, and because the phone slice is not calibrated every answer on a photographed student sheet goes to review (never auto-accepted); the key photos read 58 of 58 with 0 rows highlighted (48 before). The 143 real pages read bit-identically | Never silently wrong | **Pass** (§3.1.2, §7) |
+| — | Mis-key release gate (§12.2, §8.1; third round) | A probable mis-key at normal confidence (SCO-001 ERROR) is a review item that blocks release until the instructor changes the key, accepts a second answer, voids the item, or keeps the key with a reason and a note; low-confidence flags never block. Flag stability is seeded from the content (identical through two key histories), with every item's bootstrap CI of r_ir and a Monte Carlo margin around 50 %. On the real exams: CS 522 10 rank 1–4 flags, ARTI 503 8, all low confidence or insufficient data (the one previously confident CS 522 flag fired in 51–52 % of resamples, inside the Monte Carlo noise), so no mis-key item is queued | A confident mis-key is never released unacknowledged | **Pass** (`omr-app/tests/flag_stability.rs`, §3.1.2) |
 
 Real data (143 IAU sheets, §4): **0 silent errors in 4,089 auto-accepted answers**, review rate
 **0.171 %**, student numbers **0 wrong** (138 exact, 5 sent to review).
 
 Adversarial verification (§3.1): 15 hostile-input tests through the whole application, all
-passing; 11 defects found on the way were fixed, each with a regression test.
+passing; 11 defects found on the way were fixed, each with a regression test. A second round,
+after the instructors' keys arrived, verified the photo registration fix (F1), the key sheets and
+flag stability: 6 more defects found and fixed, each with a regression test that fails on the
+code before its fix (§3.1.1). A third round found that a confident mis-key never reached the
+release gate, and eleven more issues (photos, key-sheet provenance, flag stability, remedies,
+documentation); all are fixed, each code fix with a regression test (§3.1.2).
 
 Security and code review (§3.2): of 26 findings above "low", 21 are fixed (18 with regression
 tests; CR-05, CR-06 and CR-08 were documentation), 3 in part (SEC-11, CR-09, CR-15: the rest is
-listed in §7), 1 is deferred (CR-11, a teacher-filled key sheet) and 1 did not reproduce
+listed in §7), 1 was deferred at the acceptance run and is built since (CR-11, a
+teacher-filled key sheet, §4.1) and 1 did not reproduce
 (SEC-03); 5 of the 12 low findings are fixed in whole or in part.
 
 **Terms.** A *silent error* is an answer the software accepted on its own that differs from
@@ -142,6 +160,19 @@ laptops, and its speed varies with the load: earlier acceptance runs of this cod
 3.4–3.9 during the throughput rows of this run, partly from the acceptance run's own
 preceding tests.
 
+**Re-measured after the third round** (§3.1.2, C9) on the real IAU PDFs only: `omr bench` (best
+of 2) with the binary of the code measured here and the binary of the acceptance run, three
+alternating rounds on the same machine at a load average of 0.9–2.1:
+
+| Real IAU PDFs, 143 pages | 1 thread | 4 threads | Full pipeline, 4 threads |
+|---|---|---|---|
+| Acceptance-run code | 17.6–19.3 | 58.9–69.2 | 63.0–71.0 |
+| Code after the third round | 17.1–17.5 | **61.0–64.1** | 62.9–64.3 |
+
+(pages per second; the range of the three rounds.) The two overlap within the machine's noise,
+and both are above the 40 pages/s floor. They are lower than the table above because the
+machine was busier than in the acceptance run, as the old binary shows.
+
 ### 2.3 A3: time to first result, 30 sheets
 
 **What was measured.** How long a teacher waits from starting a grade of 30 sheets until every
@@ -159,6 +190,12 @@ Test: `omr-cli/tests/acceptance_perf.rs::req_a3_time_to_first_result_30_sheets`.
 | Real IAU PDFs | — | 0.59 s |
 
 **Result: pass** (< 3 s). **Caveat:** same machine conditions as A2.
+
+**Re-measured after the third round** (C9, the alternating rounds of §2.2): the in-process
+30-sheet run of the real PDFs took **0.71–0.93 s** (first provisional page after 218–237 ms),
+against 0.58–0.65 s (136–165 ms) for the acceptance-run binary in the same rounds: the code
+added since the acceptance run (two rounds of checks and the flag stability in the exports)
+costs 0.1–0.3 s per run here, not profiled further; the row stays well inside 3 s.
 
 ### 2.4 A4: regrade latency
 
@@ -328,8 +365,10 @@ spec's catalogue (Appendix A), and whether an unreadable answer is never treated
   decides.
 
 **Result: pass.** **Caveats:** sub-reasons are checked by tests, not by the scan. A sticker or
-white-out over an *unfilled* bubble on the IAU form still reads as blank: the ring-visibility
-check of spec §8.6 is not implemented. WARN and INFO exceptions are counted but not queued.
+white-out over one *unfilled* bubble on the IAU form still reads as blank: ring visibility
+(spec §8.6) is checked per answer row only (since the second adversarial round a row whose
+printed rings are not seen is unreadable, §3.1.1), not per bubble. WARN and INFO exceptions are
+counted but not queued.
 
 ### 2.11 A11: desktop UI
 
@@ -343,25 +382,30 @@ profile: the row is not timed):
   accessible labels and physical keys, identity candidates, the setup matrix, unique accessible
   labels, every screen in both themes at 1440 × 900 and 1280 × 800, keyboard paths, results and
   outcomes, and the DEMO DATA mark on every screen.
-- `crates/shell-slint/tests/req_a11_real.rs` (7 tests over the real `omr-app` backend, synthetic
+- `crates/shell-slint/tests/req_a11_real.rs` (10 tests over the real `omr-app` backend, synthetic
   IAU sheets): a scripted review that rescores the results exactly as the core does, then
   every item settled and the results released through *Release results…* with the Blackboard
   upload; live
   grading; adding a later batch from the Scan screen; edge projects (no roster, no CLOs, an
   inferred key) and an empty workspace without a panic; **New exam** from the dashboard (a bad
   entry refused with what to type, then graded into a new folder of the workspace with an
-  inferred key, and opened); **Replace key…** from Setup (the inferred key replaced and the exam
-  rescored); and a project whose snapshot was edited outside the app refused with SYS-011 and
-  the remedy.
-- The 28 unit tests of the shell (key map, bindings, view-model formatting) run in
-  `scripts/check.sh`.
+  inferred key, and opened; and again with the instructor's key sheets in its *Key sheets* field:
+  read with the exam as stored key sheets, held, confirmed in Setup, the key version naming both
+  scans, §3.1.2); **Replace key…** from Setup (the inferred key replaced and the exam
+  rescored); **Read key from answer sheet…** in Setup (a student's sheet refused, the
+  instructor's key sheets previewed, then confirmed: since the third round they join the exam
+  as stored, audited key sheets, §3.1.2); flag stability in Results' item analysis; and a
+  project whose snapshot was edited outside the app refused with SYS-011 and the remedy.
+- The 32 unit tests of the shell (key map, bindings, view-model formatting, flag stability)
+  run in `scripts/check.sh`.
 
 **Screenshots** (synthetic data only, rendered headless by `omr-desktop --screenshot`):
 [`design/screens/`](design/screens/) (the demo data, marked DEMO DATA: exams, setup, scan,
 review, review-identity, review-blind, results, outcomes, settings; light, dark and
-1280 × 800) and [`design/screens/real/`](design/screens/real/) (two synthetic IAU exams graded
+1280 × 800) and [`design/screens/real/`](design/screens/real/) (synthetic IAU exams graded
 through `omr-app`: the same screens plus review-scoring, review-override, results-export,
-scan-add and exams-new, the New-exam form), for example
+scan-add, exams-new (the New-exam form), and the key-sheet screens setup-keysheet (the key
+summary to confirm, each row with its printed question number) and scan-keysheet), for example
 [the review screen](design/screens/real/review-light.png),
 [results](design/screens/real/results-light.png) and
 [New exam](design/screens/real/exams-new-light.png).
@@ -419,6 +463,48 @@ each now has a regression test (marked **fixed**). All tests passed in the accep
 | All of the above in one batch, at 1, 2, 3 and 4 threads, in name, reversed and shuffled order | Decision files byte-identical | `hostile_batches_are_deterministic_across_threads_and_input_order` |
 | One 500-page scanner PDF (`omr-sim`, 223 MiB) | See §2.2: memory bounded, throughput held, 0 silent errors. **Fixed:** every input file was held twice at its peak (read into a buffer, then copied) | `req_a2_a_500_page_pdf_keeps_memory_bounded_and_throughput` |
 
+### 3.1.1 Second round: photos, key sheets and flag stability
+
+After the instructors' keys and key sheets arrived, a second adversarial verification
+reproduced the claims of the photo registration fix (F1), the key sheets (CR-11) and flag
+stability (F2), then tried to break them. Synthetic sheets only, except where a gated real run
+is named; real runs report counts only. Six defects were found and fixed; each regression test
+fails on the code before its fix. All tests pass.
+
+| Input | What happens now | Test |
+|---|---|---|
+| F1 (found by the owner's run): the CS 522 key photos (RGB JPEG ≈ 142 ppi, 4–6 % anisotropic) | Both read their student number, version and 58 of 58 answers equal to the verified key, on the scanner path with a verified one-row correction and on the camera path alone. The previous engine, rebuilt and rerun in this verification: one row too high, 447 and 580 of 687 bubbles matched, **49 of 58 answers wrong and every one auto-accepted**, student number and version wrong on both pages | gated `omr-recog/tests/real_key_sheets.rs`; `register.rs::one_pitch_aliases_are_never_verified_and_are_corrected` |
+| Phone photos upside down, skewed 11–13°, 10–14 % anisotropic, very dark (exposure 0.25–0.45), overexposed (1.3–1.8), at 100 ppi, moved one or two pitches in the frame; key sheets bubbled all 0 or all 9 with every question marked; a student number that is mostly zeros | Read or refused (REG-001/REG-003), never misread: 0 silent errors, 0 wrong numbers or versions (exploration: 40–60 photos per profile and combinations; the committed test 6 per profile) | `omr-recog/tests/photo_adversarial.rs::req_a1_adversarial_photos_are_read_or_refused_never_silently_wrong` |
+| A fold or a taped tear hiding 2–3 answer rows; an ADF feed stall repeating 1–2 rows' worth of scan lines; on scanner pages, a fold or stall across two options | Refused (REG-003: part of the page moved; rescan it flat) or the hidden rows unreadable; 0 silent errors on scanner pages and photos. **Fixed:** the region-wide verification passed on the part of the page that still matched, and every row below the damage was read two or three rows off, auto-accepted (88–123 silent errors per 16–24 pages in the exploration; 41 in the first 6 pages of the committed test). Each answer row is now compared with the question numbers of the rows around it, each answer column (scanner pages) with the option letters, and a blank-read row whose printed rings are not seen is unreadable. The 143 real pages: every measurement and decision bit-identical | `photo_adversarial.rs::req_a1_folded_or_stalled_sheets_are_refused_never_read_rows_off` |
+| A key sheet in the students' stack with its version bubble left blank | On a two-version exam it is refused naming what to do (bubble the version and rescan, or give the key as a file), and the run is held; on a one-version exam it is that version. **Fixed:** it was graded as a student whose number is `0000000000`, its answers in the students' statistics | `omr-app/tests/key_sheets.rs::a_key_sheet_with_a_blank_version_is_never_graded_as_a_student` |
+| An answer the instructor erased and changed on the key sheet; a key file given too that says otherwise on a row | The new answer is read; the row is highlighted for checking (MRK-003), as is the row where the key file differs; neither blocks the confirmation. **Fixed:** both rows looked like any other confirmed row | `…::an_erased_and_changed_key_answer_is_highlighted_for_checking` |
+| A student who bubbled `0000000000` by mistake, beside the real key sheet | The two key sheets of the version disagree, so those rows wait for the instructor, and the hold now says so and gives the way out: grade again naming the key sheet with `--key-sheet-marker none`, which grades the student. **Fixed:** the hold did not say why the rows disagreed or how to get the student graded | `…::a_student_who_bubbles_the_marker_is_named_by_the_hold_with_the_way_out` |
+| A key entry corrected after the key sheets were confirmed (`omr key set`, an audited key version), then the key sheet scanned again in a later batch | The correction stays the instructor's decision: the next key summary shows the row as "decided by you", and the re-confirmed key keeps it. **Fixed:** the rescan dropped the confirmation and the re-confirmed key reverted silently to the sheet's reading | `…::a_key_correction_after_confirmation_survives_a_rescan_of_the_key_sheet` |
+| F2: SCO-001 "probable mis-key" on items most of the class answered correctly where one top scorer chose a distractor | The exports run the flag-stability job (§12.2: N < 1,000 → 1,000 bootstrap resamples, seeded from the score run then, from the scored content since the third round (§3.1.2); N ≥ 1,000 → Fisher-z CI ends) and carry each rank 1–4 flag's share and its low-confidence label in `item_analysis.csv`, `report.html` and the XLSX. A genuine mis-key stays confident (share 1.0, both CI ends hold); the one-outlier flag is low confidence (share 0.64, fails at the upper CI end). Identical at 1 and 4 threads. **Fixed:** the export path never ran the job, so every flag read as confident | `omr-app/tests/flag_stability.rs::exported_flags_carry_their_stability_and_low_confidence_label`; `omr-analytics/tests/stability.rs` |
+| Key sheet mid-stack in a multi-page PDF; confirmation by two operators (one per version, the project closed and reopened between); undo after confirmation; a key change after confirmation | As designed, no defect: the students' pages and scores are unchanged by the key sheet's place; each version's confirmation records its operator (`confirmed_by`) and the publishing event the last one; undo reverts the latest review decision, never a key confirmation (correct a confirmed key with `omr key set` or `omr key replace`); a key change after confirmation is an audited new key version | exploration; `key_sheets.rs` |
+
+### 3.1.2 Third round: the mis-key gate, photos, key-sheet provenance
+
+A third verification read the code and the evidence of the second round against the spec and
+raised twelve findings (C1–C12 of that review; not the common cases of §3). Each was
+reproduced first; every code fix has a regression test that fails on the code before it, and
+every gated real-data test was rerun in release on the fixed code (aggregates only, §4, §4.1).
+
+| Finding | What was wrong | What happens now | Tests |
+|---|---|---|---|
+| C1 (high) | A probable mis-key at normal confidence (SCO-001, ERROR, §12.2) was only a line in the item analysis: never a review item, never blocking release | Each confident SCO-001 is a review item naming the item and the distractor, never the key letter. Release is refused ("computing…") until the flag-stability job has judged the current run, then until each item is decided: change the key to the distractor, accept both answers, void the item, or keep the key with a reason and a note (an audited `ReviewItemAcknowledged`). A key change is an audited key version; flags that disappear are withdrawn, ones that come back reopen; a later batch carries the decisions over. Low-confidence flags (SCO-002 `proposed_miskey`) never block | `omr-app/tests/flag_stability.rs::a_planted_mis_key_blocks_release_until_the_instructor_decides_it`, `…::a_mis_key_is_decided_by_changing_the_key_and_the_flag_is_gone`, `…::accepting_a_second_answer_or_voiding_decides_a_mis_key` |
+| C2 | On the CS 522 key photos every row looked "erased and changed" (MRK-003): 48 of 58 rows highlighted, and the key summary hid why | The residue that makes a row "erased" must stand out from the page's own unmarked bubbles (95th percentile of their darkness, on photos), so a photo's uneven light no longer reads as erasures; the summary prints the reason beside each highlighted row. Real key photos: **0 of 58** rows highlighted (ARTI 503 scans 0 of 56) | `omr-recog` `decide::a_photo_residue_must_stand_out_from_the_pages_unmarked_bubbles`; gated `omr-cli/tests/real_key_read.rs` (fewer than 5 % highlighted) |
+| C3 | A photographed sheet was a camera capture only if the test said so (the photo suites forced it on every other photo), and student photos were auto-accepted although the phone slice is not calibrated (§8.10) | A capture is a photo from its file (a colour JPEG below 200 ppi, a camera's EXIF tags) or its geometry (a corrected lattice, anisotropy); photo pages take the camera thresholds; every answer on a photographed student sheet goes to review (MRK-001 `uncalibrated_capture`) and the batch says so (CAP-003 WARN `phone_uncalibrated`). Photo suites now use the production classification: 200 photos, 200 decided as photos, 3 refused, 5,617 of 5,800 answers auto-accepted at recognizer level, **0 silent** | `omr-app/tests/iau_capture.rs::c3_phone_photos_of_students_sheets_go_to_review_until_the_phone_slice_is_calibrated`; `omr-imaging` `camera_exif_and_photo_resolution_mark_a_phone_capture`; `omr-recog/tests/photo_synth.rs`, `photo_adversarial.rs` |
+| C4 | A student who bubbled the marker number and answered exactly like the key was taken as a second key sheet: nothing disagreed, so the student was silently not graded | Whenever a version is given by more than one key sheet and one was found in the stack, every one is named (file and page) in the hold, the key summary and its HTML, with the way to get a student graded (`--key-sheet FILE --key-sheet-marker none`) | `omr-app/tests/key_sheets.rs::a_marker_student_who_agrees_with_the_key_is_named_never_dropped_silently` |
+| C5 | The key summary's row crops showed the bubbles only, so a sheet read one row off looked right under its question | Each crop starts 2.3 pitches left of option A and shows the question number printed beside the row; the summary tells the instructor to check it against the Q column | `key_sheets.rs::a_key_summary_row_crop_shows_its_own_printed_question_number` |
+| C6 | The remedies of REG-003 and REG-004 lived in the desktop shell only; the CLI and review queue gave none | Every blocking registration code has its remedy in the core review queue: REG-003 rescan flat (a photo: the whole sheet, from straight above, evenly lit), REG-004 check the form is printed at 100 % and rescan, a row-check refusal rescan unfolded or decide from the paper sheet; never key answers from the refused page | `omr-app` `review::tests::every_blocking_registration_code_has_a_remedy` |
+| C7 | A key sheet read from the desktop or by `omr key read` and then used lost its provenance (the key version named no sheet); own-form key sheets were untested | `ExamProject::add_key_sheets` stores the original, holds the run and publishes a key version whose source is the key sheet with its SHA-384, from Setup's *Read key from answer sheet…*, the New exam form's *Key sheets* field and `omr key replace --from-key-sheets`; own forms read key sheets under the 9-digit scheme | `omr-app/tests/key_sheets_ownform.rs` (2 tests); `omr-cli/tests/key_sheets.rs::key_sheets_added_to_a_graded_exam_are_stored_held_and_confirmed`; `shell-slint/tests/req_a11_real.rs::req_a11_real_backend_new_exam_reads_the_named_key_sheets`, `…::req_a11_real_backend_reads_a_key_from_answer_sheets_in_setup` |
+| C8 | Flag stability used Fisher-z CIs below N = 1,000 where §12.3 asks for the bootstrap; it was seeded from the run ID, so the same answers through two key histories gave different labels; a share of 51–52 % at 1,000 resamples was "confident" | Below N = 1,000 every item gets a percentile CI of r_ir from the same 1,000 resamples (`item_analysis.csv`: *r_ir bootstrap CI*); the seed is the SHA-384 of the scored content; a flag is confident only when its share's Monte Carlo 95 % interval lies above 50 % and the rule holds at both CI ends. The one confident CS 522 flag (51–52 %) is now low confidence | `omr-analytics/tests/stability.rs::stability_is_seeded_from_the_content_and_deterministic`, `…::the_bootstrap_gives_every_item_a_percentile_ci_of_r_ir`; `stability::tests::a_share_near_half_is_low_confidence_until_monte_carlo_noise_is_excluded`; `flag_stability.rs::the_same_content_through_two_key_histories_gives_identical_flags` |
+| C9 | Throughput had not been re-measured after the second round | Re-measured on the real PDFs against the acceptance-run binary, alternating on the same machine (§2.2, §2.3): pages per second within the machine's noise; a 30-sheet run 0.1–0.3 s slower than the acceptance-run code, well inside A3's 3 s | `omr bench` |
+| C10 (low) | SCO-027 printed the key's letter counts, exam-confidential, in warnings that reach the CLI and logs | The warning says what pattern was found (a run, a skewed distribution) and its p-value, never the counts; the counts appear only in the key summary for the instructor | `omr-scoring/tests/a8_oracles.rs` |
+| C11 (low) | README, crate READMEs and IMPLEMENTATION described the second round's state | Updated: key sheets, the mis-key decision, photos to review, the known limits | — |
+| C12 (low) | Exports printed Rust enum names (`ProbableMiskey`, `Low`), had no flag order, and the SCO-023 note (small N: item statistics below N = 30, with bootstrap CIs and low-confidence badges) was missing from the summary | The §12.2 messages, `normal` / `low (proposed)` / `possible, insufficient data`, a *Flag order* column (rank, then stability), and the SCO-018 / SCO-023 notes in `summary.json` and `report.html` | `omr-report` `items::tests`; golden `items.csv`, `report.html` |
+
 ### 3.2 Security and code review: what was fixed
 
 A security review and a code review of the MVP raised 26 findings above "low" (SEC-01…SEC-11,
@@ -446,7 +532,7 @@ multi-page TIFF fix of §3.1 had already landed).
 | CR-07 | No release step; the Blackboard upload was written for unreleased results | `omr release` and *Release results…*: refused while anything blocks release; the upload exists only for released results and is removed when a later change supersedes the release | `project_actions.rs::c8_blackboard_grade_center_upload_holds_only_what_it_needs`; `omr-cli/tests/real_world.rs` |
 | CR-09 | Launching the app without a display printed a raw error | The error says what to do (desktop session, `--screenshot`, or the CLI). Windows and a real window remain untested (§7) | — |
 | CR-10 | The section and exam type read from the IAU sheet were discarded | Carried into the exports; a sheet whose section disagrees with the roster is IDN-004 `cross_section` (INFO) | `c13_sheet_section_is_carried_and_checked_against_the_roster` |
-| CR-11 | No teacher-filled key sheet | Not built: listed as deferred (IMPLEMENTATION.md §2) | — |
+| CR-11 | No teacher-filled key sheet | Built after the acceptance run: key sheets named (`--key-sheet`, `omr key read`) or found in the stack (student number all 0 or all 9; on a two-version exam a key sheet must also show its version, else it is refused with what to do), never graded as students, the run held (SCO-003 BLOCKER) until the instructor confirms the rendered key summary; rows that are not one confident mark block the confirmation, and erased-and-changed rows and rows a key file contradicts are highlighted; a key sheet showing no marker is refused, never read; a correction after confirmation survives a later rescan of the key sheet (§3.1.1, §4.1) | `omr-app/tests/key_sheets.rs` (8 tests), `omr-cli/tests/key_sheets.rs`; real: `real_iau_scored.rs`, `omr-cli/tests/real_key_read.rs`, `omr-recog/tests/real_key_sheets.rs` |
 | CR-13 | A failed grade left a half-made project that every command then refused differently | The folder is removed when grading fails; an unfinished one is named with what to do | `c14_an_unfinished_grading_run_is_named_with_its_remedy` |
 | SEC-12, CR-20 (low) | A chain failure printed no code or remedy; the app's read-only fallback blamed "another program"; some input errors had no remedy | SYS-011 with the remedy everywhere; read-only only when another process holds the store; input errors say what to do; next commands quote paths with spaces; `acceptance.json` records the digest of the code it measured (§6) | `req_a11_real_backend_replaces_the_key_from_setup_and_names_a_tampered_project`, `ingest::tests::input_refusals_say_what_to_do`, `omr` `next_commands_quote_paths_the_shell_would_split` |
 | SEC-16 (low) | Roster warnings printed full student numbers | Masked to the last 3 digits, as in `review list` | `student_numbers_are_masked_outside_the_exports` (the masking they share) |
@@ -467,11 +553,11 @@ disagreements were adjudicated on 600-dpi zooms. The readers and the adjudicator
 agents, so the labels are **agent-adjudicated, not certification-grade**: the spec never
 certifies an error bound on agent labels alone (§23.1).
 
-**Answer keys were inferred.** The owner has not supplied the answer keys yet, so these runs use
-`--infer-key`: each version's key is the most common confident answer per question. Every output
-of such a run is marked INFERRED and can never be released. Accuracy below is measured against
-the reference labels (what the student marked), which does not depend on the key; scores are
-not evaluated.
+**Answer keys were inferred in this run.** The answer keys had not been supplied when it was
+made, so these runs use `--infer-key`: each version's key is the most common confident answer
+per question. Every output of such a run is marked INFERRED and can never be released. Accuracy
+below is measured against the reference labels (what the student marked), which does not depend
+on the key. Scoring with the real keys, supplied later, is §4.1.
 
 Tests (env-gated, skipped without the data): `omr-app/tests/real_iau_e2e.rs::req_a1_real_iau_full_pipeline`
 (the whole application as two exams), `omr-recog/tests/real_iau.rs::req_a1_real_iau_sheets_zero_silent_errors`
@@ -492,12 +578,30 @@ path refuses all 143 legacy pages with REG-001 rather than mis-reading them).
 | Version / form, whole app | 140 declared and correct, 0 declared wrong; 3 inferred from the answers: 1 faint bubble, inferred as the version the reference shows; 2 blank bubbles, which the reference cannot check, both queued for confirmation (SCO-005) |
 | Exam type (recognition) | 141 exact, 2 flagged, 0 wrong |
 | Pages taken for blank backs | 0; every page's upright-vs-upside-down margin ≥ 0.511 (gate 0.20) |
-| Throughput (`omr bench`, 4 threads) | **73.2 pages/s** recognition, 67.8 pages/s full pipeline (19.4 and 36.9 pages/s at 1 and 2 threads; 76–89 at 4 threads in earlier, quieter runs) |
+| Throughput (`omr bench`, 4 threads) | **73.2 pages/s** recognition, 67.8 pages/s full pipeline (19.4 and 36.9 pages/s at 1 and 2 threads; 76–89 at 4 threads in earlier, quieter runs; 61–64 after the third round, beside 59–69 for this run's binary on the same busier machine, §2.2) |
 | Whole app, 143 pages, store and exports | 2.45 s (58 pages/s) |
 | Rescans, refused or held pages | 0: no real page was superseded as a rescan, refused for its resolution or held as a foreign form; each 600-dpi page carries CAP-002 INFO (read from the 200-dpi working copy) |
 
 The whole app sends two more student numbers to review than the recognition-only count
 (3 `id_ambiguous`, 2 `id_blank`, from the rosterless IAU identity rules); none was wrong.
+
+**Rerun after the second adversarial round** (photo verification, row and column checks,
+ring visibility; `real_data.second_round` in `acceptance.json`). Recognition: the fingerprints of
+every bubble measurement and of every decision in all three baseline modes are **identical** to
+the engine measured above; 0 pages fail the row checks (the worst row's evidence of another
+row's content is 0.22 against the 0.35 threshold; the smallest own-row correlation 0.14); the
+smallest shift-verification margin is 0.334 (threshold 0.15). Whole app: the same counts (0
+silent errors in 4,089, review 0.171 %, student numbers 138 / 5 / 0, forms 140 + 3 inferred,
+0 wrong); 143 pages with the store and every export (flag stability included) in 2.8 s
+(51 pages/s) at a load average of 2.4–3.9, against 2.45 s in the acceptance run (6.1 s in an
+earlier rerun while another agent's desktop tests held the load near 7).
+
+**Rerun after the third round** (§3.1.2; `real_data.third_round`). Recognition: the fingerprints of
+every measurement and of every decision in all three baseline modes are again identical. Whole
+app: the same counts (0 silent errors in 4,089, review 0.171 %, student numbers 138 / 5 / 0,
+forms 140 + 3 inferred, 0 wrong); 0 pages taken for photos; 143 pages with the store and every
+export, flag stability with the per-item bootstrap CIs included, in 3.16 s (45 pages/s) at a
+load average near 2.
 
 **What this does and does not show.** It shows that on this university's real forms, scanners
 and students the software made no silent error in 4,089 accepted answers while asking a person
@@ -505,12 +609,51 @@ about 7. It does not certify a rate: 4,096 questions bound SER at 7.3 × 10⁻�
 contract's 10⁻⁵, and the labels are agent-adjudicated. The sheets come from two courses of one
 college.
 
+### 4.1 Scoring with the instructors' keys and key sheets
+
+The owner later supplied the instructors' key sheets: for ARTI 503 two 600-dpi bitonal scans
+(versions A and B, student number bubbled all 0), for CS 522 two phone photos in one PDF
+(version A all 0, version B all 9). The verified keys (`question,A,B,points`) were read from them
+by eye and, for ARTI 503, by the engine too; both agreed on all 56 answers. The keys are
+exam-confidential: nothing below shows a key letter, and the class's own statistics (mean, pass
+rate, KR-20) stay in the evaluation report outside the repository.
+
+Tests (env-gated, also `OMR_IAU_KEYS`): `omr-app/tests/real_iau_scored.rs::req_a8_real_iau_exams_score_with_the_real_keys`
+grades both exams with the key file, again with the key sheets named (`--key-sheet`) and again
+with the key sheets inside the students' stack, confirming them as the instructor would;
+`omr-cli/tests/real_key_read.rs` runs `omr key read` on the three key-sheet PDFs;
+`omr-recog/tests/real_key_sheets.rs` reads the key sheets with the recognizer alone (also forced
+onto the camera path). All were rerun in release by the second adversarial verification
+(§3.1.1) and again by the third (§3.1.2), after their fixes, with the results below (the third
+round's where they differ).
+
+| Measure | Result |
+|---|---|
+| Booklets | 143 (CS 522: 92, ARTI 503: 51) |
+| Scored booklets whose raw score equals the independent score (reference answers × key, computed in the test) | **137 of 137** |
+| Provisional booklets | 6, each differing from the independent score only by its questions still in review (7 in all); a pending question is never credited |
+| Auto-accepted answers differing from the reference | **0 of 4,089** |
+| Forms wrong where the reference shows a version | 0 of 141 (2 reference versions blank; their inferred forms match the file they came from) |
+| `omr key read`, ARTI 503 (600-dpi scans) | 56 of 56 answers equal to the verified key, none to decide, 0 rows highlighted |
+| `omr key read`, CS 522 (phone photos) | 58 of 58 equal, none to decide, 0 rows highlighted for checking (48 of 58 before C2, §3.1.2), after the photo registration fix (F1). The previous engine registered both photos one bubble row too high and auto-accepted all 58 answers, 49 of them wrong, reading the student numbers wrong too (reproduced by rebuilding it); the app would have refused those sheets anyway (a key sheet whose grid shows no marker is never read as a key, proven on a synthetic sheet reading `1111111111`), but a student's photographed sheet had no such guard. Now every alignment is verified against the blank form's non-periodic content before anything is read (§3.1.1) |
+| Decision files, key sheets named vs key file | **7 of 7 identical** for each exam (`results.csv`, `item_analysis.csv`, `test_stats.csv`, `tp154_a1.csv`, `booklets.json`, `review_queue.json`, `key.csv`) |
+| Decision files, key sheets in the students' stack vs key file | both key sheets of each exam found by the rule; 7 of 7 identical for each exam |
+| Mis-key flags with flag stability (§12.2, F2, C8), as exported | CS 522: 10 rank 1–4 flags, **all low confidence**, including its 4 probable mis-keys (rule 1). The one that held at both CI ends in the second round fires in 51–52 % of 1,000 bootstrap resamples, inside the Monte Carlo interval around 50 %, so it is now *(proposed)* (SCO-002), not a release blocker. ARTI 503: 8 flags, all low confidence or insufficient data, including all 7 probable mis-keys (the one-outlier items F2 reported). **No mis-key review item is queued on either exam**; the same flags whether the key comes from the file, the key sheets named or the key sheets in the stack. Before F2 every flag was exported as confident |
+| Bootstrap CI of r_ir (§12.3, C8) | Every item whose r_ir is defined in ≥ 90 % of the resamples has a percentile CI: 52 of 58 items (CS 522) and 44 of 56 (ARTI 503); the others are left blank (nearly everyone answered them alike, so r_ir is often undefined) |
+| Photographed pages among the students' sheets (C3) | 0 of 143 (every page a 600-dpi bitonal scan), so no answer was sent to review for an uncalibrated capture |
+
+**What this does and does not show.** The app's arithmetic on the real exams equals an
+independent count on every fully scored booklet, and the key read from the instructors' own
+sheets changes nothing. It rests on the agent-adjudicated reference labels (§4) and on keys
+verified by agents (by eye, and for ARTI 503 also by the engine); the instructors have not yet
+confirmed them in the app themselves.
+
 ## 5. A comparison with Remark Office OMR
 
 The owner reported that Remark Office OMR found some of these sheets hard. A fair comparison
 needs, for the same five PDFs:
 1. **The answer keys** for CS 522 and ARTI 503 (versions A and B), so both systems score
-   against the same key.
+   against the same key (supplied since: §4.1).
 2. **Remark's output**: the per-question responses it read for every sheet (not only totals),
    its exception or review list, and the template and settings used (Remark version, bubble
    thresholds, bitonal or gray processing).
@@ -545,17 +688,46 @@ machine.
 These limits apply to the MVP as measured here.
 
 **Not proven yet**
-- **Scoring on real exams.** The real sheets' answer keys have not been supplied, so their keys
-  were inferred and their scores are not evaluated (§4). Identity against a real roster and a
-  side-by-side comparison with Remark are not done either (§5).
+- **Identity against a real roster and a comparison with Remark** are not done (§5). Scoring on
+  the real exams is proven with keys verified by agents (§4.1) and read from the instructors'
+  key sheets, not yet confirmed by the instructors in the app.
 - **Platforms.** Built and tested on Linux only; Windows 10/11, the spec's primary platform,
   and macOS have not been built, and there is no installer (spec §24). The desktop app has run
   headless (the testing backend and software-rendered screenshots), never in a real window.
 
 **Recognition and review**
 - Classical rules only; the learned mark classifier (spec §8.7) is deferred. A light second
-  fill can read like erasure residue (the hard-slice error). A sticker or white-out over an
-  unfilled IAU bubble reads as blank.
+  fill can read like erasure residue (the hard-slice error). A sticker or white-out over one
+  unfilled IAU bubble reads as blank (a whole answer row whose printed rings are not seen is
+  unreadable since the second adversarial round, but a single covered bubble is not).
+- **Phone photos** (F1, C3): the camera path rests on two real photos (the CS 522 key) and
+  simulated ones; it is held to the scanner's registration gates, and the phone slice of §8.10
+  is not calibrated, so every answer on a photographed student sheet goes to review
+  (MRK-001 `uncalibrated_capture`, CAP-003 for the batch): photos cost review time, never
+  accuracy. A page is taken for a photo from its file (a colour JPEG below 200 ppi, a camera's
+  EXIF tags) or its registration (a corrected lattice, anisotropy above the warning level); a
+  photo converted to a gray, square, ≥ 200 ppi image with its EXIF removed is treated as a
+  scan. At the recognizer level photos are not column-checked: a photo of a sheet folded
+  **vertically** through an answer block so that exactly two options are hidden can still be
+  misread (3 of 24 such simulated photos, 22 errors); in the app those answers are reviewed
+  (student sheets) or confirmed by the instructor against their row crops (key sheets).
+  Scanner pages and every horizontal fold or feed stall are refused. Rescan folded sheets flat
+  on a scanner.
+- **Key sheets found in the stack** by their marker number: a student who bubbles `0000000000`
+  or `9999999999` becomes a second key sheet of the version. The hold names every key sheet of
+  that version, whether or not they disagree (C4), and the way out (grade again with
+  `--key-sheet FILE --key-sheet-marker none`), but if a key file later replaces the key sheets
+  (`omr key replace`), that student's page stays out of the results until the exam is graded
+  again. Undo reverts review decisions, never a key-sheet
+  confirmation: a confirmed key is corrected with `omr key set` or `omr key replace` (audited
+  key versions).
+- **Recognition configuration:** the photo verification and the row and column checks, then
+  the photo residue level of the third round, changed the legacy configuration
+  (`omr-recog/legacy-bitonal/3`, a new `config_sha384` in every engine manifest); on the 143
+  real pages every measurement and decision is bit-identical to version 1. Its new thresholds
+  (row evidence 0.35 at 0.60, the verification margins, the photo residue at the 95th
+  percentile of the page's unmarked bubbles) are initial values set on these pages, two real
+  photos and simulated sheets.
 - WARN and INFO items are counted, not queued. There is no blind verification sample, no
   leases and no two-person rule. Rosterless identities that need confirmation are not queued.
   There is no "duplicate" identity decision: a rescan whose marks agree is resolved
@@ -569,8 +741,19 @@ These limits apply to the MVP as measured here.
 - IAU legacy form: only `cancel_mode = erase_only`; a mirrored scan is held (REG-003), not
   un-mirrored. A single-version exam needs `--forms A`, otherwise a blank version bubble is
   queued (SCO-005) although both versions share the key (CR-16).
-- No teacher-filled key sheet (CR-11), no hot-folder watching and no SVG/PNG sheet output
-  (CR-19).
+- No hot-folder watching and no SVG/PNG sheet output (CR-19). Key sheets (CR-11, §4.1) are
+  confirmed with `omr key confirm` or in the desktop app's Setup screen (read, rendered summary,
+  confirmation; covered by `shell-slint/tests/req_a11_real.rs` on synthetic key sheets); the
+  desktop app has never run in a real window (above).
+- **Flag stability** (§12.2) is computed for the exports, before release and on request
+  (`ExamProject::flag_stability`, `judge_flags`); it is never on the ≤ 50 ms regrade path, so
+  release says "computing…" until it has judged the current run. A key that nobody chose
+  (p = 0) has no r_ir, so rule 1 (SCO-001, the release gate) cannot fire on it: such an item is
+  flagged "Top group prefers d" (rank 2, SCO-002, not blocking), as the synthetic midterm's
+  planted mis-key shows. This follows the §12.2 table as written; whether p = 0 should block
+  release is a question for the spec. Rule 2 has no
+  correlation, so its CI is a normal interval of the upper-group proportion difference, and the
+  CI ends are applied below N = 1,000 too, which makes small classes conservative.
 
 **Security and privacy** (spec §14.2–§14.4, §19)
 - **In place, with tests (§3.2):** the snapshot bound to the audit chain and checked against

@@ -33,7 +33,11 @@ resample_to_dpi(&img, src, dst), resampled_size(w, h, num, den)
 half(&img)                    // 2 × 2 fast path (one pyramid level)
 Bitmap::new(w, h, stride, bits, black_is_one)   // packed 1-bit rows (CCITT G4 output, PDF BlackIs1)
 reduce_bitmap(&bitmap, 3)     // 600 → 200 dpi coverage gray: round(255 · white / 9)
-classify_capture(&img) -> CaptureKind::{Gray, Bitonal, ReducedBitonal { factor }}; .is_bitonal()
+classify_capture(&img) -> CaptureKind::{Gray, Bitonal, ReducedBitonal { factor }, Camera};
+    .is_bitonal(), .is_camera()   // Camera: a phone photo, set by the caller from the file:
+photo_capture(colour_jpeg, dpi)   // a colour JPEG placed below PHOTO_MAX_DPI (200)
+jpeg_from_camera(&bytes)          // EXIF exposure time, f-number, ISO or focal length
+classify_capture_sampled(&img, row_step)   // the same rules on every n-th row (page stage)
 ink_coverage(&img) -> InkCoverage { paper /* p90 */, dark_ppm /* < paper/2, 3 % margins */ }
     .is_blank(2_000)          // blank back / bleed-through test (§8.9 CAP-012: < 0.2 % dark)
 img.rotated_quarter(k)        // lossless k × 90° clockwise (portrait scans of landscape forms)
@@ -49,15 +53,28 @@ circle_offsets(r), parabolic_offset(l, c, r)
 // Sampling (§8.6): 1/256-px coordinates, 8-bit integer bilinear weights → identical on every ISA.
 bilinear(&img, x, y, outside), resample_affine(_offset)(&src, w, h, &map, …)
 disk_sum(&img, cx, cy, r) -> DiskSum { ink, count, expected }   // .clipped(), .darkness_q10()
+disk_sum_paper(&img, cx, cy, r, paper) // ink = Σ max(0, B − v): darkness against a local paper
+                                       // level, .darkness_q10_of(paper); paper 255 = disk_sum
 // (non-finite / far-away centre or bad radius → empty and clipped, never a reading)
+
+// Paper background and illumination (§8.5; gray and camera captures).
+max_filter / min_filter(&img, r)   // separable van Herk / Gil-Werman, (2r+1)² square, clipped
+box_blur(&img, r)                  // exact integer sums, round half up
+paper_background(&img, r)          // closing (max, then min) + blur: marks and print removed
+flatten(&img, &bg)                 // 255·I/B, clamped; B = 255 leaves a pixel unchanged
+illumination(&levels) -> Illumination { mean, cv, min }   // lamp CV of sampled paper levels
 
 // Warps and fits (§8.4).
 trait Warp { map, jacobian, local_scale }
 Affine { m: [a, b, tx, c, d, ty] }  ::similarity/translation/then/inverse/decompose -> Decomposition
-QuadWarp { centre, norm, cx: [f64; 6], cy: [f64; 6] }   // basis [1, x, y, x², xy, y²], 12 parameters
+QuadWarp { centre, norm, cx: [f64; 6], cy: [f64; 6], den: [f64; 2] }
+    // basis [1, x, y, x², xy, y²], 12 parameters; optional projective denominator
+    // w = 1 + den₀x + den₁y (rational: any homography exactly; den = 0 is the plain quadratic,
+    // bit for bit). ::from_affine, ::from_homography, .is_rational(), .denominator(p)
 Homography { h: [f64; 9] }
 fit_affine(src, dst, weights), fit_affine_lmeds(src, dst, iters, seed) -> RobustFit<Affine>
 fit_quadratic(src, dst, weights, centre, norm), fit_homography(src, dst)   // normalised DLT
+fit_quadratic_projective(src, dst, weights, centre, norm, den)   // fixed denominator, 1/w² weights
 ransac_homography(src, dst, threshold, confidence, max_iters, seed) -> RobustFit<Homography>
 PointGrid::{new, nearest_within, k_nearest_within, for_each_within}     // grid-hashed NN
 SplitMix64 (seeded sampling), linalg::{solve, sym_eigen}
@@ -97,7 +114,12 @@ for legacy forms), §8.6 (integer bilinear sampling, disk regions), §8.11 (dete
 - **Homography DLT** finds the null vector with a cyclic Jacobi eigen-solver on AᵀA (no SVD
   crate); RANSAC uses SplitMix64 instead of the BLAKE3-derived seed of §8.4 (the caller passes
   the seed). LM refinement, ECC (Stage B), the TPS (Stage C), ICC/colour dropout channels,
-  illumination B/K maps (§8.5) and JPEG-quality estimation (§8.2) are not implemented yet.
+  the per-tag ink black K (§8.5) and JPEG-quality estimation (§8.2) are not implemented yet.
+- **Paper background** (§8.5): the closing runs on the image it is given (the legacy path
+  uses the 1/4 level; a ≈ 2-bubble square there), without the template's artwork mask (the
+  square removes everything smaller than itself; a large black band would lower B near it).
+  Colour is converted to luma at decode; a colour cast becomes a lower paper level, which the
+  background removes.
 - **`ring_map_fast`** approximates the Gaussian ring by a binomial-blurred integer circle
   (σ ≈ 0.75 px at 100 dpi); it only proposes candidates — detections are re-scored with the
   exact ring template at full resolution.
