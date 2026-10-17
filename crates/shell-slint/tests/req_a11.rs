@@ -8,10 +8,12 @@
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use shell_slint::backend::{Backend, Decision, ExamId, Lane, ReviewAction};
 use shell_slint::bind::Shell;
-use shell_slint::demo::{CS211, DemoBackend};
-use shell_slint::ui::{App, AppWindow, Page, ReviewVM, SetupVM, Theme};
-use slint::ComponentHandle;
+use shell_slint::demo::{CS211, DemoBackend, MATH101};
+use shell_slint::ui::{
+    App, AppWindow, ExamsVM, MarkState, OutcomesVM, Page, ReviewVM, ScanVM, SetupVM, Theme,
+};
 use slint::platform::{Key, WindowEvent};
+use slint::{ComponentHandle, Model};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -252,6 +254,16 @@ fn req_a11_review_flow_through_accessible_labels() {
         with_prefix(ui, "B: ").is_empty(),
         "blind items show no overlays"
     );
+    // ... and the engine's per-bubble reading never reaches the frame (§13.4)
+    let bubbles = ui.global::<ReviewVM>().get_bubbles();
+    assert!(bubbles.row_count() > 0);
+    for b in bubbles.iter() {
+        assert_eq!(b.fill, 0.0, "blind bubble {} carries a fill", b.label);
+        assert!(b.fill_text.is_empty());
+        assert_eq!(b.mark, MarkState::Blank);
+        assert!(!b.overlay);
+    }
+    assert_eq!(ui.global::<ReviewVM>().get_other_fills().row_count(), 0);
 }
 
 #[test]
@@ -619,4 +631,223 @@ fn req_a11_notice_lane_clears_and_escape_closes_the_drawer() {
         tab(ui, "Review, 28 open").accessible_item_selected(),
         Some(true)
     );
+}
+
+// ------------------------------------------------------------------------------------ layout
+
+/// A frame of the shell: page, exam and, for review, the lane and n-th open item of the lane.
+type Frame = (Page, &'static str, Option<(Lane, usize)>);
+
+/// Every frame of the shell.
+fn frames() -> Vec<Frame> {
+    vec![
+        (Page::Exams, CS211, None),
+        (Page::Setup, CS211, None),
+        (Page::Scan, MATH101, None),
+        (Page::Scan, CS211, None),
+        (Page::Review, CS211, Some((Lane::Marks, 0))),
+        (Page::Review, CS211, Some((Lane::Marks, 19))), // blind verify
+        (Page::Review, CS211, Some((Lane::Identity, 0))),
+        (Page::Review, CS211, Some((Lane::Capture, 0))),
+        (Page::Review, CS211, Some((Lane::Scoring, 0))),
+        (Page::Results, CS211, None),
+        (Page::Outcomes, CS211, None),
+        (Page::Settings, CS211, None),
+    ]
+}
+
+/// DESIGN §9: every screen works at 1440 × 900 nominal and down to 1280 × 800. The status bar
+/// is fully inside the window and no control sticks out past its right edge (lists scroll
+/// vertically only, so any horizontal overflow is a layout defect).
+#[test]
+fn req_a11_every_screen_fits_nominal_and_minimum_windows() {
+    let h = harness();
+    let ui = &h.ui;
+    for (w, hgt) in [(1440u32, 900u32), (1280, 800)] {
+        ui.window().set_size(slint::PhysicalSize::new(w, hgt));
+        for (page, exam, review) in frames() {
+            let exam = ExamId(exam.into());
+            h.shell.select_exam(&exam);
+            if let Some((lane, n)) = review {
+                let q = h.demo.borrow().review_queue(&exam, lane);
+                let id = q
+                    .groups
+                    .iter()
+                    .flat_map(|g| g.items.iter())
+                    .nth(n)
+                    .map(|i| i.id);
+                h.shell.set_lane(lane);
+                h.shell.select_item(id);
+            }
+            h.shell.navigate(page);
+            let what = format!("{page:?} {review:?} at {w}x{hgt}");
+            let bars: Vec<_> = ElementHandle::find_by_element_type_name(ui, "StatusBar").collect();
+            assert!(!bars.is_empty(), "{what}: no status bar");
+            for b in bars {
+                let (p, sz) = (b.absolute_position(), b.size());
+                assert!(
+                    p.y >= 0.0 && p.y + sz.height <= hgt as f32 + 0.5,
+                    "{what}: status bar at y {} + {} is outside the window",
+                    p.y,
+                    sz.height
+                );
+                assert!(
+                    p.x + sz.width <= w as f32 + 0.5,
+                    "{what}: status bar too wide"
+                );
+            }
+            for e in ElementQuery::from_root(ui).match_descendants().find_all() {
+                let Some(role) = e.accessible_role() else {
+                    continue;
+                };
+                if !INTERACTIVE.contains(&role) || e.computed_opacity() <= 0.0 {
+                    continue;
+                }
+                let (p, sz) = (e.absolute_position(), e.size());
+                if sz.width <= 0.0 || sz.height <= 0.0 {
+                    continue;
+                }
+                assert!(
+                    p.x + sz.width <= w as f32 + 0.5,
+                    "{what}: {:?} ends at x {} past the window",
+                    e.accessible_label().unwrap_or_default(),
+                    p.x + sz.width
+                );
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------------------------ keys
+
+#[test]
+fn req_a11_exams_table_and_screen_shortcuts_work_from_the_keyboard() {
+    let h = harness();
+    let ui = &h.ui;
+    let selected_exam = |ui: &AppWindow| -> String {
+        ElementQuery::from_root(ui)
+            .match_descendants()
+            .match_accessible_role(AccessibleRole::ListItem)
+            .find_all()
+            .into_iter()
+            .filter(|e| e.accessible_item_selected() == Some(true))
+            .filter_map(|e| e.accessible_label().map(|l| l.to_string()))
+            .find(|l| l.contains("sheets"))
+            .unwrap_or_default()
+    };
+    assert!(selected_exam(ui).starts_with("CS 211 "));
+    // activating a row selects it and puts focus on the table (one tab stop) ...
+    let math = with_prefix(ui, "MATH 101 ");
+    assert_eq!(math.len(), 1);
+    math[0].1.invoke_accessible_default_action();
+    assert!(selected_exam(ui).starts_with("MATH 101 "));
+    // ... where the arrows move the selection, which is the exam the other screens show
+    special(ui, Key::DownArrow);
+    assert!(
+        selected_exam(ui).starts_with("PHYS 110 "),
+        "{}",
+        selected_exam(ui)
+    );
+    assert!(ui.global::<App>().get_course().starts_with("PHYS 110"));
+    special(ui, Key::UpArrow);
+    special(ui, Key::UpArrow);
+    assert!(selected_exam(ui).starts_with("CS 211 "));
+    special(ui, Key::UpArrow); // stays on the first row
+    assert!(selected_exam(ui).starts_with("CS 211 "));
+    // Escape closes the drawer, Enter opens it again
+    special(ui, Key::Escape);
+    assert!(!ui.global::<ExamsVM>().get_drawer_open());
+    special(ui, Key::Return);
+    assert!(ui.global::<ExamsVM>().get_drawer_open());
+
+    // the chords the buttons advertise: Ctrl+K focuses search, Ctrl+N starts a new exam
+    chord(ui, Key::Control, "k");
+    assert_eq!(ui.global::<ExamsVM>().get_search_request(), 1);
+    chord(ui, Key::Control, "n");
+    assert!(ui.global::<App>().get_message().starts_with("New exam"));
+
+    // Scan: Ctrl+Space pauses and resumes the live batch
+    h.shell.select_exam(&ExamId(MATH101.into()));
+    chord(ui, Key::Control, "3");
+    assert_eq!(ui.global::<App>().get_page(), Page::Scan);
+    let running = ui.global::<ScanVM>().get_running();
+    chord(ui, Key::Control, " ");
+    assert_eq!(ui.global::<ScanVM>().get_running(), !running);
+    chord(ui, Key::Control, " ");
+    assert_eq!(ui.global::<ScanVM>().get_running(), running);
+    chord(ui, Key::Control, "r");
+    assert!(
+        ui.global::<App>()
+            .get_message()
+            .starts_with("Rescan pull list")
+    );
+
+    // Results: Ctrl+P is the what-if preview
+    h.shell.select_exam(&cs211());
+    chord(ui, Key::Control, "5");
+    assert_eq!(ui.global::<App>().get_page(), Page::Results);
+    chord(ui, Key::Control, "p");
+    assert!(ui.global::<App>().get_message().starts_with("What-if"));
+}
+
+#[test]
+fn req_a11_results_rank_flags_and_readiness_actions_lead_where_they_say() {
+    let h = harness();
+    let ui = &h.ui;
+    tab(ui, "Results").invoke_accessible_default_action();
+    // the worst flag (probable mis-key, SCO-001) is the first item row (§12.2)
+    let rows: Vec<String> = ElementQuery::from_root(ui)
+        .match_descendants()
+        .match_accessible_role(AccessibleRole::ListItem)
+        .find_all()
+        .into_iter()
+        .filter_map(|e| e.accessible_label().map(|l| l.to_string()))
+        .filter(|l| l.starts_with('Q'))
+        .collect();
+    let first = rows
+        .iter()
+        .min_by_key(|l| {
+            by_label(ui, l)
+                .first()
+                .map_or(i64::MAX, |e| e.absolute_position().y as i64)
+        })
+        .cloned()
+        .unwrap_or_default();
+    assert!(first.starts_with("Q12,"), "first item row: {first}");
+    assert!(first.contains("SCO-001"));
+    // the overall state is shown, and the mis-key check opens the Scoring lane
+    one(ui, "Blocked · 24 ERROR open");
+    let check = with_prefix(ui, "Review: 1 probable mis-key");
+    assert_eq!(check.len(), 1);
+    check[0].1.invoke_accessible_default_action();
+    assert_eq!(ui.global::<App>().get_page(), Page::Review);
+    assert_eq!(h.shell.lane(), Lane::Scoring);
+}
+
+#[test]
+fn req_a11_outcomes_print_both_statistics_and_name_the_deciding_method() {
+    let h = harness();
+    let ui = &h.ui;
+    tab(ui, "Outcomes").invoke_accessible_default_action();
+    // every CLO row carries μ and π with their CIs and the verdict on the policy's method
+    let rows = with_prefix(ui, "CLO");
+    let clo_rows: Vec<&String> = rows
+        .iter()
+        .map(|(l, _)| l)
+        .filter(|l| l.contains("verdict on"))
+        .collect();
+    assert_eq!(clo_rows.len(), 5);
+    for l in &clo_rows {
+        assert!(l.contains("average ") && l.contains("share at or above threshold "));
+        assert!(l.contains("verdict on π"), "{l}");
+    }
+    assert!(
+        clo_rows
+            .iter()
+            .any(|l| l.starts_with("CLO3 ") && l.contains("within the 95 % CI of the target"))
+    );
+    // §11.4 footnote: the deciding method, τ and T
+    let foot = ui.global::<OutcomesVM>().get_footnote();
+    assert!(foot.contains("τ = 60 %") && foot.contains("T = 70 %") && foot.contains("π"));
+    assert_eq!(with_prefix(ui, "Footnote: Actual level").len(), 1);
 }

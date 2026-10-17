@@ -925,6 +925,19 @@ pub struct ItemStats {
     pub flags: Vec<ItemFlag>,
 }
 
+/// Where a readiness check's action button leads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckTarget {
+    /// The review queue; `Some(lane)` switches to that lane first.
+    Review(Option<Lane>),
+    /// The live batch (reconciliation, rescan pull list).
+    Scan,
+    /// Exam setup (key, mapping).
+    Setup,
+    /// Learning outcomes.
+    Outcomes,
+}
+
 /// A release-readiness check (DESIGN §9.5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadinessCheck {
@@ -932,6 +945,8 @@ pub struct ReadinessCheck {
     pub text: String,
     /// Action label for the check's button, e.g. "Open"; empty for none.
     pub action: String,
+    /// Where the action leads; `None` when there is no action.
+    pub target: Option<CheckTarget>,
 }
 
 /// Results of an exam (grades, histogram, item analysis).

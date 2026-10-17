@@ -7,6 +7,7 @@ import {
     Breadcrumb, TableRow,
 } from "../theme.slint";
 import { App, OutcomesVM, CloRow, B1Row } from "../state.slint";
+import { ListView } from "std-widgets.slint";
 import { Icons, ThemeToggle, Centered, StatusText, EmptyState, MessageText } from "../widgets.slint";
 
 component Legend inherits HorizontalLayout {
@@ -144,22 +145,29 @@ component CloAttainmentRow inherits Rectangle {
                 accessible-label: root.data.code + " share at or above threshold";
             }
         }
+        // each statistic's 95 % CI on its own bar's line; the deciding one is emphasised
         VerticalLayout {
             width: 112px;
             alignment: center;
-            spacing: 2px;
+            spacing: 3px;
             Text {
-                text: root.data.ci-text;
+                height: 17px;
+                text: root.data.average-ci-text;
                 font-family: Theme.font-mono;
                 font-size: Theme.text-2xs;
-                color: Theme.ink-2;
+                font-weight: root.data.deciding == 0 ? Theme.weight-semibold : Theme.weight-regular;
+                color: root.data.deciding == 0 ? Theme.ink : Theme.ink-2;
+                vertical-alignment: center;
                 accessible-role: none;
             }
             Text {
-                text: "n = " + root.data.n;
+                height: 17px;
+                text: root.data.proportion-ci-text;
                 font-family: Theme.font-mono;
                 font-size: Theme.text-2xs;
-                color: Theme.ink-2;
+                font-weight: root.data.deciding == 1 ? Theme.weight-semibold : Theme.weight-regular;
+                color: root.data.deciding == 1 ? Theme.ink : Theme.ink-2;
+                vertical-alignment: center;
                 accessible-role: none;
             }
         }
@@ -194,14 +202,24 @@ component CloAttainmentRow inherits Rectangle {
                 }
             }
         }
-        Text {
+        VerticalLayout {
             width: 200px;
-            text: root.data.note;
-            font-size: Theme.text-2xs;
-            color: Theme.ink-2;
-            vertical-alignment: center;
-            wrap: word-wrap;
-            accessible-role: none;
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: "n = " + root.data.n;
+                font-family: Theme.font-mono;
+                font-size: Theme.text-2xs;
+                color: Theme.ink-2;
+                accessible-role: none;
+            }
+            Text {
+                text: root.data.note;
+                font-size: Theme.text-2xs;
+                color: Theme.ink-2;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
         }
     }
     if !root.last: Rectangle {
@@ -259,6 +277,7 @@ component B1Cell inherits Rectangle {
 }
 
 component B1Table inherits VerticalLayout {
+    padding-bottom: Theme.space-md;
     // column widths
     property <length> c-num: 52px;
     property <length> c-plo: 96px;
@@ -305,7 +324,10 @@ component B1Table inherits VerticalLayout {
             ar: "التعليق على النتائج";
         }
     }
-    for r in OutcomesVM.b1: Rectangle {
+    ListView {
+        vertical-stretch: 1;
+        min-height: 3 * 34px;
+        for r in OutcomesVM.b1: Rectangle {
         height: r.header ? 26px : 34px;
         background: r.header ? Theme.surface-sunken : transparent;
         accessible-role: AccessibleRole.list-item;
@@ -374,13 +396,29 @@ component B1Table inherits VerticalLayout {
             height: 1px;
             background: Theme.border;
         }
+        }
     }
-    Rectangle {
-        vertical-stretch: 1;
+    // §11.4: the Actual level cell prints μ and π; this note names the deciding method, τ and T
+    HorizontalLayout {
+        padding-left: Theme.space-md;
+        padding-right: Theme.space-md;
+        padding-top: Theme.space-sm;
+        Text {
+            text: OutcomesVM.footnote;
+            font-size: Theme.text-2xs;
+            color: Theme.ink-2;
+            wrap: word-wrap;
+            accessible-role: AccessibleRole.text;
+            accessible-label: "Footnote: " + OutcomesVM.footnote;
+        }
     }
 }
 
 export component OutcomesScreen inherits VerticalLayout {
+    in property <length> win-w: 1440px;
+    in property <length> win-h: 900px;
+    // CLO rows shown before the list scrolls; the B.1 table takes the rest of the height
+    property <int> clo-rows: root.win-h < 880px ? 5 : 7;
     TopBar {
         HorizontalLayout {
             spacing: Theme.space-lg;
@@ -455,13 +493,15 @@ export component OutcomesScreen inherits VerticalLayout {
                         Legend { }
                     }
                 }
-                VerticalLayout {
-                    padding-left: Theme.space-lg;
-                    padding-right: Theme.space-lg;
-                    padding-bottom: Theme.space-sm;
-                    for c[i] in OutcomesVM.clos: CloAttainmentRow {
-                        data: c;
-                        last: i == OutcomesVM.clos.length - 1;
+                ListView {
+                    height: min(OutcomesVM.clos.length, root.clo-rows) * 54px + Theme.space-sm;
+                    for c[i] in OutcomesVM.clos: HorizontalLayout {
+                        padding-left: Theme.space-lg;
+                        padding-right: Theme.space-lg;
+                        CloAttainmentRow {
+                            data: c;
+                            last: i == OutcomesVM.clos.length - 1;
+                        }
                     }
                 }
             }

@@ -98,7 +98,12 @@ pub const SHOTS: &[Shot] = &[
     },
 ];
 
-/// Installs the headless platform. Call once per process, before any window exists.
+/// The smallest window every screen must still fit (DESIGN §9: "works down to 1280×800").
+pub const MIN_WIDTH: u32 = 1280;
+pub const MIN_HEIGHT: u32 = 800;
+
+/// Installs the headless platform at 1440 × 900. Call once per process, before any window
+/// exists.
 pub fn install_platform() -> Result<Rc<MinimalSoftwareWindow>, String> {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     slint::platform::set_platform(Box::new(HeadlessPlatform {
@@ -109,15 +114,17 @@ pub fn install_platform() -> Result<Rc<MinimalSoftwareWindow>, String> {
     Ok(window)
 }
 
-/// Renders the window's current state into RGB8 pixels.
+/// Renders the window's current state into RGB8 pixels at its current size.
 pub fn capture(window: &MinimalSoftwareWindow) -> Vec<Rgb8Pixel> {
-    let mut buffer = vec![Rgb8Pixel { r: 0, g: 0, b: 0 }; (WIDTH * HEIGHT) as usize];
+    let size = window.size();
+    let (w, h) = (size.width.max(1), size.height.max(1));
+    let mut buffer = vec![Rgb8Pixel { r: 0, g: 0, b: 0 }; (w * h) as usize];
     // Two passes: list views instantiate their rows during the first layout.
     for _ in 0..2 {
         slint::platform::update_timers_and_animations();
         window.request_redraw();
         window.draw_if_needed(|renderer| {
-            renderer.render(&mut buffer, WIDTH as usize);
+            renderer.render(&mut buffer, w as usize);
         });
     }
     buffer
@@ -158,10 +165,26 @@ pub fn stage(shell: &Shell, backend: &Rc<RefCell<DemoBackend>>, shot: &Shot) {
 }
 
 /// Renders every screen of [`SHOTS`] in the given themes (`false` = light) into
-/// `<dir>/<screen>-<theme>.png`, returning the paths written.
+/// `<dir>/<screen>-<theme>.png` at 1440 × 900, returning the paths written.
 pub fn render_all(dir: &Path, themes: &[bool]) -> Result<Vec<PathBuf>, String> {
+    render_all_at(dir, themes, (WIDTH, HEIGHT))
+}
+
+/// As [`render_all`], at another window size; files other than 1440 × 900 are named
+/// `<screen>-<theme>-<w>x<h>.png`.
+pub fn render_all_at(
+    dir: &Path,
+    themes: &[bool],
+    (width, height): (u32, u32),
+) -> Result<Vec<PathBuf>, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let window = install_platform()?;
+    window.set_size(PhysicalSize::new(width, height));
+    let suffix = if (width, height) == (WIDTH, HEIGHT) {
+        String::new()
+    } else {
+        format!("-{width}x{height}")
+    };
     let ui = AppWindow::new().map_err(|e| e.to_string())?;
     ui.global::<s::Theme>().set_reduce_motion(true);
     let backend = Rc::new(RefCell::new(DemoBackend::new()));
@@ -175,11 +198,11 @@ pub fn render_all(dir: &Path, themes: &[bool]) -> Result<Vec<PathBuf>, String> {
             stage(&shell, &backend, shot);
             let pixels = capture(&window);
             let path = dir.join(format!(
-                "{}-{}.png",
+                "{}-{}{suffix}.png",
                 shot.name,
                 if dark { "dark" } else { "light" }
             ));
-            write_png(&path, &pixels, WIDTH, HEIGHT)?;
+            write_png(&path, &pixels, width, height)?;
             written.push(path);
         }
     }

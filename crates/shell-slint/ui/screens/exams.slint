@@ -163,6 +163,8 @@ component ExamTableRow inherits TableRow {
 }
 
 component Drawer inherits Rectangle {
+    // tighter rhythm below 880 px so the drawer fits 800 px windows (DESIGN §9)
+    in property <bool> short;
     width: Theme.drawer-width;
     background: Theme.surface;
     drop-shadow-blur: Theme.shadow-2-blur;
@@ -245,7 +247,8 @@ component Drawer inherits Rectangle {
         }
         VerticalLayout {
             padding: Theme.space-xl;
-            spacing: Theme.space-lg;
+            padding-top: root.short ? Theme.space-lg : Theme.space-xl;
+            spacing: root.short ? Theme.space-sm + 2px : Theme.space-lg;
             // status call-out
             Rectangle {
                 border-radius: Theme.radius-lg;
@@ -400,7 +403,24 @@ component Drawer inherits Rectangle {
     }
 }
 
+// Keyboard focus outline of the exams table: the selected row of the focused table.
+component RowFocus inherits Rectangle {
+    border-width: 2px;
+    border-radius: 2px;
+    border-color: Theme.focus;
+}
+
 export component ExamsScreen inherits VerticalLayout {
+    in property <length> win-w: 1440px;
+    in property <length> win-h: 900px;
+    // the table and the 360 px drawer fit side by side from about 1420 px; below, the drawer
+    // overlays the table's right edge (shadow-2), as a drawer does
+    property <bool> narrow: root.win-w < 1420px;
+    property <bool> short: root.win-h < 880px;
+    property <int> search-request: ExamsVM.search-request;
+    changed search-request => {
+        search.focus();
+    }
     TopBar {
         HorizontalLayout {
             spacing: Theme.space-lg;
@@ -421,10 +441,10 @@ export component ExamsScreen inherits VerticalLayout {
         HorizontalLayout {
             spacing: Theme.space-md;
             Centered {
-                SearchField {
+                search := SearchField {
                     placeholder: "Search exams and courses";
                     key-hint: "Ctrl+K";
-                    width: 280px;
+                    width: root.narrow ? 220px : 280px;
                     accepted(t) => {
                         App.request("Search for \"" + t + "\"");
                     }
@@ -470,8 +490,9 @@ export component ExamsScreen inherits VerticalLayout {
             }
         }
     }
-    HorizontalLayout {
+    Rectangle {
         vertical-stretch: 1;
+    HorizontalLayout {
         VerticalLayout {
             horizontal-stretch: 1;
             padding: Theme.space-xl;
@@ -577,21 +598,61 @@ export component ExamsScreen inherits VerticalLayout {
                             width: 120px;
                         }
                     }
-                    ListView {
+                    // One tab stop for the table: ↑ / ↓ move the selection, Enter or Space opens
+                    // the drawer (DESIGN §9.1); the focused row shows the gold outline.
+                    table-keys := FocusScope {
                         vertical-stretch: 1;
-                        for row[i] in ExamsVM.rows: ExamTableRow {
-                            height: 56px;
-                            data: row;
-                            selected: i == ExamsVM.selected;
-                            clicked => {
-                                ExamsVM.select(i);
+                        key-pressed(event) => {
+                            if (event.modifiers.control || event.modifiers.alt) {
+                                return reject;
+                            }
+                            if (event.text == Key.DownArrow) {
+                                ExamsVM.move(1);
+                                return accept;
+                            }
+                            if (event.text == Key.UpArrow) {
+                                ExamsVM.move(-1);
+                                return accept;
+                            }
+                            if ((event.text == Key.Return || event.text == " ") && ExamsVM.selected >= 0) {
+                                ExamsVM.select(ExamsVM.selected);
+                                return accept;
+                            }
+                            return reject;
+                        }
+                        ListView {
+                            for row[i] in ExamsVM.rows: Rectangle {
+                                height: 56px;
+                                ExamTableRow {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    data: row;
+                                    selected: i == ExamsVM.selected;
+                                    clicked => {
+                                        ExamsVM.select(i);
+                                        table-keys.focus();
+                                    }
+                                }
+                                if table-keys.has-focus && i == ExamsVM.selected: RowFocus {
+                                    width: parent.width;
+                                    height: parent.height;
+                                }
                             }
                         }
                     }
                 }
             }
         }
-        if ExamsVM.drawer-open: Drawer { }
+        if ExamsVM.drawer-open && !root.narrow: Drawer {
+            short: root.short;
+        }
+    }
+    if ExamsVM.drawer-open && root.narrow: Drawer {
+        x: parent.width - self.width;
+        y: 0;
+        height: parent.height;
+        short: root.short;
+    }
     }
     StatusBar {
         Centered {

@@ -11,7 +11,7 @@ component ThumbTile inherits Rectangle {
     in property <Thumb> t;
     in property <image> img;
     callback clicked();
-    height: self.width * 1.2 + 22px;
+    height: self.width * 1.12 + 22px;
     border-radius: Theme.radius-sm;
     background: Theme.surface-raised;
     border-width: 1px;
@@ -41,7 +41,7 @@ component ThumbTile inherits Rectangle {
         x: 3px;
         y: 3px;
         width: parent.width - 6px;
-        height: parent.width * 1.2 - 3px;
+        height: parent.width * 1.12 - 3px;
         source: root.img;
         image-fit: fill;
         accessible-role: none;
@@ -51,12 +51,12 @@ component ThumbTile inherits Rectangle {
         x: 3px;
         y: 3px;
         width: parent.width - 6px;
-        height: parent.width * 1.2 - 3px;
+        height: parent.width * 1.12 - 3px;
         background: Theme.surface-sunken.with-alpha(0.62);
     }
     if root.t.state == 3: Rectangle {
         x: 3px;
-        y: (parent.width * 1.2) * 0.55;
+        y: (parent.width * 1.12) * 0.55;
         width: parent.width - 6px;
         height: 2px;
         background: Theme.info.with-alpha(0.7);
@@ -190,6 +190,9 @@ component CodeBarRow inherits Rectangle {
 }
 
 export component ScanScreen inherits VerticalLayout {
+    in property <length> win-w: 1440px;
+    in property <length> win-h: 900px;
+    property <bool> narrow: root.win-w < 1400px;
     TopBar {
         HorizontalLayout {
             spacing: Theme.space-md;
@@ -261,7 +264,7 @@ export component ScanScreen inherits VerticalLayout {
                 spacing: Theme.space-md;
                 height: 148px;
                 Card {
-                    width: 236px;
+                    width: root.narrow ? 212px : 236px;
                     inset: 0;
                     VerticalLayout {
                         padding: Theme.space-md;
@@ -289,12 +292,14 @@ export component ScanScreen inherits VerticalLayout {
                 }
                 StatTile {
                     horizontal-stretch: 1;
+                    min-width: root.narrow ? 128px : 160px;
                     label: "PAGES";
                     value: ScanVM.pages-value;
                     caption: ScanVM.pages-caption;
                 }
                 StatTile {
                     horizontal-stretch: 1;
+                    min-width: root.narrow ? 128px : 160px;
                     label: "AUTO-ACCEPTED";
                     value: ScanVM.auto-value;
                     unit: "%";
@@ -302,6 +307,7 @@ export component ScanScreen inherits VerticalLayout {
                 }
                 StatTile {
                     horizontal-stretch: 1;
+                    min-width: root.narrow ? 128px : 160px;
                     label: "FIRST RESULT";
                     value: ScanVM.first-value;
                     unit: "s";
@@ -310,6 +316,7 @@ export component ScanScreen inherits VerticalLayout {
                 }
                 StatTile {
                     horizontal-stretch: 1;
+                    min-width: root.narrow ? 128px : 160px;
                     label: "REMAINING";
                     value: ScanVM.remaining-value;
                     caption: ScanVM.remaining-caption;
@@ -404,14 +411,20 @@ export component ScanScreen inherits VerticalLayout {
                             }
                         }
                     }
+                    // Whole rows only: rows that do not fit the card are left out (and so are
+                    // their AT nodes), so the grid never spills over the status bar.
                     Rectangle {
                         vertical-stretch: 1;
+                        clip: true;
                         property <length> gap: 6px;
                         property <length> tile-w: (self.width - 2 * Theme.space-lg - 9 * self.gap) / 10;
+                        property <length> row-h: self.tile-w * 1.12 + 22px + self.gap;
+                        property <int> rows: max(1, floor((self.height - Theme.space-md + self.gap) / self.row-h));
                         for t[i] in ScanVM.thumbs: ThumbTile {
                             x: Theme.space-lg + mod(i, 10) * (parent.tile-w + parent.gap);
-                            y: floor(i / 10) * (parent.tile-w * 1.2 + 22px + parent.gap);
+                            y: floor(i / 10) * parent.row-h;
                             width: parent.tile-w;
+                            visible: floor(i / 10) < parent.rows;
                             t: t;
                             img: ScanVM.thumb-images[t.variant];
                             clicked => {
@@ -423,11 +436,12 @@ export component ScanScreen inherits VerticalLayout {
             }
         }
         VerticalLayout {
-            width: 340px;
+            width: root.narrow ? 300px : 340px;
             spacing: Theme.space-lg;
             Card {
                 title: "Exceptions by code";
                 subtitle: "This batch · Enter opens the filtered queue";
+                vertical-stretch: 0;
                 VerticalLayout {
                     spacing: 2px;
                     for c in ScanVM.codes: CodeBarRow {
@@ -440,10 +454,20 @@ export component ScanScreen inherits VerticalLayout {
                             ScanVM.open-code(c.code);
                         }
                     }
+                    if ScanVM.codes-more > 0: HorizontalLayout {
+                        alignment: start;
+                        GhostButton {
+                            text: ScanVM.codes-more + " more codes in the review queue";
+                            clicked => {
+                                ScanVM.open-review();
+                            }
+                        }
+                    }
                 }
             }
             Card {
                 title: "Batch reconciliation";
+                vertical-stretch: 0;
                 VerticalLayout {
                     spacing: Theme.space-sm;
                     if ScanVM.recon-code != "": HorizontalLayout {
@@ -474,10 +498,14 @@ export component ScanScreen inherits VerticalLayout {
             Card {
                 title: "Activity";
                 vertical-stretch: 1;
+                // The log takes the height left over and clips its oldest lines: its line count
+                // must never set the column's minimum height (that pushed the status bar off).
                 Rectangle {
                     background: Theme.surface-sunken;
                     border-radius: Theme.radius-md;
                     vertical-stretch: 1;
+                    min-height: 0px;
+                    preferred-height: 0px;
                     clip: true;
                     VerticalLayout {
                         padding: Theme.space-md;

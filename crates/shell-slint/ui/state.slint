@@ -104,7 +104,12 @@ export global ExamsVM {
     in property <string> median-review;
     in property <string> throughput;
     in property <string> term-label;
+    // incremented by Rust on Ctrl+K: the dashboard focuses its search field
+    in property <int> search-request;
+    // select row n and open the drawer (click, Enter)
     callback select(int);
+    // move the selection by n rows, keeping the drawer as it is (↑ / ↓)
+    callback move(int);
     callback set-filter(int);
     // open the selected exam on a page
     callback open(Page);
@@ -225,7 +230,9 @@ export global ScanVM {
     in property <float> done-frac;
     in property <float> flight-frac;
     in property <[KV]> stages;
+    // the worst codes (at most 7 rows fit the column at 1280 × 800); the rest are counted
     in property <[CodeBar]> codes;
+    in property <int> codes-more;
     in property <[Thumb]> thumbs;
     in property <[image]> thumb-images;
     in property <string> auto-count;
@@ -260,6 +267,7 @@ export struct QueueEntry {
     severity: Severity,
     count: int,
     expanded: bool,
+    // row handle: index into the shell's item list (never a raw item id)
     id: int,
     label: string,
     detail: string,
@@ -291,6 +299,7 @@ export struct ChipVM {
 
 export struct ContactTile {
     image: image,
+    // index of the tile (the shell maps it back to the item)
     id: int,
     serial: string,
     current: bool,
@@ -376,7 +385,9 @@ export global ReviewVM {
     // incremented by Rust on "/" or Ctrl+F: the review screen focuses the roster search
     in property <int> search-request;
     callback select-lane(int);
+    // a queue row (by its handle) and a contact-sheet tile (by its index)
     callback select-item(int);
+    callback select-contact(int);
     callback toggle-group(string);
     callback choose-option(int);
     callback choose-special(int);
@@ -491,7 +502,11 @@ export struct CloRow {
     proportion-text: string,
     proportion-lo: float,
     proportion-hi: float,
-    ci-text: string,
+    // 95 % CI of each statistic, printed on its own bar's line
+    average-ci-text: string,
+    proportion-ci-text: string,
+    // which statistic the policy decides on: 0 average μ, 1 threshold-proportion π, -1 neither
+    deciding: int,
     n: string,
     verdict: string,
     verdict-tone: Tone,
@@ -524,5 +539,7 @@ export global OutcomesVM {
     in property <[B1Row]> b1;
     in property <string> classification;
     in property <string> attained-summary;
+    // TP-154 footnote: the deciding method, τ and T (§11.4, actual_level_display = both)
+    in property <string> footnote;
     callback export-tp154();
 }

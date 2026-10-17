@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! omr-desktop [--theme light|dark]                     windowed (winit), demo data
-//! omr-desktop --screenshot <dir> [--theme light|dark]  every screen to <dir>/<screen>-<theme>.png
+//! omr-desktop --screenshot <dir> [--theme light|dark] [--size WxH]
+//!                                                      every screen to <dir>/<screen>-<theme>.png
 //! ```
 //!
 //! The generated UI code lives in the library (`shell_slint::ui`, the audited R6 exception);
@@ -20,19 +21,28 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::rc::Rc;
 
-const USAGE: &str = "usage: omr-desktop [--theme light|dark] [--screenshot <dir>]\n\
+const USAGE: &str = "usage: omr-desktop [--theme light|dark] [--screenshot <dir> [--size WxH]]\n\
   --screenshot <dir>  render every screen headlessly (software renderer, 1440x900) to PNGs\n\
+  --size <WxH>        screenshot window size, e.g. 1280x800 (the smallest supported)\n\
   --theme <t>         light or dark (screenshots: both when omitted)";
 
 struct Args {
     screenshot: Option<PathBuf>,
     theme: Option<bool>,
+    size: Option<(u32, u32)>,
+}
+
+fn parse_size(s: &str) -> Option<(u32, u32)> {
+    let (w, h) = s.split_once(['x', 'X'])?;
+    let (w, h) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
+    (w >= 320 && h >= 240 && w <= 7680 && h <= 4320).then_some((w, h))
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut out = Args {
         screenshot: None,
         theme: None,
+        size: None,
     };
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -45,6 +55,12 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
                     Some("dark") => true,
                     other => return Err(format!("--theme must be light or dark, not {other:?}")),
                 })
+            }
+            "--size" => {
+                let v = args.next().unwrap_or_default();
+                out.size = Some(
+                    parse_size(&v).ok_or(format!("--size must look like 1280x800, not {v:?}"))?,
+                );
             }
             "-h" | "--help" => return Err(String::new()),
             other => return Err(format!("unknown argument {other:?}")),
@@ -73,7 +89,8 @@ fn main() -> ExitCode {
             Some(t) => vec![t],
             None => vec![false, true],
         };
-        return match screenshot::render_all(&dir, &themes) {
+        let size = args.size.unwrap_or((screenshot::WIDTH, screenshot::HEIGHT));
+        return match screenshot::render_all_at(&dir, &themes, size) {
             Ok(paths) => {
                 for p in paths {
                     println!("{}", p.display());

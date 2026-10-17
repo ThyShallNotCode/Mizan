@@ -77,6 +77,16 @@ pub enum GlobalKey {
     Dismiss,
 }
 
+/// A Ctrl chord whose meaning depends on the screen showing (DESIGN §9): Ctrl+N and Ctrl+K on
+/// Exams, Ctrl+Space and Ctrl+R on Scan, Ctrl+P on Results. Letters are physical positions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Chord {
+    /// Ctrl + the letter at this physical position (`'a'`…`'z'`).
+    Letter(char),
+    /// Ctrl+Space.
+    Space,
+}
+
 /// Physical key positions A–Z under the Arabic (101) layout (Windows; macOS "Arabic - PC").
 const ARABIC_101: [&str; 26] = [
     "ش", "لا", "ؤ", "ي", "ث", "ب", "ل", "ا", "ه", "ت", "ن", "م", "ة", "ى", "خ", "ح", "ض", "ق", "س",
@@ -246,6 +256,17 @@ pub fn review_key(
     }
 }
 
+/// Maps a Ctrl chord to its physical form, for the screen-level shortcuts (see [`Chord`]).
+pub fn page_chord(text: &str, ctrl: bool, alt: bool) -> Option<Chord> {
+    if !ctrl || alt {
+        return None;
+    }
+    if is_key(text, Key::Space) {
+        return Some(Chord::Space);
+    }
+    physical_letter(text).map(|i| Chord::Letter((b'a' + i as u8) as char))
+}
+
 /// Maps a key press anywhere in the window to a global command.
 pub fn global_key(text: &str, ctrl: bool, alt: bool) -> Option<GlobalKey> {
     if alt {
@@ -273,6 +294,16 @@ mod tests {
 
     fn k(key: Key) -> String {
         key_char(key).to_string()
+    }
+
+    #[test]
+    fn page_chords_use_physical_positions() {
+        assert_eq!(page_chord("n", true, false), Some(Chord::Letter('n')));
+        // Ctrl+N under the Arabic (101) layout produces ى on the N position
+        assert_eq!(page_chord("ى", true, false), Some(Chord::Letter('n')));
+        assert_eq!(page_chord(" ", true, false), Some(Chord::Space));
+        assert_eq!(page_chord("n", false, false), None);
+        assert_eq!(page_chord("n", true, true), None);
     }
 
     #[test]

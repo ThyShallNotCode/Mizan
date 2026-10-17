@@ -91,7 +91,22 @@ fn status_tone(st: b::ExamStatus) -> s::Tone {
 }
 
 /// Converts a backend crop to a Slint image (one copy; the shell never keeps scans on disk).
+/// A malformed crop (byte count not `width × height × 4`) shows as a neutral grey tile instead
+/// of panicking inside Slint.
 pub fn image(c: &b::CropImage) -> Image {
+    let expected = (c.width as usize)
+        .checked_mul(c.height as usize)
+        .and_then(|n| n.checked_mul(4));
+    if c.width == 0 || c.height == 0 || expected != Some(c.rgba.len()) {
+        let mut grey = SharedPixelBuffer::<Rgba8Pixel>::new(1, 1);
+        grey.make_mut_slice()[0] = Rgba8Pixel {
+            r: 0xC9,
+            g: 0xC9,
+            b: 0xC9,
+            a: 0xFF,
+        };
+        return Image::from_rgba8(grey);
+    }
     Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
         &c.rgba, c.width, c.height,
     ))
@@ -112,10 +127,13 @@ pub fn parse_weight(text: &str) -> Result<Option<f64>, String> {
     match t.as_str() {
         "" | "-" | "–" => Ok(None),
         "½" => Ok(Some(0.5)),
-        _ => t
-            .parse::<f64>()
-            .map(Some)
-            .map_err(|_| format!("\"{text}\" is not a number; type a weight such as 0.5")),
+        _ => match t.parse::<f64>() {
+            // "NaN", "inf" and friends parse as f64 but are not weights
+            Ok(w) if w.is_finite() => Ok(Some(w)),
+            _ => Err(format!(
+                "\"{text}\" is not a number; type a weight such as 0.5"
+            )),
+        },
     }
 }
 
@@ -205,6 +223,12 @@ struct State {
     exam_filter: usize,
     drawer_open: bool,
     lane: Lane,
+    /// Lanes as the backend lists them (the role may see only some), indexed like the chips.
+    lanes: Vec<Lane>,
+    /// Item handles of the queue rows and the contact sheet: the UI passes row indices, never
+    /// raw `ItemId`s (a u64 does not survive Slint's i32).
+    queue_ids: Vec<ItemId>,
+    contact_ids: Vec<ItemId>,
     item: Option<ItemId>,
     current: Option<b::ReviewItem>,
     /// Ordered open items of the lane (for next / previous).
@@ -247,6 +271,9 @@ impl Shell {
                 exam_filter: 0,
                 drawer_open: true,
                 lane: Lane::Marks,
+                lanes: Lane::ALL.to_vec(),
+                queue_ids: Vec::new(),
+                contact_ids: Vec::new(),
                 item: None,
                 current: None,
                 order: Vec::new(),
@@ -295,6 +322,9 @@ impl Shell {
             std::time::Duration::from_millis(500),
             move || {
                 if let Some(shell) = weak.upgrade() {
+                    if shell.ui.upgrade().is_none() {
+                        return; // the window is gone; nothing to refresh
+                    }
                     let changed = shell.backend.borrow_mut().pump();
                     if changed {
                         shell.refresh_scan();
@@ -367,12 +397,7 @@ impl Shell {
         let me = self.clone();
         app.on_key(move |t, ctrl, shift, alt| me.global_key(&t, ctrl, shift, alt));
         let me = self.clone();
-        app.on_request(move |what| {
-            me.say(
-                format!("{what}: handled by omr-app (not in the demo backend)"),
-                s::Tone::Info,
-            )
-        });
+        app.on_request(move |what| me.request(&what));
         let me = self.clone();
         app.on_set_single_key(move |v| {
             me.st.borrow_mut().single_key = v;
@@ -401,6 +426,8 @@ impl Shell {
                 me.select_exam(&id);
             }
         });
+        let me = self.clone();
+        ex.on_move(move |d| me.move_exam(d));
         let me = self.clone();
         ex.on_set_filter(move |i| {
             me.st.borrow_mut().exam_filter = i.max(0) as usize;
@@ -452,35 +479,37 @@ impl Shell {
             }
         });
         let me = self.clone();
-        sc.on_toggle_pause(move || {
-            let Some(exam) = me.exam() else { return };
-            let running = me.ui().global::<s::ScanVM>().get_running();
-            let r = me.backend.borrow_mut().pause_batch(&exam, running);
-            match r {
-                Ok(()) => {
-                    me.say(
-                        if running {
-                            "Batch paused"
-                        } else {
-                            "Batch resumed"
-                        },
-                        s::Tone::Info,
-                    );
-                    me.refresh_scan();
-                }
-                Err(e) => me.say(e.to_string(), s::Tone::Warning),
-            }
-        });
+        sc.on_toggle_pause(move || me.toggle_pause());
 
         // review
         let rv = ui.global::<s::ReviewVM>();
         let me = self.clone();
         rv.on_select_lane(move |i| {
-            let lane = Lane::ALL.get(i as usize).copied().unwrap_or(Lane::Marks);
-            me.select_lane(lane);
+            let lane = usize::try_from(i)
+                .ok()
+                .and_then(|i| me.st.borrow().lanes.get(i).copied());
+            if let Some(lane) = lane {
+                me.select_lane(lane);
+            }
         });
         let me = self.clone();
-        rv.on_select_item(move |id| me.select_item(Some(ItemId(id as u64))));
+        rv.on_select_item(move |row| {
+            let id = usize::try_from(row)
+                .ok()
+                .and_then(|r| me.st.borrow().queue_ids.get(r).copied());
+            if id.is_some() {
+                me.select_item(id);
+            }
+        });
+        let me = self.clone();
+        rv.on_select_contact(move |n| {
+            let id = usize::try_from(n)
+                .ok()
+                .and_then(|n| me.st.borrow().contact_ids.get(n).copied());
+            if id.is_some() {
+                me.select_item(id);
+            }
+        });
         let me = self.clone();
         rv.on_toggle_group(move |code| {
             {
@@ -556,24 +585,9 @@ impl Shell {
             )
         });
         let me = self.clone();
-        rs.on_what_if(move || {
-            me.say(
-                "What-if preview re-scores in omr-app (§12.2)",
-                s::Tone::Info,
-            )
-        });
+        rs.on_what_if(move || me.what_if());
         let me = self.clone();
-        rs.on_check_action(move |i| {
-            if i == 0 {
-                me.navigate(s::Page::Review);
-            } else if i == 1 {
-                me.st.borrow_mut().lane = Lane::Scoring;
-                me.st.borrow_mut().item = None;
-                me.navigate(s::Page::Review);
-            } else {
-                me.navigate(s::Page::Scan);
-            }
-        });
+        rs.on_check_action(move |i| me.check_action(i));
 
         // outcomes
         let me = self.clone();
@@ -590,22 +604,101 @@ impl Shell {
         self.push_item();
     }
 
+    fn request(&self, what: &str) {
+        self.say(
+            format!("{what}: handled by omr-app (not in the demo backend)"),
+            s::Tone::Info,
+        );
+    }
+
+    fn toggle_pause(&self) {
+        let Some(exam) = self.exam() else { return };
+        let running = self.ui().global::<s::ScanVM>().get_running();
+        let r = self.backend.borrow_mut().pause_batch(&exam, running);
+        match r {
+            Ok(()) => {
+                self.say(
+                    if running {
+                        "Batch paused"
+                    } else {
+                        "Batch resumed"
+                    },
+                    s::Tone::Info,
+                );
+                self.refresh_scan();
+            }
+            Err(e) => self.say(e.to_string(), s::Tone::Warning),
+        }
+    }
+
+    fn what_if(&self) {
+        self.say(
+            "What-if preview re-scores in omr-app (§12.2)",
+            s::Tone::Info,
+        );
+    }
+
+    /// Follows readiness check `i`'s action to where the backend says it leads.
+    fn check_action(&self, i: i32) {
+        let target = self.exam().and_then(|e| {
+            let r = self.backend.borrow().results(&e)?;
+            r.readiness.get(usize::try_from(i).ok()?)?.target
+        });
+        match target {
+            Some(b::CheckTarget::Review(lane)) => {
+                if let Some(lane) = lane {
+                    self.select_lane(lane);
+                }
+                self.navigate(s::Page::Review);
+            }
+            Some(b::CheckTarget::Scan) => self.navigate(s::Page::Scan),
+            Some(b::CheckTarget::Setup) => self.navigate(s::Page::Setup),
+            Some(b::CheckTarget::Outcomes) => self.navigate(s::Page::Outcomes),
+            None => {}
+        }
+    }
+
+    /// Moves the exams-table selection by `delta` rows (↑ / ↓), keeping the drawer as it is.
+    fn move_exam(&self, delta: i32) {
+        let next = {
+            let st = self.st.borrow();
+            if st.exam_rows.is_empty() {
+                return;
+            }
+            let last = st.exam_rows.len() as i32 - 1;
+            let pos = st
+                .exam
+                .as_ref()
+                .and_then(|e| st.exam_rows.iter().position(|r| r == e))
+                .map_or(if delta >= 0 { -1 } else { last + 1 }, |p| p as i32);
+            st.exam_rows
+                .get((pos + delta).clamp(0, last) as usize)
+                .cloned()
+        };
+        if let Some(id) = next {
+            self.select_exam(&id);
+        }
+    }
+
     // -------------------------------------------------------------------------- keys
 
     fn global_key(&self, text: &str, ctrl: bool, _shift: bool, alt: bool) -> bool {
+        const SCREENS: [s::Page; 6] = [
+            s::Page::Exams,
+            s::Page::Setup,
+            s::Page::Scan,
+            s::Page::Review,
+            s::Page::Results,
+            s::Page::Outcomes,
+        ];
         match keymap::global_key(text, ctrl, alt) {
-            Some(GlobalKey::Screen(n)) => {
-                let page = [
-                    s::Page::Exams,
-                    s::Page::Setup,
-                    s::Page::Scan,
-                    s::Page::Review,
-                    s::Page::Results,
-                    s::Page::Outcomes,
-                ][n as usize];
-                self.navigate(page);
-                true
-            }
+            Some(GlobalKey::Screen(n)) => match SCREENS.get(n as usize) {
+                Some(&page) => {
+                    self.navigate(page);
+                    true
+                }
+                None => false,
+            },
             Some(GlobalKey::Settings) => {
                 self.navigate(s::Page::Settings);
                 true
@@ -623,8 +716,30 @@ impl Shell {
                     false
                 }
             }
-            None => false,
+            None => self.page_chord(text, ctrl, alt),
         }
+    }
+
+    /// The Ctrl chords each screen advertises on its buttons (DESIGN §9).
+    fn page_chord(&self, text: &str, ctrl: bool, alt: bool) -> bool {
+        use keymap::Chord;
+        let Some(chord) = keymap::page_chord(text, ctrl, alt) else {
+            return false;
+        };
+        let page = self.ui().global::<s::App>().get_page();
+        match (page, chord) {
+            (s::Page::Exams, Chord::Letter('n')) => self.request("New exam"),
+            (s::Page::Exams, Chord::Letter('k')) => {
+                let ui = self.ui();
+                let ex = ui.global::<s::ExamsVM>();
+                ex.set_search_request(ex.get_search_request().wrapping_add(1));
+            }
+            (s::Page::Scan, Chord::Space) => self.toggle_pause(),
+            (s::Page::Scan, Chord::Letter('r')) => self.request("Rescan pull list"),
+            (s::Page::Results, Chord::Letter('p')) => self.what_if(),
+            _ => return false,
+        }
+        true
     }
 
     /// Handles a key pressed while the review canvas (or a control inside it) has focus.
@@ -700,8 +815,13 @@ impl Shell {
         let Some(exam) = self.exam() else { return };
         for lane in Lane::ALL {
             let q = self.backend.borrow().review_queue(&exam, lane);
-            if let Some(g) = q.groups.iter().find(|g| g.code == code) {
-                let id = g.items[0].id;
+            if let Some(id) = q
+                .groups
+                .iter()
+                .find(|g| g.code == code)
+                .and_then(|g| g.items.first())
+                .map(|i| i.id)
+            {
                 {
                     let mut st = self.st.borrow_mut();
                     st.lane = lane;
@@ -936,13 +1056,12 @@ impl Shell {
             None => options.first().cloned().unwrap_or_default(),
         };
         let r = self.backend.borrow_mut().set_key(&exam, version, q, &next);
-        self.after_setup_edit(
-            r,
-            format!(
-                "Key Q{q:02} version {}: {next}",
-                setup.keys[version].version
-            ),
-        );
+        let v = setup
+            .keys
+            .get(version)
+            .map(|k| k.version.clone())
+            .unwrap_or_default();
+        self.after_setup_edit(r, format!("Key Q{q:02} version {v}: {next}"));
     }
 
     fn set_key(&self, row: usize, version: usize, text: &str) {
@@ -1309,16 +1428,13 @@ impl Shell {
                 .iter()
                 .enumerate()
                 .map(|(ci, c)| {
+                    let weight = |r: &b::MappingRow| r.cells.get(ci).and_then(|c| c.weight);
                     let evidence: f64 = setup
                         .mapping
                         .iter()
-                        .map(|r| r.cells[ci].weight.unwrap_or(0.0) * r.points)
+                        .map(|r| weight(r).unwrap_or(0.0) * r.points)
                         .sum();
-                    let items = setup
-                        .mapping
-                        .iter()
-                        .filter(|r| r.cells[ci].weight.is_some())
-                        .count();
+                    let items = setup.mapping.iter().filter(|r| weight(r).is_some()).count();
                     let share = (evidence / total_points) as f32;
                     s::CloHead {
                         code: ss(&c.code),
@@ -1413,10 +1529,11 @@ impl Shell {
         su.set_sel_row(sel_row as i32);
         su.set_sel_col(sel_col as i32);
         if let (Some(r), Some(c)) = (setup.mapping.get(sel_row), setup.clos.get(sel_col)) {
+            let cell = r.cells.get(sel_col);
             su.set_sel_title(ss(format!("Q{:02} × {}", r.question, c.code)));
             su.set_sel_clo(ss(&c.title));
-            su.set_sel_weight(ss(fmt_weight(r.cells[sel_col].weight)));
-            su.set_sel_note(ss(&r.cells[sel_col].note));
+            su.set_sel_weight(ss(fmt_weight(cell.and_then(|c| c.weight))));
+            su.set_sel_note(ss(cell.map_or("", |c| c.note.as_str())));
         }
     }
 
@@ -1486,9 +1603,19 @@ impl Shell {
             .max()
             .unwrap_or(1)
             .max(1);
+        // Worst codes first (the backend sorts by severity, then count). Seven rows fit the column
+        // at 1280 × 800; a longer list shows six and counts the rest (they are in the queue).
+        const CODE_ROWS: usize = 7;
+        let shown = if p.exceptions.len() > CODE_ROWS {
+            CODE_ROWS - 1
+        } else {
+            p.exceptions.len()
+        };
+        sc.set_codes_more((p.exceptions.len() - shown) as i32);
         sc.set_codes(model(
             p.exceptions
                 .iter()
+                .take(shown)
                 .map(|c| s::CodeBar {
                     code: ss(&c.code),
                     title: ss(&c.title),
@@ -1583,6 +1710,7 @@ impl Shell {
         };
         let lane = self.st.borrow().lane;
         let q = self.backend.borrow().review_queue(&exam, lane);
+        self.st.borrow_mut().lanes = q.lanes.iter().map(|l| l.lane).collect();
         rv.set_lanes(model(
             q.lanes
                 .iter()
@@ -1607,6 +1735,7 @@ impl Shell {
         };
         let mut entries = Vec::new();
         let mut order = Vec::new();
+        let mut queue_ids = Vec::new();
         let mut y = 0.0_f32;
         let mut selected_y = 0.0_f32;
         for g in &q.groups {
@@ -1631,11 +1760,12 @@ impl Shell {
                     selected_y = y;
                 }
                 let blind = it.kind == ReviewKind::BlindVerify;
+                queue_ids.push(it.id);
                 entries.push(s::QueueEntry {
                     header: false,
                     code: ss(&g.code),
                     severity: severity(it.severity),
-                    id: it.id.0 as i32,
+                    id: queue_ids.len() as i32 - 1,
                     label: ss(&it.label),
                     detail: ss(&it.detail),
                     serial: ss(match it.kind {
@@ -1668,7 +1798,11 @@ impl Shell {
         rv.set_queue(model(entries));
         rv.set_selected_y(selected_y);
         rv.set_empty_text(ss(format!("No open items in the {} lane", lane.label())));
-        self.st.borrow_mut().order = order;
+        {
+            let mut st = self.st.borrow_mut();
+            st.order = order;
+            st.queue_ids = queue_ids;
+        }
         self.push_item();
     }
 
@@ -1728,15 +1862,29 @@ impl Shell {
             None => rv.set_has_original(false),
         }
         let labels: Vec<String> = c.bubbles.iter().map(|b| b.label.clone()).collect();
-        let bubble = |b: &b::BubbleView| s::BubbleVM {
-            label: ss(&b.label),
-            x: b.cx,
-            y: b.cy,
-            r: b.r,
-            fill: b.fill,
-            fill_text: ss(format!("{:.2}", b.fill)),
-            mark: mark(b.state),
-            overlay: b.state != b::MarkState::Blank || st.show_all,
+        // Blind verify (§13.4): the engine's reading is withheld. The shell masks it too, so a
+        // backend that sends fills by mistake still cannot leak them into the frame.
+        let blind = c.kind == ReviewKind::BlindVerify;
+        let bubble = |b: &b::BubbleView| {
+            let (fill, state) = if blind {
+                (0.0, b::MarkState::Blank)
+            } else {
+                (b.fill, b.state)
+            };
+            s::BubbleVM {
+                label: ss(&b.label),
+                x: b.cx,
+                y: b.cy,
+                r: b.r,
+                fill,
+                fill_text: if blind {
+                    SharedString::new()
+                } else {
+                    ss(format!("{fill:.2}"))
+                },
+                mark: mark(state),
+                overlay: !blind && (state != b::MarkState::Blank || st.show_all),
+            }
         };
         rv.set_bubbles(model(c.bubbles.iter().map(bubble).collect()));
         rv.set_fill_bars(model(if c.kind == ReviewKind::Mark {
@@ -1870,7 +2018,11 @@ impl Shell {
             ));
             rv.set_notice_consequence(ss(&n.consequence));
         }
-        rv.set_other_fills(model(c.other_fills.clone()));
+        rv.set_other_fills(model(if blind {
+            Vec::new()
+        } else {
+            c.other_fills.clone()
+        }));
         rv.set_other_caption(ss(format!(
             "Typical full fill {:.2} · {} answered",
             c.typical_full_fill, c.answered
@@ -1898,15 +2050,17 @@ impl Shell {
         rv.set_group_reason(ss(&c.group.reason));
         // contact sheet: every open member of the group, so batch confirm is an informed act
         let mut tiles = Vec::new();
+        let mut contact_ids = Vec::new();
         if c.kind == ReviewKind::Mark
             && c.group.members.len() >= 2
             && let Some(exam) = st.exam.as_ref()
         {
             for &m in c.group.members.iter().take(6) {
                 if let Some(it) = self.backend.borrow().review_item(exam, m) {
+                    contact_ids.push(m);
                     tiles.push(s::ContactTile {
                         image: image(&it.crop),
-                        id: m.0 as i32,
+                        id: contact_ids.len() as i32 - 1,
                         serial: ss(format!("Booklet {}", it.serial)),
                         current: m == c.id,
                         label: ss(format!(
@@ -1923,6 +2077,8 @@ impl Shell {
             c.group.members.len()
         )));
         rv.set_contact(model(tiles));
+        drop(st);
+        self.st.borrow_mut().contact_ids = contact_ids;
     }
 
     // -------------------------------------------------------------------------- refresh: results
@@ -1946,7 +2102,15 @@ impl Shell {
             st.median_pct, st.sd_pct
         )));
         rs.set_pass_rate(ss(format!("{:.1}", st.pass_rate * 100.0)));
-        rs.set_pass_caption(ss("≥ 60 % (D or better)"));
+        // the lowest passing band of the scale in force (Saudi scale: D, 60 %)
+        let lowest_pass = r
+            .grades
+            .iter()
+            .filter(|g| !g.fail)
+            .min_by(|a, b| a.lo.total_cmp(&b.lo));
+        rs.set_pass_caption(ss(lowest_pass.map_or(String::new(), |g| {
+            format!("≥ {:.0} % ({} or better)", g.lo, g.letter)
+        })));
         rs.set_alpha(ss(format!("{:.2}", st.alpha)));
         rs.set_alpha_caption(ss(format!(
             "Feldt 95 % CI {:.2}–{:.2}",
@@ -2008,9 +2172,24 @@ impl Shell {
             "N = {} · {:.0} % bins · mean {:.1} % (▲) · pass mark {:.0} % with ±1.96 SEM",
             st.students, r.histogram.bin_width, r.histogram.mean, r.histogram.pass_mark
         )));
+        // Flagged items first, worst flag first, stable before "proposed" (§12.2 "sort by rank,
+        // then stability"; the backend lists each item's flags in rank order), then by question.
+        let flag_rank = |it: &b::ItemStats| match it.flags.first() {
+            None => (3u8, 0u8),
+            Some(f) => (
+                match f.tone {
+                    b::Tone::Error => 0,
+                    b::Tone::Warning => 1,
+                    _ => 2,
+                },
+                u8::from(!f.stable),
+            ),
+        };
+        let mut items: Vec<&b::ItemStats> = r.items.iter().collect();
+        items.sort_by_key(|it| (flag_rank(it), it.question));
         rs.set_items(model(
-            r.items
-                .iter()
+            items
+                .into_iter()
                 .map(|it| {
                     let flag = it.flags.first();
                     let flag_text = flag
@@ -2107,6 +2286,12 @@ impl Shell {
         ov.set_policy_version(ss(&p.version));
         ov.set_target(p.target as f32);
         ov.set_classification(ss(&o.classification));
+        let deciding = match p.class_method {
+            b::ClassMethod::Average => 0,
+            b::ClassMethod::ThresholdProportion => 1,
+            b::ClassMethod::PerQuestion => -1,
+        };
+        let ci = |(lo, hi): (f64, f64)| format!("{:.0}–{:.0} %", lo * 100.0, hi * 100.0);
         let rows: Vec<s::CloRow> = o
             .clos
             .iter()
@@ -2130,23 +2315,23 @@ impl Shell {
                     proportion_text: ss(format!("π {:.0}%", c.proportion * 100.0)),
                     proportion_lo: c.proportion_ci.0 as f32,
                     proportion_hi: c.proportion_ci.1 as f32,
-                    ci_text: ss(format!(
-                        "π CI {:.0}–{:.0} %",
-                        c.proportion_ci.0 * 100.0,
-                        c.proportion_ci.1 * 100.0
-                    )),
+                    average_ci_text: ss(format!("μ CI {}", ci(c.average_ci))),
+                    proportion_ci_text: ss(format!("π CI {}", ci(c.proportion_ci))),
+                    deciding,
                     n: ss(c.n.to_string()),
                     verdict: ss(verdict),
                     verdict_tone: vt,
                     badge: c.ci_contains_target,
                     note: ss(&c.mapping_note),
                     label: ss(format!(
-                        "{} {}, domain {}, average {:.0} %, share at or above threshold {:.0} %, {verdict}{}, n {}",
+                        "{} {}, domain {}, average {:.0} % (95 % CI {}), share at or above threshold {:.0} % (95 % CI {}), verdict on {method}: {verdict}{}, n {}",
                         c.code,
                         c.title,
                         c.domain.letter(),
                         c.average * 100.0,
+                        ci(c.average_ci),
                         c.proportion * 100.0,
+                        ci(c.proportion_ci),
                         if c.ci_contains_target { ", within the 95 % CI of the target" } else { "" },
                         c.n
                     )),
@@ -2179,6 +2364,16 @@ impl Shell {
             }
         )));
         ov.set_clos(model(rows));
+        // §11.4: the TP-154 Actual level prints μ and π; the footnote names the deciding method,
+        // τ and T (and the policy version the result is bound to)
+        ov.set_footnote(ss(format!(
+            "Actual level: π is the share of students with P ≥ τ = {}; μ is the class average. \
+             The verdict uses {method} against T = {} ({} basis) · {}.",
+            pct(p.tau),
+            pct(p.target),
+            p.verdict_basis,
+            p.version
+        )));
         let mut b1 = Vec::new();
         let mut last = None;
         for r in &o.tp154_b1 {

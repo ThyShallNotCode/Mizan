@@ -2250,9 +2250,10 @@ fn setup_lints(setup: &ExamSetup) -> Vec<SetupLint> {
         .filter(|r| r.cells.iter().all(|c| c.weight.is_none()))
         .map(|r| format!("Q{:02}", r.question))
         .collect();
+    // Appendix A: SCO-013 "Scored item with no CLO mapping" (WARN)
     if !unmapped.is_empty() {
         lints.push(SetupLint {
-            code: "MAP".into(),
+            code: "SCO-013".into(),
             severity: Severity::Warn,
             message: format!(
                 "Unmapped: {} carr{} no CLO evidence",
@@ -2271,9 +2272,10 @@ fn setup_lints(setup: &ExamSetup) -> Vec<SetupLint> {
             })
             .map(|r| format!("Q{:02}", r.question))
             .collect();
+        // Appendix A: SCO-011 "Item→CLO mapping invalid" (split weights sum ≠ 1; ERROR)
         if !bad.is_empty() {
             lints.push(SetupLint {
-                code: "MAP".into(),
+                code: "SCO-011".into(),
                 severity: Severity::Error,
                 message: format!("Split weights must sum to 1: {}", bad.join(", ")),
             });
@@ -2810,8 +2812,16 @@ impl Backend for DemoBackend {
 
     fn review_item(&self, exam: &ExamId, id: ItemId) -> Option<ReviewItem> {
         let item = self.items.iter().find(|i| i.id == id && &i.exam == exam)?;
-        let (crop, original, bubbles) = self.render_item(item);
+        let (crop, original, mut bubbles) = self.render_item(item);
         let blind = item.kind == ReviewKind::BlindVerify;
+        if blind {
+            // the engine's reading never leaves the core for a blind item (§13.4, §15.3):
+            // geometry only, no fill and no state
+            for b in &mut bubbles {
+                b.fill = 0.0;
+                b.state = MarkState::Blank;
+            }
+        }
         let other_fills = if item.kind == ReviewKind::Mark {
             Self::other_fills(item)
         } else {
@@ -2987,26 +2997,32 @@ impl Backend for DemoBackend {
                 } else {
                     String::new()
                 },
+                target: (blocking > 0).then_some(CheckTarget::Review(None)),
             },
+            // SCO-001 is ERROR in Appendix A: the check carries the error glyph
             ReadinessCheck {
-                tone: Tone::Warning,
+                tone: Tone::Error,
                 text: "1 probable mis-key flagged (Q12, SCO-001)".into(),
                 action: "Review".into(),
+                target: Some(CheckTarget::Review(Some(Lane::Scoring))),
             },
             ReadinessCheck {
                 tone: Tone::Success,
                 text: "Blind verify 2 % · 0 disagreements".into(),
                 action: String::new(),
+                target: None,
             },
             ReadinessCheck {
                 tone: Tone::Error,
                 text: "Batch count: 4 serials missing (COL-005)".into(),
                 action: "Reconcile".into(),
+                target: Some(CheckTarget::Scan),
             },
             ReadinessCheck {
                 tone: Tone::Info,
                 text: "Two-person rule on · co-signer: Dr. Reem Al-Harbi".into(),
                 action: String::new(),
+                target: None,
             },
         ];
         r.release_blocked = (blocking > 0).then(|| format!("{blocking} ERROR open"));
@@ -3180,6 +3196,37 @@ mod tests {
         let item = b.review_item(&cs(), verify.items[0].id).unwrap();
         assert!(item.suggestion.is_none());
         assert!(item.other_fills.is_empty());
+        // no per-bubble reading either: geometry only
+        assert!(!item.bubbles.is_empty());
+        assert!(
+            item.bubbles
+                .iter()
+                .all(|b| b.fill == 0.0 && b.state == MarkState::Blank)
+        );
+        assert!(!item.summary.contains("filled"));
+    }
+
+    #[test]
+    fn setup_lints_use_appendix_a_codes() {
+        let b = DemoBackend::new();
+        let s = b.exam_setup(&cs()).unwrap();
+        for l in &s.lints {
+            assert!(
+                l.code.len() == 7 && l.code.starts_with("SCO-"),
+                "lint code {:?} is not an Appendix A code",
+                l.code
+            );
+        }
+        assert!(
+            s.lints
+                .iter()
+                .any(|l| l.code == "SCO-013" && l.severity == Severity::Warn)
+        );
+        assert!(
+            s.lints
+                .iter()
+                .any(|l| l.code == "SCO-011" && l.severity == Severity::Error)
+        );
     }
 
     #[test]

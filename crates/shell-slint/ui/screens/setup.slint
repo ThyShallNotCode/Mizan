@@ -10,7 +10,7 @@ import {
     Icons, ThemeToggle, Centered, SectionLabel, StatusText, KVLine, EditCell, StepIndicator,
     EmptyState, MessageText,
 } from "../widgets.slint";
-import { ListView } from "std-widgets.slint";
+import { ListView, ScrollView } from "std-widgets.slint";
 
 // Key letter of one question in one version: click cycles A→B→…, typing a letter sets it.
 component KeyCell inherits Rectangle {
@@ -189,7 +189,8 @@ component MatrixCard inherits Card {
     title: "Answer key and CLO mapping";
     subtitle: SetupVM.mapping-mode + " · digits type a weight, empty = no mapping · the gold corner marks a note";
     inset: 0;
-    property <length> clo-width: 72px;
+    // set by the screen from the window width (never from the card's own width: no layout loop)
+    in property <length> clo-width: 72px;
     VerticalLayout {
         // column-group header
         Rectangle {
@@ -292,6 +293,9 @@ component MatrixCard inherits Card {
 component TemplateCard inherits Card {
     title: "Template";
     subtitle: SetupVM.template-kind;
+    // a small share of the column's slack: Slint sizes wrapped lines (subtitle, page identity)
+    // a line short here, and the checks card below takes the rest
+    vertical-stretch: 0.2;
     VerticalLayout {
         spacing: Theme.space-sm;
         Rectangle {
@@ -317,6 +321,9 @@ component TemplateCard inherits Card {
             value: kv.value;
             wrap-value: true;
         }
+        Rectangle {
+            vertical-stretch: 1;
+        }
     }
 }
 
@@ -324,8 +331,17 @@ component LintCard inherits Card {
     title: "Checks";
     subtitle: SetupVM.lints.length + " findings before the key is published";
     vertical-stretch: 1;
-    VerticalLayout {
+    // scrolls when the findings outgrow the column (1280 × 800, DESIGN §9)
+    // takes only the height left over (preferred small), so the template card above keeps its
+    // content height
+    ScrollView {
+        vertical-stretch: 1;
+        min-height: 48px;
+        preferred-height: 48px;
+        viewport-width: self.visible-width;
+        VerticalLayout {
         spacing: Theme.space-md;
+        alignment: start;
         for l in SetupVM.lints: HorizontalLayout {
             spacing: Theme.space-sm;
             VerticalLayout {
@@ -353,8 +369,6 @@ component LintCard inherits Card {
                 }
             }
         }
-        Rectangle {
-            vertical-stretch: 1;
         }
     }
 }
@@ -362,6 +376,7 @@ component LintCard inherits Card {
 component CellCard inherits Card {
     title: SetupVM.sel-title;
     subtitle: SetupVM.sel-clo;
+    vertical-stretch: 0;
     VerticalLayout {
         spacing: Theme.space-sm;
         SectionLabel {
@@ -411,8 +426,14 @@ component CloCard inherits Card {
     title: "Course learning outcomes";
     subtitle: "Share of the exam's evidence per CLO";
     vertical-stretch: 1;
-    VerticalLayout {
+    ScrollView {
+        vertical-stretch: 1;
+        min-height: 64px;
+        preferred-height: 64px;
+        viewport-width: self.visible-width;
+        VerticalLayout {
         spacing: Theme.space-md;
+        alignment: start;
         for c in SetupVM.clos: VerticalLayout {
             spacing: 2px;
             HorizontalLayout {
@@ -460,15 +481,23 @@ component CloCard inherits Card {
                 fill: Theme.series-1;
                 thickness: 6px;
                 height: 16px;
+                accessible-label: c.code + " share of the evidence";
             }
         }
-        Rectangle {
-            vertical-stretch: 1;
         }
     }
 }
 
 export component SetupScreen inherits VerticalLayout {
+    in property <length> win-w: 1440px;
+    in property <length> win-h: 900px;
+    property <bool> narrow: root.win-w < 1400px;
+    property <length> left-w: root.narrow ? 248px : 284px;
+    property <length> right-w: root.narrow ? 264px : 296px;
+    // matrix width = window − rail − padding − gutters − side columns; CLO cells share what the
+    // fixed columns (Q, keys, points, Σw, status) leave, between 44 and 72 px
+    property <length> matrix-w: root.win-w - Theme.nav-rail-width - 2 * Theme.space-xl - 2 * Theme.space-lg - root.left-w - root.right-w;
+    property <length> clo-w: clamp((root.matrix-w - 56px - SetupVM.versions.length * 52px - 44px - 2px - 56px - 84px) / max(1, SetupVM.clos.length), 44px, 72px);
     TopBar {
         Breadcrumb {
             parts: [App.course, App.assessment, "Setup"];
@@ -534,16 +563,17 @@ export component SetupScreen inherits VerticalLayout {
         padding: Theme.space-xl;
         spacing: Theme.space-lg;
         VerticalLayout {
-            width: 284px;
+            width: root.left-w;
             spacing: Theme.space-lg;
             TemplateCard { }
             LintCard { }
         }
         MatrixCard {
             horizontal-stretch: 1;
+            clo-width: root.clo-w;
         }
         VerticalLayout {
-            width: 296px;
+            width: root.right-w;
             spacing: Theme.space-lg;
             CellCard { }
             CloCard { }

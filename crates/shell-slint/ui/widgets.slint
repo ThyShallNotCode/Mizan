@@ -88,7 +88,8 @@ export component KVLine inherits HorizontalLayout {
         horizontal-alignment: right;
         vertical-alignment: top;
         wrap: root.wrap-value ? word-wrap : no-wrap;
-        overflow: elide;
+        // a wrapping value grows instead (elide would cap it at one line's height)
+        overflow: root.wrap-value ? TextOverflow.clip : TextOverflow.elide;
     }
 }
 

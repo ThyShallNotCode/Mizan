@@ -14,15 +14,16 @@ import { ListView } from "std-widgets.slint";
 // Grade distribution: one series (teal), F hatched in error with the word "Fail" (DESIGN §3.4);
 // Latin letter over the Arabic letter, then the L6 status columns (TP-154 A.1).
 component GradeChart inherits Rectangle {
+    in property <bool> narrow;
     property <length> plot: 136px;
     height: self.plot + 74px;
     accessible-role: AccessibleRole.image;
     accessible-label: "Grade distribution chart; the table view lists the same counts";
     HorizontalLayout {
-        spacing: 8px;
+        spacing: root.narrow ? 5px : 8px;
         alignment: center;
         for g in ResultsVM.grades: VerticalLayout {
-            width: 38px;
+            width: root.narrow ? 34px : 38px;
             spacing: 3px;
             alignment: end;
             Text {
@@ -238,31 +239,38 @@ component Histogram inherits Rectangle {
     }
 }
 
+// Column widths of the item table are narrower at 1280 px so the flag pill is not clipped.
 component ItemTableRow inherits TableRow {
     in property <ItemRow> data;
+    in property <bool> narrow;
+    property <length> w-q: 56px;
+    property <length> w-r: 64px;
+    property <length> w-ci: root.narrow ? 116px : 124px;
+    property <length> w-band: root.narrow ? 124px : 136px;
+    property <length> w-spark: root.narrow ? 88px : 92px;
     row-height: 40px;
     accessible-label: root.data.label;
     TableCell {
-        width: 56px;
+        width: root.w-q;
         text: root.data.q;
         mono: true;
         strong: true;
     }
     TableCell {
-        width: 56px;
+        width: root.w-q;
         text: root.data.p;
         mono: true;
         align: right;
     }
     TableCell {
-        width: 64px;
+        width: root.w-r;
         text: root.data.r;
         mono: true;
         align: right;
         tint: root.data.r-negative ? Theme.error : Theme.ink;
     }
     Rectangle {
-        width: 124px;
+        width: root.w-ci;
         Text {
             x: Theme.space-sm;
             width: parent.width - Theme.space-sm - Theme.space-md;
@@ -276,7 +284,7 @@ component ItemTableRow inherits TableRow {
         }
     }
     Rectangle {
-        width: 136px;
+        width: root.w-band;
         HorizontalLayout {
             padding-left: Theme.space-md;
             spacing: Theme.space-sm;
@@ -294,7 +302,7 @@ component ItemTableRow inherits TableRow {
         }
     }
     Rectangle {
-        width: 92px;
+        width: root.w-spark;
         HorizontalLayout {
             padding-left: Theme.space-md;
             Centered {
@@ -326,6 +334,14 @@ component ItemTableRow inherits TableRow {
 }
 
 export component ResultsScreen inherits VerticalLayout {
+    in property <length> win-w: 1440px;
+    in property <length> win-h: 900px;
+    property <bool> narrow: root.win-w < 1400px;
+    property <length> w-q: 56px;
+    property <length> w-r: 64px;
+    property <length> w-ci: root.narrow ? 116px : 124px;
+    property <length> w-band: root.narrow ? 124px : 136px;
+    property <length> w-spark: root.narrow ? 88px : 92px;
     TopBar {
         HorizontalLayout {
             spacing: Theme.space-lg;
@@ -439,7 +455,7 @@ export component ResultsScreen inherits VerticalLayout {
             vertical-stretch: 1;
             spacing: Theme.space-lg;
             VerticalLayout {
-                width: 444px;
+                width: root.narrow ? 396px : 444px;
                 spacing: Theme.space-lg;
                 Card {
                     vertical-stretch: 0;
@@ -487,7 +503,9 @@ export component ResultsScreen inherits VerticalLayout {
                                 }
                             }
                         }
-                        if !ResultsVM.grade-table: GradeChart { }
+                        if !ResultsVM.grade-table: GradeChart {
+                    narrow: root.narrow;
+                }
                         if ResultsVM.grade-table: GradeTable { }
                         StatusStrip { }
                     }
@@ -522,7 +540,7 @@ export component ResultsScreen inherits VerticalLayout {
                                     color: Theme.ink;
                                 }
                                 Text {
-                                    text: "Corrected item–rest r (primary) with 95 % CI · flags ranked per §12.2 · key hidden by default";
+                                    text: "Corrected item–rest r (primary) with 95 % CI · flagged items first, ranked per §12.2 · key hidden by default";
                                     font-size: Theme.text-xs;
                                     color: Theme.ink-2;
                                 }
@@ -541,30 +559,30 @@ export component ResultsScreen inherits VerticalLayout {
                             header: true;
                             TableHeaderCell {
                                 text: "Q";
-                                width: 56px;
+                                width: root.w-q;
                             }
                             TableHeaderCell {
                                 text: "p";
-                                width: 56px;
+                                width: root.w-q;
                                 align: right;
                             }
                             TableHeaderCell {
                                 text: "r ir";
-                                width: 64px;
+                                width: root.w-r;
                                 align: right;
                             }
                             TableHeaderCell {
                                 text: "95 % CI";
-                                width: 124px;
+                                width: root.w-ci;
                                 align: right;
                             }
                             TableHeaderCell {
                                 text: "Discrimination";
-                                width: 136px;
+                                width: root.w-band;
                             }
                             TableHeaderCell {
                                 text: "Options A–E";
-                                width: 92px;
+                                width: root.w-spark;
                             }
                             TableHeaderCell {
                                 text: "Flag";
@@ -575,6 +593,7 @@ export component ResultsScreen inherits VerticalLayout {
                             vertical-stretch: 1;
                             for it[i] in ResultsVM.items: ItemTableRow {
                                 height: 40px;
+                                narrow: root.narrow;
                                 data: it;
                                 selected: i == ResultsVM.selected-item;
                                 clicked => {
@@ -585,10 +604,31 @@ export component ResultsScreen inherits VerticalLayout {
                     }
                 }
                 Card {
-                    title: "Release readiness";
                     vertical-stretch: 0;
+                    inset: 0;
                     VerticalLayout {
+                        padding: Theme.space-lg;
+                        padding-top: Theme.space-md;
                         spacing: 0;
+                        // overall state (DESIGN §9.5): Blocked or Ready, with the reason
+                        HorizontalLayout {
+                            height: 36px;
+                            spacing: Theme.space-sm;
+                            Text {
+                                text: "Release readiness";
+                                font-size: Theme.text-lg;
+                                font-weight: Theme.weight-semibold;
+                                color: Theme.ink;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                            Centered {
+                                StatusPill {
+                                    text: ResultsVM.release-blocked ? "Blocked · " + ResultsVM.release-reason : "Ready";
+                                    tone: ResultsVM.release-blocked ? Tone.error : Tone.success;
+                                }
+                            }
+                        }
                         for c[i] in ResultsVM.readiness: Rectangle {
                             height: 30px;
                             HorizontalLayout {

@@ -1,5 +1,8 @@
 // OMR Correction desktop shell: frame, navigation rail and screen switch (DESIGN §9).
 // Screens are instantiated only while visible, so accessible labels stay unique per screen.
+// Every screen gets the window size: it fits 1440 × 900 nominal and 1280 × 800 minimum (DESIGN
+// §9). The window size is set by the platform, never by the content, so screens can adapt to it
+// without a layout binding loop.
 
 import { Theme, NavRail, NavItem } from "theme.slint";
 import { App, ExamsVM, SetupVM, ScanVM, ReviewVM, ResultsVM, OutcomesVM, Page } from "state.slint";
@@ -31,6 +34,16 @@ export component AppWindow inherits Window {
     property <bool> dark: Theme.dark;
     changed dark => {
         Palette.color-scheme = self.dark ? ColorScheme.dark : ColorScheme.light;
+    }
+
+    // A page change destroys the previous screen and the control that had focus with it: hand
+    // focus back to the window's key scope so the keyboard keeps working (WCAG 2.1.1, 2.4.3).
+    // Review focuses its own canvas when it is created.
+    property <Page> page: App.page;
+    changed page => {
+        if (self.page != Page.review) {
+            root-keys.focus();
+        }
     }
 
     root-keys := FocusScope {
@@ -117,24 +130,38 @@ export component AppWindow inherits Window {
             }
             if App.page == Page.exams: ExamsScreen {
                 horizontal-stretch: 1;
+                win-w: root.width;
+                win-h: root.height;
             }
             if App.page == Page.setup: SetupScreen {
                 horizontal-stretch: 1;
+                win-w: root.width;
+                win-h: root.height;
             }
             if App.page == Page.scan: ScanScreen {
                 horizontal-stretch: 1;
+                win-w: root.width;
+                win-h: root.height;
             }
             if App.page == Page.review: ReviewScreen {
                 horizontal-stretch: 1;
+                win-w: root.width;
+                win-h: root.height;
             }
             if App.page == Page.results: ResultsScreen {
                 horizontal-stretch: 1;
+                win-w: root.width;
+                win-h: root.height;
             }
             if App.page == Page.outcomes: OutcomesScreen {
                 horizontal-stretch: 1;
+                win-w: root.width;
+                win-h: root.height;
             }
             if App.page == Page.settings: SettingsScreen {
                 horizontal-stretch: 1;
+                win-w: root.width;
+                win-h: root.height;
             }
         }
     }

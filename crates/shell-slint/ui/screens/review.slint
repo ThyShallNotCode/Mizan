@@ -17,11 +17,24 @@ import { ListView } from "std-widgets.slint";
 component QueuePane inherits Rectangle {
     background: Theme.surface;
     property <length> sel-y: ReviewVM.selected-y;
-    changed sel-y => {
-        // keep the current item in view (rows are 62 px, headers 32 px)
+    // keep the current item in view (rows are 62 px, headers 32 px), also when the screen is
+    // (re)created with an item already selected deep in the lane
+    function reveal() {
         if (self.sel-y < -lv.content-y || self.sel-y + 62px > -lv.content-y + lv.visible-height) {
             lv.content-y = -max(0px, self.sel-y - 2 * 62px);
         }
+    }
+    changed sel-y => {
+        self.reveal();
+    }
+    // A lane switch (or undo into another lane) changes the rows and the selection together;
+    // the list grows to the new rows only after sel-y changed, so reveal again once it has.
+    property <length> list-h: lv.content-height;
+    changed list-h => {
+        self.reveal();
+    }
+    init => {
+        self.reveal();
     }
     VerticalLayout {
         HorizontalLayout {
@@ -130,21 +143,24 @@ component FillChart inherits Rectangle {
 component OtherAnswers inherits VerticalLayout {
     spacing: Theme.space-md;
     alignment: start;
+    // bars share the card width (10 px wide at most), so they never widen the canvas
     Rectangle {
         height: 52px;
-        HorizontalLayout {
-            spacing: 4px;
-            alignment: start;
-            for f in ReviewVM.other-fills: Rectangle {
-                width: 10px;
-                background: Theme.track;
+        min-width: 0px;
+        preferred-width: 0px;
+        property <length> step: min(14px, self.width / max(1, ReviewVM.other-fills.length));
+        for f[i] in ReviewVM.other-fills: Rectangle {
+            x: i * parent.step;
+            y: 0;
+            width: max(2px, parent.step * 10 / 14);
+            height: parent.height;
+            background: Theme.track;
+            border-radius: 2px;
+            Rectangle {
+                y: parent.height * (1 - f);
+                height: parent.height * f;
                 border-radius: 2px;
-                Rectangle {
-                    y: parent.height * (1 - f);
-                    height: parent.height * f;
-                    border-radius: 2px;
-                    background: Theme.ink-3;
-                }
+                background: Theme.ink-3;
             }
         }
     }
@@ -227,9 +243,14 @@ component ContactThumb inherits Rectangle {
 }
 
 component CanvasPane inherits Rectangle {
+    // 1280 px windows: the fill chart card shrinks to its five bars
+    in property <bool> narrow;
     background: Theme.scan-backdrop;
     clip: true;
-    property <float> scale: ReviewVM.zoom / 3;
+    // "3×" is the crop at its native size, shrunk to fit narrow panes (1280 px windows); the
+    // paper box never sets the pane's width, so this cannot loop through the layout
+    property <float> fit: min(1, max(0.25, (paper-box.width - 24px) / max(1px, ReviewVM.crop-w * 1px)));
+    property <float> scale: root.fit * ReviewVM.zoom / 3;
     VerticalLayout {
         padding: Theme.space-xl;
         padding-top: Theme.space-lg;
@@ -265,8 +286,9 @@ component CanvasPane inherits Rectangle {
             Chip {
                 text: "Zoom " + ReviewVM.zoom + "×";
                 count: "+ / −";
+                // a click cycles 2× → 3× → 4× → 2× (the keys step either way)
                 clicked => {
-                    ReviewVM.zoom-by(1);
+                    ReviewVM.zoom-by(ReviewVM.zoom >= 4 ? -2 : 1);
                 }
             }
             Rectangle {
@@ -296,11 +318,13 @@ component CanvasPane inherits Rectangle {
                 }
             }
         }
-        HorizontalLayout {
-            Rectangle {
-                horizontal-stretch: 1;
-            }
-            ScanPaper {
+        paper-box := Rectangle {
+            min-width: 0px;
+            preferred-width: 0px;
+            height: paper.height;
+            paper := ScanPaper {
+                x: (parent.width - self.width) / 2;
+                y: 0;
                 source: ReviewVM.registered || !ReviewVM.has-original ? ReviewVM.crop : ReviewVM.original;
                 crop-w: ReviewVM.crop-w;
                 crop-h: ReviewVM.crop-h;
@@ -311,9 +335,6 @@ component CanvasPane inherits Rectangle {
                 caption: ReviewVM.caption;
                 image-label: "Scan crop: " + ReviewVM.caption;
             }
-            Rectangle {
-                horizontal-stretch: 1;
-            }
         }
         if ReviewVM.kind == 0: HorizontalLayout {
             spacing: Theme.space-lg;
@@ -321,7 +342,7 @@ component CanvasPane inherits Rectangle {
             Card {
                 title: "Fill by bubble";
                 subtitle: "Threshold " + ReviewVM.threshold + " · hysteresis band " + ReviewVM.band-lo + "–" + ReviewVM.band-hi;
-                width: 300px;
+                width: root.narrow ? 284px : 300px;
                 FillChart { }
             }
             Card {
@@ -335,13 +356,18 @@ component CanvasPane inherits Rectangle {
             vertical-stretch: 0;
             title: "Contact sheet · " + ReviewVM.contact.length;
             subtitle: ReviewVM.contact-caption;
-            HorizontalLayout {
-                spacing: Theme.space-sm;
-                alignment: start;
-                for t in ReviewVM.contact: ContactThumb {
+            Rectangle {
+                height: 72px;
+                min-width: 0px;
+                preferred-width: 0px;
+                property <length> tile-w: min(196px, (self.width - (ReviewVM.contact.length - 1) * Theme.space-sm) / max(1, ReviewVM.contact.length));
+                for t[i] in ReviewVM.contact: ContactThumb {
+                    x: i * (parent.tile-w + Theme.space-sm);
+                    y: 0;
+                    width: parent.tile-w;
                     t: t;
                     clicked => {
-                        ReviewVM.select-item(t.id);
+                        ReviewVM.select-contact(t.id);
                     }
                 }
             }
@@ -562,6 +588,9 @@ component CandidateRow inherits Rectangle {
 }
 
 component DecisionPane inherits Rectangle {
+    // below 880 px the keyboard legend gives way (the keys stay on every control; Settings
+    // lists the whole map) so the pane fits 800 px windows
+    in property <bool> short;
     callback refocus();
     background: Theme.surface;
     Rectangle {
@@ -577,8 +606,9 @@ component DecisionPane inherits Rectangle {
         padding: Theme.space-lg + Theme.space-xs;
         spacing: Theme.space-sm + 2px;
         // ---- suggestion
+        // tall enough for source, detail and code tag (the identity card has no display letter)
         if ReviewVM.has-suggestion && ReviewVM.kind != 3: Rectangle {
-            height: ReviewVM.kind == 2 ? 64px : 84px;
+            height: ReviewVM.kind == 2 ? 80px : 84px;
             border-radius: Theme.radius-lg;
             background: Theme.primary-soft;
             accessible-role: AccessibleRole.text;
@@ -822,11 +852,11 @@ component DecisionPane inherits Rectangle {
         Rectangle {
             vertical-stretch: 1;
         }
-        Rectangle {
+        if !root.short: Rectangle {
             height: 1px;
             background: Theme.border;
         }
-        HorizontalLayout {
+        if !root.short: HorizontalLayout {
             SectionLabel {
                 text: "KEYBOARD";
                 horizontal-stretch: 1;
@@ -836,7 +866,7 @@ component DecisionPane inherits Rectangle {
                 tone: Tone.primary;
             }
         }
-        GridLayout {
+        if !root.short: GridLayout {
             spacing-horizontal: Theme.space-lg;
             spacing-vertical: Theme.space-sm;
             Row {
@@ -874,6 +904,10 @@ component DecisionPane inherits Rectangle {
 }
 
 export component ReviewScreen inherits VerticalLayout {
+    in property <length> win-w: 1440px;
+    in property <length> win-h: 900px;
+    property <bool> narrow: root.win-w < 1400px;
+    property <bool> short: root.win-h < 880px;
     property <int> search-request: ReviewVM.search-request;
     changed search-request => {
         search.focus();
@@ -882,8 +916,9 @@ export component ReviewScreen inherits VerticalLayout {
         keys.focus();
     }
     TopBar {
+        // narrow windows drop the trailing "Review" (the active nav tab names the page)
         Breadcrumb {
-            parts: [App.course, App.assessment, "Review"];
+            parts: root.narrow ? [App.course, App.assessment] : [App.course, App.assessment, "Review"];
         }
         HorizontalLayout {
             spacing: Theme.space-sm;
@@ -902,7 +937,7 @@ export component ReviewScreen inherits VerticalLayout {
         VerticalLayout {
             alignment: center;
             spacing: Theme.space-xs;
-            width: 200px;
+            width: root.narrow ? 150px : 200px;
             accessible-role: AccessibleRole.progress-indicator;
             accessible-label: "Review progress";
             accessible-value: ReviewVM.resolved + " of " + ReviewVM.total + " resolved";
@@ -978,9 +1013,11 @@ export component ReviewScreen inherits VerticalLayout {
             }
             CanvasPane {
                 horizontal-stretch: 1;
+                narrow: root.narrow;
             }
             DecisionPane {
                 width: Theme.decision-pane-width;
+                short: root.short;
                 refocus => {
                     keys.focus();
                 }
