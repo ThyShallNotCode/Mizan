@@ -11,7 +11,7 @@ use crate::policy::{
 };
 use num_traits::{ToPrimitive, Zero};
 use omr_model::{Exception, Scope, Severity, StudentKey};
-use omr_scoring::num::{cmp_exact, reduce};
+use omr_scoring::num::{cmp_exact, mul_i128, reduce};
 use omr_scoring::stats::{SplitMix64, Z95, percentile_sorted, t_interval, wilson_ci};
 use omr_scoring::{Exact, RosterStatus, exact, widen};
 use serde::{Deserialize, Serialize};
@@ -77,19 +77,23 @@ pub struct Eamu {
 
 /// EAMU counts over `values` with cut-points (E, A, M) and FCAR thresholds (exact).
 pub fn eamu(values: &[Exact], bands: &[Exact; 3], flags: &FcarFlags) -> Eamu {
-    let (mut e, mut a, mut m, mut u) = (0, 0, 0, 0);
+    let mut c = [0usize; 4];
     for v in values {
-        if cmp_exact(v, &bands[0]) != Less {
-            e += 1;
-        } else if cmp_exact(v, &bands[1]) != Less {
-            a += 1;
-        } else if cmp_exact(v, &bands[2]) != Less {
-            m += 1;
-        } else {
-            u += 1;
-        }
+        c[usize::from(eamu_band(v, bands))] += 1;
     }
-    let n = values.len();
+    eamu_from_counts(c, flags)
+}
+
+/// EAMU band of one value: 0 = E, 1 = A, 2 = M, 3 = U.
+fn eamu_band(v: &Exact, bands: &[Exact; 3]) -> u8 {
+    bands
+        .iter()
+        .position(|b| cmp_exact(v, b) != Less)
+        .map_or(3, |i| i as u8)
+}
+
+fn eamu_from_counts([e, a, m, u]: [usize; 4], flags: &FcarFlags) -> Eamu {
+    let n = e + a + m + u;
     let (avg3, avg5, flag) = if n == 0 {
         (Exact::zero(), Exact::zero(), FcarFlag::None)
     } else {
@@ -188,13 +192,13 @@ impl PerQuestionData {
         if k == 0 {
             return None;
         }
-        let mut hit = vec![0i128; k];
-        let mut presented = vec![0i128; k];
+        let mut hit = vec![0u64; k];
+        let mut presented = vec![0u64; k];
         for &n in subset {
             if let Some(row) = self.cells.get(n * k..(n + 1) * k) {
-                for (j, &c) in row.iter().enumerate() {
-                    presented[j] += i128::from(c != 0);
-                    hit[j] += i128::from(c == 2);
+                for ((p, h), &c) in presented.iter_mut().zip(hit.iter_mut()).zip(row) {
+                    *p += u64::from(c != 0);
+                    *h += u64::from(c == 2);
                 }
             }
         }
@@ -202,7 +206,7 @@ impl PerQuestionData {
         let mut den = Exact::zero();
         for j in 0..k {
             if presented[j] > 0 {
-                num += self.weights[j] * reduce(hit[j], presented[j]);
+                num += self.weights[j] * reduce(i128::from(hit[j]), i128::from(presented[j]));
                 den += self.weights[j];
             }
         }
@@ -246,9 +250,34 @@ fn f(x: &Exact) -> f64 {
     const EXACT_F64: i128 = 1 << 53;
     let (n, d) = (*x.numer(), *x.denom());
     if n.abs() < EXACT_F64 && d < EXACT_F64 {
-        n as f64 / d as f64
+        // Through i64: i128 → f64 is a library call, i64 → f64 one instruction (exact here).
+        (n as i64) as f64 / (d as i64) as f64
     } else {
         x.to_f64().unwrap_or(f64::NAN)
+    }
+}
+
+/// Per-row facts decided once per CLO population and reused by every report group: the exact
+/// P, its f64 image, whether P ≥ τ, its EAMU band and whether the row counts as passing.
+struct RowFacts<'a> {
+    p: &'a [Exact],
+    pf: Vec<f64>,
+    met: Vec<bool>,
+    band: Vec<u8>,
+    passing: Vec<bool>,
+}
+
+impl<'a> RowFacts<'a> {
+    fn new(values: &'a [Exact], passing: &[Option<bool>], tau: &Exact, bands: &[Exact; 3]) -> Self {
+        Self {
+            p: values,
+            pf: values.iter().map(f).collect(),
+            met: values.iter().map(|v| cmp_exact(v, tau) != Less).collect(),
+            band: values.iter().map(|v| eamu_band(v, bands)).collect(),
+            passing: (0..values.len())
+                .map(|k| passing.get(k) == Some(&Some(true)))
+                .collect(),
+        }
     }
 }
 
@@ -262,18 +291,37 @@ pub fn class_stats(
     per_question: Option<(&PerQuestionData, &[usize])>,
     rng: &mut SplitMix64,
 ) -> ClassStats {
-    let n = values.len();
-    let mu = mean(values);
+    let facts = RowFacts::new(values, passing, tau, &policy.eamu_bands);
+    let all: Vec<usize> = (0..values.len()).collect();
+    stats_over(&facts, &all, policy, per_question, rng)
+}
+
+/// [`class_stats`] over the rows `subset` of precomputed facts (same values, same RNG draws).
+fn stats_over(
+    facts: &RowFacts<'_>,
+    subset: &[usize],
+    policy: &AttainmentPolicy,
+    per_question: Option<(&PerQuestionData, &[usize])>,
+    rng: &mut SplitMix64,
+) -> ClassStats {
+    let n = subset.len();
+    let mu = (n > 0)
+        .then(|| sum_exact(subset.iter().map(|&k| &facts.p[k])) / Exact::from_integer(n as i128));
     let sd = (n >= 2).then(|| {
         let m = mu.map(|m| f(&m)).unwrap_or(0.0);
-        (values.iter().map(|v| (f(v) - m).powi(2)).sum::<f64>() / (n - 1) as f64).sqrt()
+        (subset
+            .iter()
+            .map(|&k| (facts.pf[k] - m).powi(2))
+            .sum::<f64>()
+            / (n - 1) as f64)
+            .sqrt()
     });
     let mean_ci = match (mu, sd) {
         (Some(m), Some(s)) => t_interval(f(&m), s, n as u64),
         _ => None,
     };
     let mean_bootstrap_ci = (2..30).contains(&n).then(|| {
-        let fv: Vec<f64> = values.iter().map(f).collect();
+        let fv: Vec<f64> = subset.iter().map(|&k| facts.pf[k]).collect();
         let mut means: Vec<f64> = (0..policy.bootstrap_b)
             .map(|_| {
                 (0..n)
@@ -288,7 +336,7 @@ pub fn class_stats(
             percentile_sorted(&means, 0.975),
         )
     });
-    let met = values.iter().filter(|v| cmp_exact(v, tau) != Less).count();
+    let met = subset.iter().filter(|&&k| facts.met[k]).count();
     let proportion = (n > 0).then(|| Exact::new(met as i128, n as i128));
     let proportion_ci = (n > 0).then(|| wilson_ci(met as u64, n as u64, Z95));
     let level = proportion.map(|p| {
@@ -301,16 +349,14 @@ pub fn class_stats(
             .max()
             .unwrap_or(0)
     });
-    let pop: Vec<Exact> = match policy.eamu_population {
-        EamuPopulation::All => values.to_vec(),
-        EamuPopulation::Passing => values
-            .iter()
-            .zip(passing)
-            .filter(|(_, p)| **p == Some(true))
-            .map(|(v, _)| *v)
-            .collect(),
-    };
-    let eamu_v = (!pop.is_empty()).then(|| eamu(&pop, &policy.eamu_bands, &policy.fcar_flags));
+    let mut counts = [0usize; 4];
+    for &k in subset {
+        if policy.eamu_population == EamuPopulation::All || facts.passing[k] {
+            counts[usize::from(facts.band[k])] += 1;
+        }
+    }
+    let eamu_v =
+        (counts.iter().sum::<usize>() > 0).then(|| eamu_from_counts(counts, &policy.fcar_flags));
     let (pq, pq_ci) = match per_question {
         Some((data, subset)) => {
             let rho = data.rho(subset);
@@ -691,7 +737,7 @@ pub fn student_performance(
                                 continue;
                             }
                             let sc = scale_score(score, *d);
-                            match sc.and_then(|sc| w.checked_mul(sc)) {
+                            match sc.and_then(|sc| mul_i128(*w, sc)) {
                                 Some(v) => na += v,
                                 None => ok = false,
                             }
@@ -701,7 +747,7 @@ pub fn student_performance(
                     if !ok {
                         fast_ok[n] = false;
                     } else if da != 0 {
-                        match (g_a.checked_mul(na), g_a.checked_mul(da)) {
+                        match (mul_i128(*g_a, na), mul_i128(*g_a, da)) {
                             (Some(x), Some(y)) => {
                                 match (num_int[n].checked_add(x), den_int[n].checked_add(y)) {
                                     (Some(a1), Some(b1)) => {
@@ -743,9 +789,8 @@ pub fn student_performance(
             } else if fast_ok[n] && slow[n].is_empty() {
                 // Σω = den_int/F, so coverage = den_int·q_planned / (F·p_planned).
                 let bf = big_f.unwrap_or(1);
-                let cov = den_int[n]
-                    .checked_mul(*planned_total.denom())
-                    .zip(bf.checked_mul(*planned_total.numer()))
+                let cov = mul_i128(den_int[n], *planned_total.denom())
+                    .zip(mul_i128(bf, *planned_total.numer()))
                     .filter(|(_, b)| *b != 0)
                     .map_or_else(
                         || {
@@ -1027,7 +1072,7 @@ pub fn compute_attainment(
         let mut row_of_global: Vec<Option<usize>> = vec![None; n_global];
         let mut rows: Vec<&StudentClo> = Vec::new();
         for (g, s) in slice.iter().enumerate() {
-            if s.included {
+            if s.included && s.p.is_some() {
                 row_of_global[g] = Some(rows.len());
                 rows.push(s);
             }
@@ -1053,10 +1098,13 @@ pub fn compute_attainment(
             &row_of_global,
         );
         let mut rng = SplitMix64::from_run(&seed_base, &format!("clo:{}", clo.code));
+        // Included rows always carry a P (no P means excluded, "no evidence").
+        let p_vals: Vec<Exact> = rows.iter().filter_map(|s| s.p).collect();
+        debug_assert_eq!(p_vals.len(), rows.len());
+        let pass: Vec<Option<bool>> = rows.iter().map(|s| s.passing).collect();
+        let facts = RowFacts::new(&p_vals, &pass, &tau, &policy.eamu_bands);
         let stats_for = |subset: &[usize], rng: &mut SplitMix64| {
-            let vals: Vec<Exact> = subset.iter().filter_map(|&k| rows[k].p).collect();
-            let pass: Vec<Option<bool>> = subset.iter().map(|&k| rows[k].passing).collect();
-            class_stats(&vals, &pass, &tau, policy, Some((&pq, subset)), rng)
+            stats_over(&facts, subset, policy, Some((&pq, subset)), rng)
         };
         let all: Vec<usize> = (0..rows.len()).collect();
         let mut stats = stats_for(&all, &mut rng);

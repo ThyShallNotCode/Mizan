@@ -2,8 +2,9 @@
 
 use omr_model::{FormCode, StudentKey};
 use omr_outcomes::mapping::evidence_share;
+use omr_outcomes::policy::EamuPopulation;
 use omr_outcomes::*;
-use omr_scoring::stats::{Z95, wilson_ci};
+use omr_scoring::stats::{SplitMix64, Z95, wilson_ci};
 use omr_scoring::{
     Adjustments, BookletL1, Exact, Floors, FormMap, KeyEntry, KeyVersion, L1Response, MasterItem,
     NegativeMarking, PolicyVersion, ResponseSnapshot, RosterStatus, exact, pts, score,
@@ -189,5 +190,80 @@ proptest! {
         };
         let r = compute_attainment(&offering, &clos, &mapping, &policy, &[]);
         prop_assert_eq!(r.p("S", "CLO1"), Some(ref_num / ref_den));
+    }
+
+    /// Every report group's statistics equal `class_stats` recomputed independently over that
+    /// group's included members (the engine decides per-row facts once and reuses them).
+    #[test]
+    fn group_stats_match_class_stats(
+        answers in prop::collection::vec((prop::collection::vec(0u8..=4, 6), 0usize..4, 0u8..3), 3..48),
+        passing_pop in any::<bool>(),
+    ) {
+        let k = 6;
+        let forms = FormMap::single_form(
+            (0..k).map(|i| MasterItem::sba(format!("Q{}", i + 1), 5, pts(1, 1))).collect(),
+        );
+        let key = KeyVersion::new((0..k).map(|_| KeyEntry::single(0, 5)).collect());
+        let l1 = ResponseSnapshot {
+            booklets: answers.iter().enumerate().map(|(s, (a, _, _))| BookletL1::present(
+                s as u32 + 1,
+                Some(&format!("S{s:03}")),
+                FormCode(1),
+                a.iter().map(|&o| L1Response::Single(o)).collect(),
+            )).collect(),
+        };
+        let run = score(&l1, &forms, &key, &PolicyVersion::default(), &Adjustments::default()).unwrap();
+        let sections: Vec<SectionInfo> = (0..4).map(|s| SectionInfo {
+            id: format!("{s}"),
+            campus: if s < 2 { "main".into() } else { "B01".into() },
+            track: if s % 2 == 0 { Track::Male } else { Track::Female },
+        }).collect();
+        let offering = Offering {
+            course: "C".into(), term: "T".into(), credit_hours: 3, sections,
+            roster: answers.iter().enumerate().map(|(s, (_, sec, pass))| RosterEntry {
+                student: StudentKey(format!("S{s:03}")),
+                section: format!("{sec}"),
+                status: RosterStatus::Enrolled,
+                passing: [None, Some(false), Some(true)][usize::from(*pass)],
+            }).collect(),
+            assessments: vec![AssessmentEvidence::from_run("final", "Final", exact(1, 1), &run)],
+        };
+        let clos = CloSet { course: "C".into(), version: 1, clos: vec![
+            Clo::new("CLO1", "x", Domain::Knowledge), Clo::new("CLO2", "y", Domain::Skills)] };
+        let mapping = MappingSet { version: 1, mode: MappingMode::Full, rows: (0..k)
+            .map(|i| ItemCloMap::approved("final", i, CLOS[i % 2], pts(1, 1))).collect() };
+        let policy = AttainmentPolicy {
+            eamu_population: if passing_pop { EamuPopulation::Passing } else { EamuPopulation::All },
+            ..AttainmentPolicy::default()
+        };
+        let r = compute_attainment(&offering, &clos, &mapping, &policy, &[]);
+        for c in &r.clos {
+            for g in &c.groups {
+                let member = |s: &StudentClo| {
+                    let sec = offering.sections.iter().find(|x| x.id == s.section);
+                    match &g.key {
+                        GroupKey::Pooled => true,
+                        GroupKey::Section(id) => &s.section == id,
+                        GroupKey::Campus(cp) => sec.is_some_and(|x| &x.campus == cp),
+                        GroupKey::Track(t) => sec.is_some_and(|x| x.track == *t),
+                    }
+                };
+                let rows: Vec<&StudentClo> = r.students.iter()
+                    .filter(|s| s.clo == c.clo && s.included && member(s)).collect();
+                let vals: Vec<Exact> = rows.iter().filter_map(|s| s.p).collect();
+                let pass: Vec<Option<bool>> = rows.iter().map(|s| s.passing).collect();
+                let want = class_stats(&vals, &pass, &c.tau, &policy, None, &mut SplitMix64::new(1));
+                let got = &g.stats;
+                prop_assert_eq!(got.n, want.n);
+                prop_assert_eq!(got.mean, want.mean);
+                prop_assert_eq!(got.sample_sd, want.sample_sd);
+                prop_assert_eq!(got.mean_ci, want.mean_ci);
+                prop_assert_eq!(got.met, want.met);
+                prop_assert_eq!(got.proportion, want.proportion);
+                prop_assert_eq!(got.proportion_ci, want.proportion_ci);
+                prop_assert_eq!(got.level, want.level);
+                prop_assert_eq!(&got.eamu, &want.eamu);
+            }
+        }
     }
 }

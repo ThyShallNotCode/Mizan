@@ -231,7 +231,15 @@ pub fn round_exact(x: &Exact, decimals: u32, strategy: RoundingStrategy) -> Exac
 /// `n/d` reduced, with a fast 64-bit binary gcd when both fit (the common case). `d ≠ 0`.
 pub fn reduce(n: i128, d: i128) -> Exact {
     assert!(d != 0, "zero denominator");
-    let g = gcd_u128(n.unsigned_abs(), d.unsigned_abs()) as i128;
+    let (an, ad) = (n.unsigned_abs(), d.unsigned_abs());
+    let neg = (n < 0) != (d < 0);
+    if an <= u128::from(u64::MAX) && ad <= u128::from(u64::MAX) {
+        // 64-bit gcd and divisions: i128 division is a slow library call.
+        let g = gcd_u128(an, ad) as u64;
+        let (rn, rd) = (i128::from(an as u64 / g), i128::from(ad as u64 / g));
+        return Ratio::new_raw(if neg { -rn } else { rn }, rd);
+    }
+    let g = gcd_u128(an, ad) as i128;
     let (mut n, mut d) = (n / g, d / g);
     if d < 0 {
         n = -n;
@@ -271,6 +279,16 @@ fn gcd_u128(a: u128, b: u128) -> u128 {
     a
 }
 
+/// `a·b`, `None` on overflow. Operands within `i64` multiply without the overflow check,
+/// which for `i128` is a slow library call.
+#[inline]
+pub fn mul_i128(a: i128, b: i128) -> Option<i128> {
+    match (i64::try_from(a), i64::try_from(b)) {
+        (Ok(x), Ok(y)) => Some(i128::from(x) * i128::from(y)),
+        _ => a.checked_mul(b),
+    }
+}
+
 /// Exact comparison by cross-multiplication (denominators are positive), falling back to
 /// `Ord` only if the products overflow. Much cheaper than `Ratio`'s general `cmp`.
 pub fn cmp_exact(a: &Exact, b: &Exact) -> std::cmp::Ordering {
@@ -278,8 +296,8 @@ pub fn cmp_exact(a: &Exact, b: &Exact) -> std::cmp::Ordering {
         return a.numer().cmp(b.numer());
     }
     match (
-        a.numer().checked_mul(*b.denom()),
-        b.numer().checked_mul(*a.denom()),
+        mul_i128(*a.numer(), *b.denom()),
+        mul_i128(*b.numer(), *a.denom()),
     ) {
         (Some(x), Some(y)) => x.cmp(&y),
         _ => a.cmp(b),
