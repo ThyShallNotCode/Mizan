@@ -1,10 +1,11 @@
 // OMR Correction desktop shell: frame, navigation rail and screen switch (DESIGN §9).
 // Screens are instantiated only while visible, so accessible labels stay unique per screen.
 // Every screen gets the window size: it fits 1440 × 900 nominal and 1280 × 800 minimum (DESIGN
-// §9). The window size is set by the platform, never by the content, so screens can adapt to it
-// without a layout binding loop.
+// §9). The size reaches the screens as a copy written when the platform resizes the window, not
+// as a binding: `win-w: root.width` would close a loop (the window's layout constraints depend on
+// the screens, whose layout depends on the width), which Slint 1.18 deprecates and may panic on.
 
-import { Theme, NavRail, NavItem } from "theme.slint";
+import { Theme, Tone, NavRail, NavItem } from "theme.slint";
 import { App, ExamsVM, SetupVM, ScanVM, ReviewVM, ResultsVM, OutcomesVM, Page } from "state.slint";
 import { Icons } from "widgets.slint";
 import { ExamsScreen } from "screens/exams.slint";
@@ -29,6 +30,20 @@ export component AppWindow inherits Window {
     default-font-size: Theme.text-sm;
     background: Theme.canvas;
     forward-focus: root-keys;
+
+    // The window size for the screens (see the header): copied, never bound.
+    property <length> win-w: 1440px;
+    property <length> win-h: 900px;
+    init => {
+        self.win-w = self.width;
+        self.win-h = self.height;
+    }
+    changed width => {
+        self.win-w = self.width;
+    }
+    changed height => {
+        self.win-h = self.height;
+    }
 
     // std-widgets (ListView scrollbars) follow the app theme
     property <bool> dark: Theme.dark;
@@ -119,6 +134,23 @@ export component AppWindow inherits Window {
                 Rectangle {
                     vertical-stretch: 1;
                 }
+                // demo data is never mistaken for an exam: a mark on every screen (`--demo`),
+                // in the rail so no screen loses height
+                if App.demo: Rectangle {
+                    height: 44px;
+                    border-radius: Theme.radius-sm;
+                    background: Theme.tone-fg(Tone.warning);
+                    accessible-role: AccessibleRole.text;
+                    accessible-label: "Demo data: invented exams, nothing is read or written. Open your exams with omr-desktop --workspace FOLDER";
+                    Text {
+                        text: "DEMO\nDATA";
+                        color: Theme.surface;
+                        font-size: Theme.text-xs;
+                        font-weight: Theme.weight-semibold;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
                 NavItem {
                     icon: Icons.settings;
                     label: "Settings";
@@ -130,38 +162,38 @@ export component AppWindow inherits Window {
             }
             if App.page == Page.exams: ExamsScreen {
                 horizontal-stretch: 1;
-                win-w: root.width;
-                win-h: root.height;
+                win-w: root.win-w;
+                win-h: root.win-h;
             }
             if App.page == Page.setup: SetupScreen {
                 horizontal-stretch: 1;
-                win-w: root.width;
-                win-h: root.height;
+                win-w: root.win-w;
+                win-h: root.win-h;
             }
             if App.page == Page.scan: ScanScreen {
                 horizontal-stretch: 1;
-                win-w: root.width;
-                win-h: root.height;
+                win-w: root.win-w;
+                win-h: root.win-h;
             }
             if App.page == Page.review: ReviewScreen {
                 horizontal-stretch: 1;
-                win-w: root.width;
-                win-h: root.height;
+                win-w: root.win-w;
+                win-h: root.win-h;
             }
             if App.page == Page.results: ResultsScreen {
                 horizontal-stretch: 1;
-                win-w: root.width;
-                win-h: root.height;
+                win-w: root.win-w;
+                win-h: root.win-h;
             }
             if App.page == Page.outcomes: OutcomesScreen {
                 horizontal-stretch: 1;
-                win-w: root.width;
-                win-h: root.height;
+                win-w: root.win-w;
+                win-h: root.win-h;
             }
             if App.page == Page.settings: SettingsScreen {
                 horizontal-stretch: 1;
-                win-w: root.width;
-                win-h: root.height;
+                win-w: root.win-w;
+                win-h: root.win-h;
             }
         }
     }

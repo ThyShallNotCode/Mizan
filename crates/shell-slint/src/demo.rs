@@ -132,6 +132,8 @@ pub struct DemoBackend {
     live_running: bool,
     last_pump: Option<Instant>,
     crop_cache: RefCell<HashMap<ItemId, Rendered>>,
+    /// Four procedurally drawn sheets the batch thumbnails cycle through.
+    thumb_images: Vec<CropImage>,
 }
 
 impl Default for DemoBackend {
@@ -185,6 +187,9 @@ impl DemoBackend {
             live_running: true,
             last_pump: None,
             crop_cache: RefCell::new(HashMap::new()),
+            thumb_images: (0..4)
+                .map(|k| crops::page_thumbnail(11 + k, 84, 108))
+                .collect(),
         };
         b.build_exams();
         b.build_cs211_items();
@@ -243,6 +248,7 @@ impl DemoBackend {
             open_exceptions: SeverityCounts::default(),
             key_status: "Key v1 · published".into(),
             mapped_items: 0,
+            mapping_approval: true,
             total_items: 0,
             roster_count: expected,
             sections: vec!["171".into()],
@@ -1454,7 +1460,7 @@ impl DemoBackend {
         }
         let options = self.exam(&item.exam).map_or(5, |e| e.options.len());
         let made = match item.kind {
-            ReviewKind::Mark | ReviewKind::BlindVerify => {
+            ReviewKind::Mark | ReviewKind::Form | ReviewKind::BlindVerify => {
                 let labels: Vec<char> = (0..options).map(|i| (b'A' + i as u8) as char).collect();
                 let (crop, geo) = crops::answer_row(&RowSpec {
                     question: item.question,
@@ -1526,7 +1532,7 @@ impl DemoBackend {
 
     fn summary_text(&self, item: &DemoItem, bubbles: &[BubbleView]) -> String {
         match item.kind {
-            ReviewKind::Mark => {
+            ReviewKind::Mark | ReviewKind::Form => {
                 let parts: Vec<String> = bubbles
                     .iter()
                     .filter(|b| b.state != MarkState::Blank || b.fill >= 0.2)
@@ -1596,6 +1602,7 @@ impl DemoBackend {
                 Decision::Blank | Decision::Multi | Decision::Unreadable => true,
                 _ => false,
             },
+            ReviewKind::Form => matches!(d, Decision::Option(i) if (i as usize) < options),
             ReviewKind::Identity => match d {
                 Decision::Candidate(i) => {
                     (i as usize)
@@ -1631,6 +1638,7 @@ impl DemoBackend {
                 question,
                 serial,
                 action,
+                reason: None,
                 undone: false,
             },
             prior,
@@ -1666,6 +1674,14 @@ impl DemoBackend {
         }
     }
 
+    /// Gives every thumbnail one of the four drawn sheets, cycling in display order.
+    fn with_images(&self, mut thumbs: Vec<Thumbnail>) -> Vec<Thumbnail> {
+        for (i, t) in thumbs.iter_mut().enumerate() {
+            t.image = self.thumb_images.get(i % 4).cloned();
+        }
+        thumbs
+    }
+
     fn math_batch(&self) -> BatchProgress {
         let total = 1672u32;
         let done = (self.live_pages.round() as u32).min(total);
@@ -1682,6 +1698,7 @@ impl DemoBackend {
             thumbnails.push(Thumbnail {
                 serial: format!("{s:04}"),
                 state: Self::thumb_state(s),
+                image: None,
             });
         }
         for k in 1..=3 {
@@ -1692,6 +1709,7 @@ impl DemoBackend {
                 } else {
                     ThumbState::Auto
                 },
+                image: None,
             });
         }
         for k in 4..=6 {
@@ -1702,6 +1720,7 @@ impl DemoBackend {
                 } else {
                     ThumbState::Auto
                 },
+                image: None,
             });
         }
         let ts = |s: u32| {
@@ -1771,7 +1790,7 @@ impl DemoBackend {
                 },
             ],
             exceptions: self.code_counts(&ExamId(MATH101.into())),
-            thumbnails,
+            thumbnails: self.with_images(thumbnails),
             reconciliation: vec![
                 ReconLine {
                     label: "Header sheet expected".into(),
@@ -1803,7 +1822,11 @@ impl DemoBackend {
             activity,
             engine: "engine manifest 7f3a…b21c".into(),
             workers: 4,
+            sheets: SheetCounts::default(),
+            pausable: true,
+            append: demo_append(),
         }
+        .with_sheet_counts()
     }
 
     fn cs_batch(&self) -> BatchProgress {
@@ -1831,6 +1854,7 @@ impl DemoBackend {
             thumbnails.push(Thumbnail {
                 serial: format!("{s:04}"),
                 state,
+                image: None,
             });
         }
         let counts = self.open_counts(&ExamId(CS211.into()));
@@ -1878,7 +1902,7 @@ impl DemoBackend {
                 },
             ],
             exceptions: self.code_counts(&ExamId(CS211.into())),
-            thumbnails,
+            thumbnails: self.with_images(thumbnails),
             reconciliation: vec![
                 ReconLine {
                     label: "Header sheet expected".into(),
@@ -1911,7 +1935,46 @@ impl DemoBackend {
             ],
             engine: "engine manifest 7f3a…b21c".into(),
             workers: 4,
+            sheets: SheetCounts::default(),
+            pausable: true,
+            append: demo_append(),
         }
+        .with_sheet_counts()
+    }
+}
+
+/// The demo writes nothing, so it cannot add scans.
+fn demo_append() -> AppendInfo {
+    AppendInfo {
+        allowed: false,
+        note: "Demo data: nothing is read or written. Open a graded exam (--project or \
+               --workspace) to add scans"
+            .into(),
+    }
+}
+
+impl BatchProgress {
+    /// The demo's sheet pills, from its modelled exception counts: rejected = CAP-002 pages,
+    /// review = one sheet per WARN-or-worse exception, auto = the rest of the pages done.
+    fn with_sheet_counts(mut self) -> Self {
+        let rejected: u32 = self
+            .exceptions
+            .iter()
+            .filter(|c| c.code == "CAP-002")
+            .map(|c| c.count)
+            .sum();
+        let review: u32 = self
+            .exceptions
+            .iter()
+            .filter(|c| c.code != "CAP-002" && c.severity >= Severity::Warn)
+            .map(|c| c.count)
+            .sum();
+        self.sheets = SheetCounts {
+            auto: self.pages_done.saturating_sub(review + rejected),
+            review,
+            rejected,
+        };
+        self
     }
 }
 
@@ -2116,6 +2179,7 @@ fn cs211_setup() -> ExamSetup {
     }
     ExamSetup {
         exam: ExamId(CS211.into()),
+        roster_students: 120,
         template: TemplateInfo {
             id: "iau-ccsit-v1".into(),
             kind: TemplateKind::Legacy,
@@ -2195,6 +2259,7 @@ fn math101_setup() -> ExamSetup {
         .collect();
     ExamSetup {
         exam: ExamId(MATH101.into()),
+        roster_students: 120,
         template: TemplateInfo {
             id: "gen:a4-mcq-40x4 rev 3".into(),
             kind: TemplateKind::Generated,
@@ -2334,8 +2399,8 @@ fn cs211_results(setup: &ExamSetup) -> (Results, Outcomes) {
             letter_ar: ar.into(),
             lo: if lo.is_finite() { lo } else { 0.0 },
             hi,
-            gpa5: g5,
-            gpa4: g4,
+            gpa5: Some(g5),
+            gpa4: Some(g4),
             count: scores
                 .iter()
                 .filter(|&&x| x + 1e-9 >= lo && hi.is_none_or(|h| x + 1e-9 < h))
@@ -2427,10 +2492,11 @@ fn cs211_results(setup: &ExamSetup) -> (Results, Outcomes) {
         }
         items.push(ItemStats {
             question: q,
-            p,
-            r_ir: r,
-            r_ci: r_interval(r, n_students),
-            band: DiscriminationBand::from_r(r),
+            label: String::new(),
+            p: Some(p),
+            r_ir: Some(r),
+            r_ci: Some(r_interval(r, n_students)),
+            band: Some(DiscriminationBand::from_r(r)),
             option_shares: shares,
             keyed: Some(key as u8),
             flags,
@@ -2447,9 +2513,9 @@ fn cs211_results(setup: &ExamSetup) -> (Results, Outcomes) {
             median_pct: median,
             sd_pct: sd,
             pass_rate: pass,
-            alpha,
-            alpha_ci: (0.80, 0.87),
-            sem_points,
+            alpha: Some(alpha),
+            alpha_ci: Some((0.80, 0.87)),
+            sem_points: Some(sem_points),
             open_errors: 0, // filled from the live queue
         },
         histogram: ScoreHistogram {
@@ -2491,6 +2557,11 @@ fn cs211_results(setup: &ExamSetup) -> (Results, Outcomes) {
         option_labels: letters(5),
         readiness: Vec::new(), // filled from the live queue
         release_blocked: None,
+        blackboard_blocked: Some(
+            "Demo data: nothing is written. Open a graded exam with a supplied key and a roster \
+             to write the Blackboard upload"
+                .into(),
+        ),
     };
 
     // outcomes: attainment per CLO from the same cohort
@@ -2585,6 +2656,7 @@ fn cs211_results(setup: &ExamSetup) -> (Results, Outcomes) {
             tau,
             target,
             verdict_basis: "point".into(),
+            mapping_basis: "approved mappings only".into(),
             version: "Policy v3 · sha384 9a1c…07e2".into(),
         },
         clos,
@@ -2597,6 +2669,18 @@ fn cs211_results(setup: &ExamSetup) -> (Results, Outcomes) {
 // ------------------------------------------------------------------------------------ trait impl
 
 impl Backend for DemoBackend {
+    fn is_demo(&self) -> bool {
+        true
+    }
+
+    fn release(&mut self, exam: &ExamId) -> Result<String, BackendError> {
+        let _ = exam;
+        Err(BackendError::Denied(
+            "Demo data: nothing is released. Open your exams with omr-desktop --workspace FOLDER"
+                .into(),
+        ))
+    }
+
     fn dashboard(&self) -> Dashboard {
         let exams: Vec<ExamSummary> = self
             .exams
@@ -2630,12 +2714,15 @@ impl Backend for DemoBackend {
                 sheets_today: 412,
                 open_exceptions: open,
                 open_errors: errors,
-                median_review_secs: 1.4,
-                throughput_pages_per_sec: 62.0,
+                median_review_secs: Some(1.4),
+                throughput_pages_per_sec: Some(62.0),
             },
             exams,
             engine: "omr 0.1.0 · manifest 7f3a…b21c".into(),
             workspace: "~/OMR/1448-1/workspace.omr (demo data, synthetic)".into(),
+            data_note: "Demo data is synthetic: invented names, IDs starting with 9, and \
+                        procedurally drawn scans. No real student data is used."
+                .into(),
         }
     }
 
@@ -2804,9 +2891,10 @@ impl Backend for DemoBackend {
             groups,
             resolved: base + closed,
             total: base + all.len() as u32,
-            median_secs_per_item: 1.4,
+            median_secs_per_item: Some(1.4),
             audit_head: format!("{:04x}…b21c", 0x7f3a + self.seq as u32),
             two_person_rule: true,
+            unavailable: None,
         }
     }
 
@@ -2857,6 +2945,8 @@ impl Backend for DemoBackend {
             current: item.decision,
             identity: item.identity.clone(),
             notice: item.notice.clone(),
+            reasons: Vec::new(),
+            reasons_needing_note: Vec::new(),
         })
     }
 
@@ -2909,6 +2999,13 @@ impl Backend for DemoBackend {
                     it.status = Status::Resolved;
                     it.decision = Some(*decision);
                 }
+            }
+            ReviewAction::SetStudent { .. } => {
+                return Err(BackendError::Denied(
+                    "The demo has no registrar: choose a listed candidate (1–3) or N (not on \
+                     roster)"
+                        .into(),
+                ));
             }
             // `record` below assigns seq + 1 to this event: deferred items sort by it
             ReviewAction::Defer => self.items[idx].status = Status::Deferred(self.seq + 1),
@@ -3241,7 +3338,8 @@ mod tests {
         for it in &r.items {
             let s: f64 = it.option_shares.iter().sum();
             assert!((s - 0.99).abs() < 0.02, "Q{} shares {s}", it.question);
-            assert!(it.r_ci.0 <= it.r_ir && it.r_ir <= it.r_ci.1);
+            let (r, ci) = (it.r_ir.unwrap(), it.r_ci.unwrap());
+            assert!(ci.0 <= r && r <= ci.1);
         }
         assert!(r.release_blocked.is_some());
         let o = b.outcomes(&cs()).unwrap();

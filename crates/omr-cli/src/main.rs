@@ -5,8 +5,14 @@
 //! omr sheet render --spec spec.json --out sheets.pdf [--copies N]
 //! omr grade <inputs…> --template iau-ccsit-v1 | --spec spec.json --questions N
 //!           [--key key.csv | --infer-key] [--roster roster.csv|.xlsx] [--clo clo.csv] --out DIR
+//! omr add --project DIR <more inputs…>        (a later batch; review decisions carry over)
 //! omr review list --project DIR [--lane marks] [--json]
-//! omr review resolve --project DIR --item ID (--decision B | --defer | --escalate | --rescan | --undo)
+//! omr review resolve --project DIR --item ID (--decision B [--reason CODE [--note T]] | --defer
+//!                    | --escalate | --rescan | --undo)
+//! omr key replace --project DIR --key key.csv [--reason CODE]
+//! omr key set --project DIR [--form A] --question N --answer B [--reason CODE]
+//! omr release --project DIR [--reason CODE [--note T]]
+//! omr export --project DIR [--out DIR] [--blackboard-column ID]
 //! omr bench <corpus-dir> --template … --questions N [--threads 1,2,4] [--first 30]
 //! ```
 //!
@@ -16,6 +22,7 @@
 
 use clap::{Args, Parser, Subcommand};
 use omr_app::exam::{self, IdSchemeChoice};
+use omr_app::review::ReviewReason;
 use omr_app::{
     Action, AppError, Decision, ExamDefinition, ExamProject, GradeOptions, KeySource, Lane,
     MultiReviewPolicy, Progress, TemplateChoice,
@@ -53,13 +60,52 @@ enum Cmd {
     },
     /// Grade scans: recognition, identity, scoring, outcomes, exports.
     Grade(GradeArgs),
+    /// Add a later batch of scans to a graded exam (e.g. a second section scanned on another
+    /// day); the exam is regraded with every earlier review decision kept.
+    Add(AddArgs),
     /// Review queue of a graded exam.
     Review {
         #[command(subcommand)]
         cmd: ReviewCmd,
     },
+    /// Answer key of a graded exam: replace it (e.g. the real key after `--infer-key`) or
+    /// correct one entry; an audited regrade with a new key version.
+    Key {
+        #[command(subcommand)]
+        cmd: KeyCmd,
+    },
     /// Throughput (A2) and time to first result (A3) on a corpus folder.
     Bench(BenchArgs),
+    /// Releases the results of a graded exam (the instructor's deliberate act, §13.4): refused
+    /// while anything blocks release; then the exports are written again with the Blackboard
+    /// upload.
+    Release {
+        /// Graded output folder or its `project.omrproj`.
+        #[arg(long)]
+        project: PathBuf,
+        /// Reason code recorded on the release (optional).
+        #[arg(long)]
+        reason: Option<String>,
+        /// Note for the reason.
+        #[arg(long, requires = "reason")]
+        note: Option<String>,
+        /// Acting principal (the instructor).
+        #[arg(long, default_value = "principal:instructor")]
+        operator: String,
+    },
+    /// Writes every export of a graded exam again (results, reports, Blackboard upload).
+    Export {
+        /// Graded output folder or its `project.omrproj`.
+        #[arg(long)]
+        project: PathBuf,
+        /// Export folder (default: the folder holding the project).
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Blackboard grade-column ID (the number after `|` in a downloaded column header) to
+        /// update an existing column instead of creating one.
+        #[arg(long)]
+        blackboard_column: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -75,6 +121,13 @@ enum SheetCmd {
         /// Copies per form (serials 1…N).
         #[arg(long, default_value_t = 1)]
         copies: u32,
+        /// Where a bare spec's new exam key is written (default: the private key folder,
+        /// `$OMR_KEY_DIR` or `~/.local/share/omr/exam-keys/`).
+        #[arg(long)]
+        key_out: Option<PathBuf>,
+        /// Replace an existing key file at --key-out (sheets printed with it become foreign).
+        #[arg(long)]
+        new_key: bool,
     },
 }
 
@@ -105,9 +158,10 @@ struct ExamArgs {
     /// High-stakes mode.
     #[arg(long)]
     high_stakes: bool,
-    /// Student-ID scheme: iau | pnu | ksu | digits:N.
-    #[arg(long, default_value = "iau")]
-    id_scheme: String,
+    /// Student-ID scheme: iau | pnu | ksu | digits:N (default: iau on IAU sheets; on own
+    /// sheets the printed ID grid's, iau for 10 digits else digits:N).
+    #[arg(long)]
+    id_scheme: Option<String>,
     /// Exam title.
     #[arg(long, default_value = "Exam")]
     title: String,
@@ -153,6 +207,32 @@ struct GradeArgs {
     /// No progress lines.
     #[arg(long)]
     quiet: bool,
+    /// Grade own sheets whose exam was already graded into another project (the same exam
+    /// again, on purpose).
+    #[arg(long)]
+    reuse_exam_id: bool,
+}
+
+#[derive(Args)]
+struct AddArgs {
+    /// Scan files and folders of the new batch (PDF, JPEG, PNG, TIFF).
+    #[arg(required = true)]
+    inputs: Vec<PathBuf>,
+    /// Graded output folder or its `project.omrproj`.
+    #[arg(long)]
+    project: PathBuf,
+    /// Worker threads (0 = all cores).
+    #[arg(long, default_value_t = 0)]
+    threads: usize,
+    /// Report snapshot time (RFC 3339 UTC); default: the exam's.
+    #[arg(long)]
+    snapshot_time: Option<String>,
+    /// Operator principal.
+    #[arg(long, default_value = "principal:operator")]
+    operator: String,
+    /// Skip re-exporting.
+    #[arg(long)]
+    no_export: bool,
 }
 
 #[derive(Subcommand)]
@@ -168,9 +248,14 @@ enum ReviewCmd {
         /// JSON output.
         #[arg(long)]
         json: bool,
-        /// Write each item's crop as PNG into this folder.
+        /// Export each item's crop as PNG into this folder (a Restricted export: private
+        /// files, a signed manifest, recorded in the audit log).
         #[arg(long)]
         crops: Option<PathBuf>,
+        /// Show student numbers in full (masked to their last 3 digits by default); the
+        /// reveal is recorded in the audit log.
+        #[arg(long)]
+        reveal: bool,
     },
     /// Records a review decision (an audited event) and re-exports.
     Resolve {
@@ -198,9 +283,68 @@ enum ReviewCmd {
         /// Undo the latest review event.
         #[arg(long, conflicts_with_all = ["decision", "item"])]
         undo: bool,
+        /// Reason code (§14.4), required when the decision overrides the engine's proposal,
+        /// e.g. AMBIGUOUS_MARK, ERASURE_RESIDUE, TEMPLATE_MISALIGN, ID_CORRECTION, OTHER.
+        #[arg(long)]
+        reason: Option<String>,
+        /// Note for the reason (required with OTHER).
+        #[arg(long, requires = "reason")]
+        note: Option<String>,
         /// Reviewer principal.
         #[arg(long, default_value = "principal:reviewer")]
         reviewer: String,
+        /// Skip re-exporting.
+        #[arg(long)]
+        no_export: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum KeyCmd {
+    /// Replaces the whole key from a key file (same layouts as `grade --key`).
+    Replace {
+        /// Graded output folder or its `project.omrproj`.
+        #[arg(long)]
+        project: PathBuf,
+        /// Answer key CSV.
+        #[arg(long)]
+        key: PathBuf,
+        /// Reason code (default KEY_ERROR).
+        #[arg(long)]
+        reason: Option<String>,
+        /// Note for the reason.
+        #[arg(long, requires = "reason")]
+        note: Option<String>,
+        /// Acting principal.
+        #[arg(long, default_value = "principal:instructor")]
+        operator: String,
+        /// Skip re-exporting.
+        #[arg(long)]
+        no_export: bool,
+    },
+    /// Sets one key entry (a mis-key correction).
+    Set {
+        /// Graded output folder or its `project.omrproj`.
+        #[arg(long)]
+        project: PathBuf,
+        /// Form letter (default: the first form).
+        #[arg(long)]
+        form: Option<String>,
+        /// Question number (1-based, as printed).
+        #[arg(long)]
+        question: u32,
+        /// B, A|C (several accepted), * (void), or "" (missing).
+        #[arg(long, allow_hyphen_values = true)]
+        answer: String,
+        /// Reason code (default KEY_ERROR).
+        #[arg(long)]
+        reason: Option<String>,
+        /// Note for the reason.
+        #[arg(long, requires = "reason")]
+        note: Option<String>,
+        /// Acting principal.
+        #[arg(long, default_value = "principal:instructor")]
+        operator: String,
         /// Skip re-exporting.
         #[arg(long)]
         no_export: bool,
@@ -314,11 +458,19 @@ fn definition(a: &ExamArgs, key_forms: Option<Vec<String>>) -> Result<ExamDefini
         }
     };
     d.high_stakes = a.high_stakes;
-    d.id_scheme = match a.id_scheme.as_str() {
-        "iau" => IdSchemeChoice::Iau,
-        "pnu" => IdSchemeChoice::Pnu,
-        "ksu" => IdSchemeChoice::Ksu,
-        s => match s.strip_prefix("digits:").and_then(|n| n.parse().ok()) {
+    d.id_scheme = match a.id_scheme.as_deref() {
+        // Own sheets: the scheme of the printed ID grid, so the default never disagrees with
+        // the sheet (a 9-digit grid read under the 10-digit IAU scheme fails every booklet).
+        None => match &d.template {
+            TemplateChoice::Generated(spec) if spec.id_digits > 0 => {
+                IdSchemeChoice::for_grid(usize::from(spec.id_digits))
+            }
+            _ => IdSchemeChoice::Iau,
+        },
+        Some("iau") => IdSchemeChoice::Iau,
+        Some("pnu") => IdSchemeChoice::Pnu,
+        Some("ksu") => IdSchemeChoice::Ksu,
+        Some(s) => match s.strip_prefix("digits:").and_then(|n| n.parse().ok()) {
             Some(n) => IdSchemeChoice::Digits(n),
             None => {
                 return Err(usage(format!(
@@ -337,54 +489,24 @@ fn read_file(p: &Path) -> Result<Vec<u8>, AppError> {
 }
 
 fn key_forms_of(path: &Path) -> Option<Vec<String>> {
-    let bytes = std::fs::read(path).ok()?;
-    let text = String::from_utf8_lossy(&bytes);
-    let first = text
-        .lines()
-        .next()?
-        .trim_start_matches('\u{feff}')
-        .to_lowercase();
-    let cols: Vec<String> = first.split(',').map(|c| c.trim().to_string()).collect();
-    match cols.first().map(String::as_str) {
-        Some("question" | "q" | "item") => {
-            let f: Vec<String> = cols[1..]
-                .iter()
-                .filter(|c| !matches!(c.as_str(), "points" | "marks" | "key" | "answer"))
-                .map(|c| c.to_uppercase())
-                .collect();
-            (!f.is_empty()).then_some(f)
-        }
-        Some("form" | "version") => Some(
-            text.lines()
-                .skip(1)
-                .filter_map(|l| l.split(',').next())
-                .map(|f| f.trim().to_uppercase())
-                .filter(|f| !f.is_empty())
-                .collect(),
-        ),
-        _ => None,
-    }
+    exam::key_file_forms(&std::fs::read(path).ok()?)
+}
+
+fn reason_of(code: Option<&str>, note: Option<&str>) -> Option<ReviewReason> {
+    code.map(|c| ReviewReason::with_note(c, note.unwrap_or("")))
 }
 
 fn cmd_templates(example: bool) -> Result<(), AppError> {
     if example {
-        let spec = TemplateSpec::standard(
-            omr_model::ExamId(
-                omr_app::exam::ExamDefinition::new(
-                    "Example",
-                    TemplateChoice::Legacy("iau-ccsit-v1".into()),
-                    1,
-                    5,
-                    vec!["A".into()],
-                    CancelMode::EraseOnly,
-                )
-                .exam_id
-                .0,
-            ),
+        // A fresh exam ID every time (SEC-04: two exams never share one), and the IAU
+        // 10-digit student number grid.
+        let mut spec = TemplateSpec::standard(
+            omr_model::ExamId(uuid::Uuid::now_v7()),
             40,
             4,
             CancelMode::EraseOnly,
         );
+        spec.id_digits = 10;
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({"template": spec}))
@@ -402,22 +524,66 @@ fn cmd_templates(example: bool) -> Result<(), AppError> {
     Ok(())
 }
 
-fn cmd_render(spec: &Path, out: &Path, copies: u32) -> Result<(), AppError> {
-    let (spec, key_hex) = read_spec(spec)?;
+/// Where `sheet render` keeps a new exam's spec and page-code key: `--key-out`, else the
+/// device's private key folder (never beside the PDF, which goes to the print shop).
+fn key_file_path(key_out: Option<&Path>, exam: &omr_model::ExamId) -> Result<PathBuf, AppError> {
+    if let Some(p) = key_out {
+        return Ok(p.to_path_buf());
+    }
+    let dir = omr_app::keys::key_dir().ok_or_else(|| {
+        usage("no private folder for the exam key (HOME is not set): pass --key-out PATH")
+    })?;
+    Ok(dir.join("exam-keys").join(format!("{exam}.json")))
+}
+
+fn cmd_render(
+    spec: &Path,
+    out: &Path,
+    copies: u32,
+    key_out: Option<&Path>,
+    new_key: bool,
+) -> Result<(), AppError> {
+    let (mut spec, key_hex) = read_spec(spec)?;
     let key_hex = match key_hex {
+        // The spec carries its key: the same exam (e.g. more copies).
         Some(k) => k,
+        // A bare spec: a new exam, with a fresh exam ID and page-code key (SEC-04), kept in
+        // a private file that is never overwritten (printed sheets would become foreign).
         None => {
+            spec.exam = omr_model::ExamId(uuid::Uuid::now_v7());
             let mut k = [0u8; 32];
             rand::fill(&mut k);
             let hexk = hex::encode(k);
-            let kp = out.with_extension("exam-key.json");
-            std::fs::write(
+            let kp = key_file_path(key_out, &spec.exam)?;
+            if kp.exists() {
+                if !new_key {
+                    return Err(AppError::Input(format!(
+                        "{} already holds an exam key: sheets printed with it would no longer \
+                         be accepted if it were replaced. Render more copies with `--spec {}`, \
+                         or pass --new-key to replace it on purpose",
+                        kp.display(),
+                        kp.display()
+                    )));
+                }
+                eprintln!(
+                    "replacing {}: sheets printed with the old key are now foreign (IDN-002)",
+                    kp.display()
+                );
+                std::fs::remove_file(&kp)?;
+            }
+            if let Some(dir) = kp.parent().filter(|d| !d.as_os_str().is_empty()) {
+                omr_app::keys::create_private_dir(dir)?;
+            }
+            omr_app::keys::write_private_new(
                 &kp,
-                serde_json::to_vec_pretty(&json!({"template": spec, "exam_key_hex": hexk}))
+                &serde_json::to_vec_pretty(&json!({"template": spec, "exam_key_hex": hexk}))
                     .map_err(|e| AppError::Internal(e.to_string()))?,
             )?;
             eprintln!(
-                "generated a new page-code key; grading needs `--spec {}` (keep it secret)",
+                "new exam {}: its sheet spec and page-code key are in {} (private: anyone with \
+                 it can print sheets this exam accepts); grade with `--spec {}`",
+                spec.exam,
+                kp.display(),
                 kp.display()
             );
             hexk
@@ -457,7 +623,8 @@ fn build_def(g: &GradeArgs) -> Result<ExamDefinition, AppError> {
     let key_forms = g.key.as_deref().and_then(key_forms_of);
     let mut d = definition(&g.exam, key_forms)?;
     if let Some(k) = &g.key {
-        let (forms, points) = exam::read_key_csv(&read_file(k)?, &d.forms, d.questions)?;
+        let (forms, points) =
+            exam::read_key_file(&read_file(k)?, &d.forms, d.questions, d.options)?;
         d.key = KeySource::Provided { forms };
         if let Some(p) = points {
             d.points = p;
@@ -472,11 +639,21 @@ fn build_def(g: &GradeArgs) -> Result<ExamDefinition, AppError> {
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        d.roster = Some(if ext == "xlsx" || ext == "xlsm" {
+        if ext == "xlsm" || ext == "xls" {
+            return Err(AppError::Input(format!(
+                "{}: .{ext} workbooks are not read; save the roster as .xlsx or CSV UTF-8",
+                r.display()
+            )));
+        }
+        let rows = if ext == "xlsx" {
             exam::read_roster_xlsx(&bytes)?
         } else {
             exam::read_roster_csv(&bytes)?
-        });
+        };
+        // Student numbers are masked on the terminal (logs keep no full number, SEC-16).
+        for w in d.import_roster(rows)? {
+            eprintln!("roster: {}", omr_app::export::mask_numbers(&w.to_string()));
+        }
     }
     if let Some(c) = &g.clo {
         d.outcomes = Some(exam::read_clo_csv(&read_file(c)?, d.questions)?);
@@ -498,12 +675,42 @@ fn cmd_grade(g: GradeArgs) -> Result<(), AppError> {
     if let Some(t) = &g.snapshot_time {
         omr_app::pipeline::check_snapshot_utc(t)?;
     }
-    std::fs::create_dir_all(&g.out)?;
+    omr_app::keys::export_dir(&g.out)?;
     let proj = g.out.join("project.omrproj");
     if proj.exists() {
-        return Err(AppError::Input(format!(
-            "{} already holds a graded exam; use a new --out folder",
-            g.out.display()
+        return Err(AppError::Input(
+            if proj.join("cache").join("session.json").exists() {
+                format!(
+                    "{} already holds a graded exam; use a new --out folder (or `omr add --project \
+                 {}` to add scans to it)",
+                    g.out.display(),
+                    g.out.display()
+                )
+            } else {
+                format!(
+                    "{} holds the start of a grading run that did not finish; delete {} and grade \
+                 again",
+                    g.out.display(),
+                    proj.display()
+                )
+            },
+        ));
+    }
+    // Own sheets name their exam in the page code: a second project for the same exam (its
+    // spec and key reused for another sitting) would accept the first one's sheets (SEC-04).
+    let own = matches!(def.template, TemplateChoice::Generated(_));
+    if own
+        && !g.reuse_exam_id
+        && let Some(other) = omr_app::keys::exam_claimed_by(&def.exam_id, &proj)
+    {
+        return Err(AppError::Definition(format!(
+            "the sheets of exam {} were already graded into {}: add these scans to that exam \
+             (`omr add --project {}`), or render new sheets from a spec without a key for a new \
+             exam (`omr sheet render`). Pass --reuse-exam-id only to grade the same exam again \
+             on purpose",
+            def.exam_id,
+            other.display(),
+            other.display()
         )));
     }
     let opts = GradeOptions {
@@ -536,6 +743,9 @@ fn cmd_grade(g: GradeArgs) -> Result<(), AppError> {
     };
     let t0 = Instant::now();
     let mut p = ExamProject::grade(&def, &g.inputs, &opts, &progress)?;
+    if own {
+        omr_app::keys::claim_exam(&def.exam_id, &g.out.join("project.omrproj"))?;
+    }
     let sum = p.export(&g.out)?;
     let s = &p.session;
     let t = &s.timings;
@@ -569,11 +779,47 @@ fn cmd_grade(g: GradeArgs) -> Result<(), AppError> {
         t.threads,
         t.first_result_ms
     );
-    if let Some(why) = s.release_blocked() {
-        println!("release blocked: {why}");
+    match s.release_blocked() {
+        Some(why) => println!(
+            "release blocked: {why}; next: omr review list --project {}",
+            shell_arg(&g.out)
+        ),
+        None => println!(
+            "ready to release: omr release --project {}",
+            shell_arg(&g.out)
+        ),
     }
+    print_page_problems(&p);
     println!("wrote {} file(s) to {}", sum.files.len(), g.out.display());
     p.close()
+}
+
+/// Pages held out of grading (capture, registration, foreign sheets), each with its file, the
+/// reason and what to do (R10).
+fn print_page_problems(p: &ExamProject) {
+    let items: Vec<_> = p
+        .queue(Some(Lane::Capture))
+        .into_iter()
+        .filter(|i| i.page.is_some())
+        .collect();
+    if items.is_empty() {
+        return;
+    }
+    println!(
+        "{} page(s) not graded (omr review list --lane capture):",
+        items.len()
+    );
+    for it in items.iter().take(20) {
+        println!(
+            "  {} {}: {}",
+            it.code,
+            format!("{:?}", it.severity).to_uppercase(),
+            it.detail
+        );
+    }
+    if items.len() > 20 {
+        println!("  … and {} more", items.len() - 20);
+    }
 }
 
 fn cmd_review(cmd: ReviewCmd) -> Result<(), AppError> {
@@ -583,8 +829,9 @@ fn cmd_review(cmd: ReviewCmd) -> Result<(), AppError> {
             lane,
             json: as_json,
             crops,
+            reveal,
         } => {
-            let p = ExamProject::open(&project_dir(&project), "principal:viewer")?;
+            let mut p = ExamProject::open(&project_dir(&project), "principal:viewer")?;
             let lane = match lane.as_deref() {
                 None => None,
                 Some(l) => Some(Lane::parse(l).ok_or_else(|| {
@@ -593,18 +840,32 @@ fn cmd_review(cmd: ReviewCmd) -> Result<(), AppError> {
                     ))
                 })?),
             };
-            let items = p.queue(lane);
+            let ids: Vec<u64> = p.queue(lane).iter().map(|i| i.id).collect();
             if let Some(dir) = &crops {
-                std::fs::create_dir_all(dir)?;
-                for it in &items {
-                    if let Ok(c) = p.crop(it.id) {
-                        let png = omr_app::crops::png(&c).map_err(AppError::Internal)?;
-                        std::fs::write(dir.join(format!("item-{:05}.png", it.id)), png)?;
-                    }
-                }
+                let s = p.export_crops(dir, &ids)?;
+                eprintln!(
+                    "exported {} crop(s) and a signed manifest to {} (Restricted: keep them on \
+                     university devices)",
+                    s.files.len() - 1,
+                    dir.display()
+                );
             }
+            if reveal {
+                p.record_reveal("review-list", ids.len())?;
+            }
+            let shown = |t: String| {
+                if reveal {
+                    t
+                } else {
+                    omr_app::export::mask_numbers(&t)
+                }
+            };
+            let items = p.queue(lane);
             if as_json {
-                let v = omr_app::export::review_json(&p);
+                let mut v = omr_app::export::review_json(&p);
+                if !reveal {
+                    omr_app::export::mask_json(&mut v);
+                }
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&v)
@@ -625,11 +886,15 @@ fn cmd_review(cmd: ReviewCmd) -> Result<(), AppError> {
                         b.map_or_else(String::new, |b| b.label()),
                         it.question
                             .map_or_else(String::new, |q| format!("Q{}", q + 1)),
-                        it.suggestion.as_ref().map_or_else(String::new, |d| format!(
+                        shown(it.suggestion.as_ref().map_or_else(String::new, |d| format!(
                             "suggest {}",
                             d.text(&labels, &p.session.definition.forms)
-                        ))
+                        )))
                     );
+                    // Page-level items carry the file, the reason and what to do (R10).
+                    if it.kind == omr_app::ItemKind::Notice && it.page.is_some() {
+                        println!("       {}", shown(it.detail.clone()));
+                    }
                 }
             }
             Ok(())
@@ -643,12 +908,15 @@ fn cmd_review(cmd: ReviewCmd) -> Result<(), AppError> {
             escalate,
             rescan,
             undo,
+            reason,
+            note,
             reviewer,
             no_export,
         } => {
             let dir = project_dir(&project);
             let mut p = ExamProject::open(&dir, &reviewer)?;
             p.set_actor(&reviewer, "Reviewer");
+            let reason = reason_of(reason.as_deref(), note.as_deref());
             if undo {
                 match p.undo()? {
                     Some(id) => println!("undid the latest event; item {id} re-opened"),
@@ -679,7 +947,7 @@ fn cmd_review(cmd: ReviewCmd) -> Result<(), AppError> {
                         }
                     }
                 };
-                let out = p.apply(id, action)?;
+                let out = p.apply_with_reason(id, action, reason)?;
                 println!(
                     "recorded; affected {:?}; next {}",
                     out.affected,
@@ -687,14 +955,199 @@ fn cmd_review(cmd: ReviewCmd) -> Result<(), AppError> {
                 );
             }
             if !no_export {
-                let out = dir
-                    .parent()
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(|| dir.clone());
-                let s = p.export(&out)?;
-                println!("re-exported {} file(s) to {}", s.files.len(), out.display());
+                reexport(&mut p, &dir)?;
             }
             println!("{} open item(s) remain", p.queue(None).len());
+            p.close()
+        }
+    }
+}
+
+/// Re-exports a project into the folder that holds its package.
+fn reexport(p: &mut ExamProject, dir: &Path) -> Result<(), AppError> {
+    let out = dir
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| dir.to_path_buf());
+    let s = p.export(&out)?;
+    println!("re-exported {} file(s) to {}", s.files.len(), out.display());
+    Ok(())
+}
+
+fn cmd_add(a: AddArgs) -> Result<(), AppError> {
+    if let Some(t) = &a.snapshot_time {
+        omr_app::pipeline::check_snapshot_utc(t)?;
+    }
+    let dir = project_dir(&a.project);
+    let mut p = ExamProject::open(&dir, &a.operator)?;
+    p.set_actor(&a.operator, "Instructor");
+    let opts = GradeOptions {
+        threads: a.threads,
+        project_dir: None,
+        snapshot_utc: a.snapshot_time.clone(),
+        operator: a.operator.clone(),
+        max_pages: None,
+    };
+    let r = p.add_scans(&a.inputs, &opts, &|_| {})?;
+    println!(
+        "{}: {} file(s), {} new page(s), {} already imported (CAP-011); booklets {} → {}; \
+         {} review decision(s) carried over, {} conflict(s) (SYS-032) queued",
+        r.batch,
+        r.files,
+        r.new_pages,
+        r.duplicates,
+        r.booklets_before,
+        r.booklets_after,
+        r.carried_over,
+        r.conflicts
+    );
+    println!("{} open item(s)", p.queue(None).len());
+    if !a.no_export {
+        reexport(&mut p, &dir)?;
+    }
+    if let Some(why) = p.session.release_blocked() {
+        println!("release blocked: {why}");
+    }
+    print_page_problems(&p);
+    p.close()
+}
+
+fn cmd_release(
+    project: &Path,
+    reason: Option<&str>,
+    note: Option<&str>,
+    operator: &str,
+) -> Result<(), AppError> {
+    let dir = project_dir(project);
+    let mut p = ExamProject::open(&dir, operator)?;
+    p.set_actor(operator, "Instructor");
+    p.release(reason_of(reason, note))?;
+    let r = p
+        .session
+        .release
+        .clone()
+        .ok_or_else(|| AppError::Internal("release not recorded".into()))?;
+    println!(
+        "released: score run {}…, key version {}, results SHA-384 {}…",
+        &r.score_run[..16.min(r.score_run.len())],
+        r.key_version,
+        &r.results_sha384[..16]
+    );
+    reexport(&mut p, &dir)?;
+    let out = dir.parent().map(Path::to_path_buf).unwrap_or_default();
+    if out.join(omr_app::export::BLACKBOARD_FILE).exists() {
+        println!(
+            "Blackboard upload: {}",
+            out.join(omr_app::export::BLACKBOARD_FILE).display()
+        );
+    } else {
+        println!("no Blackboard upload: it needs a roster (rosterless exams are never pushed)");
+    }
+    let absent = p.absent_students().len();
+    if absent > 0 {
+        println!("{absent} roster student(s) handed in no sheet: listed as absent in results.csv");
+    }
+    p.close()
+}
+
+fn cmd_export(project: &Path, out: Option<&Path>, column: Option<&str>) -> Result<(), AppError> {
+    let dir = project_dir(project);
+    let mut p = ExamProject::open(&dir, "principal:operator")?;
+    let out = match out {
+        Some(o) => o.to_path_buf(),
+        None => dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| dir.clone()),
+    };
+    let s = p.export(&out)?;
+    println!("exported {} file(s) to {}", s.files.len(), out.display());
+    if let Some(c) = column {
+        // Its own file: the manifest of `export` lists the new-column upload.
+        let f = out.join(format!(
+            "blackboard_grade_center-column-{}.csv",
+            c.trim().trim_start_matches('|')
+        ));
+        p.export_blackboard(&f, Some(c))?;
+        println!("Blackboard upload for column {c}: {}", f.display());
+    } else if !s
+        .files
+        .iter()
+        .any(|f| f == omr_app::export::BLACKBOARD_FILE)
+    {
+        println!(
+            "no Blackboard upload: it needs released results (omr release --project {}), a \
+             supplied key (not inferred), a roster and a score run",
+            shell_arg(project)
+        );
+    }
+    p.close()
+}
+
+fn cmd_key(cmd: KeyCmd) -> Result<(), AppError> {
+    match cmd {
+        KeyCmd::Replace {
+            project,
+            key,
+            reason,
+            note,
+            operator,
+            no_export,
+        } => {
+            let dir = project_dir(&project);
+            let mut p = ExamProject::open(&dir, &operator)?;
+            p.set_actor(&operator, "Instructor");
+            let def = &p.session.definition;
+            let (forms, points) =
+                exam::read_key_file(&read_file(&key)?, &def.forms, def.questions, def.options)?;
+            p.replace_key(forms, points, reason_of(reason.as_deref(), note.as_deref()))?;
+            let k = p.session.key.as_ref().map_or(0, |k| k.version);
+            println!("key version {k} in force; the exam was rescored");
+            if !no_export {
+                reexport(&mut p, &dir)?;
+            }
+            if let Some(why) = p.session.release_blocked() {
+                println!("release blocked: {why}");
+            }
+            p.close()
+        }
+        KeyCmd::Set {
+            project,
+            form,
+            question,
+            answer,
+            reason,
+            note,
+            operator,
+            no_export,
+        } => {
+            let dir = project_dir(&project);
+            let mut p = ExamProject::open(&dir, &operator)?;
+            p.set_actor(&operator, "Instructor");
+            let forms = &p.session.definition.forms;
+            let f = match &form {
+                None => 0,
+                Some(f) => forms
+                    .iter()
+                    .position(|x| x.eq_ignore_ascii_case(f.trim()))
+                    .ok_or_else(|| {
+                        usage(format!(
+                            "--form {f}: the exam's forms are {}",
+                            forms.join(", ")
+                        ))
+                    })?,
+            };
+            p.set_key_with_reason(
+                f,
+                question,
+                &answer,
+                reason_of(reason.as_deref(), note.as_deref()),
+            )?;
+            let k = p.session.key.as_ref().map_or(0, |k| k.version);
+            println!("key version {k} in force; the exam was rescored");
+            if !no_export {
+                reexport(&mut p, &dir)?;
+            }
             p.close()
         }
     }
@@ -813,11 +1266,44 @@ fn run(cli: Cli) -> Result<(), AppError> {
     match cli.cmd {
         Cmd::Templates { example_spec } => cmd_templates(example_spec),
         Cmd::Sheet {
-            cmd: SheetCmd::Render { spec, out, copies },
-        } => cmd_render(&spec, &out, copies),
+            cmd:
+                SheetCmd::Render {
+                    spec,
+                    out,
+                    copies,
+                    key_out,
+                    new_key,
+                },
+        } => cmd_render(&spec, &out, copies, key_out.as_deref(), new_key),
         Cmd::Grade(g) => cmd_grade(g),
+        Cmd::Add(a) => cmd_add(a),
         Cmd::Review { cmd } => cmd_review(cmd),
+        Cmd::Key { cmd } => cmd_key(cmd),
         Cmd::Bench(b) => cmd_bench(b),
+        Cmd::Release {
+            project,
+            reason,
+            note,
+            operator,
+        } => cmd_release(&project, reason.as_deref(), note.as_deref(), &operator),
+        Cmd::Export {
+            project,
+            out,
+            blackboard_column,
+        } => cmd_export(&project, out.as_deref(), blackboard_column.as_deref()),
+    }
+}
+
+/// A path as one shell argument in a printed next command: quoted when it holds a space or a
+/// character the shell would split on (`omr review list --project '/home/x/OMR Exams/cs211'`).
+fn shell_arg(p: &Path) -> String {
+    let s = p.display().to_string();
+    if s.chars()
+        .all(|c| c.is_alphanumeric() || "/._-+:,@".contains(c))
+    {
+        s
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
     }
 }
 
@@ -832,5 +1318,26 @@ fn main() -> ExitCode {
             eprintln!("omr: {e}");
             ExitCode::from(e.exit_code().clamp(1, 255) as u8)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shell_arg;
+    use std::path::Path;
+
+    /// A printed next command can be pasted as is, also for a folder with a space (README:
+    /// `~/OMR Exams/…`).
+    #[test]
+    fn next_commands_quote_paths_the_shell_would_split() {
+        assert_eq!(
+            shell_arg(Path::new("out/cs211-midterm_1")),
+            "out/cs211-midterm_1"
+        );
+        assert_eq!(
+            shell_arg(Path::new("/home/u/OMR Exams/cs211")),
+            "'/home/u/OMR Exams/cs211'"
+        );
+        assert_eq!(shell_arg(Path::new("it's")), "'it'\\''s'");
     }
 }

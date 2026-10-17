@@ -6,7 +6,9 @@
 //! index) and batch statistics are order-independent.
 
 use crate::AppError;
-use crate::engine::{Measured, PageRead, Recognizer};
+use crate::engine::{
+    MAX_TRUSTED_DPI, MIN_TRUSTED_DPI, Measured, PageRead, Recognizer, WORKING_DPI,
+};
 use crate::exam::{ExamDefinition, KeySource, ParsedKey, parse_key_entry};
 use crate::infer;
 use crate::ingest::{self, OpenSource, SourceFile, SourceKind};
@@ -172,6 +174,71 @@ struct Staged {
     capture: Option<omr_imaging::CaptureKind>,
     source_dpi: Option<u32>,
     working: Option<(u32, u32)>,
+    /// A blank back or bleed-through only (CAP-012 in `refusal`).
+    blank: bool,
+    /// Page notes added to the decided page (CAP-002 WARN/INFO).
+    notes: Vec<Exception>,
+}
+
+/// Dark-pixel ceiling of a blank page (§8.9 CAP-012: < 0.2 % dark pixels and no tags).
+pub const BLANK_MAX_DARK_PPM: u32 = 2_000;
+
+/// Effective capture resolutions of CAP-002 (§8.9): below the first a page is not graded
+/// (ERROR), up to the second it is read with a warning, above the third it was read from a
+/// downsampled working copy (INFO).
+pub const CAP002_DPI: [u32; 3] = [100, 150, 400];
+
+/// CAP-002 for an effective capture resolution of `dpi`, if one applies.
+pub fn cap002(page_id: &str, dpi: u32) -> Option<Exception> {
+    let [reject, warn, info] = CAP002_DPI;
+    let (sev, detail) = if dpi < reject {
+        (
+            Severity::Error,
+            format!(
+                "effective resolution {dpi} dpi is below {reject} dpi: the page is not graded; \
+                 rescan it at 200–300 dpi"
+            ),
+        )
+    } else if dpi <= warn {
+        (
+            Severity::Warn,
+            format!(
+                "effective resolution {dpi} dpi ({reject}–{warn} dpi): read, but light marks are \
+                 less reliable; scan at 200–300 dpi"
+            ),
+        )
+    } else if dpi > info {
+        (
+            Severity::Info,
+            format!(
+                "captured at {dpi} dpi: read from a working copy downsampled to {WORKING_DPI} dpi"
+            ),
+        )
+    } else {
+        return None;
+    };
+    Some(
+        Exception::must("CAP-002", sev, Scope::Page)
+            .with_target(Target {
+                page: Some(page_id.to_string()),
+                ..Target::default()
+            })
+            .with_detail(detail),
+    )
+}
+
+/// CAP-012 (INFO, Page): a blank page or bleed-through only, dropped (§7.5).
+pub fn cap012(page_id: &str, dark_ppm: u32) -> Exception {
+    Exception::must("CAP-012", Severity::Info, Scope::Page)
+        .with_target(Target {
+            page: Some(page_id.to_string()),
+            ..Target::default()
+        })
+        .with_detail(format!(
+            "blank page or bleed-through only ({:.2} % dark pixels, no form found); dropped, \
+             nothing to grade",
+            f64::from(dark_ppm) / 10_000.0
+        ))
 }
 
 /// Builds the rayon pool of a job (the only place pools are created, R4).
@@ -227,6 +294,29 @@ pub fn grade_sources(
     t0: Instant,
     progress: &(dyn Fn(&Progress) + Sync),
 ) -> Result<Graded, AppError> {
+    grade_into(def, sources, opts, pool, t0, progress, None)
+}
+
+/// A batch appended to a graded exam: its open store and the exam state before the batch.
+pub struct Append<'a> {
+    /// The project store (a new scan batch and new runs are written into it).
+    pub store: StoreWriter,
+    /// The exam before the batch (key, resolutions and serials carry over from it).
+    pub prior: &'a Session,
+}
+
+/// [`grade_sources`], or with `append` the re-run of an exam over its stored originals and a
+/// new batch (`sources` holds both): new batch and runs in the same store, the key in force
+/// and the human resolutions carried over ([`crate::append`]).
+pub fn grade_into(
+    def: &ExamDefinition,
+    sources: Vec<Result<SourceFile, (PathBuf, String)>>,
+    opts: &GradeOptions,
+    pool: &rayon::ThreadPool,
+    t0: Instant,
+    progress: &(dyn Fn(&Progress) + Sync),
+    append: Option<Append<'_>>,
+) -> Result<Graded, AppError> {
     def.validate()?;
     let snapshot_utc = opts.snapshot_utc.clone().unwrap_or_else(now_utc);
     check_snapshot_utc(&snapshot_utc)?;
@@ -241,15 +331,34 @@ pub fn grade_sources(
     let mut broken: Vec<(usize, PathBuf, String)> = Vec::new();
     for (k, s) in sources.into_iter().enumerate() {
         match s {
+            // Every zero-byte file is a lost scan of its own (CAP-001), never a byte-identical
+            // duplicate of another empty file (all of them share one hash).
+            Ok(f) if f.bytes.is_empty() => {
+                broken.push((k, f.path.clone(), "empty (zero-byte) file".into()));
+            }
             Ok(f) => files.push((k, f)),
             Err((p, e)) => broken.push((k, p, e)),
         }
     }
     // Byte-identical files: the original is the first by name and path, never by input
-    // position, so the same set of files yields the same outputs in any order (A5).
+    // position, so the same set of files yields the same outputs in any order (A5). In an
+    // appended batch the copy already ingested stays the original (§7.4: a duplicate links to
+    // the existing object).
+    let ingested: std::collections::BTreeSet<(&str, &str)> = append
+        .as_ref()
+        .map(|a| {
+            a.prior
+                .sources
+                .iter()
+                .map(|s| (s.sha384.as_str(), s.name.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let fresh = |f: &SourceFile| !ingested.contains(&(f.sha384.as_str(), f.name.as_str()));
     files.sort_by(|a, b| {
         a.1.sha384
             .cmp(&b.1.sha384)
+            .then_with(|| fresh(&a.1).cmp(&fresh(&b.1)))
             .then_with(|| a.1.name.cmp(&b.1.name))
             .then_with(|| a.1.path.cmp(&b.1.path))
             .then(a.0.cmp(&b.0))
@@ -261,6 +370,7 @@ pub fn grade_sources(
     let mut first_of: BTreeMap<String, usize> = BTreeMap::new();
     let mut dup_of: Vec<Option<usize>> = Vec::new();
     let mut input_order_of: Vec<usize> = Vec::new();
+    let mut unreadable: Vec<Option<String>> = Vec::new();
     for (k, f) in files {
         let dup = first_of.get(&f.sha384).copied();
         if dup.is_none() {
@@ -276,12 +386,14 @@ pub fn grade_sources(
         dup_of.push(dup);
         input_order_of.push(k);
         source_files.push(Some(f));
+        unreadable.push(None);
     }
     for (k, p, e) in broken {
         let name = p
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
+        unreadable.push(Some(format!("{name}: {e}")));
         let sha = omr_store::jcs::sha384_hex(format!("unreadable:{}", p.display()).as_bytes());
         source_infos.push(SourceInfo {
             name: format!("{name} (unreadable: {e})"),
@@ -299,10 +411,17 @@ pub fn grade_sources(
         source_files
             .par_iter()
             .zip(dup_of.par_iter())
-            .map(|(f, dup)| match (f, dup) {
+            .zip(unreadable.par_iter())
+            .map(|((f, dup), why)| match (f, dup) {
                 (Some(_), Some(_)) => (OpenSource::Broken("duplicate".into()), 0),
                 (Some(f), None) => ingest::open_source(f),
-                (None, _) => (OpenSource::Broken("file could not be read".into()), 1),
+                (None, _) => (
+                    OpenSource::Broken(
+                        why.clone()
+                            .unwrap_or_else(|| "file could not be read".into()),
+                    ),
+                    1,
+                ),
             })
             .collect()
     });
@@ -341,20 +460,45 @@ pub fn grade_sources(
     }
 
     // ---- Spool first (§7.4): originals durable in the store before any computation.
-    let mut store = match &opts.project_dir {
-        Some(dir) => Some(StoreWriter::create(
-            dir,
-            def,
-            &snapshot_utc,
-            &opts.operator,
-        )?),
-        None => None,
+    let (mut store, prior_run) = match append {
+        Some(a) => (Some(a.store), Some(a.prior)),
+        None => match &opts.project_dir {
+            Some(dir) => (
+                Some(StoreWriter::create(
+                    dir,
+                    def,
+                    &snapshot_utc,
+                    &opts.operator,
+                )?),
+                None,
+            ),
+            None => (None, None),
+        },
     };
     if let Some(st) = store.as_mut() {
-        st.write_setup(def, recognizer.manifest())?;
-        let blake = pool.install(|| st.stage_sources(&source_files, &dup_of))?;
+        // An appended batch: originals already in the store keep their address and pages.
+        let stored: BTreeMap<String, String> = prior_run
+            .iter()
+            .flat_map(|p| &p.sources)
+            .filter_map(|s| s.blake3.clone().map(|b| (s.sha384.clone(), b)))
+            .collect();
+        let known: std::collections::BTreeSet<String> = prior_run
+            .iter()
+            .flat_map(|p| &p.pages)
+            .map(|pg| pg.page_id.clone())
+            .collect();
+        if prior_run.is_some() {
+            st.begin_append()?;
+        } else {
+            st.write_setup(def, recognizer.manifest())?;
+        }
+        let to_stage: Vec<Option<SourceFile>> = source_files
+            .iter()
+            .map(|f| f.clone().filter(|f| !stored.contains_key(&f.sha384)))
+            .collect();
+        let blake = pool.install(|| st.stage_sources(&to_stage, &dup_of))?;
         for (s, b) in blake.into_iter().enumerate() {
-            source_infos[s].blake3 = b;
+            source_infos[s].blake3 = b.or_else(|| stored.get(&source_infos[s].sha384).cloned());
         }
         st.spool_pages(
             &tasks
@@ -362,6 +506,7 @@ pub fn grade_sources(
                 .map(|t| (t.page_id.clone(), t.source, t.index, t.duplicate_of))
                 .collect::<Vec<_>>(),
             &source_infos,
+            &known,
         )?;
     }
     timings.ingest_ms = ms(t0);
@@ -387,6 +532,8 @@ pub fn grade_sources(
                         capture: None,
                         source_dpi: None,
                         working: None,
+                        blank: false,
+                        notes: Vec::new(),
                     }
                 } else {
                     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -403,6 +550,8 @@ pub fn grade_sources(
                         capture: None,
                         source_dpi: None,
                         working: None,
+                        blank: false,
+                        notes: Vec::new(),
                     })
                 };
                 // Provisional result for the live view (single-page prior).
@@ -503,6 +652,9 @@ pub fn grade_sources(
                 None
             }
         };
+        if let Some(r) = r.as_mut() {
+            r.exceptions.append(&mut s.notes);
+        }
         // Batch-scope exceptions (CAP-003 bitonal) are de-duplicated per batch (§13.2).
         if let Some(r) = r.as_mut() {
             r.exceptions.retain(|e| {
@@ -516,6 +668,8 @@ pub fn grade_sources(
         }
         let status = if t.duplicate_of.is_some() {
             PageStatus::Duplicate
+        } else if s.blank {
+            PageStatus::Blank
         } else if s.refusal.is_some() {
             PageStatus::Refused
         } else if r.as_ref().is_some_and(|r| r.registered) {
@@ -586,7 +740,10 @@ pub fn grade_sources(
     progress(&Progress::Stage("scoring"));
     let t_sc = Instant::now();
     let mut exam_exceptions = Vec::new();
-    let key = resolve_key(def, &mut booklets, &mut exam_exceptions)?;
+    let mut key = resolve_key(def, &mut booklets, &mut exam_exceptions)?;
+    if let Some(p) = prior_run {
+        crate::append::carry_key(p, &mut key);
+    }
     let mut session = Session {
         schema: SESSION_SCHEMA,
         definition: def.clone(),
@@ -600,20 +757,36 @@ pub fn grade_sources(
         exam_exceptions,
         review: ReviewState::default(),
         timings: Timings::default(),
+        release: None,
     };
-    let scoring = Scoring::build(&session)?;
-    timings.scoring_ms = ms(t_sc);
-
-    // ---- Review queue.
+    // ---- Review queue (an appended batch carries the earlier run's decisions over).
     let labels = def.option_labels();
     let digits: Vec<String> = (0..10).map(|d| d.to_string()).collect();
+    if let Some(p) = prior_run {
+        crate::append::mark_conflicts(p, &mut session);
+    }
     session.review.items = build_queue(&session, &labels, &digits);
+    if let Some(p) = prior_run {
+        let (_, ids) = crate::append::carry_review(p, &mut session);
+        // Earlier review events stay in the history, sealed (their decisions now belong to
+        // this run's items).
+        session.review.history = p.review.history.clone();
+        for r in &mut session.review.history {
+            r.item = ids.get(&r.item).copied().unwrap_or(r.item);
+            for c in &mut r.changes {
+                c.item = ids.get(&c.item).copied().unwrap_or(c.item);
+            }
+        }
+        session.review.sealed = session.review.history.len();
+    }
+    let scoring = Scoring::build(&session)?;
+    timings.scoring_ms = ms(t_sc);
 
     // ---- Store: recognition run, identity, exceptions, score run.
     progress(&Progress::Stage("store"));
     let t_st = Instant::now();
     if let Some(st) = store.as_mut() {
-        st.write_results(&mut session, scoring.as_ref())?;
+        st.write_results(&mut session, scoring.as_ref(), prior_run)?;
     }
     timings.store_ms = ms(t_st);
     timings.total_ms = ms(t0);
@@ -652,30 +825,164 @@ fn stage_page(
         capture: None,
         source_dpi: None,
         working: None,
+        blank: false,
+        notes: Vec::new(),
     };
     let Some(src) = src else {
-        return none(ingest::cap001(&t.page_id, "file could not be read"));
+        let why = match open {
+            OpenSource::Broken(why) => why.as_str(),
+            _ => "file could not be read",
+        };
+        return none(ingest::cap001(&t.page_id, why));
     };
     let d = match ingest::decode_page(src, open, t.index, &t.page_id) {
         Ok(d) => d,
         Err(e) => return none(e),
     };
     let capture = d.capture;
+    let decoded_long = d.image.width().max(d.image.height());
+    let d_source_dpi = d.source_dpi;
     let w = rec.to_working(d.image, d.capture, d.known_dpi);
     let working = Some((w.image.width() as u32, w.image.height() as u32));
     let source_dpi = d.source_dpi.or(w.source_dpi);
     let measured = rec.measure(&w, &t.page_id);
+    // Blank backs and bleed-through (§7.5, §8.9): < 0.2 % dark pixels and no form. A page
+    // with that little ink is dropped (CAP-012) only when the engine finds no sheet on it
+    // either: an own form without tags, or with only mirrored tags (the front seen through
+    // the paper); a legacy form that does not register. A washed-out scan of a real sheet
+    // still registers and is graded (and queued if its marks are faint).
+    let no_sheet = match &measured {
+        Measured::Legacy(m, _) => !m.registered(),
+        Measured::Own(m) => m.tags.tags.is_empty() || m.tags.mirrored,
+    };
+    // (The ink count runs only on pages without a sheet: free on the normal path.)
+    if no_sheet {
+        let ink = omr_imaging::ink_coverage(&w.image);
+        if ink.is_blank(BLANK_MAX_DARK_PPM) {
+            return Staged {
+                measured: None,
+                refusal: Some(cap012(&t.page_id, ink.dark_ppm)),
+                capture: Some(capture),
+                source_dpi,
+                working,
+                blank: true,
+                notes: Vec::new(),
+            };
+        }
+    }
+    // Effective resolution (§8.9 CAP-002): an own form's from its corner tags (scaled back
+    // from the working copy to the scan), else the trusted PDF placement or the page size.
+    let effective = match &measured {
+        Measured::Own(m) => m.registration.as_ref().map(|a| {
+            let long = w.image.width().max(w.image.height()).max(1);
+            (a.dpi_eff() * decoded_long as f64 / long as f64).round() as u32
+        }),
+        Measured::Legacy(..) => None,
+    }
+    .or(d_source_dpi.filter(|x| (MIN_TRUSTED_DPI..=MAX_TRUSTED_DPI).contains(x)))
+    .or(w.source_dpi);
+    let mut notes = Vec::new();
+    if let Some(e) = effective.and_then(|d| cap002(&t.page_id, d)) {
+        if e.severity == Severity::Error {
+            return Staged {
+                measured: None,
+                refusal: Some(e),
+                capture: Some(capture),
+                source_dpi,
+                working,
+                blank: false,
+                notes,
+            };
+        }
+        notes.push(e);
+    }
     Staged {
         measured: Some(measured),
         refusal: None,
         capture: Some(capture),
         source_dpi,
         working,
+        blank: false,
+        notes,
     }
+}
+
+/// Questions a read page did not auto-accept (its abstentions).
+fn abstentions(r: &PageRead) -> usize {
+    r.questions.iter().filter(|q| !q.auto_accepted).count()
+}
+
+/// Two reads of one sheet agree (§7.4): every answer auto-accepted in both has the same
+/// response, and the student-ID columns and the bubbled form agree wherever both read them
+/// confidently. Abstentions never disagree.
+fn reads_agree(a: &PageRead, b: &PageRead) -> bool {
+    let by_q: BTreeMap<u16, &omr_model::QuestionOutcome> =
+        a.questions.iter().map(|q| (q.question, q)).collect();
+    let answers = b.questions.iter().all(|q| {
+        by_q.get(&q.question)
+            .is_none_or(|p| !(p.auto_accepted && q.auto_accepted) || p.response == q.response)
+    });
+    let id = match (&a.student_id, &b.student_id) {
+        (Some(x), Some(y)) => {
+            let (tx, ty): (Vec<char>, Vec<char>) =
+                (x.text().chars().collect(), y.text().chars().collect());
+            tx.len() == ty.len()
+                && (0..tx.len()).all(|c| {
+                    x.review.get(c).copied().unwrap_or(true)
+                        || y.review.get(c).copied().unwrap_or(true)
+                        || tx[c] == ty[c]
+                })
+        }
+        _ => true,
+    };
+    let form = match (&a.form_choice, &b.form_choice) {
+        (Some(x), Some(y)) => !(x.confident && y.confident) || x.response == y.response,
+        _ => true,
+    };
+    answers && id && form
+}
+
+/// Copies of one sheet (in canonical order) grouped by agreement: each group is one reading
+/// of the sheet, with the copy that is graded (the fewest abstentions, then the first in
+/// canonical order, §7.4) and the rescans it supersedes (COL-003). Groups come in the order of
+/// their first copy; copies in different groups disagree.
+fn group_copies(pages: &[PageState], copies: &[usize]) -> Vec<(usize, Vec<usize>)> {
+    let read = |i: usize| pages[i].read.as_ref().expect("read pages only");
+    let mut reps: Vec<(usize, Vec<usize>)> = Vec::new();
+    for &i in copies {
+        match reps
+            .iter()
+            .position(|(r, _)| reads_agree(read(*r), read(i)))
+        {
+            Some(k) => {
+                let (r, sup) = &mut reps[k];
+                if abstentions(read(i)) < abstentions(read(*r)) {
+                    sup.push(*r);
+                    *r = i;
+                } else {
+                    sup.push(i);
+                }
+            }
+            None => reps.push((i, Vec::new())),
+        }
+    }
+    reps
+}
+
+/// The fully bubbled student number of a read page (every column one confident digit).
+fn full_id(r: &PageRead) -> Option<String> {
+    let g = r.student_id.as_ref()?;
+    let t = g.text();
+    (g.confident() && !t.is_empty() && t.bytes().all(|c| c.is_ascii_digit())).then_some(t)
 }
 
 /// Collates read pages into booklets (§7.5): one page per booklet on single-page sheets;
 /// own-form multi-page booklets by the verified serial, generic copies in input order.
+/// Rescans are resolved first (§7.4): a second copy of a sheet (same verified serial and page,
+/// or on serial-less single-page sheets the same fully bubbled student number) whose marks
+/// agree with the first is superseded (COL-003, INFO: kept, linked, not graded); one whose
+/// marks differ is held out with COL-004 (ERROR) and never overwrites or duplicates the copy
+/// that is graded.
 fn collate(
     def: &ExamDefinition,
     rec: &Recognizer,
@@ -685,13 +992,50 @@ fn collate(
     let n = usize::from(def.questions);
     let multi_page = rec.page_count() > 1;
     let page_no = |pages: &[PageState], i: usize| pages[i].read.as_ref().map_or(1, |r| r.page_no);
-    // Groups of page indices. A second page with the same verified serial and template page
-    // (a rescan that is not byte-identical) is held out with COL-004: it never overwrites the
-    // first copy (canonical order) and never becomes a second booklet with the same serial.
     let mut groups: Vec<Vec<usize>> = Vec::new();
     let mut held: Vec<(usize, u32)> = Vec::new();
+    // (superseded page, the page graded instead).
+    let mut superseded: Vec<(usize, usize)> = Vec::new();
     let mut by_serial: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
     let mut generic: Vec<usize> = Vec::new();
+    let labels = rec.form_labels();
+    // A verified page code naming a form this exam does not declare (form C of a sheet set
+    // whose exam uses A and B) is an unknown form (IDN-002): its questions follow a key the
+    // exam does not have, so it is never scored under another form's key or offered for one.
+    for p in pages.iter_mut() {
+        let id = p.page_id.clone();
+        if p.status != PageStatus::Read {
+            continue;
+        }
+        let Some(r) = p.read.as_mut() else {
+            continue;
+        };
+        let Some(f) = r.code_form else {
+            continue;
+        };
+        let lab = usize::from(f.0)
+            .checked_sub(1)
+            .and_then(|k| labels.get(k))
+            .cloned()
+            .unwrap_or_else(|| f.letter().to_string());
+        if !def.forms.contains(&lab) {
+            p.status = PageStatus::Unattributed;
+            r.exceptions.push(
+                Exception::must("IDN-002", Severity::Blocker, Scope::Page)
+                    .with_target(Target {
+                        page: Some(id),
+                        booklet: r.code_serial,
+                        ..Target::default()
+                    })
+                    .with_detail(format!(
+                        "the verified page code names form {lab}, which this exam does not \
+                         declare ({}); not graded: add form {lab} and its key to the exam, or \
+                         remove the sheet",
+                        def.forms.join(", ")
+                    )),
+            );
+        }
+    }
     for (i, p) in pages.iter().enumerate() {
         if p.status != PageStatus::Read {
             continue;
@@ -702,19 +1046,44 @@ fn collate(
         }
     }
     for (s, idx) in by_serial {
-        let mut seen = std::collections::BTreeSet::new();
-        let mut g = Vec::new();
+        let mut by_page: BTreeMap<u16, Vec<usize>> = BTreeMap::new();
         for i in idx {
-            if seen.insert(page_no(pages, i)) {
-                g.push(i);
-            } else {
-                held.push((i, s));
+            by_page.entry(page_no(pages, i)).or_default().push(i);
+        }
+        let mut g = Vec::new();
+        for copies in by_page.values() {
+            let mut reading = group_copies(pages, copies).into_iter();
+            let (kept, sup) = reading.next().expect("at least one copy");
+            g.push(kept);
+            superseded.extend(sup.into_iter().map(|i| (i, kept)));
+            // Copies that disagree with the graded one are held out (never a second booklet
+            // with the same serial).
+            for (r, sup) in reading {
+                held.extend(std::iter::once(r).chain(sup).map(|i| (i, s)));
             }
         }
+        g.sort_unstable();
         groups.push(g);
     }
     if !multi_page {
-        groups.extend(generic.into_iter().map(|i| vec![i]));
+        let mut by_id: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        let mut single = Vec::new();
+        for i in generic {
+            match pages[i].read.as_ref().and_then(full_id) {
+                Some(id) => by_id.entry(id).or_default().push(i),
+                None => single.push(i),
+            }
+        }
+        // One student number on sheets whose marks differ stays one booklet per reading, for
+        // identity review (IDN-005).
+        for copies in by_id.values() {
+            for (kept, sup) in group_copies(pages, copies) {
+                single.push(kept);
+                superseded.extend(sup.into_iter().map(|i| (i, kept)));
+            }
+        }
+        single.sort_unstable();
+        groups.extend(single.into_iter().map(|i| vec![i]));
     } else {
         generic.sort_by_key(|&i| tasks[i].input_order);
         let mut cur: Vec<usize> = Vec::new();
@@ -738,14 +1107,16 @@ fn collate(
         if let Some(r) = p.read.as_mut() {
             r.exceptions.push(
                 Exception::must("COL-004", Severity::Error, Scope::Booklet)
+                    .with_sub_reason("marks_differ")
                     .with_target(Target {
                         page: Some(id),
                         booklet: Some(serial),
                         ..Target::default()
                     })
                     .with_detail(format!(
-                        "booklet {serial} page {} was scanned again with different content; \
-                         the first copy is graded, this one is held out",
+                        "booklet {serial} page {} was scanned again and the marks differ; the \
+                         first copy is graded, this one is held out (keep it as not exam \
+                         material, or rescan and grade again without the wrong copy)",
                         r.page_no
                     )),
             );
@@ -756,7 +1127,6 @@ fn collate(
         .filter_map(|g| pages[g[0]].read.as_ref().and_then(|r| r.code_serial))
         .max()
         .unwrap_or(0);
-    let labels = rec.form_labels();
     let mut booklets = Vec::with_capacity(groups.len());
     for (rank, mut g) in groups.into_iter().enumerate() {
         g.sort_by_key(|&i| pages[i].read.as_ref().map_or(0, |r| r.page_no));
@@ -770,9 +1140,9 @@ fn collate(
         let mut questions: Vec<Option<QuestionState>> = vec![None; n];
         let mut exceptions = Vec::new();
         let mut id_read = None;
+        let (mut sheet_section, mut exam_type) = (String::new(), String::new());
         let (mut declared_form, mut declared_text, mut form_source) =
             (None, String::new(), FormSource::Unknown);
-        let mut code_unknown = false;
         for &pi in &g {
             pages[pi].booklet = Some(bi);
             let Some(r) = pages[pi].read.as_ref() else {
@@ -781,14 +1151,22 @@ fn collate(
             for q in &r.questions {
                 let qi = usize::from(q.question);
                 if qi < n {
+                    let mut q = q.clone();
+                    // A mark on an option the sheet prints but the exam does not use (E on a
+                    // four-option exam on the IAU sheet) never reaches scoring as an option it
+                    // cannot score, and is never dropped: the question goes to review.
+                    if let Some(e) = option_not_offered(def, serial_hint(&r.code_serial), &q) {
+                        q.auto_accepted = false;
+                        q.exceptions.push(e);
+                    }
                     let status = if q.auto_accepted {
                         ResponseStatus::Auto
                     } else {
                         ResponseStatus::Pending
                     };
                     questions[qi] = Some(QuestionState {
-                        recognized: q.clone(),
                         current: q.response.clone(),
+                        recognized: q,
                         status,
                         page: pi,
                     });
@@ -802,25 +1180,34 @@ fn collate(
             if id_read.is_none() {
                 id_read = r.student_id.clone();
             }
+            // The section and exam type bubbled on the sheet, when read confidently (digits
+            // without a leading or trailing blank column).
+            if sheet_section.is_empty()
+                && let Some(g) = r.section.as_ref().filter(|g| g.confident())
+            {
+                sheet_section = g.text().trim_matches('_').to_string();
+                if sheet_section.contains('_') {
+                    sheet_section.clear();
+                }
+            }
+            if exam_type.is_empty()
+                && let Some(v) = r.exam_type.as_ref().and_then(|c| c.value())
+            {
+                exam_type = v.to_string();
+            }
             if let Some(f) = r.code_form {
                 // The verified code names a printed form: map it by its letter, never by
-                // position (the definition may list the forms in another order).
+                // position (the definition may list the forms in another order). A form the
+                // exam does not declare was held out above (IDN-002).
                 let lab = usize::from(f.0)
                     .checked_sub(1)
                     .and_then(|k| labels.get(k))
                     .cloned()
                     .unwrap_or_else(|| f.letter().to_string());
                 declared_text = lab.clone();
-                match def.forms.iter().position(|x| *x == lab) {
-                    Some(k) => {
-                        declared_form = Some(k);
-                        form_source = FormSource::Code;
-                        code_unknown = false;
-                    }
-                    None => {
-                        declared_form = None;
-                        code_unknown = true;
-                    }
+                if let Some(k) = def.forms.iter().position(|x| *x == lab) {
+                    declared_form = Some(k);
+                    form_source = FormSource::Code;
                 }
             } else if declared_form.is_none()
                 && let Some(c) = &r.form_choice
@@ -869,32 +1256,21 @@ fn collate(
             .as_ref()
             .map(|g: &omr_recog::GridField| g.text())
             .unwrap_or_default();
-        let single = def.forms.len() == 1 && !code_unknown;
-        if code_unknown && def.forms.len() == 1 {
-            // Several forms are inferred and reviewed in `resolve_key`; a one-form exam has
-            // nothing to infer, so the booklet waits for a reviewer's form decision.
-            exceptions.push(
-                Exception::must("SCO-005", Severity::Error, Scope::Booklet)
-                    .with_sub_reason("code_form_not_in_exam")
-                    .with_target(Target {
-                        booklet: Some(serial),
-                        ..Target::default()
-                    })
-                    .with_detail(format!(
-                        "the verified page code names form {declared_text}, which this exam does \
-                         not declare ({}); not scored until a reviewer decides",
-                        def.forms.join(", ")
-                    )),
-            );
-        }
+        let single = def.forms.len() == 1;
         // A blank booklet (MRK-015) is never scored 0 automatically: its score is held as
         // pending until a reviewer acknowledges it (§8.8).
         let hold = exceptions
             .iter()
             .find(|e| e.code == "MRK-015" && e.severity >= Severity::Error)
             .map(|e| e.code.clone());
+        // A printed serial names the booklet; a sheet without one is named by its first page
+        // (content-derived), so the name survives a later batch that changes the ranks.
+        let booklet_id = match code_serial {
+            Some(s) => format!("bk-{s:06}"),
+            None => format!("bk-{}", pages[g[0]].page_id.trim_start_matches("pg-")),
+        };
         booklets.push(Booklet {
-            booklet_id: format!("bk-{serial:06}"),
+            booklet_id,
             serial,
             pages: g,
             declared_form,
@@ -917,9 +1293,73 @@ fn collate(
                 confirmed: false,
             },
             exceptions,
+            sheet_section,
+            exam_type,
         });
     }
+    for &(i, kept) in &superseded {
+        let serial = pages[kept].booklet.map(|b| booklets[b].serial);
+        let kept_id = pages[kept].page_id.clone();
+        let p = &mut pages[i];
+        p.status = PageStatus::Duplicate;
+        p.booklet = None;
+        let e = Exception::must("COL-003", Severity::Info, Scope::Booklet)
+            .with_target(Target {
+                page: Some(p.page_id.clone()),
+                booklet: serial,
+                ..Target::default()
+            })
+            .with_detail(format!(
+                "rescan of the sheet on page {kept_id}: the marks agree, so the copy with fewer \
+                 abstentions is graded and this one is kept, linked and not graded"
+            ));
+        p.refusal = Some(e);
+    }
     booklets
+}
+
+fn serial_hint(code_serial: &Option<u32>) -> Option<u32> {
+    code_serial.filter(|&s| s > 0)
+}
+
+/// MRK-017 `option_not_offered` (ERROR, Item) when a response marks an option at or beyond the
+/// exam's option count: the sheet prints it, the exam does not use it.
+pub fn option_not_offered(
+    def: &ExamDefinition,
+    booklet: Option<u32>,
+    q: &omr_model::QuestionOutcome,
+) -> Option<Exception> {
+    let m = def.options;
+    let outside: Vec<u8> = match &q.response {
+        Response::Single(o) => vec![*o],
+        Response::Multi(v) | Response::Set(v) => v.clone(),
+        _ => Vec::new(),
+    }
+    .into_iter()
+    .filter(|&o| o >= m)
+    .collect();
+    if outside.is_empty() {
+        return None;
+    }
+    let letter = |o: u8| char::from(b'A' + o.min(25)).to_string();
+    let marked: Vec<String> = outside.iter().map(|&o| letter(o)).collect();
+    Some(
+        Exception::must("MRK-017", Severity::Error, Scope::Item)
+            .with_sub_reason("option_not_offered")
+            .with_target(Target {
+                booklet,
+                question: Some(q.question),
+                ..Target::default()
+            })
+            .with_detail(format!(
+                "option {} is marked, but the exam uses options A–{} (--options {m}): choose \
+                 the answer among A–{}, or blank for no valid answer (scored as no answer); if \
+                 the exam really has more options, grade it again with --options set to them",
+                marked.join(", "),
+                letter(m - 1),
+                letter(m - 1)
+            )),
+    )
 }
 
 /// Roster snapshot of a definition.
@@ -927,6 +1367,7 @@ pub fn roster_snapshot(def: &ExamDefinition) -> Result<Option<RosterSnapshot>, A
     let Some(rows) = &def.roster else {
         return Ok(None);
     };
+    crate::exam::check_roster(rows, &def.id_scheme)?;
     let records = rows
         .iter()
         .map(|r| RosterRecord {
@@ -1020,6 +1461,30 @@ fn identify(
                 }
             }
         }
+        // The section bubbled on the sheet against the roster's (§9.9 row 11): surfaced,
+        // never deciding (INFO).
+        if let (Some(k), Some(rows)) = (&student, &def.roster)
+            && !b.sheet_section.is_empty()
+            && let Some(r) = rows
+                .iter()
+                .find(|r| omr_identity::normalize_id(&r.id) == *k)
+            && !r.section.is_empty()
+            && !same_section(&r.section, &b.sheet_section)
+        {
+            exceptions.push(
+                Exception::must("IDN-004", Severity::Info, Scope::Booklet)
+                    .with_sub_reason("cross_section")
+                    .with_target(Target {
+                        booklet: Some(b.serial),
+                        ..Target::default()
+                    })
+                    .with_detail(format!(
+                        "the sheet bubbles section {} but the roster lists the student in \
+                         section {}",
+                        b.sheet_section, r.section
+                    )),
+            );
+        }
         b.identity = IdentityState {
             read: a
                 .decision
@@ -1043,6 +1508,58 @@ fn identify(
     Ok(())
 }
 
+/// Two section codes name the same section: equal ignoring case and surrounding blanks, or
+/// equal as numbers (`071` and `71`).
+fn same_section(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim(), b.trim());
+    if a.eq_ignore_ascii_case(b) {
+        return true;
+    }
+    match (a.parse::<u64>(), b.parse::<u64>()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    }
+}
+
+/// The effective key of per-form keys (§10.1): cells in the definition's form order, the
+/// definition's points; identical keys share master items.
+pub fn provided_key(
+    def: &ExamDefinition,
+    forms: &[crate::exam::FormKey],
+    version: u32,
+) -> Result<EffectiveKey, AppError> {
+    let n = usize::from(def.questions);
+    let points = if def.points.is_empty() {
+        vec!["1".to_string(); n]
+    } else {
+        def.points.clone()
+    };
+    let mut cells = Vec::new();
+    for f in &def.forms {
+        let k = forms.iter().find(|k| &k.form == f).ok_or_else(|| {
+            AppError::Definition(format!("no key for form {f}; add its column or row"))
+        })?;
+        cells.push(
+            k.answers
+                .iter()
+                .map(|a| {
+                    parse_key_entry(a, def.options)
+                        .map(KeyCell::from)
+                        .unwrap_or(KeyCell::Missing)
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
+    let shared = cells.iter().all(|c| *c == cells[0]);
+    Ok(EffectiveKey {
+        version,
+        inferred: false,
+        forms: cells,
+        points,
+        shared_items: shared,
+    })
+}
+
 /// The key in force, form inference and the related exceptions (§10.3).
 fn resolve_key(
     def: &ExamDefinition,
@@ -1057,33 +1574,7 @@ fn resolve_key(
     };
     let key = match &def.key {
         KeySource::None => None,
-        KeySource::Provided { forms } => {
-            let mut cells = Vec::new();
-            for f in &def.forms {
-                let k = forms
-                    .iter()
-                    .find(|k| &k.form == f)
-                    .ok_or_else(|| AppError::Definition(format!("no key for form {f}")))?;
-                cells.push(
-                    k.answers
-                        .iter()
-                        .map(|a| {
-                            parse_key_entry(a, def.options)
-                                .map(KeyCell::from)
-                                .unwrap_or(KeyCell::Missing)
-                        })
-                        .collect::<Vec<_>>(),
-                );
-            }
-            let shared = cells.iter().all(|c| *c == cells[0]);
-            Some(EffectiveKey {
-                version: 1,
-                inferred: false,
-                forms: cells,
-                points,
-                shared_items: shared,
-            })
-        }
+        KeySource::Provided { forms } => Some(provided_key(def, forms, 1)?),
         KeySource::Inferred => {
             let cells = infer::infer_key(booklets, def.forms.len(), n, def.options);
             exam_exceptions.push(crate::score::inferred_key_exception());

@@ -589,6 +589,8 @@ pub struct Results {
     pub readiness: Vec<(bool, String)>,
     /// Release blocked reason.
     pub release_blocked: Option<String>,
+    /// Roster students without a booklet (absent; 0 without a roster, §9.6).
+    pub absent: u32,
 }
 
 /// CLO attainment row (shell `CloAttainment`).
@@ -665,7 +667,16 @@ fn counts(p: &ExamProject) -> SeverityCounts {
             Severity::Blocker => c.blocker += 1,
         }
     }
-    c.warn += p.session.batch_exceptions.len() as u32;
+    // batch-scope findings are not queued; each counts at its own severity (an INFO note such
+    // as MRK-016 `prior_model` is no warning, CR-18)
+    for e in &p.session.batch_exceptions {
+        match e.severity {
+            Severity::Info => c.info += 1,
+            Severity::Warn => c.warn += 1,
+            Severity::Error => c.error += 1,
+            Severity::Blocker => c.blocker += 1,
+        }
+    }
     c
 }
 
@@ -673,7 +684,8 @@ fn key_label(p: &ExamProject) -> String {
     match &p.session.key {
         None => "No key".into(),
         Some(k) if k.inferred => format!("Key v{} · INFERRED", k.version),
-        Some(k) => format!("Key v{} · draft", k.version),
+        Some(k) if p.session.released() => format!("Key v{} · released", k.version),
+        Some(k) => format!("Key v{} · in force", k.version),
     }
 }
 
@@ -703,6 +715,8 @@ impl ExamProject {
             versions: def.forms.clone(),
             status: if s.pages.is_empty() {
                 ExamStatus::Setup
+            } else if s.released() {
+                ExamStatus::Released
             } else if s.release_blocked().is_some() {
                 ExamStatus::InReview
             } else {
@@ -724,7 +738,10 @@ impl ExamProject {
             total_items: u32::from(def.questions),
             roster_count: def.roster.as_ref().map_or(0, |r| r.len() as u32),
             sections,
-            batch_id: crate::store::BATCH_ID.into(),
+            batch_id: self
+                .store()
+                .map_or(crate::store::BATCH_ID, |s| s.batch_id())
+                .into(),
         }
     }
 
@@ -1138,7 +1155,11 @@ impl ExamProject {
                             format!("group {}", decision.text(&labels, &s.definition.forms))
                         }
                         a => format!("{a:?}").to_lowercase(),
-                    },
+                    } + &r
+                        .reason
+                        .as_ref()
+                        .map(|r| format!(" ({})", r.code))
+                        .unwrap_or_default(),
                     undone: r.undone,
                 }
             })
@@ -1297,6 +1318,7 @@ impl ExamProject {
             option_labels: s.definition.option_labels(),
             readiness,
             release_blocked: s.release_blocked(),
+            absent: self.absent_students().len() as u32,
         })
     }
 

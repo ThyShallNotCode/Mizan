@@ -3,12 +3,12 @@
 
 import {
     Theme, Tone, Severity, Card, TopBar, StatusBar, PrimaryButton, SecondaryButton, StatusPill, Tag,
-    MeterBar, SeverityGlyph, FocusRing, Breadcrumb, TableRow, TableHeaderCell,
+    MeterBar, SeverityGlyph, FocusRing, Breadcrumb, TableRow, TableHeaderCell, GhostButton,
 } from "../theme.slint";
 import { App, SetupVM, MapRow, MapCell } from "../state.slint";
 import {
     Icons, ThemeToggle, Centered, SectionLabel, StatusText, KVLine, EditCell, StepIndicator,
-    EmptyState, MessageText,
+    EmptyState, MessageText, TextField,
 } from "../widgets.slint";
 import { ListView, ScrollView } from "std-widgets.slint";
 
@@ -338,7 +338,7 @@ component LintCard inherits Card {
         vertical-stretch: 1;
         min-height: 48px;
         preferred-height: 48px;
-        viewport-width: self.visible-width;
+        content-width: self.visible-width;
         VerticalLayout {
         spacing: Theme.space-md;
         alignment: start;
@@ -424,13 +424,13 @@ component CellCard inherits Card {
 
 component CloCard inherits Card {
     title: "Course learning outcomes";
-    subtitle: "Share of the exam's evidence per CLO";
+    subtitle: SetupVM.clos.length == 0 ? "No CLOs in this exam (grade with --clo clo.csv)" : "Share of the exam's evidence per CLO";
     vertical-stretch: 1;
     ScrollView {
         vertical-stretch: 1;
         min-height: 64px;
         preferred-height: 64px;
-        viewport-width: self.visible-width;
+        content-width: self.visible-width;
         VerticalLayout {
         spacing: Theme.space-md;
         alignment: start;
@@ -488,6 +488,70 @@ component CloCard inherits Card {
     }
 }
 
+// Replace the whole key from a key file (the real key after an inferred one, a corrected file):
+// a new key version, the exam rescored, every change audited (§10.1, §10.8).
+component KeyBar inherits Rectangle {
+    background: Theme.surface-raised;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    init => {
+        field.focus();
+    }
+    FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                SetupVM.key-open = false;
+                return accept;
+            }
+            return reject;
+        }
+        HorizontalLayout {
+            padding-left: Theme.space-xl;
+            padding-right: Theme.space-xl;
+            padding-top: Theme.space-sm;
+            padding-bottom: Theme.space-sm;
+            spacing: Theme.space-md;
+            Text {
+                text: "Replace key";
+                font-size: Theme.text-md;
+                font-weight: Theme.weight-semibold;
+                color: Theme.ink;
+                vertical-alignment: center;
+            }
+            field := TextField {
+                horizontal-stretch: 1;
+                label: "Key file";
+                placeholder: "Path of the key file, e.g. key.csv (question,A,B or form,Q1,Q2,…)";
+                text <=> SetupVM.key-path;
+                mono: true;
+                accepted(v) => {
+                    if (v != "") {
+                        SetupVM.replace-key(v);
+                    }
+                }
+            }
+            Centered {
+                PrimaryButton {
+                    text: "Replace and rescore";
+                    key-hint: "Enter";
+                    enabled: SetupVM.key-path != "";
+                    clicked => {
+                        SetupVM.replace-key(SetupVM.key-path);
+                    }
+                }
+            }
+            Centered {
+                GhostButton {
+                    text: "Cancel";
+                    clicked => {
+                        SetupVM.key-open = false;
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component SetupScreen inherits VerticalLayout {
     in property <length> win-w: 1440px;
     in property <length> win-h: 900px;
@@ -517,12 +581,13 @@ export component SetupScreen inherits VerticalLayout {
             StepIndicator {
                 number: 3;
                 text: "CLO mapping";
-                state: SetupVM.lints.length > 0 ? 2 : 1;
+                state: SetupVM.lints.length > 0 || SetupVM.clos.length == 0 ? 2 : 1;
             }
+            // without a roster no identity is matched: shown as a warning, never as done
             StepIndicator {
                 number: 4;
                 text: "Roster";
-                state: 1;
+                state: SetupVM.has-roster ? 1 : 2;
             }
             StepIndicator {
                 number: 5;
@@ -540,11 +605,11 @@ export component SetupScreen inherits VerticalLayout {
             }
             Centered {
                 PrimaryButton {
-                    text: "Publish key…";
-                    enabled: !SetupVM.key-published;
-                    accessible-description: SetupVM.key-published ? "The current key version is already published" : "Needs four-eyes approval after release";
+                    text: "Replace key…";
+                    enabled: SetupVM.can-replace-key;
+                    accessible-description: "Replaces the whole answer key from a key file: a new key version, rescored and audited";
                     clicked => {
-                        App.request("Publish key");
+                        SetupVM.key-open = !SetupVM.key-open;
                     }
                 }
             }
@@ -553,6 +618,7 @@ export component SetupScreen inherits VerticalLayout {
             }
         }
     }
+    if SetupVM.available && SetupVM.key-open: KeyBar { }
     if !SetupVM.available: EmptyState {
         vertical-stretch: 1;
         title: "No setup for this exam yet";
@@ -575,7 +641,8 @@ export component SetupScreen inherits VerticalLayout {
         VerticalLayout {
             width: root.right-w;
             spacing: Theme.space-lg;
-            CellCard { }
+            // without CLOs there is no cell to edit
+            if SetupVM.clos.length > 0: CellCard { }
             CloCard { }
         }
     }
@@ -592,7 +659,7 @@ export component SetupScreen inherits VerticalLayout {
             horizontal-stretch: 1;
         }
         StatusText {
-            text: "Mapping edits are draft until approved (SCO-032)";
+            text: "Key and mapping edits are recorded as audited events (§14.4)";
         }
         StatusText {
             text: App.engine;

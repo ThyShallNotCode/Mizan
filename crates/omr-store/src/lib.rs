@@ -48,5 +48,6 @@ pub use model::{
 };
 pub use objects::{ManifestEntry, ObjectKind, ObjectManifest, ObjectStore, StagedObject};
 pub use project::{
-    CommandOutcome, NewProject, OpenOptions, PackagePaths, Project, ProjectHeader, Tx,
+    CommandOutcome, NewProject, OpenOptions, PackagePaths, Project, ProjectHeader, ReadOnlyProject,
+    Tx,
 };

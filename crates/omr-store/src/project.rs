@@ -137,6 +137,12 @@ pub struct OpenOptions {
     pub verify_chain: bool,
     /// Signer for automatic checkpoints (every [`CHECKPOINT_EVERY`] events, batch end, close).
     pub signer: Option<Box<dyn CheckpointSigner + Send>>,
+    /// Verifies the signatures of stored and external checkpoints on open (`None`: head
+    /// hashes only).
+    pub verifier: Option<Box<dyn CheckpointVerifier + Send>>,
+    /// Checkpoints held outside the package (e.g. the device's latest checkpoint of this
+    /// project): a truncated or rewritten chain fails against them on open (SYS-011).
+    pub external: Vec<Checkpoint>,
 }
 
 impl Default for OpenOptions {
@@ -148,6 +154,8 @@ impl Default for OpenOptions {
             lock: true,
             verify_chain: true,
             signer: None,
+            verifier: None,
+            external: Vec::new(),
         }
     }
 }
@@ -160,6 +168,8 @@ impl std::fmt::Debug for OpenOptions {
             .field("lock", &self.lock)
             .field("verify_chain", &self.verify_chain)
             .field("signer", &self.signer.is_some())
+            .field("verifier", &self.verifier.is_some())
+            .field("external", &self.external.len())
             .finish_non_exhaustive()
     }
 }
@@ -279,6 +289,39 @@ impl Tx<'_> {
     }
 }
 
+/// A project opened by [`Project::open_read_only`]: a `query_only` connection, no lock.
+pub struct ReadOnlyProject {
+    conn: Connection,
+    paths: PackagePaths,
+    header: ProjectHeader,
+}
+
+impl std::fmt::Debug for ReadOnlyProject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReadOnlyProject")
+            .field("root", &self.paths.root)
+            .field("project_uuid", &self.header.project_uuid)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ReadOnlyProject {
+    /// The header.
+    pub fn header(&self) -> &ProjectHeader {
+        &self.header
+    }
+
+    /// Package paths.
+    pub fn paths(&self) -> &PackagePaths {
+        &self.paths
+    }
+
+    /// Typed reads.
+    pub fn reader(&self) -> Reader<'_> {
+        Reader::new(&self.conn)
+    }
+}
+
 /// An open project with its single writer connection.
 pub struct Project {
     conn: Connection,
@@ -298,6 +341,25 @@ impl std::fmt::Debug for Project {
             .field("project_uuid", &self.header.project_uuid)
             .finish_non_exhaustive()
     }
+}
+
+/// Makes a package folder private to its owner (mode 0700 on Unix): the database, its WAL,
+/// the originals, the snapshot and every cache file hold Restricted data (PDPL), and SQLite
+/// creates its files under the process umask, so the folder is the gate (§19.3). On other
+/// platforms the folder keeps the owner-only ACL of the user's profile (an explicit ACL is
+/// deferred to the platform layer).
+pub fn restrict_to_owner(dir: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(dir)?.permissions().mode();
+        if mode & 0o077 != 0 {
+            fs::set_permissions(dir, fs::Permissions::from_mode(mode & 0o700 | 0o700))?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
 }
 
 fn take_lock(path: &Path) -> Result<File> {
@@ -327,6 +389,7 @@ impl Project {
             )));
         }
         fs::create_dir_all(&paths.root)?;
+        restrict_to_owner(&paths.root)?;
         if opts.check_location {
             location::check_location(&paths.root)?;
         }
@@ -338,6 +401,7 @@ impl Project {
             &paths.exports,
         ] {
             fs::create_dir_all(d)?;
+            restrict_to_owner(d)?;
         }
         let header = ProjectHeader {
             magic: "omr-project".into(),
@@ -441,6 +505,9 @@ impl Project {
         } else {
             None
         };
+        // A package created before this rule keeps working; it becomes private on its first
+        // writable open.
+        restrict_to_owner(&paths.root)?;
         let mut conn = db::open_writer(&paths.db)?;
         let version = schema::user_version(&conn)?;
         if version > schema::LATEST_VERSION {
@@ -468,7 +535,15 @@ impl Project {
             ));
         }
         if opts.verify_chain {
-            events::verify_chain(&conn, &header.project_uuid, None, &[])?;
+            events::verify_chain(
+                &conn,
+                &header.project_uuid,
+                opts.verifier
+                    .as_deref()
+                    .map(|v| v as &dyn CheckpointVerifier),
+                &opts.external,
+            )?;
+            Reader::new(&conn).verify_projections()?;
         }
         let hlc_last: i64 =
             conn.query_row("SELECT coalesce(max(hlc_ts), 0) FROM events", [], |r| {
@@ -493,6 +568,66 @@ impl Project {
         };
         p.touch_lease()?;
         Ok(p)
+    }
+
+    /// Opens a package for reading only: no lock, no lease, no migration, no writes (a
+    /// dashboard, a preview, or a viewer while another process holds the writer). The checks
+    /// of [`Project::open`] run first: location (when asked), marker, canonical schema,
+    /// project identity, and with `verify_chain` the chain against stored and `external`
+    /// checkpoints and the decision projections (SYS-011). A project whose schema is older
+    /// than this app's must be opened for writing once (it is migrated then).
+    pub fn open_read_only(root: &Path, opts: OpenOptions) -> Result<ReadOnlyProject> {
+        let paths = PackagePaths::new(root);
+        if opts.check_location {
+            location::check_location(&paths.root)?;
+        }
+        let header: ProjectHeader = serde_json::from_slice(&fs::read(&paths.marker)?)?;
+        if header.magic != "omr-project" {
+            return Err(StoreError::Invalid(
+                "project.omr is not an OMR marker".into(),
+            ));
+        }
+        let conn = db::open_reader(&paths.db, 0)?;
+        let version = schema::user_version(&conn)?;
+        if version > schema::LATEST_VERSION {
+            return Err(StoreError::SchemaTooNew {
+                found: version,
+                supported: schema::LATEST_VERSION,
+            });
+        }
+        // An older schema is read as it is (checked against its own canonical form); the
+        // decision replay needs version 3 (the identity decision log).
+        if version < 3 {
+            return Err(StoreError::Invalid(format!(
+                "project schema version {version} predates this app's {}; open the project \
+                 for writing once so it is migrated",
+                schema::LATEST_VERSION
+            )));
+        }
+        schema::verify_schema(&conn)?;
+        let stored_uuid: String =
+            conn.query_row("SELECT project_uuid FROM project_header", [], |r| r.get(0))?;
+        if stored_uuid != header.project_uuid.to_string() {
+            return Err(StoreError::Integrity(
+                "project.omr and project.db name different projects".into(),
+            ));
+        }
+        if opts.verify_chain {
+            events::verify_chain(
+                &conn,
+                &header.project_uuid,
+                opts.verifier
+                    .as_deref()
+                    .map(|v| v as &dyn CheckpointVerifier),
+                &opts.external,
+            )?;
+            Reader::new(&conn).verify_projections()?;
+        }
+        Ok(ReadOnlyProject {
+            conn,
+            paths,
+            header,
+        })
     }
 
     fn touch_lease(&self) -> Result<()> {

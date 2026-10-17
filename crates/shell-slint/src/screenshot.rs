@@ -1,9 +1,10 @@
 //! Headless screenshots: every screen rendered with Slint's software renderer at 1440 × 900 into
 //! PNG files, with no display (IMPLEMENTATION.md A11, ADR-001 S7). Time is frozen, so
 //! `Theme.reduce-motion` is set: animated colours would otherwise be captured mid-transition
-//! (DESIGN §6).
+//! (DESIGN §6). Any [`Backend`] can be captured: the demo ([`SHOTS`]) or the real core
+//! ([`real_shots`]).
 
-use crate::backend::{Backend, ExamId, Lane};
+use crate::backend::{Backend, Decision, ExamId, Lane};
 use crate::bind::Shell;
 use crate::demo::{CS211, DemoBackend, MATH101};
 use crate::ui::{self as s, AppWindow};
@@ -35,9 +36,19 @@ impl Platform for HeadlessPlatform {
 pub struct Shot {
     pub name: &'static str,
     pub page: s::Page,
-    pub exam: &'static str,
+    /// The exam to show; `None` = the backend's default exam.
+    pub exam: Option<&'static str>,
     /// For review shots: the lane and the n-th open item of that lane.
     pub review: Option<(Lane, usize)>,
+    /// For the setup shot: the mapping cell to select (row, CLO); `None` = the first cell
+    /// with a note.
+    pub cell: Option<(usize, usize)>,
+    /// For review shots: choose the first option other than the suggestion, so the frame shows
+    /// the override-reason prompt (§13.4).
+    pub override_choice: bool,
+    /// Open the screen's bar: Add scans on Scan, Exports on Results, the New-exam form on
+    /// Exams.
+    pub bar: bool,
 }
 
 /// Every screen, plus the identity and blind-verify review frames.
@@ -45,58 +56,179 @@ pub const SHOTS: &[Shot] = &[
     Shot {
         name: "exams",
         page: s::Page::Exams,
-        exam: CS211,
+        exam: Some(CS211),
         review: None,
+        cell: None,
+        override_choice: false,
+        bar: false,
     },
     Shot {
         name: "setup",
         page: s::Page::Setup,
-        exam: CS211,
+        exam: Some(CS211),
         review: None,
+        // the cell with an Arabic note: Q18 × CLO4
+        cell: Some((17, 3)),
+        override_choice: false,
+        bar: false,
     },
     Shot {
         name: "scan",
         page: s::Page::Scan,
-        exam: MATH101,
+        exam: Some(MATH101),
         review: None,
+        cell: None,
+        override_choice: false,
+        bar: false,
     },
     Shot {
         name: "review",
         page: s::Page::Review,
-        exam: CS211,
+        exam: Some(CS211),
         review: Some((Lane::Marks, 0)),
+        cell: None,
+        override_choice: false,
+        bar: false,
     },
     Shot {
         name: "review-identity",
         page: s::Page::Review,
-        exam: CS211,
+        exam: Some(CS211),
         review: Some((Lane::Identity, 0)),
+        cell: None,
+        override_choice: false,
+        bar: false,
     },
     Shot {
         name: "review-blind",
         page: s::Page::Review,
-        exam: CS211,
+        exam: Some(CS211),
         review: Some((Lane::Marks, 19)),
+        cell: None,
+        override_choice: false,
+        bar: false,
     },
     Shot {
         name: "results",
         page: s::Page::Results,
-        exam: CS211,
+        exam: Some(CS211),
         review: None,
+        cell: None,
+        override_choice: false,
+        bar: false,
     },
     Shot {
         name: "outcomes",
         page: s::Page::Outcomes,
-        exam: CS211,
+        exam: Some(CS211),
         review: None,
+        cell: None,
+        override_choice: false,
+        bar: false,
     },
     Shot {
         name: "settings",
         page: s::Page::Settings,
-        exam: CS211,
+        exam: Some(CS211),
         review: None,
+        cell: None,
+        override_choice: false,
+        bar: false,
     },
 ];
+
+/// The screens of the real core: every screen, plus one review frame per lane that has open
+/// items (an empty lane would only show the empty state). There is no blind-verify frame:
+/// omr-app does not draw blind samples yet.
+pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
+    let mut shots = vec![
+        Shot {
+            name: "exams",
+            page: s::Page::Exams,
+            exam: None,
+            review: None,
+            cell: None,
+            override_choice: false,
+            bar: false,
+        },
+        Shot {
+            name: "setup",
+            page: s::Page::Setup,
+            exam: None,
+            review: None,
+            cell: None,
+            override_choice: false,
+            bar: false,
+        },
+        Shot {
+            name: "scan",
+            page: s::Page::Scan,
+            exam: None,
+            review: None,
+            cell: None,
+            override_choice: false,
+            bar: false,
+        },
+    ];
+    let exam = backend.default_exam();
+    let open = |lane: Lane| {
+        exam.as_ref().is_some_and(|e| {
+            backend
+                .review_queue(e, lane)
+                .groups
+                .iter()
+                .any(|g| !g.items.is_empty())
+        })
+    };
+    for (lane, name) in [
+        (Lane::Marks, "review"),
+        (Lane::Identity, "review-identity"),
+        (Lane::Capture, "review-capture"),
+        (Lane::Scoring, "review-scoring"),
+    ] {
+        if open(lane) {
+            shots.push(Shot {
+                name,
+                page: s::Page::Review,
+                exam: None,
+                review: Some((lane, 0)),
+                cell: None,
+                override_choice: false,
+                bar: false,
+            });
+        }
+    }
+    if open(Lane::Marks) {
+        shots.push(Shot {
+            name: "review-override",
+            page: s::Page::Review,
+            exam: None,
+            review: Some((Lane::Marks, 0)),
+            cell: None,
+            override_choice: true,
+            bar: false,
+        });
+    }
+    for (name, page, bar) in [
+        ("results", s::Page::Results, false),
+        ("results-export", s::Page::Results, true),
+        ("outcomes", s::Page::Outcomes, false),
+        ("settings", s::Page::Settings, false),
+        ("scan-add", s::Page::Scan, true),
+        ("exams-new", s::Page::Exams, true),
+    ] {
+        shots.push(Shot {
+            name,
+            page,
+            exam: None,
+            review: None,
+            cell: None,
+            override_choice: false,
+            bar,
+        });
+    }
+    shots
+}
 
 /// The smallest window every screen must still fit (DESIGN §9: "works down to 1280×800").
 pub const MIN_WIDTH: u32 = 1280;
@@ -143,9 +275,21 @@ pub fn write_png(path: &Path, pixels: &[Rgb8Pixel], width: u32, height: u32) -> 
 }
 
 /// Puts the shell into the state of `shot`.
-pub fn stage(shell: &Shell, backend: &Rc<RefCell<DemoBackend>>, shot: &Shot) {
-    let exam = ExamId(shot.exam.into());
+pub fn stage<B: Backend + ?Sized>(shell: &Shell, backend: &RefCell<B>, shot: &Shot) {
+    let Some(exam) = shot
+        .exam
+        .map(|e| ExamId(e.into()))
+        .or_else(|| backend.borrow().default_exam())
+    else {
+        shell.navigate(shot.page);
+        return;
+    };
     shell.select_exam(&exam);
+    shell.set_bars(
+        shot.bar && shot.page == s::Page::Scan,
+        shot.bar && shot.page == s::Page::Results,
+        shot.bar && shot.page == s::Page::Exams,
+    );
     if let Some((lane, n)) = shot.review {
         let q = backend.borrow().review_queue(&exam, lane);
         let id = q
@@ -156,10 +300,30 @@ pub fn stage(shell: &Shell, backend: &Rc<RefCell<DemoBackend>>, shot: &Shot) {
             .map(|i| i.id);
         shell.set_lane(lane);
         shell.select_item(id);
+        if shot.override_choice
+            && let Some(item) = id.and_then(|i| backend.borrow().review_item(&exam, i))
+        {
+            let suggested = item.suggestion.as_ref().map(|s| s.decision);
+            if let Some(o) = (0..item.bubbles.len() as u8)
+                .map(Decision::Option)
+                .find(|d| Some(*d) != suggested)
+            {
+                shell.choose(o);
+            }
+        }
     }
     if shot.page == s::Page::Setup {
-        // the cell with an Arabic note: Q18 × CLO4
-        shell.select_cell(17, 3);
+        let cell = shot.cell.or_else(|| {
+            let setup = backend.borrow().exam_setup(&exam)?;
+            setup.mapping.iter().enumerate().find_map(|(r, row)| {
+                row.cells
+                    .iter()
+                    .position(|c| !c.note.is_empty())
+                    .map(|c| (r, c))
+            })
+        });
+        let (row, col) = cell.unwrap_or((0, 0));
+        shell.select_cell(row, col);
     }
     shell.navigate(shot.page);
 }
@@ -175,7 +339,21 @@ pub fn render_all(dir: &Path, themes: &[bool]) -> Result<Vec<PathBuf>, String> {
 pub fn render_all_at(
     dir: &Path,
     themes: &[bool],
+    size: (u32, u32),
+) -> Result<Vec<PathBuf>, String> {
+    let backend: Rc<RefCell<dyn Backend>> = Rc::new(RefCell::new(DemoBackend::new()));
+    render_shots(dir, themes, size, backend, SHOTS, None)
+}
+
+/// Renders `shots` of any backend (the demo's [`SHOTS`], or [`real_shots`]); `only` keeps the
+/// shots with these names. The headless platform is installed here, once per process.
+pub fn render_shots(
+    dir: &Path,
+    themes: &[bool],
     (width, height): (u32, u32),
+    backend: Rc<RefCell<dyn Backend>>,
+    shots: &[Shot],
+    only: Option<&[String]>,
 ) -> Result<Vec<PathBuf>, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let window = install_platform()?;
@@ -187,15 +365,14 @@ pub fn render_all_at(
     };
     let ui = AppWindow::new().map_err(|e| e.to_string())?;
     ui.global::<s::Theme>().set_reduce_motion(true);
-    let backend = Rc::new(RefCell::new(DemoBackend::new()));
-    let dynamic: Rc<RefCell<dyn Backend>> = backend.clone();
-    let shell = Shell::bind(&ui, dynamic);
+    let shell = Shell::bind(&ui, backend.clone());
     ui.show().map_err(|e| e.to_string())?;
     let mut written = Vec::new();
+    let wanted = |name: &str| only.is_none_or(|o| o.iter().any(|n| n == name));
     for &dark in themes {
         ui.global::<s::Theme>().set_dark(dark);
-        for shot in SHOTS {
-            stage(&shell, &backend, shot);
+        for shot in shots.iter().filter(|s| wanted(s.name)) {
+            stage(&shell, &*backend, shot);
             let pixels = capture(&window);
             let path = dir.join(format!(
                 "{}-{}{suffix}.png",

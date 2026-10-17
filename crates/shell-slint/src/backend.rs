@@ -2,8 +2,8 @@
 //!
 //! The shell renders and binds; it decides nothing. Everything it shows comes from a [`Backend`]
 //! as the plain-Rust view-models below (no Slint types), and every user decision goes back as a
-//! typed call. `omr-app` implements [`Backend`] (wrapped in this crate, so the orphan rule holds);
-//! until then [`crate::demo::DemoBackend`] serves synthetic data.
+//! typed call. [`crate::app_backend::AppBackend`] implements [`Backend`] over `omr-app` (wrapped
+//! in this crate, so the orphan rule holds); [`crate::demo::DemoBackend`] serves synthetic data.
 //!
 //! Conventions:
 //! - Fractions are `0.0..=1.0` (`f32` for pixels and fills, `f64` for statistics); percentages
@@ -177,8 +177,12 @@ pub struct ExamSummary {
     pub open_exceptions: SeverityCounts,
     /// e.g. "Key v2 · published".
     pub key_status: String,
-    /// Items with at least one approved CLO mapping, of `total_items`.
+    /// Items with at least one approved CLO mapping, of `total_items` (every mapped item when
+    /// `mapping_approval` is false).
     pub mapped_items: u32,
+    /// True when the core approves mappings (§11.2), so `mapped_items` counts approved ones;
+    /// false when every mapping of the definition is in force without an approval step.
+    pub mapping_approval: bool,
     pub total_items: u32,
     pub roster_count: u32,
     pub sections: Vec<String>,
@@ -196,8 +200,10 @@ pub struct DashboardStats {
     pub open_exceptions: u32,
     /// ERROR + BLOCKER among `open_exceptions`.
     pub open_errors: u32,
-    pub median_review_secs: f64,
-    pub throughput_pages_per_sec: f64,
+    /// `None` when review times are not recorded.
+    pub median_review_secs: Option<f64>,
+    /// `None` before any grading run.
+    pub throughput_pages_per_sec: Option<f64>,
 }
 
 /// The signed-in user, for the top bar.
@@ -219,6 +225,8 @@ pub struct Dashboard {
     pub engine: String,
     /// Workspace path or name for the status bar.
     pub workspace: String,
+    /// Where the data comes from and what stays local (Settings · About).
+    pub data_note: String,
 }
 
 // ------------------------------------------------------------------------------------- setup
@@ -240,18 +248,20 @@ pub enum LabelSet {
     Numeric,
 }
 
-/// How students cancel a mark (§6.1).
+/// How students cancel a mark (§6.5 `cancel_mode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CancelMode {
     EraseOnly,
-    CrossOut,
+    CrossCancels,
+    FillCancelsCheck,
 }
 
 impl CancelMode {
     pub fn label(self) -> &'static str {
         match self {
             Self::EraseOnly => "erase_only",
-            Self::CrossOut => "cross_out",
+            Self::CrossCancels => "cross_cancels",
+            Self::FillCancelsCheck => "fill_cancels_check",
         }
     }
 }
@@ -345,6 +355,8 @@ pub enum MappingStatus {
     Draft,
     Proposed,
     Approved,
+    /// Mapped and in force in a core without an approval step (never shown as "approved").
+    InUse,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -388,6 +400,8 @@ pub struct ExamSetup {
     pub mapping_mode: MappingMode,
     pub mapping: Vec<MappingRow>,
     pub lints: Vec<SetupLint>,
+    /// Students on the roster; 0 when the exam has none (identities are then never matched).
+    pub roster_students: u32,
 }
 
 // ------------------------------------------------------------------------------------- scan
@@ -412,6 +426,9 @@ pub struct Thumbnail {
     /// Booklet serial or imprint number, e.g. "0412".
     pub serial: String,
     pub state: ThumbState,
+    /// The page as scanned, scaled down; `None` while the page is not available (the shell
+    /// shows a blank sheet, never an invented one).
+    pub image: Option<CropImage>,
 }
 
 /// Pipeline stage counter.
@@ -436,6 +453,23 @@ pub struct ReconLine {
     pub label: String,
     pub value: String,
     pub tone: Tone,
+}
+
+/// Sheets of the batch by state (the pills over the thumbnail grid): every sheet is counted
+/// once, by its worst open item, whatever the number of items on it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SheetCounts {
+    pub auto: u32,
+    pub review: u32,
+    pub rejected: u32,
+}
+
+/// Whether more scans can be added to a graded exam from the Scan screen (§8.1 later batch).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AppendInfo {
+    pub allowed: bool,
+    /// What adding does, or why it cannot be done now (shown under the path field).
+    pub note: String,
 }
 
 /// Live batch progress (DESIGN §9.3). A snapshot: the shell re-reads it after [`Backend::pump`].
@@ -478,6 +512,12 @@ pub struct BatchProgress {
     /// Engine manifest and workers for the status bar.
     pub engine: String,
     pub workers: u32,
+    /// Sheets by state, for the pills over the thumbnails.
+    pub sheets: SheetCounts,
+    /// True when a capture agent runs the batch, so it can be paused and stopped.
+    pub pausable: bool,
+    /// Adding a later batch of scans to this exam.
+    pub append: AppendInfo,
 }
 
 // ------------------------------------------------------------------------------------- review
@@ -561,7 +601,8 @@ pub struct Suggestion {
     pub source: SuggestionSource,
     /// Fill of the suggested bubble, 0..1.
     pub fill: f32,
-    /// Margin to the runner-up, 0..1.
+    /// Margin to the runner-up, 0..1 (for a [`ReviewKind::Form`] item: the log-likelihood margin
+    /// of the inferred form in nats).
     pub margin: f32,
 }
 
@@ -596,6 +637,9 @@ pub enum ReviewKind {
     BlindVerify,
     /// Identity exception (§13.3): ID-grid crop, top candidates with per-channel evidence.
     Identity,
+    /// Form (version) exception (§10.3): the version bubbles as options, the form letters as
+    /// labels; only an option decides it (no Blank, Multi or Unreadable).
+    Form,
     /// Page- or exam-level exception (capture, scoring): evidence lines and acknowledge.
     Notice,
 }
@@ -704,10 +748,14 @@ pub struct ReviewQueue {
     /// Resolved and total exception items of the exam (all lanes).
     pub resolved: u32,
     pub total: u32,
-    pub median_secs_per_item: f64,
+    /// `None` when review times are not recorded.
+    pub median_secs_per_item: Option<f64>,
     /// Audit-chain head for the status bar, abbreviated.
     pub audit_head: String,
     pub two_person_rule: bool,
+    /// Why the exam has no queue to show right now (being graded, failed to open); `None`
+    /// when the groups are the exam's queue, even an empty one.
+    pub unavailable: Option<String>,
 }
 
 /// Everything the review frame shows for one item.
@@ -751,6 +799,11 @@ pub struct ReviewItem {
     pub identity: Option<IdentityEvidence>,
     /// Set for [`ReviewKind::Notice`] items.
     pub notice: Option<NoticeEvidence>,
+    /// Reason codes the core accepts when a decision overrides the suggestion (§13.4, §14.4),
+    /// the item's family first; empty when the core asks for none.
+    pub reasons: Vec<String>,
+    /// Those of `reasons` that need a note saying why (`OTHER`, `SOLO_SELF_APPROVAL`, §14.4).
+    pub reasons_needing_note: Vec<String>,
 }
 
 /// A review command (§13.3). Every one becomes an audited event in the core.
@@ -765,6 +818,10 @@ pub enum ReviewAction {
     },
     /// Apply the decision to every open member of the item's group (§13.2 batch confirm).
     ApplyToGroup { decision: Decision },
+    /// Identity items: the student number the reviewer typed (from the sheet's writing or the
+    /// registrar), for a student who is not among the listed candidates; on the roster when
+    /// the exam has one.
+    SetStudent { student_id: String, note: String },
     /// Move to the end of the queue.
     Defer,
     /// Escalate to the instructor.
@@ -782,7 +839,8 @@ pub struct ApplyOutcome {
     pub next: Option<ItemId>,
 }
 
-/// One recorded review event, newest last.
+/// One recorded review event, newest last. An identity decision for a student outside the
+/// item's listed candidates (recorded by another client) reads `Candidate(u8::MAX)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecisionRecord {
     pub seq: u64,
@@ -790,6 +848,8 @@ pub struct DecisionRecord {
     pub question: u32,
     pub serial: String,
     pub action: ReviewAction,
+    /// The reviewer's reason code, when one was given (§13.4).
+    pub reason: Option<String>,
     /// True once compensated by an undo (the event itself is never rewritten, §4.7).
     pub undone: bool,
 }
@@ -806,8 +866,9 @@ pub struct GradeBand {
     /// Band in percent, `[lo, hi)`; `hi = None` for the top band.
     pub lo: f64,
     pub hi: Option<f64>,
-    pub gpa5: f64,
-    pub gpa4: f64,
+    /// Grade points on the 5.00 and 4.00 bases, when the scale publishes them.
+    pub gpa5: Option<f64>,
+    pub gpa4: Option<f64>,
     pub count: u32,
     pub fail: bool,
 }
@@ -837,17 +898,18 @@ pub struct ScoreHistogram {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ResultStats {
     pub students: u32,
+    /// Students on the roster; 0 when the exam has none.
     pub roster: u32,
     pub absent: u32,
     pub mean_pct: f64,
     pub median_pct: f64,
     pub sd_pct: f64,
     pub pass_rate: f64,
-    /// Cronbach α with its Feldt 95 % CI.
-    pub alpha: f64,
-    pub alpha_ci: (f64, f64),
-    /// SEM in points.
-    pub sem_points: f64,
+    /// Cronbach α with its Feldt 95 % CI (`None`: too few students or no variance).
+    pub alpha: Option<f64>,
+    pub alpha_ci: Option<(f64, f64)>,
+    /// SEM in points (`None` without α).
+    pub sem_points: Option<f64>,
     pub open_errors: u32,
 }
 
@@ -912,12 +974,17 @@ pub struct ItemFlag {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ItemStats {
     pub question: u32,
-    /// Difficulty p.
-    pub p: f64,
-    /// Corrected item-rest r and its 95 % CI.
-    pub r_ir: f64,
-    pub r_ci: (f64, f64),
-    pub band: DiscriminationBand,
+    /// Row label when the question number alone is ambiguous, e.g. "B-Q03" for a master item
+    /// of form B; empty = "Q" and the question number.
+    pub label: String,
+    /// Difficulty p (`None`: not computed, e.g. nobody was scored on the item).
+    pub p: Option<f64>,
+    /// Corrected item-rest r and its 95 % CI (`None`: not computable, e.g. too few students
+    /// or no score variance; never shown as 0).
+    pub r_ir: Option<f64>,
+    pub r_ci: Option<(f64, f64)>,
+    /// The band of `r_ir`, when there is one.
+    pub band: Option<DiscriminationBand>,
     /// Share choosing each option (omit excluded), in option order.
     pub option_shares: Vec<f64>,
     /// Keyed option, shown only when the user reveals the key.
@@ -965,6 +1032,9 @@ pub struct Results {
     pub readiness: Vec<ReadinessCheck>,
     /// `Some(reason)` while release is blocked, e.g. "38 ERROR open".
     pub release_blocked: Option<String>,
+    /// `Some(reason)` when the Blackboard grade-center upload cannot be written (an inferred
+    /// key, no roster, §16.1); `None` when [`Backend::export_blackboard`] can write it.
+    pub blackboard_blocked: Option<String>,
 }
 
 // ------------------------------------------------------------------------------------- outcomes
@@ -975,6 +1045,10 @@ pub enum ClassMethod {
     Average,
     ThresholdProportion,
     PerQuestion,
+    /// Attainment levels 1–3 against level cut-offs (§11.3).
+    Levels,
+    /// ABET EAMU bands.
+    Eamu,
 }
 
 /// Verdict of one CLO under the policy (§11.3, §11.4).
@@ -996,6 +1070,8 @@ pub struct PolicyView {
     pub target: f64,
     /// e.g. "point" or "ci_lower".
     pub verdict_basis: String,
+    /// Which mappings are evidence, e.g. "approved mappings only".
+    pub mapping_basis: String,
     /// e.g. "Policy v3 · sha384 9a1c…".
     pub version: String,
 }
@@ -1050,6 +1126,27 @@ pub struct Outcomes {
 
 // ------------------------------------------------------------------------------------- trait
 
+/// A new exam as typed in the New-exam form (plain text; the backend validates it with the
+/// same rules as `omr grade`). Blank optional fields take the sheet's defaults; a blank key
+/// file means the key is inferred (provisional, never releasable, replaceable from Setup).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NewExam {
+    pub title: String,
+    pub course: String,
+    /// Scan files or folders, separated by `;` or new lines.
+    pub scans: String,
+    /// A template ID (`iau-ccsit-v1`) or the spec file of an own sheet.
+    pub sheet: String,
+    pub questions: String,
+    /// Options per question (blank: the sheet's).
+    pub options: String,
+    /// Form letters, e.g. `A,B` (blank: the key file's, else the sheet's).
+    pub forms: String,
+    pub key: String,
+    pub roster: String,
+    pub clo: String,
+}
+
 /// What the shell needs from the application core. Queries are cheap snapshots; commands
 /// validate, record an audited event and return the new state the shell should show.
 ///
@@ -1099,6 +1196,30 @@ pub trait Backend {
         item: ItemId,
         action: ReviewAction,
     ) -> Result<ApplyOutcome, BackendError>;
+    /// [`Backend::apply`] with the reviewer's reason code (one of [`ReviewItem::reasons`]); the
+    /// core requires one when the decision overrides its suggestion (§13.4). The default drops
+    /// the reason (a backend that asks for none).
+    fn apply_with_reason(
+        &mut self,
+        exam: &ExamId,
+        item: ItemId,
+        action: ReviewAction,
+        reason: Option<String>,
+    ) -> Result<ApplyOutcome, BackendError> {
+        let _ = reason;
+        self.apply(exam, item, action)
+    }
+    /// True when committing `decision` on `item` overrides the core's suggestion, so a reason
+    /// is required first (§13.4). The default asks for none.
+    fn needs_reason(&self, exam: &ExamId, item: ItemId, decision: Decision) -> bool {
+        let _ = (exam, item, decision);
+        false
+    }
+    /// [`Backend::needs_reason`] for a typed student number ([`ReviewAction::SetStudent`]).
+    fn needs_reason_for_student(&self, exam: &ExamId, item: ItemId, student_id: &str) -> bool {
+        let _ = (exam, item, student_id);
+        false
+    }
     /// Compensates the latest not-yet-undone event; returns the item it re-opened.
     fn undo(&mut self, exam: &ExamId) -> Result<Option<ItemId>, BackendError>;
     /// Review events of the exam, oldest first.
@@ -1107,6 +1228,100 @@ pub trait Backend {
     // ---- results and outcomes
     fn results(&self, exam: &ExamId) -> Option<Results>;
     fn outcomes(&self, exam: &ExamId) -> Option<Outcomes>;
+
+    /// Writes the exam's exports (results, item analysis, TP-154 tables, decisions) and returns
+    /// where they went. The default refuses: a backend without a project store has nothing to
+    /// export.
+    fn export(&mut self, exam: &ExamId) -> Result<String, BackendError> {
+        let _ = exam;
+        Err(BackendError::Denied(
+            "Exports need a graded project: open one with --project or --workspace".into(),
+        ))
+    }
+
+    /// Writes the Blackboard Learn grade-center upload (§16.3), for an existing grade column
+    /// when `column_id` is given (else Blackboard creates a new column), and returns where it
+    /// went. The default refuses, as [`Backend::export`] does.
+    fn export_blackboard(
+        &mut self,
+        exam: &ExamId,
+        column_id: Option<&str>,
+    ) -> Result<String, BackendError> {
+        let _ = (exam, column_id);
+        Err(BackendError::Denied(
+            "The Blackboard upload needs a graded project: open one with --project or --workspace"
+                .into(),
+        ))
+    }
+
+    /// True for invented demo data: the shell shows a banner on every screen. The default is
+    /// false.
+    fn is_demo(&self) -> bool {
+        false
+    }
+
+    /// True when a new exam can be graded from the New-exam form (a workspace to grade into,
+    /// and no other run in progress).
+    fn can_create_exam(&self) -> bool {
+        false
+    }
+
+    /// Validates `form` and starts grading it in the background into a new folder of the
+    /// workspace; progress arrives through [`Backend::pump`] as for an added batch. Returns
+    /// the new exam and what was started. The default refuses.
+    fn create_exam(&mut self, form: &NewExam) -> Result<(ExamId, String), BackendError> {
+        let _ = form;
+        Err(BackendError::Denied(
+            "Creating an exam needs an exams folder: start omr-desktop with --workspace DIR".into(),
+        ))
+    }
+
+    /// True when the exam's answer key can be replaced from a key file (a writable project).
+    fn can_replace_key(&self, exam: &ExamId) -> bool {
+        let _ = exam;
+        false
+    }
+
+    /// Replaces the exam's whole answer key from a key file (`question,A,B[,points]`,
+    /// `form,Q1,Q2,…` and the other layouts `omr grade --key` reads): a new key version, the
+    /// exam rescored, the change audited (§10.1, §10.8). Returns what happened. The default
+    /// refuses.
+    fn replace_key(
+        &mut self,
+        exam: &ExamId,
+        path: &std::path::Path,
+    ) -> Result<String, BackendError> {
+        let _ = (exam, path);
+        Err(BackendError::Denied(
+            "Replacing the key needs a graded project: open one with --project or --workspace"
+                .into(),
+        ))
+    }
+
+    /// Releases the exam's results (§13.4): refused while anything blocks release; the
+    /// released score run is frozen in the audit log and the exports, the Blackboard upload
+    /// with them, are written. Returns what happened. The default refuses.
+    fn release(&mut self, exam: &ExamId) -> Result<String, BackendError> {
+        let _ = exam;
+        Err(BackendError::Denied(
+            "Releasing needs a graded project: open one with --project or --workspace".into(),
+        ))
+    }
+
+    /// Starts adding a later batch of scans (files or folders) to a graded exam (§8.1): the
+    /// exam is graded again over every page, in the background, and review decisions carry
+    /// over. Progress arrives through [`Backend::pump`]; returns what was started. The default
+    /// refuses.
+    fn add_scans(
+        &mut self,
+        exam: &ExamId,
+        inputs: &[std::path::PathBuf],
+    ) -> Result<String, BackendError> {
+        let _ = (exam, inputs);
+        Err(BackendError::Denied(
+            "Adding scans needs a graded project: open one with --project or --workspace".into(),
+        ))
+    }
 
     /// Pauses (`true`) or resumes (`false`) the exam's running batch. The default refuses:
     /// a core without a capture agent cannot pause anything.
@@ -1122,5 +1337,12 @@ pub trait Backend {
     /// shell shows may have changed. The default does nothing.
     fn pump(&mut self) -> bool {
         false
+    }
+
+    /// Exams whose project was reloaded since the last call (a grading run or an added batch
+    /// finished): their review item IDs are new, so the shell drops its selection. The default
+    /// reloads nothing.
+    fn take_reloaded(&mut self) -> Vec<ExamId> {
+        Vec::new()
     }
 }

@@ -3,13 +3,176 @@
 import {
     Theme, Tone, Severity, Card, StatTile, TopBar, StatusBar, PrimaryButton, SecondaryButton, Chip,
     StatusPill, Tag, Breadcrumb, TableRow, TableHeaderCell, TableCell, SeverityGlyph, Keycap,
+    GhostButton,
 } from "../theme.slint";
 import { App, ResultsVM, ItemRow } from "../state.slint";
 import {
     Icons, ThemeToggle, Centered, SectionLabel, StatusText, Hatch, StepMeter, ShareSpark, EmptyState,
-    MessageText, Segment, SegmentGroup,
+    MessageText, Segment, SegmentGroup, TextField,
 } from "../widgets.slint";
 import { ListView } from "std-widgets.slint";
+
+// Exports (§16.3): every file next to the project, and the Blackboard Learn grade-center
+// upload (a new column, or an existing one by its column ID). Opens with the focus on the first
+// button.
+component ExportBar inherits Rectangle {
+    background: Theme.surface-raised;
+    border-radius: Theme.radius-lg;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    drop-shadow-blur: Theme.shadow-2-blur;
+    drop-shadow-offset-y: Theme.shadow-2-offset;
+    drop-shadow-color: Theme.shadow-2-color;
+    init => {
+        all.focus();
+    }
+    // Escape closes the bar from anywhere inside it
+    FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                ResultsVM.export-open = false;
+                return accept;
+            }
+            return reject;
+        }
+        VerticalLayout {
+            padding-left: Theme.space-lg;
+            padding-right: Theme.space-lg;
+            padding-top: Theme.space-md;
+            padding-bottom: Theme.space-md;
+            spacing: Theme.space-xs;
+            HorizontalLayout {
+                spacing: Theme.space-md;
+                Centered {
+                    all := PrimaryButton {
+                        text: "Write all exports";
+                        icon: Icons.export;
+                        enabled: ResultsVM.can-export;
+                        accessible-description: "Results, item analysis, TP-154 tables, key and decisions (CSV, XLSX, HTML) next to the project";
+                        clicked => {
+                            ResultsVM.export-all();
+                        }
+                    }
+                }
+                Rectangle {
+                    width: 1px;
+                    background: Theme.border;
+                }
+                Text {
+                    text: "Blackboard";
+                    font-size: Theme.text-sm;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                }
+                TextField {
+                    width: 230px;
+                    label: "Blackboard column ID (optional)";
+                    placeholder: "Column ID, e.g. 835932 (optional)";
+                    text <=> ResultsVM.blackboard-column;
+                    mono: true;
+                    enabled: ResultsVM.blackboard-ready;
+                }
+                Centered {
+                    SecondaryButton {
+                        text: "Write Blackboard CSV";
+                        enabled: ResultsVM.blackboard-ready;
+                        accessible-description: ResultsVM.blackboard-note;
+                        clicked => {
+                            ResultsVM.export-blackboard(ResultsVM.blackboard-column);
+                        }
+                    }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+                Centered {
+                    GhostButton {
+                        text: "Close";
+                        clicked => {
+                            ResultsVM.export-open = false;
+                        }
+                    }
+                }
+            }
+            Text {
+                text: ResultsVM.blackboard-note;
+                font-size: Theme.text-xs;
+                color: ResultsVM.blackboard-ready ? Theme.ink-2 : Theme.warning;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+// Release confirmation (§13.4): what is released and what follows, confirmed by the instructor.
+// Opens with the focus on Cancel, so Enter never releases by accident.
+component ReleaseBar inherits Rectangle {
+    background: Theme.surface-raised;
+    border-radius: Theme.radius-lg;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    drop-shadow-blur: Theme.shadow-2-blur;
+    drop-shadow-offset-y: Theme.shadow-2-offset;
+    drop-shadow-color: Theme.shadow-2-color;
+    init => {
+        cancel.focus();
+    }
+    FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                ResultsVM.release-open = false;
+                return accept;
+            }
+            return reject;
+        }
+        VerticalLayout {
+            padding-left: Theme.space-lg;
+            padding-right: Theme.space-lg;
+            padding-top: Theme.space-md;
+            padding-bottom: Theme.space-md;
+            spacing: Theme.space-xs;
+            HorizontalLayout {
+                spacing: Theme.space-md;
+                Text {
+                    text: "Release the results?";
+                    font-size: Theme.text-md;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+                Centered {
+                    PrimaryButton {
+                        text: "Release";
+                        icon: Icons.release;
+                        accessible-description: "Releases the results and writes the Blackboard upload";
+                        clicked => {
+                            ResultsVM.release-open = false;
+                            ResultsVM.release();
+                        }
+                    }
+                }
+                Centered {
+                    cancel := GhostButton {
+                        text: "Cancel";
+                        clicked => {
+                            ResultsVM.release-open = false;
+                        }
+                    }
+                }
+            }
+            Text {
+                text: ResultsVM.release-note;
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
 
 // Grade distribution: one series (teal), F hatched in error with the word "Fail" (DESIGN §3.4);
 // Latin letter over the Arabic letter, then the L6 status columns (TP-154 A.1).
@@ -243,6 +406,8 @@ component Histogram inherits Rectangle {
 component ItemTableRow inherits TableRow {
     in property <ItemRow> data;
     in property <bool> narrow;
+    // the item column fits per-form labels such as "B-Q03"
+    property <length> w-label: 68px;
     property <length> w-q: 56px;
     property <length> w-r: 64px;
     property <length> w-ci: root.narrow ? 116px : 124px;
@@ -251,7 +416,7 @@ component ItemTableRow inherits TableRow {
     row-height: 40px;
     accessible-label: root.data.label;
     TableCell {
-        width: root.w-q;
+        width: root.w-label;
         text: root.data.q;
         mono: true;
         strong: true;
@@ -313,389 +478,432 @@ component ItemTableRow inherits TableRow {
             }
         }
     }
-    Rectangle {
+    // the pill sits outside any layout, so its capped width cannot feed back into the row; a long
+    // engine message is elided inside the cell (the row's label carries it whole)
+    flag-cell := Rectangle {
         horizontal-stretch: 1;
-        HorizontalLayout {
-            padding-left: Theme.space-md;
-            alignment: start;
-            if root.data.has-flag: Centered {
-                StatusPill {
-                    text: root.data.flag;
-                    tone: root.data.flag-tone;
-                }
-            }
-            if !root.data.has-flag: Text {
-                text: "—";
-                color: Theme.ink-3;
-                vertical-alignment: center;
-            }
+        min-width: 0px;
+        if root.data.has-flag: StatusPill {
+            x: Theme.space-md;
+            y: (parent.height - self.height) / 2;
+            text: root.data.flag;
+            tone: root.data.flag-tone;
+            max-pill-width: flag-cell.width - Theme.space-md - Theme.space-sm;
+        }
+        if !root.data.has-flag: Text {
+            x: Theme.space-md;
+            height: parent.height;
+            text: "—";
+            color: Theme.ink-3;
+            vertical-alignment: center;
         }
     }
 }
 
-export component ResultsScreen inherits VerticalLayout {
+export component ResultsScreen inherits Rectangle {
     in property <length> win-w: 1440px;
     in property <length> win-h: 900px;
     property <bool> narrow: root.win-w < 1400px;
+    property <length> w-label: 68px;
     property <length> w-q: 56px;
     property <length> w-r: 64px;
     property <length> w-ci: root.narrow ? 116px : 124px;
     property <length> w-band: root.narrow ? 124px : 136px;
     property <length> w-spark: root.narrow ? 88px : 92px;
-    TopBar {
-        HorizontalLayout {
-            spacing: Theme.space-lg;
-            Breadcrumb {
-                parts: [App.course, App.assessment, "Results"];
-            }
-            Centered {
-                Tag {
-                    text: ResultsVM.key-label;
-                    tone: Tone.primary;
-                }
-            }
+    // focus returns to the button that opened the bar, however the bar closes
+    property <bool> bar-open: ResultsVM.export-open;
+    changed bar-open => {
+        if (!self.bar-open) {
+            export-button.focus();
         }
-        HorizontalLayout {
-            spacing: Theme.space-md;
-            Centered {
-                SecondaryButton {
-                    text: "What-if preview";
-                    key-hint: "Ctrl+P";
-                    enabled: ResultsVM.available;
-                    clicked => {
-                        ResultsVM.what-if();
+    }
+    VerticalLayout {
+        TopBar {
+            HorizontalLayout {
+                spacing: Theme.space-lg;
+                Breadcrumb {
+                    parts: [App.course, App.assessment, "Results"];
+                }
+                if ResultsVM.available: Centered {
+                    Tag {
+                        text: ResultsVM.key-label;
+                        tone: Tone.primary;
                     }
                 }
             }
-            Centered {
-                PrimaryButton {
-                    text: "Release results…";
-                    icon: Icons.release;
-                    enabled: ResultsVM.available && !ResultsVM.release-blocked;
-                    accessible-description: ResultsVM.release-blocked ? "Blocked: " + ResultsVM.release-reason : "Release is a deliberate act of the instructor";
-                    clicked => {
-                        ResultsVM.release();
-                    }
-                }
-            }
-            if ResultsVM.release-blocked: HorizontalLayout {
-                spacing: Theme.space-xs + 2px;
+            HorizontalLayout {
+                spacing: Theme.space-md;
                 Centered {
-                    SeverityGlyph {
-                        severity: Severity.error;
-                        size: 10px;
+                    export-button := SecondaryButton {
+                        text: "Export…";
+                        icon: Icons.export;
+                        enabled: ResultsVM.available;
+                        clicked => {
+                            ResultsVM.export-open = !ResultsVM.export-open;
+                        }
                     }
                 }
-                Text {
-                    text: ResultsVM.release-reason;
-                    font-size: Theme.text-xs;
-                    font-weight: Theme.weight-medium;
-                    color: Theme.error;
-                    vertical-alignment: center;
+                Centered {
+                    SecondaryButton {
+                        text: "What-if preview";
+                        key-hint: "Ctrl+P";
+                        enabled: ResultsVM.available;
+                        clicked => {
+                            ResultsVM.what-if();
+                        }
+                    }
+                }
+                Centered {
+                    PrimaryButton {
+                        text: "Release results…";
+                        icon: Icons.release;
+                        enabled: ResultsVM.available && !ResultsVM.release-blocked;
+                        accessible-description: ResultsVM.release-blocked ? "Blocked: " + ResultsVM.release-reason : "Release is a deliberate act of the instructor";
+                        clicked => {
+                            ResultsVM.export-open = false;
+                            ResultsVM.release-open = true;
+                        }
+                    }
+                }
+                if ResultsVM.release-blocked: HorizontalLayout {
+                    spacing: Theme.space-xs + 2px;
+                    Centered {
+                        SeverityGlyph {
+                            severity: Severity.error;
+                            size: 10px;
+                        }
+                    }
+                    // a long reason is cut here (never the buttons); the readiness card and
+                    // the Release button's description carry it whole
+                    Text {
+                        text: ResultsVM.release-reason;
+                        max-width: root.narrow ? 170px : 300px;
+                        font-size: Theme.text-xs;
+                        font-weight: Theme.weight-medium;
+                        color: Theme.error;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+                Centered {
+                    ThemeToggle { }
                 }
             }
-            Centered {
-                ThemeToggle { }
-            }
         }
-    }
-    if !ResultsVM.available: EmptyState {
-        vertical-stretch: 1;
-        title: "No results yet";
-        text: "Results appear once every sheet of the exam is recognised and scored.";
-    }
-    if ResultsVM.available: VerticalLayout {
-        vertical-stretch: 1;
-        padding: Theme.space-xl;
-        spacing: Theme.space-lg;
-        HorizontalLayout {
-            spacing: Theme.space-md;
-            StatTile {
-                horizontal-stretch: 1;
-                label: "STUDENTS";
-                value: ResultsVM.students;
-                caption: ResultsVM.students-caption;
-            }
-            StatTile {
-                horizontal-stretch: 1;
-                label: "MEAN";
-                value: ResultsVM.mean;
-                unit: "%";
-                caption: ResultsVM.mean-caption;
-            }
-            StatTile {
-                horizontal-stretch: 1;
-                label: "PASS RATE";
-                value: ResultsVM.pass-rate;
-                unit: "%";
-                caption: ResultsVM.pass-caption;
-            }
-            StatTile {
-                horizontal-stretch: 1;
-                label: "CRONBACH α";
-                value: ResultsVM.alpha;
-                caption: ResultsVM.alpha-caption;
-            }
-            StatTile {
-                horizontal-stretch: 1;
-                label: "SEM";
-                value: ResultsVM.sem;
-                unit: "pts";
-                caption: ResultsVM.sem-caption;
-            }
-            StatTile {
-                horizontal-stretch: 1;
-                label: "OPEN EXCEPTIONS";
-                value: ResultsVM.open-errors;
-                caption: ResultsVM.open-caption;
-                caption-tone: Tone.error;
-            }
-        }
-        HorizontalLayout {
+        if !ResultsVM.available: EmptyState {
             vertical-stretch: 1;
+            title: "No results yet";
+            text: "Results appear once every sheet of the exam is recognised and scored.";
+        }
+        if ResultsVM.available: VerticalLayout {
+            vertical-stretch: 1;
+            padding: Theme.space-xl;
             spacing: Theme.space-lg;
-            VerticalLayout {
-                width: root.narrow ? 396px : 444px;
-                spacing: Theme.space-lg;
-                Card {
-                    vertical-stretch: 0;
-                    inset: 0;
-                    VerticalLayout {
-                        padding: Theme.space-lg;
-                        spacing: Theme.space-md;
-                        HorizontalLayout {
-                            spacing: Theme.space-sm;
-                            VerticalLayout {
-                                horizontal-stretch: 1;
-                                spacing: Theme.space-2xs;
-                                alignment: start;
-                                Text {
-                                    text: "Grade distribution";
-                                    font-size: Theme.text-lg;
-                                    font-weight: Theme.weight-semibold;
-                                    color: Theme.ink;
-                                }
-                                Text {
-                                    text: ResultsVM.scale-label;
-                                    font-size: Theme.text-xs;
-                                    color: Theme.ink-2;
-                                }
-                            }
-                            VerticalLayout {
-                                alignment: start;
-                                SegmentGroup {
-                                    Segment {
-                                        text: "Chart";
-                                        label: "Grade chart view";
-                                        selected: !ResultsVM.grade-table;
-                                        clicked => {
-                                            ResultsVM.grade-table = false;
-                                        }
-                                    }
-                                    Segment {
-                                        text: "Table";
-                                        label: "Grade table view";
-                                        selected: ResultsVM.grade-table;
-                                        clicked => {
-                                            ResultsVM.grade-table = true;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if !ResultsVM.grade-table: GradeChart {
-                    narrow: root.narrow;
+            HorizontalLayout {
+                spacing: Theme.space-md;
+                StatTile {
+                    horizontal-stretch: 1;
+                    label: "STUDENTS";
+                    value: ResultsVM.students;
+                    caption: ResultsVM.students-caption;
                 }
-                        if ResultsVM.grade-table: GradeTable { }
-                        StatusStrip { }
-                    }
+                StatTile {
+                    horizontal-stretch: 1;
+                    label: "MEAN";
+                    value: ResultsVM.mean;
+                    unit: "%";
+                    caption: ResultsVM.mean-caption;
                 }
-                Card {
-                    title: "Score distribution";
-                    subtitle: ResultsVM.histogram-caption;
-                    vertical-stretch: 1;
-                    min-height: 0;
-                    Histogram { }
+                StatTile {
+                    horizontal-stretch: 1;
+                    label: "PASS RATE";
+                    value: ResultsVM.pass-rate;
+                    unit: "%";
+                    caption: ResultsVM.pass-caption;
+                }
+                StatTile {
+                    horizontal-stretch: 1;
+                    label: "CRONBACH α";
+                    value: ResultsVM.alpha;
+                    caption: ResultsVM.alpha-caption;
+                }
+                StatTile {
+                    horizontal-stretch: 1;
+                    label: "SEM";
+                    value: ResultsVM.sem;
+                    unit: "pts";
+                    caption: ResultsVM.sem-caption;
+                }
+                StatTile {
+                    horizontal-stretch: 1;
+                    label: "OPEN EXCEPTIONS";
+                    value: ResultsVM.open-errors;
+                    caption: ResultsVM.open-caption;
+                    // red only while something holds release
+                    caption-tone: ResultsVM.open-errors == "0" ? Tone.success : Tone.error;
                 }
             }
-            VerticalLayout {
-                horizontal-stretch: 1;
+            HorizontalLayout {
+                vertical-stretch: 1;
                 spacing: Theme.space-lg;
-                Card {
-                    vertical-stretch: 1;
-                    inset: 0;
-                    VerticalLayout {
-                        HorizontalLayout {
+                VerticalLayout {
+                    width: root.narrow ? 396px : 444px;
+                    spacing: Theme.space-lg;
+                    Card {
+                        vertical-stretch: 0;
+                        inset: 0;
+                        VerticalLayout {
                             padding: Theme.space-lg;
-                            padding-bottom: Theme.space-md;
-                            spacing: Theme.space-sm;
-                            VerticalLayout {
-                                horizontal-stretch: 1;
-                                spacing: Theme.space-2xs;
-                                alignment: start;
-                                Text {
-                                    text: "Item analysis";
-                                    font-size: Theme.text-lg;
-                                    font-weight: Theme.weight-semibold;
-                                    color: Theme.ink;
-                                }
-                                Text {
-                                    text: "Corrected item–rest r (primary) with 95 % CI · flagged items first, ranked per §12.2 · key hidden by default";
-                                    font-size: Theme.text-xs;
-                                    color: Theme.ink-2;
-                                }
-                            }
-                            Centered {
-                                Chip {
-                                    text: ResultsVM.show-key ? "Key shown" : "Show key";
-                                    selected: ResultsVM.show-key;
-                                    clicked => {
-                                        ResultsVM.show-key = !ResultsVM.show-key;
-                                    }
-                                }
-                            }
-                        }
-                        TableRow {
-                            header: true;
-                            TableHeaderCell {
-                                text: "Q";
-                                width: root.w-q;
-                            }
-                            TableHeaderCell {
-                                text: "p";
-                                width: root.w-q;
-                                align: right;
-                            }
-                            TableHeaderCell {
-                                text: "r ir";
-                                width: root.w-r;
-                                align: right;
-                            }
-                            TableHeaderCell {
-                                text: "95 % CI";
-                                width: root.w-ci;
-                                align: right;
-                            }
-                            TableHeaderCell {
-                                text: "Discrimination";
-                                width: root.w-band;
-                            }
-                            TableHeaderCell {
-                                text: "Options A–E";
-                                width: root.w-spark;
-                            }
-                            TableHeaderCell {
-                                text: "Flag";
-                                horizontal-stretch: 1;
-                            }
-                        }
-                        ListView {
-                            vertical-stretch: 1;
-                            for it[i] in ResultsVM.items: ItemTableRow {
-                                height: 40px;
-                                narrow: root.narrow;
-                                data: it;
-                                selected: i == ResultsVM.selected-item;
-                                clicked => {
-                                    ResultsVM.select-item(i);
-                                }
-                            }
-                        }
-                    }
-                }
-                Card {
-                    vertical-stretch: 0;
-                    inset: 0;
-                    VerticalLayout {
-                        padding: Theme.space-lg;
-                        padding-top: Theme.space-md;
-                        spacing: 0;
-                        // overall state (DESIGN §9.5): Blocked or Ready, with the reason
-                        HorizontalLayout {
-                            height: 36px;
-                            spacing: Theme.space-sm;
-                            Text {
-                                text: "Release readiness";
-                                font-size: Theme.text-lg;
-                                font-weight: Theme.weight-semibold;
-                                color: Theme.ink;
-                                vertical-alignment: center;
-                                horizontal-stretch: 1;
-                            }
-                            Centered {
-                                StatusPill {
-                                    text: ResultsVM.release-blocked ? "Blocked · " + ResultsVM.release-reason : "Ready";
-                                    tone: ResultsVM.release-blocked ? Tone.error : Tone.success;
-                                }
-                            }
-                        }
-                        for c[i] in ResultsVM.readiness: Rectangle {
-                            height: 30px;
+                            spacing: Theme.space-md;
                             HorizontalLayout {
                                 spacing: Theme.space-sm;
-                                Centered {
-                                    Path {
-                                        width: 12px;
-                                        height: 12px;
-                                        viewbox-width: 12;
-                                        viewbox-height: 12;
-                                        stroke-width: 1.5px;
-                                        stroke: Theme.tone-fg(c.tone);
-                                        fill: c.tone == Tone.error || c.tone == Tone.warning ? Theme.tone-fg(c.tone) : transparent;
-                                        commands: c.tone == Tone.success ? "M 1.2 6 A 4.8 4.8 0 1 1 10.8 6 A 4.8 4.8 0 1 1 1.2 6 Z M 3.6 6.2 L 5.3 7.9 L 8.5 4.4"
-                                            : c.tone == Tone.error ? "M 6 0.6 L 11.4 6 L 6 11.4 L 0.6 6 Z"
-                                            : c.tone == Tone.warning ? "M 6 1 L 11.4 10.6 L 0.6 10.6 Z"
-                                            : "M 1.2 6 A 4.8 4.8 0 1 1 10.8 6 A 4.8 4.8 0 1 1 1.2 6 Z";
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: Theme.space-2xs;
+                                    alignment: start;
+                                    Text {
+                                        text: "Grade distribution";
+                                        font-size: Theme.text-lg;
+                                        font-weight: Theme.weight-semibold;
+                                        color: Theme.ink;
+                                    }
+                                    Text {
+                                        text: ResultsVM.scale-label;
+                                        font-size: Theme.text-xs;
+                                        color: Theme.ink-2;
                                     }
                                 }
+                                VerticalLayout {
+                                    alignment: start;
+                                    SegmentGroup {
+                                        Segment {
+                                            text: "Chart";
+                                            label: "Grade chart view";
+                                            selected: !ResultsVM.grade-table;
+                                            clicked => {
+                                                ResultsVM.grade-table = false;
+                                            }
+                                        }
+                                        Segment {
+                                            text: "Table";
+                                            label: "Grade table view";
+                                            selected: ResultsVM.grade-table;
+                                            clicked => {
+                                                ResultsVM.grade-table = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if !ResultsVM.grade-table: GradeChart {
+                        narrow: root.narrow;
+                    }
+                            if ResultsVM.grade-table: GradeTable { }
+                            StatusStrip { }
+                        }
+                    }
+                    Card {
+                        title: "Score distribution";
+                        subtitle: ResultsVM.histogram-caption;
+                        vertical-stretch: 1;
+                        min-height: 0;
+                        Histogram { }
+                    }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Theme.space-lg;
+                    Card {
+                        vertical-stretch: 1;
+                        inset: 0;
+                        VerticalLayout {
+                            HorizontalLayout {
+                                padding: Theme.space-lg;
+                                padding-bottom: Theme.space-md;
+                                spacing: Theme.space-sm;
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: Theme.space-2xs;
+                                    alignment: start;
+                                    Text {
+                                        text: "Item analysis";
+                                        font-size: Theme.text-lg;
+                                        font-weight: Theme.weight-semibold;
+                                        color: Theme.ink;
+                                    }
+                                    Text {
+                                        text: "Corrected item–rest r (primary) with 95 % CI · flagged items first, ranked per §12.2 · key hidden by default";
+                                        font-size: Theme.text-xs;
+                                        color: Theme.ink-2;
+                                    }
+                                }
+                                Centered {
+                                    Chip {
+                                        text: ResultsVM.show-key ? "Key shown" : "Show key";
+                                        selected: ResultsVM.show-key;
+                                        clicked => {
+                                            ResultsVM.show-key = !ResultsVM.show-key;
+                                        }
+                                    }
+                                }
+                            }
+                            TableRow {
+                                header: true;
+                                TableHeaderCell {
+                                    text: "Q";
+                                    width: root.w-label;
+                                }
+                                TableHeaderCell {
+                                    text: "p";
+                                    width: root.w-q;
+                                    align: right;
+                                }
+                                TableHeaderCell {
+                                    text: "r ir";
+                                    width: root.w-r;
+                                    align: right;
+                                }
+                                TableHeaderCell {
+                                    text: "95 % CI";
+                                    width: root.w-ci;
+                                    align: right;
+                                }
+                                TableHeaderCell {
+                                    text: "Discrimination";
+                                    width: root.w-band;
+                                }
+                                // the exam's own labels (A–D, A–E, أ–هـ); one word when narrow
+                                TableHeaderCell {
+                                    text: root.narrow || ResultsVM.option-labels.length == 0 ? "Options" : "Options " + ResultsVM.option-labels[0] + "–" + ResultsVM.option-labels[ResultsVM.option-labels.length - 1];
+                                    width: root.w-spark;
+                                }
+                                TableHeaderCell {
+                                    text: "Flag";
+                                    horizontal-stretch: 1;
+                                }
+                            }
+                            ListView {
+                                vertical-stretch: 1;
+                                for it[i] in ResultsVM.items: ItemTableRow {
+                                    height: 40px;
+                                    narrow: root.narrow;
+                                    data: it;
+                                    selected: i == ResultsVM.selected-item;
+                                    clicked => {
+                                        ResultsVM.select-item(i);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Card {
+                        vertical-stretch: 0;
+                        inset: 0;
+                        VerticalLayout {
+                            padding: Theme.space-lg;
+                            padding-top: Theme.space-md;
+                            spacing: 0;
+                            // overall state (DESIGN §9.5): Blocked or Ready, with the reason
+                            HorizontalLayout {
+                                height: 36px;
+                                spacing: Theme.space-sm;
                                 Text {
-                                    text: c.text;
-                                    font-size: Theme.text-sm;
+                                    text: "Release readiness";
+                                    font-size: Theme.text-lg;
+                                    font-weight: Theme.weight-semibold;
                                     color: Theme.ink;
                                     vertical-alignment: center;
                                     horizontal-stretch: 1;
-                                    overflow: elide;
                                 }
-                                if c.action != "": Centered {
-                                    Chip {
-                                        text: c.action;
-                                        accessible-label: c.action + ": " + c.text;
-                                        clicked => {
-                                            ResultsVM.check-action(i);
-                                        }
+                                Centered {
+                                    StatusPill {
+                                        text: ResultsVM.release-blocked ? "Blocked · " + ResultsVM.release-reason : "Ready";
+                                        tone: ResultsVM.release-blocked ? Tone.error : Tone.success;
                                     }
                                 }
                             }
-                            Rectangle {
-                                y: parent.height - 1px;
-                                height: 1px;
-                                background: Theme.border;
-                                visible: i < ResultsVM.readiness.length - 1;
+                            for c[i] in ResultsVM.readiness: Rectangle {
+                                height: 30px;
+                                HorizontalLayout {
+                                    spacing: Theme.space-sm;
+                                    Centered {
+                                        Path {
+                                            width: 12px;
+                                            height: 12px;
+                                            viewbox-width: 12;
+                                            viewbox-height: 12;
+                                            stroke-width: 1.5px;
+                                            stroke: Theme.tone-fg(c.tone);
+                                            fill: c.tone == Tone.error || c.tone == Tone.warning ? Theme.tone-fg(c.tone) : transparent;
+                                            commands: c.tone == Tone.success ? "M 1.2 6 A 4.8 4.8 0 1 1 10.8 6 A 4.8 4.8 0 1 1 1.2 6 Z M 3.6 6.2 L 5.3 7.9 L 8.5 4.4"
+                                                : c.tone == Tone.error ? "M 6 0.6 L 11.4 6 L 6 11.4 L 0.6 6 Z"
+                                                : c.tone == Tone.warning ? "M 6 1 L 11.4 10.6 L 0.6 10.6 Z"
+                                                : "M 1.2 6 A 4.8 4.8 0 1 1 10.8 6 A 4.8 4.8 0 1 1 1.2 6 Z";
+                                        }
+                                    }
+                                    Text {
+                                        text: c.text;
+                                        font-size: Theme.text-sm;
+                                        color: Theme.ink;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                        overflow: elide;
+                                    }
+                                    if c.action != "": Centered {
+                                        Chip {
+                                            text: c.action;
+                                            accessible-label: c.action + ": " + c.text;
+                                            clicked => {
+                                                ResultsVM.check-action(i);
+                                            }
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    y: parent.height - 1px;
+                                    height: 1px;
+                                    background: Theme.border;
+                                    visible: i < ResultsVM.readiness.length - 1;
+                                }
                             }
                         }
                     }
                 }
             }
         }
-    }
-    StatusBar {
-        Centered {
-            StatusPill {
-                text: "Saved";
-                tone: Tone.success;
+        StatusBar {
+            Centered {
+                StatusPill {
+                    text: "Saved";
+                    tone: Tone.success;
+                }
+            }
+            MessageText {
+                text: App.message;
+                tone: App.message-tone;
+                horizontal-stretch: 1;
+            }
+            StatusText {
+                text: "Release is a deliberate act of the instructor (PDPL IR Art. 11(2)(c))";
+            }
+            StatusText {
+                text: App.engine;
+                mono: true;
             }
         }
-        MessageText {
-            text: App.message;
-            tone: App.message-tone;
-            horizontal-stretch: 1;
-        }
-        StatusText {
-            text: "Release is a deliberate act of the instructor (PDPL IR Art. 11(2)(c))";
-        }
-        StatusText {
-            text: App.engine;
-            mono: true;
-        }
+    }
+    // the bar floats over the screen, so opening it never pushes the status bar out of a
+    // 1280 × 800 window
+    if ResultsVM.available && ResultsVM.export-open: ExportBar {
+        x: Theme.space-lg;
+        y: Theme.top-bar-height + Theme.space-sm;
+        width: root.width - 2 * Theme.space-lg;
+        height: self.preferred-height;
+    }
+    if ResultsVM.available && ResultsVM.release-open: ReleaseBar {
+        x: Theme.space-lg;
+        y: Theme.top-bar-height + Theme.space-sm;
+        width: root.width - 2 * Theme.space-lg;
+        height: self.preferred-height;
     }
 }

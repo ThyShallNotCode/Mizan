@@ -40,7 +40,7 @@ pub struct ResultRow {
     pub name: Option<String>,
     /// Section.
     pub section: Option<String>,
-    /// Booklet serial.
+    /// Booklet serial (0: no booklet, e.g. an absent student; shown empty).
     pub booklet: u32,
     /// Form letter.
     pub form: String,
@@ -213,7 +213,12 @@ impl ResultsTable {
                     r.student_id.clone().map_or(Cell::Empty, Cell::Id),
                     Cell::opt_text(r.name.clone()),
                     r.section.clone().map_or(Cell::Empty, Cell::Id),
-                    Cell::Int(i64::from(r.booklet)),
+                    // Booklet 0: no booklet (a roster student who handed in no sheet).
+                    if r.booklet == 0 {
+                        Cell::Empty
+                    } else {
+                        Cell::Int(i64::from(r.booklet))
+                    },
                     Cell::text(r.form.clone()),
                     Cell::text(r.status.clone()),
                     Cell::num(r.raw.as_ref().map(|x| exact_str(x, 2)), 2),

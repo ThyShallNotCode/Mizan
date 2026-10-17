@@ -103,6 +103,12 @@ pub struct RegistrationConfig {
     /// The aligned NCC must beat every one-pitch translation by this much, else REG-003 ERROR
     /// (*initial*).
     pub alias_min_margin_milli: u32,
+    /// The chosen orientation (upright or upside down) must correlate better than the other
+    /// by this much at 1/32, else the orientation is undecided: REG-001, never a guess (§8.3)
+    /// (*initial*: the 143 real IAU pages separate by ≥ 0.51, synthetic sheets by ≥ 0.60; a
+    /// sheet printed over its own upside-down copy by 0.11).
+    #[serde(default)]
+    pub orientation_min_margin_milli: u32,
     /// ICP nearest-neighbour thresholds, one per round.
     pub icp_thresholds_mpx: Vec<u32>,
     /// Rounds (from the first) that fit an affine by LMedS; later rounds fit the quadratic warp.
@@ -167,6 +173,7 @@ impl Default for RegistrationConfig {
             coarse_min_ncc_milli: 200,
             alias_pitch_mpx: [50_000, 41_500],
             alias_min_margin_milli: 50,
+            orientation_min_margin_milli: 200,
             icp_thresholds_mpx: vec![12_000, 8_000, 6_000, 4_000, 3_000, 3_000],
             icp_affine_rounds: 2,
             icp_min_matches: 30,

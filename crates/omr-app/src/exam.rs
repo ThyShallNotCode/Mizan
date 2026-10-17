@@ -109,6 +109,24 @@ pub enum IdSchemeChoice {
 }
 
 impl IdSchemeChoice {
+    /// Digits of a student number under the scheme (IAU 10, PNU and KSU 9).
+    pub fn digit_count(&self) -> usize {
+        match self {
+            IdSchemeChoice::Iau => 10,
+            IdSchemeChoice::Pnu | IdSchemeChoice::Ksu => 9,
+            IdSchemeChoice::Digits(n) => *n,
+        }
+    }
+
+    /// The scheme for a printed ID grid of `digits` columns: IAU's for 10, else `digits:N`.
+    pub fn for_grid(digits: usize) -> Self {
+        if digits == 10 {
+            IdSchemeChoice::Iau
+        } else {
+            IdSchemeChoice::Digits(digits)
+        }
+    }
+
     /// The identity scheme.
     pub fn scheme(&self) -> omr_identity::StudentIdScheme {
         match self {
@@ -302,8 +320,9 @@ pub struct ExamDefinition {
     #[serde(default)]
     pub outcomes: Option<OutcomeSetup>,
     /// Page-code secret K_exam of a generated sheet (hex, 32 bytes). A secret (§6.4): never
-    /// printed in reports or event payloads.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// printed in reports or event payloads, and never serialised: the session snapshot leaves
+    /// it out and the project keeps it in its private `secrets/` file (read back on open).
+    #[serde(default, skip_serializing)]
     pub page_code_key_hex: Option<String>,
 }
 
@@ -317,6 +336,13 @@ impl ExamDefinition {
         forms: Vec<String>,
         cancel_mode: CancelMode,
     ) -> Self {
+        // Own sheets: the scheme of the printed ID grid (CR-12).
+        let id_scheme = match &template {
+            TemplateChoice::Generated(spec) if spec.id_digits > 0 => {
+                IdSchemeChoice::for_grid(usize::from(spec.id_digits))
+            }
+            _ => IdSchemeChoice::default(),
+        };
         let mut d = Self {
             schema: DEFINITION_SCHEMA,
             exam_id: ExamId(uuid::Uuid::nil()),
@@ -336,7 +362,7 @@ impl ExamDefinition {
             points: Vec::new(),
             key: KeySource::None,
             roster: None,
-            id_scheme: IdSchemeChoice::default(),
+            id_scheme,
             outcomes: None,
             page_code_key_hex: None,
         };
@@ -344,9 +370,14 @@ impl ExamDefinition {
         d
     }
 
-    /// A deterministic exam ID from the title, course and template (so repeated runs of the
+    /// The exam ID: for a generated sheet, the exam its sheets were printed for (the page
+    /// code carries it, so the project and the sheets name one exam, SEC-04); for a legacy
+    /// sheet, a deterministic ID from the title, course and template (so repeated runs of the
     /// same definition produce identical outputs).
     pub fn derived_exam_id(&self) -> ExamId {
+        if let TemplateChoice::Generated(spec) = &self.template {
+            return spec.exam;
+        }
         let seed = format!(
             "omr-exam|{}|{}|{}|{}|{}",
             self.title,
@@ -422,6 +453,28 @@ impl ExamDefinition {
                 }
             }
             TemplateChoice::Generated(spec) => {
+                if self.exam_id != spec.exam {
+                    return bad(format!(
+                        "the exam is {} but its sheets were printed for exam {} (the spec's \
+                         `exam`); grade with the spec the sheets were rendered from",
+                        self.exam_id, spec.exam
+                    ));
+                }
+                if spec.id_digits > 0 && usize::from(spec.id_digits) != self.id_scheme.digit_count()
+                {
+                    return bad(format!(
+                        "the sheet's student-ID grid has {} digits but the ID scheme {:?} has \
+                         {}: pass --id-scheme {}",
+                        spec.id_digits,
+                        self.id_scheme,
+                        self.id_scheme.digit_count(),
+                        if spec.id_digits == 10 {
+                            "iau".to_string()
+                        } else {
+                            format!("digits:{}", spec.id_digits)
+                        }
+                    ));
+                }
                 if spec.questions < self.questions {
                     return bad(format!(
                         "the sheet prints {} questions; {} requested",
@@ -505,10 +558,17 @@ impl ExamDefinition {
                 }
                 for (q, a) in k.answers.iter().enumerate() {
                     parse_key_entry(a, self.options).map_err(|m| {
-                        AppError::Definition(format!("key {} Q{}: {m}", k.form, q + 1))
+                        AppError::Definition(format!(
+                            "key of form {} question {}: {m}",
+                            k.form,
+                            q + 1
+                        ))
                     })?;
                 }
             }
+        }
+        if let Some(r) = &self.roster {
+            check_roster(r, &self.id_scheme)?;
         }
         if let Some(o) = &self.outcomes {
             let codes: BTreeSet<&str> = o.clos.iter().map(|c| c.code.as_str()).collect();
@@ -536,6 +596,33 @@ impl ExamDefinition {
             .map_err(|e| AppError::Definition(format!("page-code key is not hex: {e}")))?;
         <[u8; 32]>::try_from(v.as_slice())
             .map_err(|_| AppError::Definition("page-code key must be 32 bytes (64 hex)".into()))
+    }
+
+    /// Imports roster rows (§9.2): restores leading zeros a spreadsheet dropped when the
+    /// student-ID scheme makes it unambiguous ([`restore_leading_zeros`]), then validates the
+    /// rows as the snapshot will ([`check_roster`]): duplicate, empty or precision-damaged IDs
+    /// and national IDs refuse the roster with what to change. On success the roster is set
+    /// and the warnings (repairs, scheme mismatches, converted numeric cells …) are returned
+    /// for display.
+    pub fn import_roster(&mut self, mut rows: Vec<RosterStudent>) -> Result<Vec<String>, AppError> {
+        let scheme = self.id_scheme.scheme();
+        let mut notes = Vec::new();
+        for (k, r) in rows.iter_mut().enumerate() {
+            if let Some(fixed) = restore_leading_zeros(&r.id, &scheme) {
+                notes.push(format!(
+                    "roster row {}: leading zeros restored ({} → {fixed}) under the {} \
+                     student-ID scheme",
+                    k + 1,
+                    r.id,
+                    scheme.name()
+                ));
+                r.id = fixed;
+                r.numeric_cell = true;
+            }
+        }
+        notes.extend(check_roster(&rows, &self.id_scheme)?);
+        self.roster = Some(rows);
+        Ok(notes)
     }
 
     /// True when the key is inferred from the sheets (never releasable).
@@ -576,13 +663,17 @@ pub enum ParsedKey {
     Missing,
 }
 
-/// Parses one option label: Latin letters, Arabic letters or 1-based digits.
+/// Arabic option labels (abjad order, §13.3).
+const ARABIC_OPTIONS: [&str; 10] = ["أ", "ب", "ج", "د", "هـ", "و", "ز", "ح", "ط", "ي"];
+
+/// Parses one option label: Latin letters (either case), Arabic letters or 1-based digits
+/// (ASCII or Arabic-Indic).
 pub fn parse_option(s: &str, options: u8) -> Option<u8> {
-    let t = s.trim();
-    let arabic = ["أ", "ب", "ج", "د", "هـ", "و", "ز", "ح", "ط", "ي"];
-    let o = if let Some(i) = arabic
+    let t = clean_cell(s);
+    let t = t.trim();
+    let o = if let Some(i) = ARABIC_OPTIONS
         .iter()
-        .position(|a| *a == t || (*a == "هـ" && t == "ه"))
+        .position(|a| *a == t || (*a == "هـ" && t == "ه") || (*a == "أ" && t == "ا"))
     {
         i as u8
     } else if t.len() == 1 && t.as_bytes()[0].is_ascii_alphabetic() {
@@ -595,24 +686,61 @@ pub fn parse_option(s: &str, options: u8) -> Option<u8> {
     (o < options).then_some(o)
 }
 
-/// Parses a key entry (`"B"`, `"A|C"`, `"*"`, `""`).
+/// Words that void a question (`*` too): dropped from the counted set.
+const VOID_WORDS: &[&str] = &[
+    "void",
+    "voided",
+    "drop",
+    "dropped",
+    "cancelled",
+    "canceled",
+    "ملغى",
+    "ملغي",
+    "ملغاة",
+];
+
+/// Words that leave an entry missing (SCO-003 until filled in).
+const MISSING_WORDS: &[&str] = &["-", "–", "n/a", "na", "none", "?"];
+
+/// Parses a key entry: `"B"`, `"b"`, `"A|C"` (also `A/C`, `A;C`, `A,C`, `A+C`, `A&C`,
+/// `A C`, `A or C`, `AC`), `"*"` or `"void"`, `""` (missing). Arabic letters and 1-based digits
+/// (ASCII or Arabic-Indic) are accepted.
 pub fn parse_key_entry(s: &str, options: u8) -> Result<ParsedKey, String> {
-    let t = s.trim();
-    if t.is_empty() {
+    let t = clean_cell(s);
+    let t = t.trim();
+    let lower = t.to_lowercase();
+    if t.is_empty() || MISSING_WORDS.contains(&lower.as_str()) {
         return Ok(ParsedKey::Missing);
     }
-    if t == "*" || t.eq_ignore_ascii_case("void") {
+    if t == "*" || VOID_WORDS.contains(&lower.as_str()) {
         return Ok(ParsedKey::Void);
     }
+    let spaced = format!(" {lower} ")
+        .replace(" or ", "|")
+        .replace(" أو ", "|")
+        .replace(" او ", "|");
+    let labels: Vec<String> = (0..options)
+        .map(|o| char::from(b'A' + o).to_string())
+        .collect();
     let mut v = Vec::new();
-    for part in t
-        .split(['|', '/', ';', ',', '+', ' '])
+    for part in spaced
+        .split(['|', '/', ';', ',', '+', '&', ' '])
         .filter(|p| !p.is_empty())
     {
-        let o = parse_option(part, options)
-            .ok_or_else(|| format!("`{part}` is not one of the {options} options"))?;
-        if !v.contains(&o) {
-            v.push(o);
+        let found: Vec<u8> = match parse_option(part, options) {
+            Some(o) => vec![o],
+            // Letters run together ("AC") name several accepted options.
+            None if part.len() >= 2 && part.bytes().all(|b| b.is_ascii_alphabetic()) => part
+                .chars()
+                .map(|c| parse_option(&c.to_string(), options))
+                .collect::<Option<Vec<u8>>>()
+                .ok_or_else(|| bad_option(&part.to_uppercase(), options, &labels))?,
+            None => return Err(bad_option(&part.to_uppercase(), options, &labels)),
+        };
+        for o in found {
+            if !v.contains(&o) {
+                v.push(o);
+            }
         }
     }
     if v.is_empty() {
@@ -622,100 +750,508 @@ pub fn parse_key_entry(s: &str, options: u8) -> Result<ParsedKey, String> {
     Ok(ParsedKey::Options(v))
 }
 
-fn norm_header(h: &str) -> String {
-    h.trim()
-        .trim_start_matches('\u{feff}')
-        .to_lowercase()
-        .replace(['_', '-'], " ")
+fn bad_option(part: &str, options: u8, labels: &[String]) -> String {
+    format!(
+        "`{part}` is not one of the {options} options ({}); write one letter, several \
+         accepted letters like A|C, or * to void the question",
+        labels.join(", ")
+    )
 }
 
-/// Reads a key file (CSV). Two layouts:
-/// - long: header `question,A,B[,points]`, one row per question;
-/// - wide: header `form,Q1,Q2,…` (or `version,…`), one row per form.
+// ---------------------------------------------------------------------------------------------
+// Files as instructors produce them (§16.3 import): encodings, delimiters, header aliases.
+
+/// Format and bidi controls stripped from imported cells (§9.2 rule 3, §9.3 step 7).
+fn is_format_control(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}' | '\u{061C}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
+        | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+}
+
+/// Arabic-Indic (U+0660–0669) and Extended Arabic-Indic (U+06F0–06F9) digits → ASCII.
+fn fold_digit(c: char) -> char {
+    match c {
+        '\u{0660}'..='\u{0669}' => char::from(b'0' + (c as u32 - 0x0660) as u8),
+        '\u{06F0}'..='\u{06F9}' => char::from(b'0' + (c as u32 - 0x06F0) as u8),
+        '\u{00A0}' => ' ',
+        _ => c,
+    }
+}
+
+/// One imported cell: format and bidi controls stripped, Arabic-Indic digits folded to ASCII,
+/// trimmed. Display text (names) keeps its letters unchanged.
+pub fn clean_cell(s: &str) -> String {
+    s.chars()
+        .filter(|c| !is_format_control(*c))
+        .map(fold_digit)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+/// Decodes an imported text file: UTF-8 with or without a BOM, UTF-16 with a BOM (Excel
+/// "Unicode text"), otherwise Windows-1256, the Arabic ANSI code page of Saudi Windows
+/// installations (§9.2, §16.3).
+pub fn decode_text(bytes: &[u8]) -> String {
+    if let Some((enc, bom)) = encoding_rs::Encoding::for_bom(bytes) {
+        return enc
+            .decode_without_bom_handling(&bytes[bom..])
+            .0
+            .into_owned();
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => encoding_rs::WINDOWS_1256
+            .decode_without_bom_handling(bytes)
+            .0
+            .into_owned(),
+    }
+}
+
+/// The delimiter of a delimited text file from its first non-empty line, outside quotes: tab
+/// when present (Excel "Unicode text"), else semicolon when it outnumbers commas (Excel in
+/// locales with a decimal comma), else comma.
+pub fn sniff_delimiter(text: &str) -> u8 {
+    let line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    let (mut tabs, mut semis, mut commas, mut quoted) = (0, 0, 0, false);
+    for c in line.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            '\t' if !quoted => tabs += 1,
+            ';' if !quoted => semis += 1,
+            ',' if !quoted => commas += 1,
+            _ => {}
+        }
+    }
+    if tabs > 0 {
+        b'\t'
+    } else if semis > commas {
+        b';'
+    } else {
+        b','
+    }
+}
+
+/// Non-empty records of a delimited file with their 1-based line numbers; cells cleaned
+/// ([`clean_cell`]) and trailing empty cells dropped (spreadsheets pad rows).
+fn delimited_rows(bytes: &[u8], what: &str) -> Result<Vec<(u64, Vec<String>)>, AppError> {
+    let text = decode_text(bytes);
+    let mut r = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .delimiter(sniff_delimiter(&text))
+        .from_reader(text.as_bytes());
+    let mut out = Vec::new();
+    for rec in r.records() {
+        let rec = rec.map_err(|e| {
+            AppError::Input(format!(
+                "{what}: {e}; save the file again as CSV (comma or semicolon separated, UTF-8) \
+                 and check that every quote is closed"
+            ))
+        })?;
+        let line = rec.position().map_or(0, |p| p.line());
+        let mut cells: Vec<String> = rec.iter().map(clean_cell).collect();
+        while cells.last().is_some_and(String::is_empty) {
+            cells.pop();
+        }
+        if !cells.is_empty() {
+            out.push((line, cells));
+        }
+    }
+    Ok(out)
+}
+
+fn norm_header(h: &str) -> String {
+    clean_cell(h)
+        .to_lowercase()
+        .replace(['_', '-', '.', ':'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A question number as instructors write it: `7`, `Q7`, `q 7`, `#7`, `7.`, `7)`, `س7`,
+/// Arabic-Indic digits.
+fn parse_question_number(s: &str) -> Option<u32> {
+    let t = clean_cell(s);
+    let t = t
+        .trim_start_matches(['Q', 'q', '#', 'س'])
+        .trim()
+        .trim_end_matches(['.', ')', ':']);
+    t.parse().ok()
+}
+
+/// A form (version) label: `A`, `a`, `Form A`, `Version B`, `Model C`, `Key A`, `نموذج أ`.
+fn form_label(s: &str) -> String {
+    let mut t = clean_cell(s).to_uppercase();
+    for p in [
+        "VERSION",
+        "FORM",
+        "MODEL",
+        "VARIANT",
+        "KEY",
+        "BOOKLET",
+        "النموذج",
+        "نموذج",
+    ] {
+        if let Some(r) = t.strip_prefix(p) {
+            t = r.to_string();
+            break;
+        }
+    }
+    let t: String = t
+        .chars()
+        .filter(|c| !matches!(c, ' ' | '-' | '_' | ':' | '.' | '(' | ')'))
+        .collect();
+    match t.as_str() {
+        "أ" | "ا" => "A".into(),
+        "ب" => "B".into(),
+        "ج" => "C".into(),
+        "د" => "D".into(),
+        "هـ" | "ه" => "E".into(),
+        _ => t,
+    }
+}
+
+const QUESTION_HEADERS: &[&str] = &[
+    "question",
+    "questions",
+    "q",
+    "item",
+    "items",
+    "no",
+    "number",
+    "#",
+    "q no",
+    "q#",
+    "question no",
+    "question number",
+    "سؤال",
+    "السؤال",
+    "رقم السؤال",
+];
+const FORM_HEADERS: &[&str] = &[
+    "form",
+    "version",
+    "model",
+    "variant",
+    "booklet",
+    "نموذج",
+    "النموذج",
+];
+const POINTS_HEADERS: &[&str] = &[
+    "points",
+    "point",
+    "pts",
+    "marks",
+    "mark",
+    "score",
+    "weight",
+    "درجة",
+    "الدرجة",
+    "الدرجات",
+];
+const SHARED_KEY_HEADERS: &[&str] = &[
+    "key",
+    "answer",
+    "answers",
+    "correct",
+    "correct answer",
+    "answer key",
+    "الإجابة",
+    "الاجابة",
+    "الإجابة الصحيحة",
+    "الحل",
+    "مفتاح",
+];
+
+/// Highest option count an exam supports (key files are checked against the exam's own count
+/// by [`ExamDefinition::validate`]).
+pub const MAX_OPTIONS: u8 = 10;
+
+fn key_error(line: u64, what: impl std::fmt::Display) -> AppError {
+    AppError::Input(format!("key file line {line}: {what}"))
+}
+
+/// The accepted key-file layouts, for remediation messages.
+pub const KEY_LAYOUTS: &str = "accepted layouts: one row per question (`question,A,B` with \
+    a header, or `1,B` / `1,B,C` without one), one row per version (`form,Q1,Q2,…` or \
+    `A,B,C,D,…`), or a single column of answers; entries are letters (any case), A|C for \
+    several accepted answers, * to void";
+
+/// Reads an answer-key file (CSV or tab/semicolon separated; UTF-8 with or without BOM,
+/// UTF-16, Windows-1256; CRLF or LF). Layouts, with or without a header row:
+/// - **one row per question**: `question,A,B[,points]` (a `key`/`answer` column is one key
+///   for every form), or headerless `1,B` (every form) / `1,B,C` (one column per form, in the
+///   exam's form order);
+/// - **one row per version**: `form,Q1,Q2,…` / `version,1,2,…`, or headerless `A,B,C,D,…`
+///   (the first cell names the form) or unlabeled rows of answers in the exam's form order;
+/// - **a single column** of answers, one per question.
 ///
-/// Returns the per-form keys (in `forms` order) and the points column if present.
+/// Question numbers may be written `7`, `Q7`, `7.` or in Arabic-Indic digits; questions
+/// beyond the exam's count are ignored (the sheet may print more). Entries follow
+/// [`parse_key_entry`]. Returns the per-form keys (in `forms` order) and the points column if
+/// present. Every malformed line fails with its line number and what to change (R10).
 pub fn read_key_csv(
     bytes: &[u8],
     forms: &[String],
     questions: u16,
 ) -> Result<(Vec<FormKey>, Option<Vec<String>>), AppError> {
-    let mut r = csv::ReaderBuilder::new()
-        .has_headers(true)
-        .flexible(true)
-        .from_reader(bytes);
-    let headers: Vec<String> = r
-        .headers()
-        .map_err(|e| AppError::Input(format!("key CSV: {e}")))?
-        .iter()
-        .map(norm_header)
-        .collect();
-    let rows: Vec<Vec<String>> = r
-        .records()
-        .map(|rec| {
-            rec.map(|x| x.iter().map(|c| c.trim().to_string()).collect())
-                .map_err(|e| AppError::Input(format!("key CSV: {e}")))
-        })
-        .collect::<Result<_, _>>()?;
-    let first = headers.first().cloned().unwrap_or_default();
-    if first == "form" || first == "version" {
-        let mut out = Vec::new();
-        for row in &rows {
-            let form = row.first().cloned().unwrap_or_default().to_uppercase();
-            let answers: Vec<String> = (0..usize::from(questions))
-                .map(|q| row.get(q + 1).cloned().unwrap_or_default())
+    read_key_file(bytes, forms, questions, MAX_OPTIONS)
+}
+
+/// [`read_key_csv`] with the exam's option count (entries are checked against it).
+pub fn read_key_file(
+    bytes: &[u8],
+    forms: &[String],
+    questions: u16,
+    options: u8,
+) -> Result<(Vec<FormKey>, Option<Vec<String>>), AppError> {
+    let rows = delimited_rows(bytes, "key file")?;
+    let Some((_, first)) = rows.first() else {
+        return Err(AppError::Input(format!("key file: no rows; {KEY_LAYOUTS}")));
+    };
+    let n = usize::from(questions);
+    let h0 = norm_header(&first[0]);
+    let entry = |line: u64, col: &str, v: &str| -> Result<String, AppError> {
+        parse_key_entry(v, options).map_err(|m| key_error(line, format!("{col}: {m}")))?;
+        Ok(v.to_string())
+    };
+    // One row per question.
+    let long = |body: &[(u64, Vec<String>)],
+                cols: &[(String, usize)],
+                points_col: Option<usize>,
+                width: usize|
+     -> Result<(Vec<FormKey>, Option<Vec<String>>), AppError> {
+        let mut keys: Vec<(String, Vec<String>)> = cols
+            .iter()
+            .map(|(f, _)| (f.clone(), vec![String::new(); n]))
+            .collect();
+        let mut points = points_col.map(|_| vec!["1".to_string(); n]);
+        let mut seen: BTreeMap<usize, (u64, Vec<String>)> = BTreeMap::new();
+        for (line, row) in body {
+            let q = parse_question_number(&row[0]).ok_or_else(|| {
+                key_error(
+                    *line,
+                    format!(
+                        "`{}` is not a question number (expected 1–{questions}); {KEY_LAYOUTS}",
+                        row[0]
+                    ),
+                )
+            })? as usize;
+            if q == 0 {
+                return Err(key_error(*line, "questions are numbered from 1"));
+            }
+            if row.len() > width {
+                return Err(key_error(
+                    *line,
+                    format!(
+                        "question {q} has {} cells, the header names {width} columns; remove \
+                         the extra cells or name their columns",
+                        row.len()
+                    ),
+                ));
+            }
+            if q > n {
+                continue; // the sheet may print more questions than the exam uses
+            }
+            let cells: Vec<String> = cols
+                .iter()
+                .map(|(_, i)| row.get(*i).cloned().unwrap_or_default())
                 .collect();
+            if let Some((l0, prev)) = seen.get(&q) {
+                if *prev != cells {
+                    return Err(key_error(
+                        *line,
+                        format!(
+                            "question {q} is listed again (first on line {l0}) with other \
+                             answers; keep one row per question"
+                        ),
+                    ));
+                }
+                continue;
+            }
+            for ((f, _), v) in cols.iter().zip(&cells) {
+                let col = if f == "*" {
+                    format!("question {q}")
+                } else {
+                    format!("question {q} form {f}")
+                };
+                let v = entry(*line, &col, v)?;
+                if let Some(k) = keys.iter_mut().find(|(kf, _)| kf == f) {
+                    k.1[q - 1] = v;
+                }
+            }
+            if let (Some(pc), Some(p)) = (points_col, points.as_mut())
+                && let Some(v) = row.get(pc).filter(|v| !v.is_empty())
+            {
+                let v = v.replace(',', ".");
+                omr_scoring::parse_points(&v).map_err(|e| {
+                    key_error(
+                        *line,
+                        format!("points `{v}` of question {q}: {e}; write a number like 1 or 0.5"),
+                    )
+                })?;
+                p[q - 1] = v;
+            }
+            seen.insert(q, (*line, cells));
+        }
+        let out = keys
+            .into_iter()
+            .map(|(form, answers)| FormKey { form, answers })
+            .collect();
+        Ok((order_keys(out, forms)?, points))
+    };
+    // One row per version: `labelled` rows start with the form letter.
+    let wide = |body: &[(u64, Vec<String>)],
+                header: Option<&[String]>,
+                labelled: bool|
+     -> Result<(Vec<FormKey>, Option<Vec<String>>), AppError> {
+        let skip = usize::from(labelled);
+        let qcols: Vec<Option<usize>> = match header {
+            Some(h) => h[skip..]
+                .iter()
+                .map(|c| match parse_question_number(c) {
+                    Some(q) if q >= 1 => Ok(Some(q as usize)),
+                    _ if c.is_empty() => Ok(None),
+                    _ => Err(AppError::Input(format!(
+                        "key file header: column `{c}` is not a question number (Q1, Q2, …); \
+                         {KEY_LAYOUTS}"
+                    ))),
+                })
+                .collect::<Result<_, _>>()?,
+            None => (1..=body.iter().map(|(_, r)| r.len()).max().unwrap_or(0))
+                .map(Some)
+                .collect(),
+        };
+        let mut out = Vec::new();
+        for (k, (line, row)) in body.iter().enumerate() {
+            let form = if labelled {
+                form_label(&row[0])
+            } else {
+                forms.get(k).cloned().ok_or_else(|| {
+                    key_error(
+                        *line,
+                        format!(
+                            "{} unlabeled key rows for {} form(s); start each row with its \
+                             form letter (A, B, …)",
+                            body.len(),
+                            forms.len()
+                        ),
+                    )
+                })?
+            };
+            if out.iter().any(|k: &FormKey| k.form == form) {
+                return Err(key_error(
+                    *line,
+                    format!("form {form} has a second key row; keep one row per form"),
+                ));
+            }
+            let mut answers = vec![String::new(); n];
+            for (j, v) in row[skip..].iter().enumerate() {
+                if let Some(Some(q)) = qcols.get(j)
+                    && *q <= n
+                {
+                    answers[q - 1] = entry(*line, &format!("form {form} question {q}"), v)?;
+                }
+            }
             out.push(FormKey { form, answers });
         }
-        return Ok((order_keys(out, forms)?, None));
-    }
-    if first != "question" && first != "q" && first != "item" {
-        return Err(AppError::Input(format!(
-            "key CSV: first column must be `question` (long layout) or `form` (wide layout), got `{first}`"
-        )));
-    }
-    let mut cols: Vec<(String, usize)> = Vec::new();
-    let mut points_col = None;
-    for (i, h) in headers.iter().enumerate().skip(1) {
-        if h == "points" || h == "marks" {
-            points_col = Some(i);
-        } else if h == "key" || h == "answer" {
-            cols.push(("*".into(), i)); // one key for every form
-        } else {
-            cols.push((h.to_uppercase(), i));
-        }
-    }
-    let mut keys: BTreeMap<String, Vec<String>> = cols
-        .iter()
-        .map(|(f, _)| (f.clone(), vec![String::new(); usize::from(questions)]))
-        .collect();
-    let mut points = points_col.map(|_| vec!["1".to_string(); usize::from(questions)]);
-    for row in &rows {
-        let qs = row.first().map(String::as_str).unwrap_or("");
-        let q: usize = qs
-            .trim_start_matches(['Q', 'q'])
-            .parse()
-            .map_err(|_| AppError::Input(format!("key CSV: bad question `{qs}`")))?;
-        if q == 0 || q > usize::from(questions) {
-            continue; // the sheet may hold more questions than the exam uses
-        }
-        for (f, i) in &cols {
-            if let Some(v) = row.get(*i)
-                && let Some(k) = keys.get_mut(f)
-            {
-                k[q - 1] = v.clone();
+        Ok((order_keys(out, forms)?, None))
+    };
+    if QUESTION_HEADERS.contains(&h0.as_str()) {
+        let mut cols: Vec<(String, usize)> = Vec::new();
+        let mut points_col = None;
+        for (i, h) in first.iter().enumerate().skip(1) {
+            let hn = norm_header(h);
+            if POINTS_HEADERS.contains(&hn.as_str()) {
+                points_col = Some(i);
+            } else if SHARED_KEY_HEADERS.contains(&hn.as_str()) {
+                cols.push(("*".into(), i)); // one key for every form
+            } else if !hn.is_empty() {
+                cols.push((form_label(h), i));
             }
         }
-        if let (Some(pc), Some(p)) = (points_col, points.as_mut())
-            && let Some(v) = row.get(pc).filter(|v| !v.is_empty())
-        {
-            p[q - 1] = v.clone();
+        if cols.is_empty() {
+            return Err(AppError::Input(format!(
+                "key file header: no answer column after `{}`; {KEY_LAYOUTS}",
+                first[0]
+            )));
         }
+        return long(&rows[1..], &cols, points_col, first.len());
     }
-    let out = keys
-        .into_iter()
-        .map(|(form, answers)| FormKey { form, answers })
-        .collect();
-    Ok((order_keys(out, forms)?, points))
+    if FORM_HEADERS.contains(&h0.as_str()) {
+        return wide(&rows[1..], Some(&first[..]), true);
+    }
+    // No header row.
+    if parse_question_number(&first[0]).is_some() && first.len() >= 2 {
+        let k = rows.iter().map(|(_, r)| r.len()).max().unwrap_or(2) - 1;
+        let cols: Vec<(String, usize)> = if k == 1 {
+            vec![("*".into(), 1)]
+        } else if k == forms.len() {
+            forms.iter().cloned().zip(1..).collect()
+        } else {
+            return Err(key_error(
+                rows[0].0,
+                format!(
+                    "{k} answer columns for {} form(s); add a header row `question,{}`",
+                    forms.len(),
+                    forms.join(",")
+                ),
+            ));
+        };
+        return long(&rows, &cols, None, k + 1);
+    }
+    if rows.iter().all(|(_, r)| r.len() == 1) {
+        // A single column: one answer per question, in order.
+        let answers = rows
+            .iter()
+            .enumerate()
+            .take(n)
+            .map(|(q, (line, r))| entry(*line, &format!("question {}", q + 1), &r[0]))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut answers = answers;
+        answers.resize(n, String::new());
+        return Ok((
+            order_keys(
+                vec![FormKey {
+                    form: "*".into(),
+                    answers,
+                }],
+                forms,
+            )?,
+            None,
+        ));
+    }
+    let labelled = rows.iter().all(|(_, r)| {
+        let f = form_label(&r[0]);
+        r.len() != n && forms.contains(&f)
+    });
+    wide(&rows, None, labelled)
+}
+
+/// The form letters a key file names (`question,A,B`, `form,…` rows, or labelled rows), for
+/// a definition without `--forms`; `None` when the file names none.
+pub fn key_file_forms(bytes: &[u8]) -> Option<Vec<String>> {
+    let rows = delimited_rows(bytes, "key file").ok()?;
+    let (_, first) = rows.first()?;
+    let h0 = norm_header(&first[0]);
+    let mut out: Vec<String> = Vec::new();
+    if QUESTION_HEADERS.contains(&h0.as_str()) {
+        for h in first.iter().skip(1) {
+            let hn = norm_header(h);
+            if !hn.is_empty()
+                && !POINTS_HEADERS.contains(&hn.as_str())
+                && !SHARED_KEY_HEADERS.contains(&hn.as_str())
+            {
+                out.push(form_label(h));
+            }
+        }
+    } else if FORM_HEADERS.contains(&h0.as_str()) {
+        out = rows[1..].iter().map(|(_, r)| form_label(&r[0])).collect();
+    }
+    out.retain(|f| !f.is_empty());
+    (!out.is_empty()).then_some(out)
 }
 
 fn order_keys(keys: Vec<FormKey>, forms: &[String]) -> Result<Vec<FormKey>, AppError> {
@@ -735,7 +1271,8 @@ fn order_keys(keys: Vec<FormKey>, forms: &[String]) -> Result<Vec<FormKey>, AppE
             Some(k) => out.push(k.clone()),
             None => {
                 return Err(AppError::Input(format!(
-                    "key file has no key for form {f} (found: {})",
+                    "key file has no key for form {f} (found: {}); add a column or row for \
+                     form {f}, or declare the exam's forms to match the file (--forms)",
                     keys.iter()
                         .map(|k| k.form.as_str())
                         .collect::<Vec<_>>()
@@ -747,7 +1284,7 @@ fn order_keys(keys: Vec<FormKey>, forms: &[String]) -> Result<Vec<FormKey>, AppE
     Ok(out)
 }
 
-/// Header aliases of the roster columns.
+/// Header aliases of the roster columns (English and Arabic SIS exports).
 fn roster_column(h: &str) -> Option<&'static str> {
     let h = norm_header(h);
     match h.as_str() {
@@ -756,92 +1293,176 @@ fn roster_column(h: &str) -> Option<&'static str> {
         | "studentid"
         | "student number"
         | "student no"
+        | "student #"
         | "university id"
+        | "university number"
+        | "id number"
         | "sis id"
         | "الرقم الجامعي"
-        | "رقم الطالب" => Some("id"),
-        "name" | "student name" | "full name" | "name en" | "english name" | "الاسم" => {
-            Some("name")
-        }
-        "name ar" | "arabic name" | "الاسم بالعربي" | "الاسم العربي" => {
+        | "رقم الطالب"
+        | "الرقم الاكاديمي"
+        | "الرقم الأكاديمي"
+        | "رقم القيد" => Some("id"),
+        "name"
+        | "student name"
+        | "full name"
+        | "name en"
+        | "english name"
+        | "الاسم"
+        | "اسم الطالب"
+        | "الاسم الكامل" => Some("name"),
+        "name ar" | "arabic name" | "الاسم بالعربي" | "الاسم العربي" | "الاسم باللغة العربية" => {
             Some("name_ar")
         }
-        "section" | "sec" | "الشعبة" => Some("section"),
+        "section" | "sec" | "section number" | "crn" | "الشعبة" | "رقم الشعبة" => {
+            Some("section")
+        }
         _ => None,
     }
 }
 
-fn roster_from_rows(rows: Vec<Vec<(String, bool)>>) -> Result<Vec<RosterStudent>, AppError> {
-    let mut it = rows.into_iter();
-    let header = it
-        .next()
-        .ok_or_else(|| AppError::Input("roster: empty file".into()))?;
-    let cols: Vec<Option<&'static str>> = header.iter().map(|(h, _)| roster_column(h)).collect();
+/// Remediation for an ID damaged by a spreadsheet.
+const EXCEL_ID_FIX: &str = "in Excel, format the ID column as Text (or Number with 0 decimal \
+    places) before typing or pasting the IDs, or export the roster from the SIS again, then \
+    save it as CSV UTF-8 or XLSX";
+
+/// Cleans one roster ID cell (§9.2 rule 1): Arabic-Indic digits folded, a `.0` float artefact
+/// dropped and a scientific-notation value expanded **only when no digit was lost**
+/// (`2.210345601E+09` → `2210345601`); `2.2E+09` lost digits and is refused. Returns the ID
+/// and whether it came from a number (flagged as a converted numeric cell).
+pub fn clean_roster_id(raw: &str, numeric_cell: bool) -> Result<(String, bool), String> {
+    let t = clean_cell(raw);
+    // `…E+n`: Excel's display of a large number in a General cell.
+    if let Some((mant, exp)) = t.split_once(['e', 'E'])
+        && let Ok(exp) = exp.trim_start_matches('+').parse::<i32>()
+        && !mant.is_empty()
+        && mant.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        && mant.bytes().any(|b| b.is_ascii_digit())
+    {
+        let (int, frac) = mant.split_once('.').unwrap_or((mant, ""));
+        let digits = format!("{int}{frac}");
+        let zeros = exp - frac.len() as i32;
+        if zeros != 0 || digits.trim_start_matches('0').len() > 15 {
+            return Err(format!(
+                "`{t}` is a number in scientific notation that lost digits; {EXCEL_ID_FIX}"
+            ));
+        }
+        return Ok((digits.trim_start_matches('0').to_string(), true));
+    }
+    // `2210345601.0`: a float cell written as text.
+    if let Some((int, frac)) = t.split_once('.')
+        && !int.is_empty()
+        && int.bytes().all(|b| b.is_ascii_digit())
+        && !frac.is_empty()
+        && frac.bytes().all(|b| b.is_ascii_digit())
+    {
+        if frac.bytes().all(|b| b == b'0') && int.trim_start_matches('0').len() <= 15 {
+            return Ok((int.to_string(), true));
+        }
+        return Err(format!(
+            "`{t}` is a decimal number, not a student ID; {EXCEL_ID_FIX}"
+        ));
+    }
+    Ok((t, numeric_cell))
+}
+
+fn roster_from_rows(
+    rows: Vec<(u64, Vec<(String, bool)>)>,
+    what: &str,
+) -> Result<Vec<RosterStudent>, AppError> {
+    // The header is the first row (among the first ten: SIS exports put titles above it) that
+    // names an ID column.
+    let Some(h) = rows
+        .iter()
+        .take(10)
+        .position(|(_, r)| r.iter().any(|(c, _)| roster_column(c) == Some("id")))
+    else {
+        return Err(AppError::Input(format!(
+            "{what}: no student-ID column found; add a header row such as \
+             `student_id,name,section` (Arabic headers like الرقم الجامعي and الاسم work too)"
+        )));
+    };
+    let cols: Vec<Option<&'static str>> = rows[h].1.iter().map(|(c, _)| roster_column(c)).collect();
     let find = |name: &str| cols.iter().position(|c| *c == Some(name));
-    let id = find("id").ok_or_else(|| {
-        AppError::Input("roster: no student-ID column (e.g. `student_id`)".into())
-    })?;
-    let name = find("name");
-    let name_ar = find("name_ar");
-    let section = find("section");
+    let id = find("id").expect("the header names an ID column");
+    let (name, name_ar, section) = (find("name"), find("name_ar"), find("section"));
     let mut out = Vec::new();
-    for row in it {
+    let mut errors = Vec::new();
+    for (line, row) in rows.into_iter().skip(h + 1) {
         let get = |i: Option<usize>| {
             i.and_then(|i| row.get(i))
-                .map(|(v, _)| v.trim().to_string())
+                .map(|(v, _)| clean_cell(v))
                 .unwrap_or_default()
         };
-        let Some((idv, numeric)) = row.get(id) else {
-            continue;
-        };
-        if idv.trim().is_empty() {
+        let (raw, numeric) = row.get(id).cloned().unwrap_or_default();
+        if raw.trim().is_empty() {
+            if row.iter().any(|(c, _)| !c.trim().is_empty()) {
+                errors.push(format!(
+                    "line {line}: a row without a student ID; fill it in or delete the row"
+                ));
+            }
             continue;
         }
-        out.push(RosterStudent {
-            id: idv.trim().to_string(),
-            name: get(name),
-            name_ar: get(name_ar),
-            section: get(section),
-            numeric_cell: *numeric,
-        });
+        match clean_roster_id(&raw, numeric) {
+            Ok((idv, numeric)) => out.push(RosterStudent {
+                id: idv,
+                name: get(name),
+                name_ar: get(name_ar),
+                section: get(section),
+                numeric_cell: numeric,
+            }),
+            Err(m) => errors.push(format!("line {line}: student ID {m}")),
+        }
+    }
+    if !errors.is_empty() {
+        return Err(AppError::Input(format!(
+            "{what}: {} row(s) refused: {}",
+            errors.len(),
+            errors.join("; ")
+        )));
+    }
+    if out.is_empty() {
+        return Err(AppError::Input(format!(
+            "{what}: the roster has a header but no students"
+        )));
     }
     Ok(out)
 }
 
-/// Reads a roster from CSV bytes (header row with aliases, see [`roster_column`]).
+/// Reads a roster from CSV bytes (comma, semicolon or tab separated; UTF-8 with or without a
+/// BOM, UTF-16, Windows-1256): a header row with English or Arabic aliases (see
+/// `roster_column`), possibly below title rows. IDs damaged by Excel are repaired when no
+/// digit was lost and refused otherwise ([`clean_roster_id`]).
 pub fn read_roster_csv(bytes: &[u8]) -> Result<Vec<RosterStudent>, AppError> {
-    let mut r = csv::ReaderBuilder::new()
-        .has_headers(false)
-        .flexible(true)
-        .from_reader(bytes);
-    let rows = r
-        .records()
-        .map(|rec| {
-            rec.map(|x| x.iter().map(|c| (c.to_string(), false)).collect())
-                .map_err(|e| AppError::Input(format!("roster CSV: {e}")))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    roster_from_rows(rows)
+    let rows = delimited_rows(bytes, "roster CSV")?
+        .into_iter()
+        .map(|(l, r)| (l, r.into_iter().map(|c| (c, false)).collect()))
+        .collect();
+    roster_from_rows(rows, "roster CSV")
 }
 
-/// Reads a roster from the first sheet of an XLSX workbook (calamine). Numeric ID cells are
-/// written without a decimal part and flagged (§9.2 rule 1).
+/// Reads a roster from the first sheet of an XLSX workbook (calamine). Integer-valued numeric
+/// ID cells are written without a decimal part and flagged (§9.2 rule 1).
 pub fn read_roster_xlsx(bytes: &[u8]) -> Result<Vec<RosterStudent>, AppError> {
     use calamine::{Data, Reader, Xlsx};
+    let fix = "save the roster again as an Excel workbook (.xlsx) or as CSV UTF-8";
     let mut wb: Xlsx<_> = Xlsx::new(std::io::Cursor::new(bytes.to_vec()))
-        .map_err(|e| AppError::Input(format!("roster XLSX: {e}")))?;
+        .map_err(|e| AppError::Input(format!("roster XLSX: {e}; {fix}")))?;
     let name = wb
         .sheet_names()
         .first()
         .cloned()
-        .ok_or_else(|| AppError::Input("roster XLSX: no sheet".into()))?;
+        .ok_or_else(|| AppError::Input(format!("roster XLSX: no sheet; {fix}")))?;
     let range = wb
         .worksheet_range(&name)
-        .map_err(|e| AppError::Input(format!("roster XLSX: {e}")))?;
+        .map_err(|e| AppError::Input(format!("roster XLSX: {e}; {fix}")))?;
+    let first_row = range.start().map_or(0, |(r, _)| u64::from(r));
     let rows = range
         .rows()
-        .map(|r| {
-            r.iter()
+        .enumerate()
+        .map(|(k, r)| {
+            let cells = r
+                .iter()
                 .map(|c| match c {
                     Data::Int(i) => (i.to_string(), true),
                     Data::Float(f) if f.fract() == 0.0 && f.abs() < 1e15 => {
@@ -853,10 +1474,114 @@ pub fn read_roster_xlsx(bytes: &[u8]) -> Result<Vec<RosterStudent>, AppError> {
                     Data::Empty => (String::new(), false),
                     other => (other.to_string(), false),
                 })
-                .collect()
+                .collect();
+            (first_row + k as u64 + 1, cells)
         })
         .collect();
-    roster_from_rows(rows)
+    roster_from_rows(rows, "roster XLSX")
+}
+
+/// The leading zeros a spreadsheet dropped from an all-digit ID, restored only when exactly
+/// one padded length satisfies the student-ID scheme and the ID as given does not (§9.2 rule
+/// 2: the scheme is the institution's fixed-length rule).
+pub fn restore_leading_zeros(id: &str, scheme: &omr_identity::StudentIdScheme) -> Option<String> {
+    let key = omr_identity::normalize_id(id);
+    if key.is_empty() || !key.bytes().all(|b| b.is_ascii_digit()) || scheme.accepts(&key) {
+        return None;
+    }
+    let fits: Vec<String> = (key.len() + 1..=20)
+        .map(|n| format!("{key:0>n$}"))
+        .filter(|p| scheme.accepts(p))
+        .collect();
+    (fits.len() == 1).then(|| fits[0].clone())
+}
+
+/// Validates roster rows as the snapshot will (§9.2 rule 4): blocking findings (duplicate,
+/// empty or precision-damaged IDs, national IDs) refuse the roster with what to change;
+/// the warnings (scheme mismatches, converted numeric cells, empty names, mixed lengths) are
+/// returned for display.
+pub fn check_roster(
+    rows: &[RosterStudent],
+    scheme: &IdSchemeChoice,
+) -> Result<Vec<String>, AppError> {
+    use omr_identity::{ImportIssue as I, RosterError, RosterRecord, RosterSnapshot};
+    let records = rows
+        .iter()
+        .map(|r| RosterRecord {
+            student_key: r.id.clone(),
+            key_from_numeric_cell: r.numeric_cell,
+            name: r.name.clone(),
+            name_ar: (!r.name_ar.is_empty()).then(|| r.name_ar.clone()),
+            section: (!r.section.is_empty()).then(|| r.section.clone()),
+            ..RosterRecord::default()
+        })
+        .collect();
+    let s = scheme.scheme();
+    let row = |k: &usize| format!("roster row {}", k + 1);
+    let text = |i: &I| match i {
+        I::DuplicateKey { key, rows } => format!(
+            "student ID {key} appears {} times ({}); remove the extra rows or correct the IDs",
+            rows.len(),
+            rows.iter().map(row).collect::<Vec<_>>().join(", ")
+        ),
+        I::EmptyKey { row: k } => {
+            format!("{} has no student ID; fill it in or delete the row", row(k))
+        }
+        I::ScientificNotation { row: k }
+        | I::FloatArtifact { row: k }
+        | I::PrecisionLoss { row: k } => {
+            format!(
+                "{}: the student ID lost digits in a spreadsheet; {EXCEL_ID_FIX}",
+                row(k)
+            )
+        }
+        I::NationalIdAsKey { row: k, masked } => format!(
+            "{}: {masked} is a national ID or Iqama, never a student ID; use the university \
+             ID column",
+            row(k)
+        ),
+        I::NationalIdColumn {
+            national_ids,
+            values,
+        } => format!(
+            "the ID column holds national IDs or Iqamas ({national_ids} of {values}); choose \
+             the university student-ID column"
+        ),
+        I::NumericCellConverted { row: k } => {
+            format!(
+                "{}: the ID was a number in the spreadsheet; check it",
+                row(k)
+            )
+        }
+        I::LeadingZerosRestored { row: k } => format!("{}: leading zeros restored", row(k)),
+        I::SchemeMismatch { row: k, reason } => format!(
+            "{}: the ID does not fit the {} student-ID scheme ({reason})",
+            row(k),
+            s.name()
+        ),
+        I::EmptyName { row: k } => format!("{}: no name", row(k)),
+        I::MixedLengths { lengths } => format!(
+            "IDs of different lengths: {}",
+            lengths
+                .iter()
+                .map(|(l, n)| format!("{n} × {l} characters"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    match RosterSnapshot::build(records, &s, &omr_identity::ImportOptions::default()) {
+        Ok((_, report)) => Ok(report.issues.iter().map(text).collect()),
+        Err(RosterError::Blocked(report)) => Err(AppError::Input(format!(
+            "roster refused (§9.2): {}",
+            report
+                .issues
+                .iter()
+                .filter(|i| i.is_blocking())
+                .map(text)
+                .collect::<Vec<_>>()
+                .join("; ")
+        ))),
+    }
 }
 
 /// Parses `"1-5,9"` into 1-based question numbers.
@@ -881,10 +1606,12 @@ pub fn parse_question_list(s: &str, questions: u16) -> Result<Vec<u16>, String> 
 /// Reads the CLO file (CSV): header `clo,domain,title[,title_ar][,plo],questions[,weight][,note]`,
 /// one or more rows per CLO; `questions` is a list like `1-5,9`.
 pub fn read_clo_csv(bytes: &[u8], questions: u16) -> Result<OutcomeSetup, AppError> {
+    let text = decode_text(bytes);
     let mut r = csv::ReaderBuilder::new()
         .has_headers(true)
         .flexible(true)
-        .from_reader(bytes);
+        .delimiter(sniff_delimiter(&text))
+        .from_reader(text.as_bytes());
     let headers: Vec<String> = r
         .headers()
         .map_err(|e| AppError::Input(format!("CLO CSV: {e}")))?
@@ -992,7 +1719,7 @@ mod tests {
     #[test]
     fn roster_and_clo_csv() {
         let r = read_roster_csv(
-            "\u{feff}Student ID,Name,Section\n900000001,Test One,101\n,skip,\n900000002,Test Two,102\n"
+            "\u{feff}Student ID,Name,Section\n900000001,Test One,101\n,,\n900000002,Test Two,102\n"
                 .as_bytes(),
         )
         .unwrap();

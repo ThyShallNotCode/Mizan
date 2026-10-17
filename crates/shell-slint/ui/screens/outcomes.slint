@@ -282,9 +282,11 @@ component B1Table inherits VerticalLayout {
     property <length> c-num: 52px;
     property <length> c-plo: 96px;
     property <length> c-methods: 156px;
+    // the report's actual level ("Average 80.0%; 90.0% of students ≥ 60.0% *") wraps; rows grow
+    // with the lines their longest cell needs (`B1Row.lines`)
     property <length> c-target: 176px;
-    property <length> c-actual: 132px;
-    property <length> c-comment: 276px;
+    property <length> c-actual: 168px;
+    property <length> c-comment: 252px;
     TableRow {
         header: true;
         min-height: 46px;
@@ -328,7 +330,7 @@ component B1Table inherits VerticalLayout {
         vertical-stretch: 1;
         min-height: 3 * 34px;
         for r in OutcomesVM.b1: Rectangle {
-        height: r.header ? 26px : 34px;
+        height: r.header ? 26px : max(34px, 8px + r.lines * 14px);
         background: r.header ? Theme.surface-sunken : transparent;
         accessible-role: AccessibleRole.list-item;
         accessible-label: r.header ? r.domain-title : r.number + " " + r.clo + ", actual " + r.actual + ", " + r.comment;
@@ -383,7 +385,6 @@ component B1Table inherits VerticalLayout {
             B1Cell {
                 width: root.c-actual;
                 text: r.actual;
-                mono: true;
             }
             B1Cell {
                 width: root.c-comment;
@@ -425,7 +426,8 @@ export component OutcomesScreen inherits VerticalLayout {
             Breadcrumb {
                 parts: [App.course, App.assessment, "Outcomes"];
             }
-            Centered {
+            // no tags without outcomes (an empty tag, or the previous exam's, is never shown)
+            if OutcomesVM.available: Centered {
                 Tag {
                     text: OutcomesVM.method-label;
                     tone: Tone.primary;
@@ -435,7 +437,7 @@ export component OutcomesScreen inherits VerticalLayout {
         }
         HorizontalLayout {
             spacing: Theme.space-md;
-            Centered {
+            if OutcomesVM.available: Centered {
                 Tag {
                     text: OutcomesVM.policy-version;
                 }
@@ -458,7 +460,7 @@ export component OutcomesScreen inherits VerticalLayout {
     if !OutcomesVM.available: EmptyState {
         vertical-stretch: 1;
         title: "No outcome results yet";
-        text: "CLO attainment appears once scores exist and the item × CLO mapping is approved.";
+        text: "CLO attainment appears once scores exist and the exam's items are mapped to CLOs (a CLO file, --clo clo.csv).";
     }
     if OutcomesVM.available: VerticalLayout {
         vertical-stretch: 1;

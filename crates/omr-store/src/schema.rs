@@ -426,6 +426,20 @@ JOIN events e ON e.seq = (
       AND json_extract(x.payload, '$.run') = d.run_id);
 "#;
 
+/// Version 4: reviewer notes (§14.4 `{ct_ref, ct_sha384}`). A note's text lives here under a
+/// random reference with a random salt; events carry only the reference and the SHA-384 of
+/// salt ‖ text, which a dictionary cannot reverse. The row may be deleted (erasure): the
+/// events still verify, and the note can no longer be read or linked (crypto-shredding in
+/// the MVP's plain form; encryption under the booklet key is deferred, §19.2).
+const V4: &str = r#"
+CREATE TABLE review_note (
+    note_ref TEXT PRIMARY KEY,
+    salt TEXT NOT NULL,
+    body TEXT NOT NULL,
+    sha384 TEXT NOT NULL
+) STRICT, WITHOUT ROWID;
+"#;
+
 /// All migrations, in order.
 pub const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -443,10 +457,15 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "identity_decision_log",
         sql: V3,
     },
+    Migration {
+        version: 4,
+        name: "review_note",
+        sql: V4,
+    },
 ];
 
 /// The newest schema version this build knows.
-pub const LATEST_VERSION: i64 = 3;
+pub const LATEST_VERSION: i64 = 4;
 
 /// What a migration call did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

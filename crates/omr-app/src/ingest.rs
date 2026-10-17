@@ -1,7 +1,8 @@
 //! Ingest (§7.3, §7.4): files and folders in, pages out. PDF pages through `omr-pdf` (image
-//! XObjects, no rasterising), JPEG/PNG/TIFF through `omr-imaging`. Every page is isolated: a
-//! corrupt or unsupported input becomes CAP-001 (or CAP-004) on that page and the batch goes on.
-//! File I/O lives here (R4: only `omr-app` and the CLI touch files).
+//! XObjects, no rasterising), JPEG/PNG/TIFF through `omr-imaging`; a multi-page TIFF (a scanner
+//! batch) gives one page per image directory. Every page is isolated: a corrupt or unsupported
+//! input becomes CAP-001 (or CAP-004) on that page, naming the file and what to do (R10), and
+//! the batch goes on. File I/O lives here (R4: only `omr-app` and the CLI touch files).
 
 use crate::AppError;
 use crate::engine::WORKING_DPI;
@@ -54,21 +55,24 @@ pub fn collect_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, AppError> {
         } else if p.is_file() {
             if kind_of(p).is_none() {
                 return Err(AppError::Input(format!(
-                    "{}: not a PDF, JPEG, PNG or TIFF file",
+                    "{}: not a PDF, JPEG, PNG or TIFF file; leave it out, or save the scan as \
+                     PDF or TIFF (every scanner can)",
                     p.display()
                 )));
             }
             out.push(p.clone());
         } else {
             return Err(AppError::Input(format!(
-                "{}: no such file or folder",
+                "{}: no such file or folder; check the path",
                 p.display()
             )));
         }
     }
     if out.is_empty() {
         return Err(AppError::Input(
-            "no input files (PDF, JPEG, PNG, TIFF) found".into(),
+            "no input files (PDF, JPEG, PNG, TIFF) found; check the folder path (scanners can \
+             save as PDF or TIFF)"
+                .into(),
         ));
     }
     Ok(out)
@@ -95,9 +99,16 @@ impl std::fmt::Debug for SourceFile {
     }
 }
 
+/// Largest input file read (§7.4: ≤ 2 GB), checked before anything is allocated.
+pub const MAX_FILE_BYTES: u64 = 2_000_000_000;
+
 impl SourceFile {
     /// Wraps bytes already in memory.
     pub fn from_bytes(path: &Path, bytes: Vec<u8>) -> Option<Self> {
+        Self::from_shared(path, bytes.into())
+    }
+
+    fn from_shared(path: &Path, bytes: Arc<[u8]>) -> Option<Self> {
         let kind = kind_of(path)?;
         let sha384 = omr_store::jcs::sha384_hex(&bytes);
         Some(Self {
@@ -106,39 +117,68 @@ impl SourceFile {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
-            bytes: bytes.into(),
+            bytes,
             sha384,
             kind,
         })
     }
 
-    /// Reads a file.
+    /// Reads a file straight into its shared buffer (a `Vec` converted afterwards would hold
+    /// the file twice at the peak). A file over [`MAX_FILE_BYTES`] is refused unread.
     pub fn read(path: &Path) -> Result<Self, String> {
-        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-        Self::from_bytes(path, bytes).ok_or_else(|| "unknown file type".to_string())
+        use std::io::Read;
+        let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+        let len = f.metadata().map_err(|e| e.to_string())?.len();
+        if len > MAX_FILE_BYTES {
+            return Err(format!(
+                "file of {len} bytes exceeds the {MAX_FILE_BYTES}-byte input limit; split the \
+                 scan batch into smaller files"
+            ));
+        }
+        let mut bytes: Arc<[u8]> = std::iter::repeat_n(0u8, len as usize).collect();
+        let buf = Arc::get_mut(&mut bytes).expect("a new buffer has one owner");
+        f.read_exact(buf).map_err(|e| e.to_string())?;
+        Self::from_shared(path, bytes).ok_or_else(|| "unknown file type".to_string())
     }
 }
 
-/// An opened source: a parsed PDF, an image, or a refusal.
+/// An opened source: a parsed PDF, an image, a multi-page TIFF, or a refusal.
 pub enum OpenSource {
     /// A PDF document (pages extracted lazily, in parallel).
     Pdf(Arc<PdfDocument>),
     /// A single image.
     Image,
+    /// A TIFF with more than one page (or a damaged page chain): one page per image directory;
+    /// a chain that breaks off adds one CAP-001 page for the lost rest.
+    Tiff(Arc<omr_imaging::TiffPages>),
     /// The file could not be opened: every page of it is CAP-001.
     Broken(String),
 }
 
+/// What an operator does about a file that cannot be read (R10).
+pub const REMEDY_FILE: &str =
+    "rescan the sheets, or copy or export the file again from the scanner, then add it";
+
 /// Opens a source and counts its pages (a broken file counts one page).
 pub fn open_source(src: &SourceFile) -> (OpenSource, u32) {
+    if src.bytes.is_empty() {
+        return (OpenSource::Broken("empty (zero-byte) file".into()), 1);
+    }
     match src.kind {
-        SourceKind::Image => {
-            if src.bytes.is_empty() {
-                (OpenSource::Broken("empty (zero-byte) file".into()), 1)
-            } else {
-                (OpenSource::Image, 1)
+        SourceKind::Image => match omr_imaging::tiff_pages(&src.bytes) {
+            Some(t) if t.offsets.len() > 1 || t.broken.is_some() => {
+                if t.offsets.is_empty() {
+                    let why = t.broken.unwrap_or_default();
+                    return (
+                        OpenSource::Broken(format!("TIFF without a readable page: {why}")),
+                        1,
+                    );
+                }
+                let n = t.offsets.len() as u32 + u32::from(t.broken.is_some());
+                (OpenSource::Tiff(Arc::new(t)), n)
             }
-        }
+            _ => (OpenSource::Image, 1),
+        },
         SourceKind::Pdf => match PdfDocument::open(src.bytes.clone(), ExtractOptions::default()) {
             Ok(doc) => {
                 let n = doc.page_count() as u32;
@@ -148,6 +188,14 @@ pub fn open_source(src: &SourceFile) -> (OpenSource, u32) {
                     (OpenSource::Pdf(Arc::new(doc)), n)
                 }
             }
+            Err(omr_pdf::PdfError::PasswordRequired) => (
+                OpenSource::Broken(
+                    "encrypted PDF: a password is needed to open it (never guessed); save or \
+                     scan it again without a password"
+                        .into(),
+                ),
+                1,
+            ),
             Err(e) => (OpenSource::Broken(e.to_string()), 1),
         },
     }
@@ -166,14 +214,44 @@ pub struct DecodedPage {
     pub source_dpi: Option<u32>,
 }
 
-/// CAP-001 (BLOCKER, Page) for `page_id`.
+/// CAP-001 (BLOCKER, Page) for `page_id`: what failed, that the batch went on, and what to do.
 pub fn cap001(page_id: &str, detail: &str) -> Exception {
     Exception::must("CAP-001", Severity::Blocker, Scope::Page)
         .with_target(Target {
             page: Some(page_id.to_string()),
             ..Target::default()
         })
-        .with_detail(format!("{detail}; page quarantined, batch continues"))
+        .with_detail(format!(
+            "{detail}; page quarantined, batch continues; {REMEDY_FILE}"
+        ))
+}
+
+/// A PDF's own refusal (CAP-001/CAP-004 from `omr-pdf`) for `page_id`, naming the file and
+/// what to do. A file without its `%%EOF` trailer was most likely cut short in transfer, which
+/// the parser reports as a missing image.
+fn pdf_refusal(src: &SourceFile, index: u32, page_id: &str, e: &Exception) -> Exception {
+    let mut e = e.clone();
+    e.target.page = Some(page_id.to_string());
+    let tail = &src.bytes[src.bytes.len().saturating_sub(1024)..];
+    let truncated = !tail.windows(5).any(|w| w == b"%%EOF");
+    let remedy = if e.code == "CAP-004" {
+        "scan the sheets again with JBIG2/MRC (\"compact PDF\") compression switched off"
+    } else {
+        REMEDY_FILE
+    };
+    e.detail = format!(
+        "{} page {}: {}{}; {remedy}",
+        src.name,
+        index + 1,
+        e.detail
+            .trim_start_matches(&format!("page {}: ", index + 1)),
+        if truncated {
+            " (the file has no %%EOF trailer: it looks cut short)"
+        } else {
+            ""
+        }
+    );
+    e
 }
 
 fn to_gray(g: omr_pdf::GrayImage8) -> GrayImage {
@@ -200,12 +278,30 @@ pub fn decode_page(
                 source_dpi: None,
             })
         }
-        OpenSource::Pdf(doc) => match doc.extract_page(index as usize) {
-            PageOutcome::Refused(r) => {
-                let mut e = r.exception.clone();
-                e.target.page = Some(page_id.to_string());
-                Err(e)
+        OpenSource::Tiff(t) => {
+            let i = index as usize;
+            if i >= t.offsets.len() {
+                return Err(cap001(
+                    page_id,
+                    &format!(
+                        "{}: pages after page {} cannot be read: {}",
+                        src.name,
+                        t.offsets.len(),
+                        t.broken.as_deref().unwrap_or("damaged page chain")
+                    ),
+                ));
             }
+            let d = omr_imaging::decode_tiff_page(&src.bytes, t, i, Default::default())
+                .map_err(|e| cap001(page_id, &format!("{} page {}: {e}", src.name, i + 1)))?;
+            Ok(DecodedPage {
+                image: d.image,
+                capture: d.capture,
+                known_dpi: None,
+                source_dpi: None,
+            })
+        }
+        OpenSource::Pdf(doc) => match doc.extract_page(index as usize) {
+            PageOutcome::Refused(r) => Err(pdf_refusal(src, index, page_id, &r.exception)),
             PageOutcome::Extracted(p) => {
                 let src_dpi = p.nominal_dpi();
                 let fail =
@@ -266,4 +362,27 @@ pub fn decode_page(
 /// so it does not depend on the input order, §8.11).
 pub fn page_id(sha384: &str, index: u32) -> String {
     format!("pg-{}-{:03}", &sha384[..16.min(sha384.len())], index + 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// CR-20 (R10): every input refusal says what to do.
+    #[test]
+    fn input_refusals_say_what_to_do() {
+        let dir = tempfile::tempdir().unwrap();
+        let bmp = dir.path().join("scan.bmp");
+        std::fs::write(&bmp, b"BM").unwrap();
+        let empty = dir.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        for (input, remedy) in [
+            (bmp, "save the scan as PDF or TIFF"),
+            (empty, "check the folder path"),
+            (dir.path().join("missing"), "check the path"),
+        ] {
+            let e = collect_paths(&[input]).unwrap_err().to_string();
+            assert!(e.contains(remedy), "{e}");
+        }
+    }
 }

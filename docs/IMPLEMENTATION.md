@@ -24,10 +24,35 @@ The **common case** (the spec's "standard slice", §2.4, §23.1):
 | A10 | Exceptions (§13.1, App. A) | Every raised code exists in Appendix A; `UNREADABLE` is never `EMPTY` | Catalogue test plus targeted tests |
 | A11 | Desktop UI (§5.2, ADR-001 S7) | Headless screenshots of the main screens; review flow driven through accessible labels | Screens render; scripted review completes |
 
+### Status (acceptance run of 2026-10-17)
+
+Every row was proven by one run of `scripts/acceptance.sh` on the code after the security and
+code review fixes: a release build, all `req_a*` tests including the long runs, the common
+cases, the adversarial suite `omr-app/tests/adversarial.rs`, the gated real-data runs, and with
+`OMR_ACCEPT_A11=1` the desktop rows (A11, dev profile: not timed). The evidence for the
+university, with methods and caveats, is [`docs/EVIDENCE.md`](EVIDENCE.md); the figures, with
+the digest of the code that was built, are in
+[`docs/evidence/acceptance.json`](evidence/acceptance.json). Not proven yet: scoring on the real
+exams (no answer keys supplied) and any platform other than Linux.
+
+| ID | Status | Measured (shared 4-vCPU container) |
+|---|---|---|
+| A1 | Pass | Standard slice: 0 silent errors in 50,000 held-out questions (bound 6.0 × 10⁻⁵), AR 0.50 %; hard slice 1 in 50,000, AR 5.9 % (reported). Real IAU sheets: 0 in 4,089 auto-accepted, AR 0.171 % |
+| A2 | Pass | 131.4 pages/s (own forms, 200-dpi JPEG), 88.4 pages/s (IAU form, 600-dpi bitonal PDF), 73.2 pages/s (real IAU PDFs), 4 threads; a 500-page PDF through the whole app at 81.9 pages/s, peak memory +276 MiB (the PDF once plus ≈ 100 KB per page) |
+| A3 | Pass | 30 sheets end to end: 0.69 s (own forms), 0.72 s (IAU form) |
+| A4 | Pass | Key change 12.8 ms (scoring); review action 22.1 ms, key change 17.1 ms (app); a review action with its audited snapshot save 32.6 ms (156 MB snapshot) |
+| A5 | Pass | Decision CSV/JSON files byte-identical at 1, 2, 4 threads and shuffled order (own forms, IAU form, and a hostile batch at 1–4 threads); XLSX/HTML/summary/manifest excluded (wall-clock chain head, timings) |
+| A6 | Pass | 21 identity oracle tests; all 14 IDN-004 sub-reasons and IDN-005 |
+| A7 | Pass | 14 tests; forged and foreign sheets held with IDN-002 through the whole app |
+| A8 | Pass | 17 scoring oracle tests |
+| A9 | Pass | 12 outcome oracle tests |
+| A10 | Pass | 0 unknown exception codes in 241 source files; UNREADABLE never EMPTY through scoring; 15 adversarial tests give each hostile input its Appendix A code (11 defects fixed) |
+| A11 | Pass | `crates/shell-slint/tests/req_a11.rs` (13 tests, demo data) and `req_a11_real.rs` (7 tests over omr-app: review and release, New exam, key replacement, live grading, added batches, a tampered project); screenshots in `docs/design/screens/` and `docs/design/screens/real/`. Headless only: never run in a real window or on Windows |
+
 ## 2. Scope
 
 **In the MVP:**
-- Sheet generation: SVG, PNG and PDF from the template model (§6.1–§6.5), using AprilTag 36h11 corners, row ticks and the QR v3-M page code with the 96-bit tag.
+- Sheet generation: printable PDF from the template model (§6.1–§6.5), using AprilTag 36h11 corners, row ticks and the QR v3-M page code with the 96-bit tag. A new exam gets a fresh exam ID and page-code key, kept in the user's private key folder, never beside the PDF.
 - Semi-synthetic corpus generation (§23.3).
 - Image ingest (JPEG/PNG/TIFF) and PDF image-XObject extraction (§7.3).
 - The recognition pipeline (§8.2–§8.8), classical cascade (see the deferred list for the CNN).
@@ -35,21 +60,28 @@ The **common case** (the spec's "standard slice", §2.4, §23.1):
 - Scoring (§10.1–§10.6).
 - CLO engine (§11.1–§11.4, §11.7 tables).
 - CTT item analysis (§12.1–§12.2).
-- SQLite project store with a SHA-384 hash-chained event log (§14.2–§14.4).
-- CSV/XLSX/HTML exports (§16.3, §17).
+- SQLite project store with a SHA-384 hash-chained event log (§14.2–§14.4): the session snapshot bound to the chain (`SnapshotSaved`), projections replayed against their events on open, checkpoints signed with a per-device ECDSA P-384 key and kept outside the project (truncation, re-chained logs and older copies refused with SYS-011), reviewer notes stored by salted reference so they can be erased.
+- Privacy controls of §14.2–§14.4 and §19: project folders and exports owner-only (0700/0600), sync and network folders refused (SYS-015), student numbers masked in CLI output unless revealed, reveals and crop exports recorded in the audit log.
+- CSV/XLSX/HTML exports (§16.3, §17), listed in a manifest signed with the device key; the release step (§13.4: `ResultsReleased`, superseded by any later change) gates the Blackboard grade-center upload.
 - The end-to-end pipeline in `omr-app` with rayon parallelism.
 - The `omr` CLI.
-- The Slint desktop shell (§5.2) for setup, import, review queue, results and outcomes.
+- The Slint desktop shell (§5.2): an exams folder by default (demo data only with `--demo`, marked on every screen), a New-exam form that grades a folder of scans, setup with key replacement, live import and added batches, the review queue, results with release and exports, and outcomes.
 
 **Deferred, with the spec section that owns each:**
 - The CNN/conformal stage of the cascade (§8.7 steps 3–6); the MVP uses calibrated classical features plus hysteresis.
 - Handwritten name HTR (§9.4 channel C).
 - Typst rendering (§6.2): the MVP renders through SVG behind the same API.
-- TWAIN/eSCL capture agents (§7.1); the MVP uses hot folders and file import.
+- TWAIN/eSCL capture agents (§7.1) and hot-folder watching; the MVP imports files and folders (`omr grade`, `omr add`, the desktop's New exam and Add scans).
+- SVG and PNG sheet output (§6.2); `omr sheet render` writes PDF.
+- A teacher-filled key sheet as the key source (§10.2, Remark's Quick Grade): keys come from a key file or are inferred (never releasable).
+- Packaging, installers and the Windows/macOS builds (§24): the MVP has been built and tested on Linux only, and the desktop app has run headless (testing backend and software-rendered screenshots), never in a real window.
+- Streaming ingest (§7.4) and the per-run decode budget and per-page watchdog (§22.3–§22.4): files are size-checked before they are read and images by their header before they are decoded, but each input file is read whole into memory.
+- The read-access log (§19.5 `access_log`): reveals of student numbers and crop exports are audit events; views in the desktop app are not logged.
+- Licence enforcement (§5.4: `cargo-deny`, the notices file, Slint's AboutSlint widget).
 - Server mode (§15).
 - Blackboard/Banner connectors (§16.1–§16.2).
 - The DOCX filling of official NCAAA blanks (§11.7): the MVP emits the TP-154 tables as XLSX/CSV/HTML.
-- Encryption at rest and the key hierarchy (§19.2); the MVP uses plain SQLite, with hooks noted.
+- Encryption at rest and the key hierarchy (§19.2); the MVP uses plain SQLite and owner-only files, with hooks noted.
 - The AI pack (§18).
 - Phone capture (§7.6).
 

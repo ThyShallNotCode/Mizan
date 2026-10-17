@@ -1,0 +1,820 @@
+{
+  "generated_utc": "2026-10-17T09:27:08Z",
+  "what": "MVP acceptance run (docs/IMPLEMENTATION.md §1): one object per row; aggregates only; synthetic data unless the real_data section is present",
+  "git": {
+    "head": "df5daee",
+    "dirty": true,
+    "measured": {
+      "code_sha256": "d3401928dbf897a1eb9f682de2e9424d5cf3435e6b68a0c5361ff49e9d9908c9",
+      "files": 315,
+      "verify": "git ls-tree -r <commit> -- crates Cargo.toml Cargo.lock | grep -v '\\.md$' | sha256sum"
+    }
+  },
+  "machine": {
+    "cpus": 4,
+    "cpu_model": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "os": "Linux-6.18.44-fc-v139-x86_64-with-glibc2.39",
+    "load_average_start": "2.29 2.94 2.73",
+    "load_average_end": "3.01 3.20 3.22",
+    "note": "shared 4-vCPU container; timings are lower bounds of what a quiet machine gives when other builds run alongside"
+  },
+  "toolchain": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+  "rows": [
+    {
+      "id": "A1",
+      "requirement": "Recognition accuracy with calibrated abstention (spec §8, §23.1)",
+      "method": "Held-out semi-synthetic standard slice from omr-sim (truth by construction): 500 own-form sheets x 100 questions, 200-dpi gray JPEG q70-95, seed 20261016 (never used for tuning); pooled-batch and single-page baselines. Hard slice (light marks, erasures, ticks, cross-outs, strong distortion, streaks) on the same seed, reported separately. Plus the committed small corpora and the legacy synthetic tests.",
+      "target": "0 silent errors on >= 50,000 test questions, SER bound 3/n at k = 0, AR <= 1 %",
+      "measured": {
+        "standard_slice": {
+          "corpus": {
+            "profile": "standard",
+            "seed": 20261016,
+            "sheets": 500,
+            "pages": 500,
+            "questions_per_sheet": 100,
+            "options": 5,
+            "forms": 2,
+            "dpi": 200
+          },
+          "registration": {
+            "failed_pages": 0,
+            "code_not_verified": 0,
+            "wrong_page_or_payload": 0,
+            "true_centre_error_px_max": 0.104792
+          },
+          "pooled_batch": {
+            "questions": 50000,
+            "auto_accepted": 49750,
+            "silent_errors": 0,
+            "ser_per_question": 0.0,
+            "ser_per_question_upper95": 6e-05,
+            "ser_per_question_upper95_deff2": 0.00012,
+            "review": 250,
+            "ar": 0.005,
+            "auto_accepted_on_review_truth": 0,
+            "sheets": 500,
+            "sheets_with_silent_error": 0,
+            "sheet_ser_upper95": 0.006,
+            "student_id": {
+              "exact_confident": 500,
+              "flagged": 0,
+              "wrong_unflagged": 0
+            }
+          },
+          "single_page_prior": {
+            "questions": 50000,
+            "auto_accepted": 49744,
+            "silent_errors": 0,
+            "ser_per_question": 0.0,
+            "ser_per_question_upper95": 6e-05,
+            "ser_per_question_upper95_deff2": 0.00012,
+            "review": 256,
+            "ar": 0.00512,
+            "auto_accepted_on_review_truth": 0,
+            "sheets": 500,
+            "sheets_with_silent_error": 0,
+            "sheet_ser_upper95": 0.006,
+            "student_id": {
+              "exact_confident": 500,
+              "flagged": 0,
+              "wrong_unflagged": 0
+            }
+          },
+          "timing_one_thread": {
+            "decide_ms_median": 0.046015,
+            "jpeg_decode_ms_median": 15.8539,
+            "page_stage_ms_max": 21.4635,
+            "page_stage_ms_median": 13.063,
+            "page_stage_ms_p95": 19.5563,
+            "pages": 60,
+            "threads": 1
+          }
+        },
+        "hard_slice_reported_separately": {
+          "corpus": {
+            "profile": "hard",
+            "seed": 20261016,
+            "sheets": 500,
+            "pages": 500,
+            "questions_per_sheet": 100,
+            "options": 5,
+            "forms": 2,
+            "dpi": 200
+          },
+          "registration": {
+            "failed_pages": 0,
+            "code_not_verified": 0,
+            "wrong_page_or_payload": 0,
+            "true_centre_error_px_max": 0.346057
+          },
+          "pooled_batch": {
+            "questions": 50000,
+            "auto_accepted": 47057,
+            "silent_errors": 1,
+            "ser_per_question": 2e-05,
+            "ser_per_question_upper95": 9.48e-05,
+            "ser_per_question_upper95_deff2": 0.0001896,
+            "review": 2943,
+            "ar": 0.05886,
+            "auto_accepted_on_review_truth": 0,
+            "sheets": 500,
+            "sheets_with_silent_error": 1,
+            "sheet_ser_upper95": 0.00948,
+            "student_id": {
+              "exact_confident": 500,
+              "flagged": 0,
+              "wrong_unflagged": 0
+            }
+          },
+          "single_page_prior": {
+            "questions": 50000,
+            "auto_accepted": 47036,
+            "silent_errors": 1,
+            "ser_per_question": 2e-05,
+            "ser_per_question_upper95": 9.48e-05,
+            "ser_per_question_upper95_deff2": 0.0001896,
+            "review": 2964,
+            "ar": 0.05928,
+            "auto_accepted_on_review_truth": 0,
+            "sheets": 500,
+            "sheets_with_silent_error": 1,
+            "sheet_ser_upper95": 0.00948,
+            "student_id": {
+              "exact_confident": 500,
+              "flagged": 0,
+              "wrong_unflagged": 0
+            }
+          },
+          "timing_one_thread": null
+        },
+        "tests_passed": 9
+      },
+      "pass": true,
+      "tests": [
+        "omr-app::synthetic_e2e::req_a1_a8_synthetic_sheets_grade_end_to_end",
+        "omr-recog::fractional_dpi::req_a1_iau_form_at_300_dpi_gray_jpeg_and_png_registers_and_reads",
+        "omr-recog::ownform_gates::req_a1_bitonal_capture_uses_bitonal_thresholds",
+        "omr-recog::ownform_synth::req_a1_ownform_hard_slice_reported_separately",
+        "omr-recog::ownform_synth::req_a1_ownform_standard_slice_50k_held_out_questions",
+        "omr-recog::ownform_synth::req_a1_ownform_standard_slice_zero_silent_errors",
+        "omr-recog::ownform_synth::req_a1_ownform_two_page_booklets_route_by_page_code",
+        "omr-recog::synthetic::req_a1_bitonal_600dpi_page_is_reduced_and_flagged",
+        "omr-recog::synthetic::req_a1_synthetic_decisions_follow_the_brief"
+      ],
+      "tests_failed": []
+    },
+    {
+      "id": "A2",
+      "requirement": "Throughput (spec §2.4, §21.1)",
+      "method": "omr bench (release) at 1, 2 and 4 threads, best of 3: decode + page stage + batch stage (recognition) and the full in-memory pipeline, on 240 own-form 200-dpi JPEG sheets and on 150 synthetic legacy IAU sheets as 600-dpi bitonal PDFs; plus one 500-page own-form PDF graded through the whole application (store included) at 4 threads, with its peak memory",
+      "target": ">= 40 pages/s at 4 threads (spec 4-core floor); stretch >= 100",
+      "measured": {
+        "ownform_200dpi_jpeg": {
+          "pages": 240,
+          "pages_per_s_by_threads": {
+            "1": {
+              "recognition_pages_per_s": 34.9,
+              "pipeline_pages_per_s": 32.2
+            },
+            "2": {
+              "recognition_pages_per_s": 65.4,
+              "pipeline_pages_per_s": 67.1
+            },
+            "4": {
+              "recognition_pages_per_s": 131.4,
+              "pipeline_pages_per_s": 132.9
+            }
+          },
+          "bench_30_sheets_in_process_s": 0.811
+        },
+        "legacy_iau_600dpi_bitonal_pdf": {
+          "pages": 150,
+          "pages_per_s_by_threads": {
+            "1": {
+              "recognition_pages_per_s": 22.2,
+              "pipeline_pages_per_s": 21.1
+            },
+            "2": {
+              "recognition_pages_per_s": 40.9,
+              "pipeline_pages_per_s": 37.5
+            },
+            "4": {
+              "recognition_pages_per_s": 88.4,
+              "pipeline_pages_per_s": 78.6
+            }
+          },
+          "bench_30_sheets_in_process_s": 0.552
+        },
+        "large_pdf_500_pages_whole_app": {
+          "auto_accepted": 19886,
+          "grade_and_export_s": 6.22623,
+          "grade_s": 6.10699,
+          "page_stage_pages_per_s": 142.761,
+          "pages": 500,
+          "pdf_mib": 223.287,
+          "peak_rss_growth_mib": 276.035,
+          "peak_rss_mib": 675.727,
+          "questions": 20000,
+          "release_build": true,
+          "silent_errors": 0,
+          "threads": 4,
+          "whole_app_pages_per_s": 81.8734
+        },
+        "load_average_during": [
+          3.85,
+          3.42
+        ],
+        "tests_passed": 3
+      },
+      "pass": true,
+      "tests": [
+        "omr-app::adversarial::req_a2_a_500_page_pdf_keeps_memory_bounded_and_throughput",
+        "omr-cli::acceptance_perf::req_a2_throughput_legacy_iau_bitonal_pdf_corpus",
+        "omr-cli::acceptance_perf::req_a2_throughput_ownform_200dpi_jpeg_corpus"
+      ],
+      "tests_failed": []
+    },
+    {
+      "id": "A3",
+      "requirement": "Time to first result, 30 sheets (spec §2.4)",
+      "method": "Wall time of the `omr grade` process on exactly 30 sheets with key, roster and CLO file at 4 threads (start, read, spool, recognition, identity, scoring, outcomes, analytics, store, every export), own forms and legacy; plus omr bench's in-process 30-sheet run",
+      "target": "< 3 s",
+      "measured": {
+        "budget_s": 3.0,
+        "legacy_600dpi_bitonal_pdf_s": 0.717207,
+        "ownform_200dpi_jpeg_s": 0.688764,
+        "sheets": 30,
+        "threads": 4,
+        "what": "omr grade process wall time: start, read, spool, recognition, identity, scoring, outcomes, analytics, store, exports",
+        "load_average_during": [
+          3.51
+        ],
+        "tests_passed": 1
+      },
+      "pass": true,
+      "tests": [
+        "omr-cli::acceptance_perf::req_a3_time_to_first_result_30_sheets"
+      ],
+      "tests_failed": []
+    },
+    {
+      "id": "A4",
+      "requirement": "Regrade latency, 10,000 sheets x 100 items (spec §10.1)",
+      "method": "Release, best of 5: omr-scoring key-change regrade (10 items re-keyed, 4 permuted forms, validate + compile + L3-L6) and the omr-app session rescoring after one review action and after a key change; reported beside it, a review action including the save of the session snapshot bound to the audit chain (CR-14)",
+      "target": "<= 50 ms",
+      "measured": {
+        "omr_scoring_key_change": {
+          "booklets": 10000,
+          "items": 100,
+          "forms": 4,
+          "key_change_regrade_ms": 12.836,
+          "prepare_ms": 93.323,
+          "release_build": true
+        },
+        "omr_app_session": {
+          "booklets": 10000,
+          "items": 100,
+          "review_action_rescore_ms": 22.1302,
+          "key_change_rescore_ms": 17.1468,
+          "review_action_with_snapshot_save_ms": 32.5911,
+          "snapshot_bytes": 156317574,
+          "release_build": true
+        },
+        "load_average_during": [
+          3.51,
+          3.36
+        ],
+        "tests_passed": 2
+      },
+      "pass": true,
+      "tests": [
+        "omr-app::synthetic_e2e::req_a4_rescoring_is_incremental_and_fast",
+        "omr-scoring::regrade::req_a4_regrade_10k_x100"
+      ],
+      "tests_failed": []
+    },
+    {
+      "id": "A5",
+      "requirement": "Determinism (spec §8.11, §23.6)",
+      "method": "The same corpus graded at 1, 2 and 4 threads in name order, in a seeded shuffle and reversed, compared byte for byte (own forms: 24 sheets; legacy: 18 sheets in two slices); engine-level measurement identity at 1/2/4 rayon threads",
+      "target": "Byte-identical decision files",
+      "measured": {
+        "ownform": {
+          "byte_identical": [
+            "blackboard_grade_center.csv",
+            "booklets.json",
+            "item_analysis.csv",
+            "key.csv",
+            "results.csv",
+            "review_queue.json",
+            "test_stats.csv",
+            "tp154_a1.csv",
+            "tp154_b1.csv"
+          ],
+          "excluded": [
+            "results.xlsx",
+            "item_analysis.xlsx",
+            "tp154.xlsx",
+            "report.html",
+            "summary.json",
+            "manifest.json"
+          ],
+          "excluded_and_differing": [
+            "item_analysis.xlsx",
+            "manifest.json",
+            "report.html",
+            "results.xlsx",
+            "summary.json",
+            "tp154.xlsx"
+          ],
+          "runs": [
+            {
+              "run": "t1",
+              "threads": 1
+            },
+            {
+              "run": "t2",
+              "threads": 2
+            },
+            {
+              "run": "t4",
+              "threads": 4
+            },
+            {
+              "run": "t4-shuffled",
+              "threads": 4
+            },
+            {
+              "run": "t2-reversed",
+              "threads": 2
+            }
+          ],
+          "sheets": 24
+        },
+        "legacy": {
+          "byte_identical": [
+            "booklets.json",
+            "item_analysis.csv",
+            "key.csv",
+            "results.csv",
+            "review_queue.json",
+            "test_stats.csv",
+            "tp154_a1.csv"
+          ],
+          "excluded": [
+            "results.xlsx",
+            "item_analysis.xlsx",
+            "tp154.xlsx",
+            "report.html",
+            "summary.json",
+            "manifest.json"
+          ],
+          "runs": [
+            {
+              "run": "t1",
+              "threads": 1
+            },
+            {
+              "run": "t2",
+              "threads": 2
+            },
+            {
+              "run": "t4",
+              "threads": 4
+            },
+            {
+              "run": "t4-shuffled",
+              "threads": 4
+            }
+          ],
+          "sheets": 18,
+          "slices": [
+            "200-dpi gray PNG files",
+            "600-dpi bitonal PDF"
+          ]
+        },
+        "tests_passed": 4
+      },
+      "pass": true,
+      "tests": [
+        "omr-app::acceptance::req_a5_legacy_decisions_identical_at_1_2_4_threads_and_shuffled_order",
+        "omr-app::synthetic_e2e::req_a5_outputs_identical_across_threads_and_input_order",
+        "omr-recog::ownform_determinism::req_a5_ownform_identical_across_threads_and_page_orders",
+        "omr-recog::synthetic::req_a5_page_stage_is_deterministic"
+      ],
+      "tests_failed": []
+    },
+    {
+      "id": "A6",
+      "requirement": "Identity (spec §9)",
+      "method": "Oracle tests of roster matching from the bubbled ID, national ID/Iqama detection, duplicates, not-on-roster, rosterless mode, assignment invariants",
+      "target": "Correct codes: IDN-004 sub-reasons, IDN-005",
+      "measured": {
+        "tests_passed": 21
+      },
+      "pass": true,
+      "tests": [
+        "omr-identity::a6_identity::req_a6_absent_list_holds_only_students_expected_this_session",
+        "omr-identity::a6_identity::req_a6_assignment_changed_when_the_batch_moves_a_booklet",
+        "omr-identity::a6_identity::req_a6_batch_duplicates_and_not_on_roster",
+        "omr-identity::a6_identity::req_a6_batch_outcome_is_invariant_to_booklet_order",
+        "omr-identity::a6_identity::req_a6_blank_multi_unreadable_columns_are_one_column_wildcards",
+        "omr-identity::a6_identity::req_a6_blocked_scoring_with_a_typed_string_is_conservative",
+        "omr-identity::a6_identity::req_a6_confirmed_pair_is_never_moved_by_a_roster_change",
+        "omr-identity::a6_identity::req_a6_confirmed_pairs_stay_fixed_and_absent_dn_rules",
+        "omr-identity::a6_identity::req_a6_exact_roster_match_from_bubbled_id",
+        "omr-identity::a6_identity::req_a6_gap_within_hysteresis_of_g_null_never_auto_accepts",
+        "omr-identity::a6_identity::req_a6_id_only_auto_accept_needs_an_id_passing_the_check_digit",
+        "omr-identity::a6_identity::req_a6_national_id_and_iqama_detection",
+        "omr-identity::a6_identity::req_a6_national_id_digits_are_masked_across_channels",
+        "omr-identity::a6_identity::req_a6_never_nearest_neighbour_property",
+        "omr-identity::a6_identity::req_a6_never_snaps_to_the_nearest_roster_entry",
+        "omr-identity::a6_identity::req_a6_roster_change_after_scanning_is_flagged",
+        "omr-identity::a6_identity::req_a6_rosterless_mode",
+        "omr-identity::a6_identity::req_a6_second_channel_page_code_auto_accepts_and_conflict_is_idn006",
+        "omr-identity::a6_identity::req_a6_typed_channel_agreement_raises_confidence_and_conflict_is_flagged",
+        "omr-identity::a6_identity::req_a6_typed_string_resolves_a_blank_column",
+        "omr-recog::ownform_gates::req_a6_unverified_page_id_is_never_exact"
+      ],
+      "tests_failed": []
+    },
+    {
+      "id": "A7",
+      "requirement": "Page code (spec §6.4)",
+      "method": "Encode/decode round trip (unit + property), single-character changes, other keys, rendered sheets at 200/300 dpi, every copy outcome on rendered sheets, forged and foreign sheets through the whole app",
+      "target": "96-bit HMAC-SHA384 tag verified; IDN-002 on failure",
+      "measured": {
+        "tests_passed": 14
+      },
+      "pass": true,
+      "tests": [
+        "omr-app::acceptance::req_a7_forged_and_foreign_sheets_are_held_with_idn002",
+        "omr-forms::lib::pagecode::tests::req_a7_non_zero_pad_is_rejected",
+        "omr-forms::lib::pagecode::tests::req_a7_round_trip_and_length",
+        "omr-forms::lib::pagecode::tests::req_a7_tampered_body_is_rejected",
+        "omr-forms::lib::pagecode::tests::req_a7_wrong_key_is_rejected",
+        "omr-forms::properties::req_a7_any_single_character_change_is_rejected",
+        "omr-forms::properties::req_a7_encode_decode_round_trip",
+        "omr-forms::properties::req_a7_other_keys_never_verify",
+        "omr-forms::render::req_a7_tags_and_codes_are_machine_readable_at_200_dpi",
+        "omr-forms::render::req_a7_tags_and_codes_are_machine_readable_at_300_dpi",
+        "omr-recog::lib::ownform::code::tests::req_a7_copy_outcomes",
+        "omr-recog::ownform_identity::req_a7_mirrored_page_is_unmirrored",
+        "omr-recog::ownform_identity::req_a7_page_code_copy_outcomes_on_rendered_sheets",
+        "omr-recog::ownform_identity::req_a7_rotated_pages_are_auto_rotated"
+      ],
+      "tests_failed": []
+    },
+    {
+      "id": "A8",
+      "requirement": "Scoring (spec §10)",
+      "method": "Hand-computed oracles: multi-form mapping, item rules, exact rationals, Saudi grade scale, voids/bonus/choice groups, floors, penalties; golden CSV; end-to-end scores equal a hand computation from the truth",
+      "target": "Exact match with hand-computed oracles",
+      "measured": {
+        "tests_passed": 17
+      },
+      "pass": true,
+      "tests": [
+        "omr-app::synthetic_e2e::req_a1_a8_synthetic_sheets_grade_end_to_end",
+        "omr-report::golden::req_a8_results_csv_letters_on_the_saudi_scale",
+        "omr-scoring::a8_oracles::req_a8_choice_groups_never_guess_pending",
+        "omr-scoring::a8_oracles::req_a8_course_split_and_status_codes",
+        "omr-scoring::a8_oracles::req_a8_exact_rationals_point_three",
+        "omr-scoring::a8_oracles::req_a8_floors_and_penalties",
+        "omr-scoring::a8_oracles::req_a8_item_rules_oracle_default_policy",
+        "omr-scoring::a8_oracles::req_a8_item_rules_oracle_formula_scoring",
+        "omr-scoring::a8_oracles::req_a8_key_revision_is_a_new_run_and_rescore_is_idempotent",
+        "omr-scoring::a8_oracles::req_a8_l4_voids_bonus_choice_groups_overrides",
+        "omr-scoring::a8_oracles::req_a8_malformed_inputs_are_errors_not_panics",
+        "omr-scoring::a8_oracles::req_a8_multi_form_mapping_oracle",
+        "omr-scoring::a8_oracles::req_a8_not_reached_row_shift_near_chance",
+        "omr-scoring::a8_oracles::req_a8_publish_validation_codes",
+        "omr-scoring::a8_oracles::req_a8_saudi_grade_scale",
+        "omr-scoring::a8_oracles::req_a8_score_box_points_and_mrk013",
+        "omr-scoring::a8_oracles::req_a8_unreadable_and_absent_exceptions"
+      ],
+      "tests_failed": []
+    },
+    {
+      "id": "A9",
+      "requirement": "Outcomes (spec §11)",
+      "method": "Hand-computed oracles: average, threshold proportion, Taif per-question, FCAR/EAMU, TP-154 A.1/B.1 rows, PLO roll-up, ABET crosswalk, missing data; golden CSV",
+      "target": "Exact match with hand-computed oracles",
+      "measured": {
+        "tests_passed": 12
+      },
+      "pass": true,
+      "tests": [
+        "omr-outcomes::a9_oracles::req_a9_average_threshold_levels_eamu",
+        "omr-outcomes::a9_oracles::req_a9_exit_exam_item_outcome_map",
+        "omr-outcomes::a9_oracles::req_a9_frameworks_and_abet_crosswalk",
+        "omr-outcomes::a9_oracles::req_a9_missing_data_policy",
+        "omr-outcomes::a9_oracles::req_a9_outcome_exceptions_and_missing_data",
+        "omr-outcomes::a9_oracles::req_a9_plo_rollup_worked_example",
+        "omr-outcomes::a9_oracles::req_a9_sections_pooling_blend_and_suppression",
+        "omr-outcomes::a9_oracles::req_a9_student_performance_worked_example",
+        "omr-outcomes::a9_oracles::req_a9_taif_per_question",
+        "omr-outcomes::a9_oracles::req_a9_tp154_a1_distribution",
+        "omr-outcomes::a9_oracles::req_a9_tp154_b1_rows",
+        "omr-report::golden::req_a9_tp154_a1_and_b1_csv_with_bilingual_headers"
+      ],
+      "tests_failed": []
+    },
+    {
+      "id": "A10",
+      "requirement": "Exceptions (spec §13.1, Appendix A)",
+      "method": "Source scan of every .rs/.slint file for exception codes against the generated Appendix A catalogue (plus literal severity/scope at constructor calls); targeted tests that cut-off, unregistered and two-tag pages are UNREADABLE (never blank) and stay pending through scoring",
+      "target": "Every raised code exists in Appendix A; UNREADABLE is never EMPTY",
+      "measured": {
+        "catalogue_scan": {
+          "bad_severity_or_scope": 0,
+          "catalogue_codes": 115,
+          "code_tokens": 1213,
+          "computed_constructor_calls": 8,
+          "distinct_codes": 115,
+          "literal_constructor_calls": 99,
+          "source_files": 241,
+          "unknown_codes": 0
+        },
+        "tests_passed": 8
+      },
+      "pass": true,
+      "tests": [
+        "omr-app::acceptance::req_a10_cut_off_answers_stay_pending_never_scored_blank",
+        "omr-app::synthetic_e2e::req_a10_corrupt_inputs_inferred_key_and_view_models",
+        "omr-identity::a6_identity::req_a10_identity_exceptions_are_catalogued",
+        "omr-model::catalogue::req_a10_every_code_in_the_workspace_sources_is_in_appendix_a",
+        "omr-recog::ownform_gates::req_a10_two_tag_pages_are_never_auto_graded",
+        "omr-recog::ownform_identity::req_a10_blank_and_cut_off_pages",
+        "omr-recog::synthetic::req_a10_cut_off_bubbles_are_unreadable_never_blank",
+        "omr-recog::synthetic::req_a10_failed_registration_is_unreadable_never_blank"
+      ],
+      "tests_failed": []
+    },
+    {
+      "id": "A11",
+      "requirement": "Desktop UI (spec §5.2, ADR-001 S7)",
+      "method": "shell-slint tests (OMR_ACCEPT_A11=1, dev profile: not timed): headless screenshots of every screen in both themes and window sizes; review flow driven through accessible labels and keys; the real backend over omr-app (review, live grading, added batches, the New-exam form, key replacement, release). Screenshots: docs/design/screens/, docs/design/screens/real/",
+      "target": "Screens render; scripted review completes",
+      "measured": {
+        "tests_passed": 20
+      },
+      "pass": true,
+      "tests": [
+        "shell-slint::req_a11::req_a11_blind_items_never_show_a_leaked_engine_reading",
+        "shell-slint::req_a11::req_a11_demo_data_is_marked_on_every_screen",
+        "shell-slint::req_a11::req_a11_every_control_has_a_unique_accessible_label",
+        "shell-slint::req_a11::req_a11_every_screen_fits_nominal_and_minimum_windows",
+        "shell-slint::req_a11::req_a11_every_screen_renders_in_both_themes",
+        "shell-slint::req_a11::req_a11_exams_table_and_screen_shortcuts_work_from_the_keyboard",
+        "shell-slint::req_a11::req_a11_identity_lane_and_candidates_by_label",
+        "shell-slint::req_a11::req_a11_notice_lane_clears_and_escape_closes_the_drawer",
+        "shell-slint::req_a11::req_a11_outcomes_print_both_statistics_and_name_the_deciding_method",
+        "shell-slint::req_a11::req_a11_results_rank_flags_and_readiness_actions_lead_where_they_say",
+        "shell-slint::req_a11::req_a11_review_flow_through_accessible_labels",
+        "shell-slint::req_a11::req_a11_review_keyboard_path_with_physical_keys",
+        "shell-slint::req_a11::req_a11_setup_matrix_edits_through_accessible_values",
+        "shell-slint::req_a11_real::req_a11_real_backend_adds_scans_from_the_scan_screen",
+        "shell-slint::req_a11_real::req_a11_real_backend_creates_an_exam_from_the_new_exam_form",
+        "shell-slint::req_a11_real::req_a11_real_backend_edge_projects_never_panic",
+        "shell-slint::req_a11_real::req_a11_real_backend_empty_workspace_never_panics",
+        "shell-slint::req_a11_real::req_a11_real_backend_grades_live_through_pump",
+        "shell-slint::req_a11_real::req_a11_real_backend_replaces_the_key_from_setup_and_names_a_tampered_project",
+        "shell-slint::req_a11_real::req_a11_real_backend_review_flow_rescores_results"
+      ],
+      "tests_failed": []
+    }
+  ],
+  "common_cases": [
+    {
+      "id": "C1",
+      "case": "Orientation: pages turned 90/180/270 degrees",
+      "tests": [
+        "omr-app::iau_capture::c1_legacy_orientation_that_cannot_be_decided_is_never_read_silently",
+        "omr-app::iau_capture::c1_legacy_pages_turned_a_quarter_or_upside_down_are_read_upright",
+        "omr-app::iau_capture::c1_own_form_pages_at_90_180_270_degrees_are_read"
+      ],
+      "tests_failed": [],
+      "pass": true
+    },
+    {
+      "id": "C2",
+      "case": "Duplex blank backs (CAP-012)",
+      "tests": [
+        "omr-app::iau_capture::c2_blank_backs_in_a_pdf_and_as_image_files_are_dropped_with_cap012",
+        "omr-app::iau_capture::c2_own_form_blank_backs_do_not_shift_collation"
+      ],
+      "tests_failed": [],
+      "pass": true
+    },
+    {
+      "id": "C3",
+      "case": "Mixed capture slices in one exam",
+      "tests": [
+        "omr-app::iau_capture::c3_bitonal_pdf_gray_jpeg_and_png_in_one_exam_each_get_their_baseline"
+      ],
+      "tests_failed": [],
+      "pass": true
+    },
+    {
+      "id": "C4",
+      "case": "A later batch appended",
+      "tests": [
+        "omr-app::append_batch::c4_appending_a_batch_equals_grading_everything_at_once",
+        "omr-app::append_batch::c4_review_decisions_taken_before_the_append_carry_over",
+        "omr-cli::real_world::omr_cli_real_world_cases"
+      ],
+      "tests_failed": [],
+      "pass": true
+    },
+    {
+      "id": "C5",
+      "case": "Answer keys: real key after --infer-key, mis-key, file layouts",
+      "tests": [
+        "omr-app::instructor_files::c5_key_files_in_every_common_layout_read_the_same_key",
+        "omr-app::instructor_files::c5_malformed_key_files_fail_with_the_line_and_what_to_change",
+        "omr-app::project_actions::c5_a_mis_keyed_answer_is_corrected_with_an_audited_regrade",
+        "omr-app::project_actions::c5_the_real_key_replaces_an_inferred_key_and_the_blocker_clears",
+        "omr-cli::real_world::omr_cli_real_world_cases"
+      ],
+      "tests_failed": [],
+      "pass": true
+    },
+    {
+      "id": "C6",
+      "case": "Rosters: BOM, Arabic, Excel damage, duplicates",
+      "tests": [
+        "omr-app::instructor_files::c6_duplicate_and_damaged_roster_ids_are_refused_with_the_fix",
+        "omr-app::instructor_files::c6_lost_leading_zeros_restored_only_when_the_scheme_makes_it_unambiguous",
+        "omr-app::instructor_files::c6_roster_csv_with_bom_arabic_names_and_excel_damage",
+        "omr-app::instructor_files::c6_roster_xlsx_with_numeric_id_cells_and_arabic_names",
+        "omr-cli::real_world::omr_cli_real_world_cases"
+      ],
+      "tests_failed": [],
+      "pass": true
+    },
+    {
+      "id": "C7",
+      "case": "Override reasons on review actions",
+      "tests": [
+        "omr-app::project_actions::c7_overriding_the_engine_needs_a_canonical_reason",
+        "omr-cli::real_world::omr_cli_real_world_cases"
+      ],
+      "tests_failed": [],
+      "pass": true
+    },
+    {
+      "id": "C8",
+      "case": "Blackboard grade-center upload",
+      "tests": [
+        "omr-app::project_actions::c8_blackboard_grade_center_upload_holds_only_what_it_needs",
+        "omr-cli::real_world::omr_cli_real_world_cases"
+      ],
+      "tests_failed": [],
+      "pass": true
+    },
+    {
+      "id": "C9",
+      "case": "Absent, partial, stray-mark and full-row sheets",
+      "tests": [
+        "omr-app::iau_sheets::c9_absent_partial_stray_and_full_row_sheets"
+      ],
+      "tests_failed": [],
+      "pass": true
+    },
+    {
+      "id": "C10",
+      "case": "Student-ID mistakes on IAU sheets",
+      "tests": [
+        "omr-app::iau_sheets::c10_a_roster_neighbour_who_already_holds_a_sheet_is_never_proposed",
+        "omr-app::iau_sheets::c10_id_mistakes_get_idn_codes_and_roster_suggestions"
+      ],
+      "tests_failed": [],
+      "pass": true
+    }
+  ],
+  "adversarial": {
+    "what": "Hostile inputs through the whole application (omr-app/tests/adversarial.rs, synthetic data): broken, truncated, encrypted and mislabelled files, multi-page TIFF, foreign and unreadable pages, 75/150/300/400 dpi, rescans and duplicated pages, every bubble filled or none marked, void and any-of keys, review + key change + undo, append + undo, a group decision refused part way, determinism across threads and input orders",
+    "tests": [
+      "omr-app::adversarial::a_cleaner_rescan_in_a_later_batch_never_silently_replaces_a_reviewers_decision",
+      "omr-app::adversarial::a_group_decision_refused_part_way_changes_nothing",
+      "omr-app::adversarial::a_sheet_of_a_form_the_exam_does_not_declare_is_held_with_idn002",
+      "omr-app::adversarial::a_void_and_an_any_of_key_entry_score_as_declared",
+      "omr-app::adversarial::an_incomplete_key_never_reads_as_releasable",
+      "omr-app::adversarial::broken_files_are_cap001_naming_the_file_and_the_fix",
+      "omr-app::adversarial::every_bubble_filled_or_none_marked_is_never_credited",
+      "omr-app::adversarial::every_page_of_a_multi_page_tiff_is_graded_and_a_damaged_rest_is_cap001",
+      "omr-app::adversarial::hostile_batches_are_deterministic_across_threads_and_input_order",
+      "omr-app::adversarial::pages_that_are_not_this_exams_sheet_are_held_never_graded",
+      "omr-app::adversarial::rescans_and_duplicated_pages_are_col003_when_marks_agree",
+      "omr-app::adversarial::review_then_key_change_then_undo_rescore_and_stay_audited",
+      "omr-app::adversarial::scans_at_150_300_400_dpi_read_and_below_100_dpi_are_refused_with_cap002",
+      "omr-app::adversarial::turned_pages_read_upright_and_mirrored_ones_are_never_read",
+      "omr-app::adversarial::undo_after_appending_a_batch_stops_at_the_append_and_rescores"
+    ],
+    "tests_failed": [],
+    "pass": true
+  },
+  "real_data": {
+    "conditions": "143 real IAU CCSIT sheets (restricted personal data, never committed); reference labels agent-adjudicated (two readers plus the prototype, disagreements adjudicated on 600-dpi zooms), not certification-grade; answer keys inferred (--infer-key) because the owner has not supplied them yet",
+    "not_proven": "scoring correctness on real exams (no answer keys), identity against a real roster (all runs rosterless), and any side-by-side comparison with Remark Office OMR",
+    "full_pipeline": {
+      "pages": 143,
+      "questions": 4096,
+      "auto_accepted": 4089,
+      "silent_errors": 0,
+      "review": 7,
+      "ar": 0.00170898,
+      "student_number": {
+        "exact": 138,
+        "flagged": 5,
+        "wrong_unflagged": 0
+      },
+      "form": {
+        "declared_correct": 140,
+        "inferred": 3,
+        "wrong": 0
+      },
+      "blank_pages": 0,
+      "orientation_margin_min": 0.511,
+      "wall_s": 2.45264,
+      "pages_per_s": 58.3045,
+      "ser_per_question": 0.0,
+      "ser_per_question_upper95": 0.000732422,
+      "ser_per_auto_accepted_upper95": 0.000733676
+    },
+    "recognition_pooled_batch": {
+      "pages": 143,
+      "questions": 4096,
+      "auto_accepted": 4089,
+      "silent_errors": 0,
+      "ser_upper_95_rule_of_three": 0.000733676,
+      "review": 7,
+      "ar": 0.00170898,
+      "student_number": {
+        "exact": 140,
+        "flagged": 3,
+        "wrong_unflagged": 0
+      },
+      "section": {
+        "exact": 142,
+        "flagged": 1,
+        "wrong_unflagged": 0
+      },
+      "version": {
+        "exact": 142,
+        "flagged": 1,
+        "wrong_unflagged": 0
+      },
+      "exam": {
+        "exact": 141,
+        "flagged": 2,
+        "wrong_unflagged": 0
+      }
+    },
+    "bench": {
+      "pages": 143,
+      "pages_per_s_by_threads": {
+        "1": {
+          "recognition_pages_per_s": 19.4,
+          "pipeline_pages_per_s": 18.5
+        },
+        "2": {
+          "recognition_pages_per_s": 36.9,
+          "pipeline_pages_per_s": 36.4
+        },
+        "4": {
+          "recognition_pages_per_s": 73.2,
+          "pipeline_pages_per_s": 67.8
+        }
+      },
+      "bench_30_sheets_in_process_s": 0.587
+    },
+    "tests": [
+      "omr-app::real_iau_e2e::req_a1_real_iau_full_pipeline",
+      "omr-recog::ownform_real_iau::ownform_path_rejects_legacy_iau_sheets",
+      "omr-recog::real_iau::req_a1_real_iau_sheets_zero_silent_errors",
+      "omr::bench::omr_bench_real_iau_pdfs"
+    ],
+    "tests_failed": [],
+    "pass": true,
+    "registration": {
+      "failed_pages": 0,
+      "rms_px": {
+        "max": 1.24097,
+        "mean": 0.482127,
+        "median": 0.444955,
+        "min": 0.279356,
+        "p95": 0.839662
+      },
+      "matched": {
+        "max": 652.0,
+        "mean": 639.364,
+        "median": 638.0,
+        "min": 607.0,
+        "p95": 648.0
+      }
+    }
+  }
+}

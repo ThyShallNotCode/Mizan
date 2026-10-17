@@ -8,7 +8,7 @@ import {
 import { App, ExamsVM, ExamRow, Page } from "../state.slint";
 import {
     Icons, ThemeToggle, Centered, KVLine, SectionLabel, StatusText, SeverityStack, SeverityCount,
-    CoverageRing, Avatar, MessageText,
+    CoverageRing, Avatar, MessageText, TextField,
 } from "../widgets.slint";
 import { ListView } from "std-widgets.slint";
 
@@ -338,7 +338,7 @@ component Drawer inherits Rectangle {
                         color: Theme.ink;
                     }
                     Text {
-                        text: ExamsVM.drawer.mapped + " of " + ExamsVM.drawer.total + " items approved";
+                        text: ExamsVM.drawer.mapped + " of " + ExamsVM.drawer.total + " items " + ExamsVM.drawer.mapped-word;
                         font-size: Theme.text-xs;
                         color: Theme.ink-2;
                     }
@@ -403,6 +403,169 @@ component Drawer inherits Rectangle {
     }
 }
 
+// One labelled field of the New-exam form: the visible label above the field (the field's
+// accessible label is the same text).
+component FormField inherits VerticalLayout {
+    in property <string> label;
+    in property <string> placeholder;
+    in property <bool> mono: true;
+    in-out property <string> text;
+    callback accepted(string);
+    forward-focus: field;
+    spacing: 2px;
+    Text {
+        text: root.label;
+        font-size: Theme.text-xs;
+        font-weight: Theme.weight-semibold;
+        color: Theme.ink-2;
+        accessible-role: none;
+    }
+    field := TextField {
+        label: root.label;
+        placeholder: root.placeholder;
+        text <=> root.text;
+        mono: root.mono;
+        accepted(v) => {
+            root.accepted(v);
+        }
+    }
+}
+
+// The New-exam form (CR-04): the scans, the sheet and the question count, with the key,
+// roster and CLO files. Rust validates it with the rules of `omr grade` and grades it in the
+// background into a new folder of the workspace; the Scan screen follows the run.
+component NewExamBar inherits Rectangle {
+    background: Theme.surface-raised;
+    border-radius: Theme.radius-lg;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    drop-shadow-blur: Theme.shadow-2-blur;
+    drop-shadow-offset-y: Theme.shadow-2-offset;
+    drop-shadow-color: Theme.shadow-2-color;
+    property <bool> ready: ExamsVM.can-create && ExamsVM.new-scans != "" && ExamsVM.new-questions != "";
+    init => {
+        scans.focus();
+    }
+    FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                ExamsVM.new-open = false;
+                return accept;
+            }
+            return reject;
+        }
+        VerticalLayout {
+            padding: Theme.space-lg;
+            spacing: Theme.space-sm;
+            HorizontalLayout {
+                spacing: Theme.space-md;
+                Text {
+                    text: "New exam";
+                    font-size: Theme.text-md;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                }
+                Text {
+                    horizontal-stretch: 1;
+                    text: ExamsVM.new-note;
+                    font-size: Theme.text-xs;
+                    color: Theme.ink-2;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+            scans := FormField {
+                label: "Scan files or folders";
+                placeholder: "A folder or files of scans (PDF, TIFF, JPEG, PNG); separate several with ;";
+                text <=> ExamsVM.new-scans;
+            }
+            HorizontalLayout {
+                spacing: Theme.space-md;
+                FormField {
+                    horizontal-stretch: 2;
+                    label: "Exam title";
+                    placeholder: "e.g. Midterm 1";
+                    mono: false;
+                    text <=> ExamsVM.new-title;
+                }
+                FormField {
+                    horizontal-stretch: 1;
+                    label: "Course code";
+                    placeholder: "e.g. CS 211";
+                    mono: false;
+                    text <=> ExamsVM.new-course;
+                }
+            }
+            HorizontalLayout {
+                spacing: Theme.space-md;
+                FormField {
+                    horizontal-stretch: 3;
+                    label: "Sheet template or spec file";
+                    placeholder: "iau-ccsit-v1, or the spec file of your own sheet";
+                    text <=> ExamsVM.new-sheet;
+                }
+                FormField {
+                    horizontal-stretch: 1;
+                    label: "Number of questions";
+                    placeholder: "e.g. 30";
+                    text <=> ExamsVM.new-questions;
+                }
+                FormField {
+                    horizontal-stretch: 1;
+                    label: "Options per question";
+                    placeholder: "sheet's";
+                    text <=> ExamsVM.new-options;
+                }
+                FormField {
+                    horizontal-stretch: 1;
+                    label: "Form letters";
+                    placeholder: "from key";
+                    text <=> ExamsVM.new-forms;
+                }
+            }
+            HorizontalLayout {
+                spacing: Theme.space-md;
+                FormField {
+                    horizontal-stretch: 1;
+                    label: "Answer key file";
+                    placeholder: "key.csv; blank: infer a provisional key";
+                    text <=> ExamsVM.new-key;
+                }
+                FormField {
+                    horizontal-stretch: 1;
+                    label: "Roster file";
+                    placeholder: "roster.csv or .xlsx (optional)";
+                    text <=> ExamsVM.new-roster;
+                }
+                FormField {
+                    horizontal-stretch: 1;
+                    label: "CLO mapping file";
+                    placeholder: "clo.csv (optional)";
+                    text <=> ExamsVM.new-clo;
+                }
+            }
+            HorizontalLayout {
+                spacing: Theme.space-md;
+                alignment: end;
+                GhostButton {
+                    text: "Cancel";
+                    clicked => {
+                        ExamsVM.new-open = false;
+                    }
+                }
+                PrimaryButton {
+                    text: "Grade exam";
+                    enabled: root.ready;
+                    clicked => {
+                        ExamsVM.create-exam();
+                    }
+                }
+            }
+        }
+    }
+}
+
 // Keyboard focus outline of the exams table: the selected row of the focused table.
 component RowFocus inherits Rectangle {
     border-width: 2px;
@@ -410,7 +573,7 @@ component RowFocus inherits Rectangle {
     border-color: Theme.focus;
 }
 
-export component ExamsScreen inherits VerticalLayout {
+export component ExamsScreen inherits Rectangle {
     in property <length> win-w: 1440px;
     in property <length> win-h: 900px;
     // the table and the 360 px drawer fit side by side from about 1420 px; below, the drawer
@@ -421,259 +584,269 @@ export component ExamsScreen inherits VerticalLayout {
     changed search-request => {
         search.focus();
     }
-    TopBar {
-        HorizontalLayout {
-            spacing: Theme.space-lg;
-            Text {
-                text: "OMR Correction";
-                font-size: Theme.text-lg;
-                font-weight: Theme.weight-semibold;
-                color: Theme.ink;
-                vertical-alignment: center;
-            }
-            Centered {
-                Tag {
-                    text: ExamsVM.term-label;
-                    mono: false;
-                }
-            }
-        }
-        HorizontalLayout {
-            spacing: Theme.space-md;
-            Centered {
-                search := SearchField {
-                    placeholder: "Search exams and courses";
-                    key-hint: "Ctrl+K";
-                    width: root.narrow ? 220px : 280px;
-                    accepted(t) => {
-                        App.request("Search for \"" + t + "\"");
-                    }
-                }
-            }
-            Centered {
-                PrimaryButton {
-                    text: "New exam";
-                    icon: Icons.plus;
-                    key-hint: "Ctrl+N";
-                    clicked => {
-                        App.request("New exam");
-                    }
-                }
-            }
-            Centered {
-                ThemeToggle { }
-            }
-            Rectangle {
-                width: 1px;
-                background: Theme.border;
-            }
-            VerticalLayout {
-                alignment: center;
+    VerticalLayout {
+        TopBar {
+            HorizontalLayout {
+                spacing: Theme.space-lg;
                 Text {
-                    text: App.user-name;
-                    font-size: Theme.text-sm;
+                    text: "OMR Correction";
+                    font-size: Theme.text-lg;
                     font-weight: Theme.weight-semibold;
                     color: Theme.ink;
-                    horizontal-alignment: right;
+                    vertical-alignment: center;
                 }
-                Text {
-                    text: App.user-role;
-                    font-size: Theme.text-2xs;
-                    color: Theme.ink-2;
-                    horizontal-alignment: right;
-                }
-            }
-            Centered {
-                Avatar {
-                    initials: App.user-initials;
-                }
-            }
-        }
-    }
-    Rectangle {
-        vertical-stretch: 1;
-    HorizontalLayout {
-        VerticalLayout {
-            horizontal-stretch: 1;
-            padding: Theme.space-xl;
-            spacing: Theme.space-lg;
-            VerticalLayout {
-                spacing: Theme.space-sm;
-                HorizontalLayout {
-                    Text {
-                        text: "Exams";
-                        font-size: Theme.text-xl;
-                        font-weight: Theme.weight-semibold;
-                        color: Theme.ink;
-                        vertical-alignment: center;
-                    }
-                    Rectangle {
-                        horizontal-stretch: 1;
-                    }
-                    Text {
+                Centered {
+                    Tag {
                         text: ExamsVM.term-label;
-                        font-size: Theme.text-xs;
-                        color: Theme.ink-2;
-                        vertical-alignment: center;
-                    }
-                }
-                GirihDivider { }
-            }
-            HorizontalLayout {
-                spacing: Theme.space-sm;
-                alignment: start;
-                for f[i] in ExamsVM.filters: Chip {
-                    text: f.label;
-                    count: f.count;
-                    selected: i == ExamsVM.filter;
-                    clicked => {
-                        ExamsVM.set-filter(i);
+                        mono: false;
                     }
                 }
             }
             HorizontalLayout {
                 spacing: Theme.space-md;
-                StatTile {
-                    horizontal-stretch: 1;
-                    label: "SHEETS SCANNED THIS WEEK";
-                    value: ExamsVM.sheets-week;
-                    caption: ExamsVM.sheets-today;
-                    caption-tone: Tone.success;
-                }
-                StatTile {
-                    horizontal-stretch: 1;
-                    label: "OPEN EXCEPTIONS";
-                    value: ExamsVM.open-exceptions;
-                    caption: ExamsVM.open-errors;
-                    caption-tone: Tone.error;
-                }
-                StatTile {
-                    horizontal-stretch: 1;
-                    label: "MEDIAN REVIEW TIME";
-                    value: ExamsVM.median-review;
-                    unit: "s / item";
-                    caption: "Marks lane, this week";
-                }
-                StatTile {
-                    horizontal-stretch: 1;
-                    label: "THROUGHPUT";
-                    value: ExamsVM.throughput;
-                    unit: "pages / s";
-                    caption: "Floor 40 pages / s";
-                }
-            }
-            Card {
-                inset: 0;
-                vertical-stretch: 1;
-                VerticalLayout {
-                    TableRow {
-                        header: true;
-                        TableHeaderCell {
-                            text: "Course";
-                            horizontal-stretch: 1;
-                            min-width: 220px;
-                        }
-                        TableHeaderCell {
-                            text: "Assessment";
-                            width: 104px;
-                        }
-                        TableHeaderCell {
-                            text: "Date";
-                            width: 116px;
-                        }
-                        TableHeaderCell {
-                            text: "Forms";
-                            width: 100px;
-                        }
-                        TableHeaderCell {
-                            text: "Sheets";
-                            width: 124px;
-                        }
-                        TableHeaderCell {
-                            text: "Exceptions";
-                            width: 148px;
-                        }
-                        TableHeaderCell {
-                            text: "Status";
-                            width: 120px;
+                Centered {
+                    search := SearchField {
+                        placeholder: "Search exams and courses";
+                        key-hint: "Ctrl+K";
+                        width: root.narrow ? 220px : 280px;
+                        accepted(t) => {
+                            App.request("Search for \"" + t + "\"");
                         }
                     }
-                    // One tab stop for the table: ↑ / ↓ move the selection, Enter or Space opens
-                    // the drawer (DESIGN §9.1); the focused row shows the gold outline.
-                    table-keys := FocusScope {
-                        vertical-stretch: 1;
-                        key-pressed(event) => {
-                            if (event.modifiers.control || event.modifiers.alt) {
+                }
+                Centered {
+                    PrimaryButton {
+                        text: "New exam";
+                        icon: Icons.plus;
+                        key-hint: "Ctrl+N";
+                        clicked => {
+                            App.request("New exam");
+                        }
+                    }
+                }
+                Centered {
+                    ThemeToggle { }
+                }
+                Rectangle {
+                    width: 1px;
+                    background: Theme.border;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: App.user-name;
+                        font-size: Theme.text-sm;
+                        font-weight: Theme.weight-semibold;
+                        color: Theme.ink;
+                        horizontal-alignment: right;
+                    }
+                    Text {
+                        text: App.user-role;
+                        font-size: Theme.text-2xs;
+                        color: Theme.ink-2;
+                        horizontal-alignment: right;
+                    }
+                }
+                Centered {
+                    Avatar {
+                        initials: App.user-initials;
+                    }
+                }
+            }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+        HorizontalLayout {
+            VerticalLayout {
+                horizontal-stretch: 1;
+                padding: Theme.space-xl;
+                spacing: Theme.space-lg;
+                VerticalLayout {
+                    spacing: Theme.space-sm;
+                    HorizontalLayout {
+                        Text {
+                            text: "Exams";
+                            font-size: Theme.text-xl;
+                            font-weight: Theme.weight-semibold;
+                            color: Theme.ink;
+                            vertical-alignment: center;
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: ExamsVM.term-label;
+                            font-size: Theme.text-xs;
+                            color: Theme.ink-2;
+                            vertical-alignment: center;
+                        }
+                    }
+                    GirihDivider { }
+                }
+                HorizontalLayout {
+                    spacing: Theme.space-sm;
+                    alignment: start;
+                    for f[i] in ExamsVM.filters: Chip {
+                        text: f.label;
+                        count: f.count;
+                        selected: i == ExamsVM.filter;
+                        clicked => {
+                            ExamsVM.set-filter(i);
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: Theme.space-md;
+                    StatTile {
+                        horizontal-stretch: 1;
+                        label: "SHEETS SCANNED THIS WEEK";
+                        value: ExamsVM.sheets-week;
+                        caption: ExamsVM.sheets-today;
+                        caption-tone: Tone.success;
+                    }
+                    StatTile {
+                        horizontal-stretch: 1;
+                        label: "OPEN EXCEPTIONS";
+                        value: ExamsVM.open-exceptions;
+                        caption: ExamsVM.open-errors;
+                        caption-tone: Tone.error;
+                    }
+                    StatTile {
+                        horizontal-stretch: 1;
+                        label: "MEDIAN REVIEW TIME";
+                        value: ExamsVM.median-review;
+                        unit: "s / item";
+                        caption: ExamsVM.median-caption;
+                    }
+                    StatTile {
+                        horizontal-stretch: 1;
+                        label: "THROUGHPUT";
+                        value: ExamsVM.throughput;
+                        unit: "pages / s";
+                        caption: "Floor 40 pages / s";
+                    }
+                }
+                Card {
+                    inset: 0;
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        TableRow {
+                            header: true;
+                            TableHeaderCell {
+                                text: "Course";
+                                horizontal-stretch: 1;
+                                min-width: 220px;
+                            }
+                            TableHeaderCell {
+                                text: "Assessment";
+                                width: 104px;
+                            }
+                            TableHeaderCell {
+                                text: "Date";
+                                width: 116px;
+                            }
+                            TableHeaderCell {
+                                text: "Forms";
+                                width: 100px;
+                            }
+                            TableHeaderCell {
+                                text: "Sheets";
+                                width: 124px;
+                            }
+                            TableHeaderCell {
+                                text: "Exceptions";
+                                width: 148px;
+                            }
+                            TableHeaderCell {
+                                text: "Status";
+                                width: 120px;
+                            }
+                        }
+                        // One tab stop for the table: ↑ / ↓ move the selection, Enter or Space opens
+                        // the drawer (DESIGN §9.1); the focused row shows the gold outline.
+                        table-keys := FocusScope {
+                            vertical-stretch: 1;
+                            key-pressed(event) => {
+                                if (event.modifiers.control || event.modifiers.alt) {
+                                    return reject;
+                                }
+                                if (event.text == Key.DownArrow) {
+                                    ExamsVM.move(1);
+                                    return accept;
+                                }
+                                if (event.text == Key.UpArrow) {
+                                    ExamsVM.move(-1);
+                                    return accept;
+                                }
+                                if ((event.text == Key.Return || event.text == " ") && ExamsVM.selected >= 0) {
+                                    ExamsVM.select(ExamsVM.selected);
+                                    return accept;
+                                }
                                 return reject;
                             }
-                            if (event.text == Key.DownArrow) {
-                                ExamsVM.move(1);
-                                return accept;
-                            }
-                            if (event.text == Key.UpArrow) {
-                                ExamsVM.move(-1);
-                                return accept;
-                            }
-                            if ((event.text == Key.Return || event.text == " ") && ExamsVM.selected >= 0) {
-                                ExamsVM.select(ExamsVM.selected);
-                                return accept;
-                            }
-                            return reject;
-                        }
-                        ListView {
-                            for row[i] in ExamsVM.rows: Rectangle {
-                                height: 56px;
-                                ExamTableRow {
-                                    width: parent.width;
-                                    height: parent.height;
-                                    data: row;
-                                    selected: i == ExamsVM.selected;
-                                    clicked => {
-                                        ExamsVM.select(i);
-                                        table-keys.focus();
+                            ListView {
+                                for row[i] in ExamsVM.rows: Rectangle {
+                                    height: 56px;
+                                    ExamTableRow {
+                                        width: parent.width;
+                                        height: parent.height;
+                                        data: row;
+                                        selected: i == ExamsVM.selected;
+                                        clicked => {
+                                            ExamsVM.select(i);
+                                            table-keys.focus();
+                                        }
                                     }
-                                }
-                                if table-keys.has-focus && i == ExamsVM.selected: RowFocus {
-                                    width: parent.width;
-                                    height: parent.height;
+                                    if table-keys.has-focus && i == ExamsVM.selected: RowFocus {
+                                        width: parent.width;
+                                        height: parent.height;
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
-        if ExamsVM.drawer-open && !root.narrow: Drawer {
-            short: root.short;
-        }
-    }
-    if ExamsVM.drawer-open && root.narrow: Drawer {
-        x: parent.width - self.width;
-        y: 0;
-        height: parent.height;
-        short: root.short;
-    }
-    }
-    StatusBar {
-        Centered {
-            StatusPill {
-                text: "Project saved";
-                tone: Tone.success;
+            if ExamsVM.drawer-open && !root.narrow: Drawer {
+                short: root.short;
             }
         }
-        StatusText {
-            text: App.workspace;
-            mono: true;
-            horizontal-stretch: 1;
-            overflow: elide;
+        if ExamsVM.drawer-open && root.narrow: Drawer {
+            x: parent.width - self.width;
+            y: 0;
+            height: parent.height;
+            short: root.short;
         }
-        MessageText {
-            text: App.message;
-            tone: App.message-tone;
         }
-        StatusText {
-            text: App.engine;
-            mono: true;
+        StatusBar {
+            Centered {
+                StatusPill {
+                    text: "Project saved";
+                    tone: Tone.success;
+                }
+            }
+            StatusText {
+                text: App.workspace;
+                mono: true;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            MessageText {
+                text: App.message;
+                tone: App.message-tone;
+            }
+            StatusText {
+                text: App.engine;
+                mono: true;
+            }
         }
+    }
+    // the form floats over the dashboard, so opening it never pushes the status bar out of a
+    // 1280 × 800 window
+    if ExamsVM.new-open: NewExamBar {
+        x: (root.width - self.width) / 2;
+        y: Theme.top-bar-height + Theme.space-sm;
+        width: min(root.width - 2 * Theme.space-lg, 960px);
+        height: self.preferred-height;
     }
 }

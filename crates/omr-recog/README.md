@@ -159,6 +159,10 @@ hysteresis, ID grids never auto-accepted), §8.9 (20 px bubble gate, coverage �
   115 full-scale pages, 12.5 px on the 28 reduced copies); the coarse search is coarse-to-fine with the scale/angle hypotheses ranked
   at 1/16 (the prototype searched them at 1/4).
 - **Additions** beyond the prototype: one-pitch alias check (REG-003), 180° pages (REG-002),
+  an orientation gate (the upright and upside-down coarse correlations must differ by
+  `orientation_min_margin_milli` = 0.20, else REG-001 "orientation undecided", never a guess;
+  `RegistrationQuality::orientation_margin`; the 143 real pages separate by ≥ 0.511, synthetic
+  sheets by ≥ 0.60, a sheet printed over its own upside-down copy by 0.11),
   a local-support guard (< 2 matched bubbles within 350 px → UNREADABLE, REG-003 Region),
   hysteresis (2 extra reviews on the real data), MRK-002 `uncertain_set`, finer review codes.
 - **Baseline fallback** defaults to β_p⁰ (blank-form print coverage) + the field's median
@@ -181,7 +185,8 @@ hysteresis, ID grids never auto-accepted), §8.9 (20 px bubble gate, coverage �
   light-pencil page is accepted as a light mark (the brief's rule; the §8.7 CNN would separate
   `erased_residue`).
 - Not implemented on this path: illumination B/K, JPEG quality, streak masks,
-  cross-out/tick/circle classes, mirrored pages (REG-005), 90° pages (the own-form path below
+  cross-out/tick/circle classes, mirrored pages (REG-005), 90° pages (`omr-app` turns a
+  portrait scan of the landscape form a quarter before registration; the own-form path below
   has tags, mirroring, quarter turns, B/K normalisation, streak masks and tick/cross-out
   review triggers).
 
@@ -340,7 +345,15 @@ profile).
   - `req_a6_unverified_…`: an IDN-002 page is never `ColumnState::Single`, has no
     `exact_digits` and no logit reaching +L_q; the proposed digits stay correct.
 - `tests/ownform_synth.rs`: 30 standard sheets (SER 0, AR ≤ 1 %, IDs), 12 hard sheets, 6
-  two-page booklets (180 questions) routed by page code (`req_a1_…`).
+  two-page booklets (180 questions) routed by page code (`req_a1_…`). The A1 proof runs are
+  `#[ignore]`d (about a minute each in release) and run by `scripts/acceptance.sh`:
+  `req_a1_ownform_standard_slice_50k_held_out_questions` (500 sheets on the held-out seed
+  20 261 016: 50,000 questions, 0 silent errors, SER per question with the one-sided 95 %
+  bound 3/n = 6.0 × 10⁻⁵, AR ≤ 1 % in both baseline modes) and
+  `req_a1_ownform_hard_slice_reported_separately` (same seed, hard profile: at most 2 silent
+  errors, no tick or cross-out auto-accepted). Both write their aggregates to
+  `$OMR_ACCEPT_OUT`; `support/ownform_eval.rs` reports SER per question (§23.1), its bound
+  (k ≤ 2), the bound at the DEFF floor of 2 and the sheet SER.
 - `tests/ownform_determinism.rs` (`req_a5_…`): byte-identical measurements on 1, 2 and 4
   `rayon` threads (the tag detector's internal loops included) and identical decisions for a
   shuffled batch.

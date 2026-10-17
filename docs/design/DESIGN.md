@@ -48,7 +48,7 @@ The PNG screenshots were taken with Playwright and Chromium at 1440×900. Tailwi
 - The ambiguous amber `#B26B00` and the gold accent were too close to each other, and too light on scan grey. The mark colours were re-derived and validated (§4).
 - In the dashboard, Arabic course names were forced `text-align:left` inside LTR runs, so the Arabic-Indic digit `١` landed on the wrong side. Arabic strings are now isolated runs set in `font-arabic` (§5.3).
 - The dashboard's 10 px table text and 9 px keycaps are now at least 11 px.
-- The concepts used `#B26B00` warning text at 4.13:1. Warning text is now `#9A5B00` (5.34:1).
+- The concepts used `#B26B00` warning text at 4.13:1. Warning text is now `#955800` (5.62:1 on surface, 4.65:1 on a selected row's `primary-soft`); dark `ink-3` is `#95A29E` (4.69:1 on `primary-soft`).
 - Cards use one radius (8 px) everywhere; the concepts mixed 4 to 12 px.
 
 ---
@@ -88,7 +88,7 @@ All tokens live in the `Theme` global. `Theme.dark` selects the column. "Contras
 | `track` | `#E8E1D3` | `#2A3936` | Progress and meter tracks |
 | `ink` | `#1C2430` | `#ECE6DA` | Primary text |
 | `ink-2` | `#55606E` | `#B7BFBB` | Secondary text, labels |
-| `ink-3` | `#5D6672` | `#8F9C98` | Placeholders and captions (still ≥ 4.5:1) |
+| `ink-3` | `#5D6672` | `#95A29E` | Placeholders and captions (≥ 4.5:1, on selected rows too) |
 | `ink-disabled` | `#A39B8B` | `#5E6B68` | Disabled only (exempt from 1.4.3) |
 | `ink-inverse` | `#FFFDF8` | `#0F1716` | Text on `ink` fills (selected filter chip) |
 
@@ -109,7 +109,7 @@ All tokens live in the `Theme` global. `Theme.dark` selects the column. "Contras
 | `nav-fg` / `nav-fg-2` | `#FFFFFF` / `#A8C3BE` | `#FFFFFF` / `#9FB8B3` | Active / idle nav label and icon |
 | `nav-active-bg` / `nav-hover-bg` | `#FFFFFF17` / `#FFFFFF0D` | same | Nav item fills |
 | `success` / `success-soft` | `#2A7148` / `#E2EFE5` | `#6BCB8F` / `#18352A` | Released, attained, auto-accepted |
-| `warning` / `warning-soft` | `#9A5B00` / `#FAEBD3` | `#E7A846` / `#3A2C12` | WARN, in review, within CI |
+| `warning` / `warning-soft` | `#955800` / `#FAEBD3` | `#E7A846` / `#3A2C12` | WARN, in review, within CI |
 | `error` / `error-soft` | `#B3261E` / `#F7E0DC` | `#F08A7E` / `#3E1F1C` | ERROR, not attained, mis-key |
 | `blocker` | `#7F1D17` | `#FFB4A8` | BLOCKER (octagon) |
 | `info` / `info-soft` | `#3D5A80` / `#E2E8F0` | `#9DB4DA` / `#1E2A3D` | INFO, scanning (muted slate, not SaaS blue) |

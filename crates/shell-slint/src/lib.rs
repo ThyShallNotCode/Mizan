@@ -1,6 +1,6 @@
 //! `shell-slint`: the Slint desktop shell (spec §5.2, ADR-001). Binding and blitting only: the
-//! view-models and every decision come from a [`backend::Backend`] (`omr-app`, or the synthetic
-//! [`demo::DemoBackend`] until `omr-app` exposes its view-models).
+//! view-models and every decision come from a [`backend::Backend`]: `omr-app` through
+//! [`app_backend::AppBackend`], or the synthetic [`demo::DemoBackend`].
 //!
 //! R6 audited exception: Slint's generated code expands `allow(unsafe_code)` internally, which a
 //! crate-level `forbid` rejects (E0453). The crate therefore uses `deny(unsafe_code)` and the only
@@ -17,6 +17,7 @@ pub mod ui {
     pub use crate::generated::*;
 }
 
+pub mod app_backend;
 pub mod backend;
 pub mod bind;
 pub mod crops;

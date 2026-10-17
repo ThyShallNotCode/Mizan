@@ -160,6 +160,21 @@ fn req_a4_regrade_10k_x100() {
         prepare_time.as_secs_f64() * 1e3,
         best.as_secs_f64() * 1e3
     );
+    if let Ok(dir) = std::env::var("OMR_ACCEPT_OUT") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            std::path::Path::new(&dir).join("a4-scoring-regrade.json"),
+            format!(
+                "{{\"booklets\": {N}, \"items\": {ITEMS}, \"forms\": {FORMS}, \"best_of\": 5, \
+                 \"prepare_ms\": {:.3}, \"key_change_regrade_ms\": {:.3}, \"totals_changed\": \
+                 {changed}, \"budget_ms\": 50, \"release_build\": {}}}",
+                prepare_time.as_secs_f64() * 1e3,
+                best.as_secs_f64() * 1e3,
+                !cfg!(debug_assertions)
+            ),
+        )
+        .unwrap();
+    }
     if cfg!(debug_assertions) {
         eprintln!("A4: debug build, timing assertion skipped (run with --release)");
     } else {

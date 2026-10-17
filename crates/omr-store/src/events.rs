@@ -377,6 +377,15 @@ pub enum ChainError {
         /// Checkpoint seq.
         seq: i64,
     },
+    /// A state table disagrees with the event that recorded its row (an identity decision,
+    /// a response correction or a key version edited behind the chain's back).
+    #[error("{table}: {detail}")]
+    ProjectionMismatch {
+        /// The table.
+        table: String,
+        /// What did not match.
+        detail: String,
+    },
 }
 
 /// Result of a successful verification.

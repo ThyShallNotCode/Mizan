@@ -17,6 +17,13 @@ path = "src/main.rs"
 
 [dependencies]
 omr-app.workspace = true
+# Types of the view-models omr-app hands over (severity, cancel mode, catalogue titles, item
+# flags, attainment policy); the shell decides nothing with them.
+omr-model.workspace = true
+omr-analytics.workspace = true
+omr-outcomes.workspace = true
+# `omr-desktop --grade --spec spec.json` reads the own-form spec (as `omr grade` does).
+serde_json.workspace = true
 slint.workspace = true
 # Synthetic review crops (bubble rows drawn at first use) and PNG encoding of headless screenshots.
 tiny-skia.workspace = true
@@ -24,6 +31,15 @@ tiny-skia.workspace = true
 [dev-dependencies]
 # R8: test-only. No features: with `internal`, the crates.io 1.18.1 package fails to build.
 i-slint-backend-testing.workspace = true
+# The synthetic exam (tests/support, examples/synthetic_exam.rs): the committed blank IAU form,
+# omr-sim's pencil-mark painter and JPEG encoder. R8: dev-only.
+omr-sim.workspace = true
+omr-recog.workspace = true
+omr-forms.workspace = true
+image.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+tempfile.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true

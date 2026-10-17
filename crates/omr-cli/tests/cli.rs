@@ -10,9 +10,16 @@ use std::process::{Command, Output};
 
 const KEY: [u8; 32] = [0x33; 32];
 
+thread_local! {
+    /// This test's private key folder (device key, external checkpoints, exam registry), so
+    /// tests that grade the same sheets in parallel never see each other's projects.
+    static KEY_DIR: tempfile::TempDir = tempfile::tempdir().unwrap();
+}
+
 fn omr(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_omr"))
         .args(args)
+        .env("OMR_KEY_DIR", KEY_DIR.with(|d| d.path().to_path_buf()))
         .output()
         .expect("run omr")
 }
@@ -134,6 +141,16 @@ fn omr_cli_grades_reviews_and_benches() {
         "--quiet",
     ]));
     assert!(g.contains("7 page(s) → 6 booklet(s)"), "{g}");
+    // The page held out is named with its reason and what to do (R10).
+    assert!(g.contains("1 page(s) not graded"), "{g}");
+    let held = g
+        .lines()
+        .find(|l| l.contains("zz-broken.jpg"))
+        .unwrap_or_else(|| panic!("no line for the broken scan: {g}"));
+    assert!(
+        held.contains("CAP-001") && held.contains("rescan"),
+        "{held}"
+    );
     for f in [
         "results.csv",
         "results.xlsx",
@@ -380,4 +397,170 @@ fn omr_cli_exit_codes_for_bad_input() {
         .code(),
         Some(2)
     );
+}
+
+/// Own-form first use with default flags (SEC-04, SEC-06, CR-12): `--example-spec` names a
+/// fresh exam each time with the IAU 10-digit ID grid; rendering a spec without a key mints a
+/// new exam ID and key into a private file (never beside the PDF, never overwritten); grading
+/// with that file and no `--id-scheme` reads the grid under the matching scheme; and a second
+/// project for the same exam is refused unless `--reuse-exam-id`.
+#[test]
+fn own_form_first_use_with_default_flags() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let a: Value = serde_json::from_str(&ok(&omr(&["templates", "--example-spec"]))).unwrap();
+    let b: Value = serde_json::from_str(&ok(&omr(&["templates", "--example-spec"]))).unwrap();
+    assert_ne!(a["template"]["exam"], b["template"]["exam"]);
+    assert_eq!(a["template"]["id_digits"], 10);
+    let mut spec: TemplateSpec = serde_json::from_value(a["template"].clone()).unwrap();
+    spec.questions = 20;
+    let bare = d.join("spec.json");
+    std::fs::write(
+        &bare,
+        serde_json::to_vec(&json!({"template": spec})).unwrap(),
+    )
+    .unwrap();
+
+    // Render: a new exam ID and key in the private key folder; nothing beside the PDF.
+    let pdfs = d.join("print");
+    std::fs::create_dir_all(&pdfs).unwrap();
+    let r = omr(&[
+        "sheet",
+        "render",
+        "--spec",
+        p(&bare),
+        "--out",
+        p(&pdfs.join("sheets.pdf")),
+    ]);
+    ok(&r);
+    let names: Vec<String> = std::fs::read_dir(&pdfs)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, vec!["sheets.pdf".to_string()]);
+    let keys = KEY_DIR.with(|k| k.path().join("exam-keys"));
+    let keyf = std::fs::read_dir(&keys)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&keyf).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+    }
+    let kj: Value = serde_json::from_slice(&std::fs::read(&keyf).unwrap()).unwrap();
+    assert_ne!(
+        kj["template"]["exam"], a["template"]["exam"],
+        "a fresh exam ID"
+    );
+    assert!(String::from_utf8_lossy(&r.stderr).contains(p(&keyf)));
+    // An explicit key file is never overwritten without --new-key.
+    let mine = d.join("mine.json");
+    let again_pdf = pdfs.join("again.pdf");
+    let render_to = |extra: &[&str]| {
+        let mut args = vec![
+            "sheet",
+            "render",
+            "--spec",
+            p(&bare),
+            "--out",
+            p(&again_pdf),
+            "--key-out",
+            p(&mine),
+        ];
+        args.extend_from_slice(extra);
+        omr(&args)
+    };
+    ok(&render_to(&[]));
+    let first = std::fs::read(&mine).unwrap();
+    let again = render_to(&[]);
+    assert_eq!(again.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&again.stderr).contains("--new-key"));
+    assert_eq!(std::fs::read(&mine).unwrap(), first);
+    ok(&render_to(&["--new-key"]));
+    assert_ne!(std::fs::read(&mine).unwrap(), first);
+
+    // Scans of the rendered exam, students with IAU numbers, graded with default flags.
+    let t = Template::build(serde_json::from_value(kj["template"].clone()).unwrap()).unwrap();
+    let key: [u8; 32] = hex::decode(kj["exam_key_hex"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let mut cfg = omr_sim::CorpusConfig::standard(4, 9);
+    cfg.roster = (0..4).map(|i| format!("22210{:05}", i * 7 + 3)).collect();
+    cfg.threads = 2;
+    omr_sim::corpus::write_corpus(&t, &ExamKey::from_bytes(key), &cfg, &d.join("c")).unwrap();
+    let images = d.join("c").join("images");
+    let grade = |out: &str, extra: &[&str]| {
+        let mut args = vec![
+            "grade",
+            p(&images),
+            "--spec",
+            p(&keyf),
+            "--questions",
+            "20",
+            "--infer-key",
+            "--out",
+            out,
+            "--quiet",
+        ];
+        args.extend_from_slice(extra);
+        omr(&args)
+    };
+    let out1 = d.join("g1");
+    let g = ok(&grade(p(&out1), &[]));
+    assert!(g.contains("4 page(s) → 4 booklet(s)"), "{g}");
+    let s: Value =
+        serde_json::from_slice(&std::fs::read(out1.join("summary-INFERRED.json")).unwrap())
+            .unwrap();
+    assert!(
+        s["open_items_by_code"].get("IDN-004").is_none(),
+        "the 10-digit grid is read under the IAU scheme: {s}"
+    );
+    // The page-code secret is kept apart from the session snapshot, private to the user.
+    let pkg = out1.join("project.omrproj");
+    let khex = kj["exam_key_hex"].as_str().unwrap();
+    let session = std::fs::read_to_string(pkg.join("cache").join("session.json")).unwrap();
+    assert!(
+        !session.contains(khex),
+        "the snapshot holds the page-code key"
+    );
+    let secret = pkg.join("secrets").join("page-code-key.hex");
+    assert_eq!(std::fs::read_to_string(&secret).unwrap().trim(), khex);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&secret).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+    }
+    // Reopened, the exam still verifies its pages (crops re-read them with the secret).
+    ok(&omr(&[
+        "review",
+        "list",
+        "--project",
+        p(&out1),
+        "--crops",
+        p(&d.join("crops")),
+    ]));
+    // The same exam's sheets into a second project: refused, then allowed on purpose.
+    let out2 = d.join("g2");
+    let e = grade(p(&out2), &[]);
+    assert_eq!(e.status.code(), Some(2));
+    let msg = String::from_utf8_lossy(&e.stderr);
+    assert!(
+        msg.contains("already graded into") && msg.contains("omr add"),
+        "{msg}"
+    );
+    assert!(!out2.join("project.omrproj").exists());
+    ok(&grade(p(&out2), &["--reuse-exam-id"]));
+    // An explicit scheme that disagrees with the printed grid is refused before grading.
+    let e = grade(
+        p(&d.join("g3")),
+        &["--id-scheme", "digits:9", "--reuse-exam-id"],
+    );
+    assert_eq!(e.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&e.stderr).contains("ID grid has 10 digits"));
 }

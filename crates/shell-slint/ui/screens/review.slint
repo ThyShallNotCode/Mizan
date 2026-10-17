@@ -10,7 +10,7 @@ import {
 import { App, ReviewVM, Candidate, ContactTile } from "../state.slint";
 import {
     Icons, ThemeToggle, Centered, SectionLabel, StatusText, QueueRow, ScanPaper, FillBar,
-    ShortcutRow, AgreeGlyph, EmptyState, MessageText, EditCell, KVLine,
+    ShortcutRow, AgreeGlyph, EmptyState, MessageText, KVLine, TextField,
 } from "../widgets.slint";
 import { ListView } from "std-widgets.slint";
 
@@ -243,13 +243,17 @@ component ContactThumb inherits Rectangle {
 }
 
 component CanvasPane inherits Rectangle {
+    // hands the keys back to the review canvas (after a typed student number)
+    callback refocus();
     // 1280 px windows: the fill chart card shrinks to its five bars
     in property <bool> narrow;
     background: Theme.scan-backdrop;
     clip: true;
-    // "3×" is the crop at its native size, shrunk to fit narrow panes (1280 px windows); the
-    // paper box never sets the pane's width, so this cannot loop through the layout
-    property <float> fit: min(1, max(0.25, (paper-box.width - 24px) / max(1px, ReviewVM.crop-w * 1px)));
+    // "3×" is the crop at its native size, shrunk to fit narrow panes (1280 px windows); a
+    // small crop at scan resolution (one answer row at 200 dpi) is enlarged to about 600 × 260
+    // px. The paper box never sets the pane's width, so this cannot loop through the layout
+    property <float> grow: max(1, min(600px / max(1px, ReviewVM.crop-w * 1px), 260px / max(1px, ReviewVM.crop-h * 1px)));
+    property <float> fit: min(root.grow, max(0.25, (paper-box.width - 24px) / max(1px, ReviewVM.crop-w * 1px)));
     property <float> scale: root.fit * ReviewVM.zoom / 3;
     VerticalLayout {
         padding: Theme.space-xl;
@@ -341,7 +345,7 @@ component CanvasPane inherits Rectangle {
             vertical-stretch: 0;
             Card {
                 title: "Fill by bubble";
-                subtitle: "Threshold " + ReviewVM.threshold + " · hysteresis band " + ReviewVM.band-lo + "–" + ReviewVM.band-hi;
+                subtitle: ReviewVM.threshold-text;
                 width: root.narrow ? 284px : 300px;
                 FillChart { }
             }
@@ -403,7 +407,8 @@ component CanvasPane inherits Rectangle {
                         letter-spacing: 1px;
                     }
                 }
-                VerticalLayout {
+                // channels the core does not read (no handwriting or seat map) are left out
+                if ReviewVM.boxes-read != "": VerticalLayout {
                     spacing: 2px;
                     SectionLabel {
                         text: "WRITE-IN BOXES";
@@ -417,7 +422,7 @@ component CanvasPane inherits Rectangle {
                         letter-spacing: 1px;
                     }
                 }
-                VerticalLayout {
+                if ReviewVM.neighbours.length > 0: VerticalLayout {
                     spacing: 2px;
                     horizontal-stretch: 1;
                     SectionLabel {
@@ -428,6 +433,38 @@ component CanvasPane inherits Rectangle {
                         font-size: Theme.text-xs;
                         color: Theme.ink-2;
                     }
+                }
+            }
+            // a student who is not listed (or an exam without a roster): the number as written
+            // on the sheet or given by the registrar; it then waits for Accept like a candidate
+            SectionLabel {
+                text: "NOT LISTED? TYPE THE STUDENT NUMBER";
+            }
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                TextField {
+                    width: 240px;
+                    label: "Student number";
+                    placeholder: "Digits as written on the sheet";
+                    text <=> ReviewVM.student-entry;
+                    mono: true;
+                    accepted(v) => {
+                        ReviewVM.use-student(v);
+                        root.refocus();
+                    }
+                }
+                Centered {
+                    SecondaryButton {
+                        text: ReviewVM.typed-student != "" ? "Number set" : "Use number";
+                        enabled: ReviewVM.student-entry != "";
+                        clicked => {
+                            ReviewVM.use-student(ReviewVM.student-entry);
+                            root.refocus();
+                        }
+                    }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
                 }
             }
         }
@@ -443,6 +480,46 @@ component CanvasPane inherits Rectangle {
         Rectangle {
             vertical-stretch: 1;
         }
+    }
+}
+
+// One reason code for an override: a compact checkable button (two per row). `toggle` makes it
+// the "more / fewer reasons" switch of the list instead.
+component ReasonChip inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    in property <bool> toggle;
+    callback clicked();
+    height: 28px;
+    min-width: 0px;
+    horizontal-stretch: 1;
+    border-radius: Theme.radius-md;
+    background: root.selected ? Theme.primary-soft : ta.has-hover ? Theme.surface-hover : Theme.surface-raised;
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? Theme.primary : Theme.border-strong;
+    accessible-role: AccessibleRole.button;
+    accessible-checkable: !root.toggle;
+    accessible-checked: root.selected;
+    accessible-label: root.toggle ? root.label : "Reason: " + root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+    Text {
+        x: Theme.space-sm;
+        width: parent.width - 2 * Theme.space-sm;
+        height: parent.height;
+        text: root.label;
+        font-size: Theme.text-xs;
+        font-weight: root.selected ? Theme.weight-semibold : Theme.weight-regular;
+        color: root.toggle ? Theme.primary : Theme.ink;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
     }
 }
 
@@ -527,7 +604,8 @@ component CandidateRow inherits Rectangle {
                 accessible-role: none;
             }
             Text {
-                text: "NID " + root.c.national-id;
+                // the core may have no national ID for the candidate: then nothing is shown
+                text: root.c.national-id == "" ? "" : "NID " + root.c.national-id;
                 font-family: Theme.font-mono;
                 font-size: Theme.text-xs;
                 color: Theme.ink-2;
@@ -735,6 +813,24 @@ component DecisionPane inherits Rectangle {
                 }
             }
         }
+        // ---- override reason (§13.4): only when the choice differs from the suggestion
+        if ReviewVM.reason-needed: SectionLabel {
+            text: "WHY OVERRIDE THE SUGGESTION?";
+        }
+        if ReviewVM.reason-needed: GridLayout {
+            spacing: Theme.space-xs;
+            for r[i] in ReviewVM.reasons: ReasonChip {
+                col: mod(i, 2);
+                row: floor(i / 2);
+                label: r.label;
+                selected: r.selected;
+                toggle: r.key == "more";
+                clicked => {
+                    ReviewVM.choose-reason(i);
+                    root.refocus();
+                }
+            }
+        }
         // ---- notice context
         if ReviewVM.kind == 3: Rectangle {
             border-radius: Theme.radius-lg;
@@ -777,12 +873,13 @@ component DecisionPane inherits Rectangle {
                 }
             }
         }
-        // ---- commit
+        // ---- commit (a reason that needs a note waits for one)
         PrimaryButton {
-            text: ReviewVM.accept-label;
+            property <bool> wants-note: ReviewVM.note-required && ReviewVM.note == "";
+            text: self.wants-note ? "Write why in the note" : ReviewVM.accept-label;
             key-hint: "Enter";
             large: true;
-            enabled: ReviewVM.accept-enabled;
+            enabled: ReviewVM.accept-enabled && !self.wants-note;
             clicked => {
                 ReviewVM.accept();
                 root.refocus();
@@ -834,20 +931,13 @@ component DecisionPane inherits Rectangle {
                 }
             }
         }
-        EditCell {
+        // two-way: the note is in the view-model as it is typed, so Accept never misses it
+        TextField {
             label: "Reviewer note (personal data, PDPL)";
-            placeholder: "Note: personal data under PDPL";
-            text: ReviewVM.note;
-            mono: false;
+            placeholder: ReviewVM.note-required ? "Why? This reason needs a note" : "Note: personal data under PDPL";
+            text <=> ReviewVM.note;
             arabic: true;
-            align: left;
-            height: 32px;
-            border-width: 1px;
-            border-color: Theme.border-strong;
-            background: Theme.surface-raised;
-            committed(v) => {
-                ReviewVM.note = v;
-            }
+            border-color: ReviewVM.note-required && ReviewVM.note == "" ? Theme.warning : Theme.border-strong;
         }
         Rectangle {
             vertical-stretch: 1;
@@ -965,11 +1055,14 @@ export component ReviewScreen inherits VerticalLayout {
         HorizontalLayout {
             spacing: Theme.space-sm;
             Centered {
+                // a number typed here decides the identity item on screen; the canvas then
+                // takes the keys again, so Enter accepts it
                 search := SearchField {
                     placeholder: "Roster search";
                     width: 200px;
                     accepted(t) => {
                         ReviewVM.search(t);
+                        keys.focus();
                     }
                 }
             }
@@ -1014,6 +1107,9 @@ export component ReviewScreen inherits VerticalLayout {
             CanvasPane {
                 horizontal-stretch: 1;
                 narrow: root.narrow;
+                refocus => {
+                    keys.focus();
+                }
             }
             DecisionPane {
                 width: Theme.decision-pane-width;

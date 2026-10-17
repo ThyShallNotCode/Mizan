@@ -30,7 +30,10 @@ pub mod rng;
 pub mod sample;
 pub mod warp;
 
-pub use decode::{DecodeLimits, Decoded, SourceFormat, decode, decode_with_limits};
+pub use decode::{
+    DecodeLimits, Decoded, SourceFormat, TIFF_MAX_PAGES, TiffPages, decode, decode_tiff_page,
+    decode_with_limits, jpeg_complete, tiff_pages,
+};
 pub use fit::{
     RobustFit, fit_affine, fit_affine_lmeds, fit_homography, fit_quadratic, ransac_homography,
 };
@@ -41,8 +44,8 @@ pub use ncc::{
     local_maxima, match_patch, ncc_patch, parabolic_offset, ring_map_fast,
 };
 pub use reduce::{
-    Bitmap, CaptureKind, classify_capture, half, reduce_area, reduce_bitmap, resample_area,
-    resample_to_dpi, resampled_size,
+    Bitmap, CaptureKind, InkCoverage, classify_capture, half, ink_coverage, reduce_area,
+    reduce_bitmap, resample_area, resample_to_dpi, resampled_size,
 };
 pub use rng::SplitMix64;
 pub use sample::{DiskSum, bilinear, disk_sum, resample_affine, resample_affine_offset};

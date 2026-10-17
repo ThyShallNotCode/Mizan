@@ -4,7 +4,6 @@
 use crate::backend::{
     self as b, Backend, Decision, ExamId, ItemId, Lane, ReviewAction, ReviewKind,
 };
-use crate::crops;
 use crate::keymap::{self, GlobalKey, KeyContext, ReviewKey};
 use crate::ui::{self as s, AppWindow};
 use slint::{
@@ -49,6 +48,42 @@ fn signed(x: f64, places: usize) -> String {
 
 fn pct(x: f64) -> String {
     format!("{:.0} %", x * 100.0)
+}
+
+/// Joins the non-empty parts with `sep` (view-models leave unknown parts empty).
+fn join(parts: &[&str], sep: &str) -> String {
+    parts
+        .iter()
+        .filter(|p| !p.trim().is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join(sep)
+}
+
+/// The scan files or folders typed into the Add scans field: separated by `;` or new lines,
+/// quotes stripped, `~/` for the home folder.
+pub fn scan_paths(text: &str) -> Vec<std::path::PathBuf> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    text.split([';', '\n'])
+        .map(|p| p.trim().trim_matches(|c| c == '"' || c == '\''))
+        .filter(|p| !p.is_empty())
+        .map(|p| match (p.strip_prefix("~/"), &home) {
+            (Some(rest), Some(h)) => h.join(rest),
+            _ => std::path::PathBuf::from(p),
+        })
+        .collect()
+}
+
+/// A blank sheet for a thumbnail whose page image is not available (never an invented scan).
+fn blank_sheet() -> Image {
+    let mut px = SharedPixelBuffer::<Rgba8Pixel>::new(1, 1);
+    px.make_mut_slice()[0] = Rgba8Pixel {
+        r: 0xF4,
+        g: 0xF2,
+        b: 0xEC,
+        a: 0xFF,
+    };
+    Image::from_rgba8(px)
 }
 
 fn tone(t: b::Tone) -> s::Tone {
@@ -164,6 +199,21 @@ fn decision_word(d: Decision, labels: &[String]) -> String {
     }
 }
 
+/// Reason codes shown before "more reasons" (the family's first ones; OTHER always follows).
+const FIRST_REASONS: usize = 4;
+/// The last reason chip: shows every code on offer, or the first ones again.
+const MORE_REASONS: &str = "\u{0}more";
+
+/// "AMBIGUOUS_MARK" → "Ambiguous mark" (reason codes as words on the chips).
+fn reason_words(code: &str) -> String {
+    let lower = code.replace('_', " ").to_lowercase();
+    let mut chars = lower.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
 fn help_for(code: &str) -> &'static str {
     match code {
         "MRK-001" => {
@@ -234,6 +284,13 @@ struct State {
     /// Ordered open items of the lane (for next / previous).
     order: Vec<ItemId>,
     pending: Option<Decision>,
+    /// The override reason chosen for the pending decision, and the codes on offer (§13.4).
+    reason: Option<String>,
+    reason_codes: Vec<String>,
+    /// Every reason code on offer, not only the family's first ones.
+    reasons_all: bool,
+    /// Identity items: a student number the reviewer typed, pending like a chosen answer.
+    typed_student: Option<String>,
     collapsed: BTreeSet<String>,
     overlay: bool,
     show_all: bool,
@@ -244,7 +301,6 @@ struct State {
     sel_row: usize,
     sel_col: usize,
     search_request: i32,
-    thumbs: Vec<Image>,
 }
 
 /// The shell controller: owns the backend handle and keeps the UI globals in sync.
@@ -259,9 +315,6 @@ impl Shell {
     /// Binds `backend` to `ui`, wires every callback and fills every screen.
     pub fn bind(ui: &AppWindow, backend: Rc<RefCell<dyn Backend>>) -> Rc<Self> {
         let exam = backend.borrow().default_exam();
-        let thumbs = (0..4)
-            .map(|k| image(&crops::page_thumbnail(11 + k, 84, 108)))
-            .collect();
         let shell = Rc::new(Self {
             ui: ui.as_weak(),
             backend,
@@ -278,6 +331,10 @@ impl Shell {
                 current: None,
                 order: Vec::new(),
                 pending: None,
+                reason: None,
+                reason_codes: Vec::new(),
+                reasons_all: false,
+                typed_student: None,
                 collapsed: BTreeSet::new(),
                 overlay: true,
                 show_all: false,
@@ -288,7 +345,6 @@ impl Shell {
                 sel_row: 17,
                 sel_col: 3,
                 search_request: 0,
-                thumbs,
             }),
             timer: RefCell::new(None),
         });
@@ -325,15 +381,40 @@ impl Shell {
                     if shell.ui.upgrade().is_none() {
                         return; // the window is gone; nothing to refresh
                     }
-                    let changed = shell.backend.borrow_mut().pump();
-                    if changed {
-                        shell.refresh_scan();
-                        shell.refresh_dashboard();
-                    }
+                    shell.pump();
                 }
             },
         );
         *self.timer.borrow_mut() = Some(timer);
+    }
+
+    /// Lets the backend fold in background work (a grading run, an added batch) and refreshes
+    /// what it changed. A reloaded project has new review item IDs, so the review selection of
+    /// that exam starts again from the first item. Returns true when anything changed.
+    pub fn pump(&self) -> bool {
+        let changed = self.backend.borrow_mut().pump();
+        let reloaded = self.backend.borrow_mut().take_reloaded();
+        if reloaded.is_empty() {
+            if changed {
+                self.refresh_scan();
+                self.refresh_dashboard();
+            }
+            return changed;
+        }
+        let current = self.exam().is_some_and(|e| reloaded.contains(&e));
+        if current {
+            let mut st = self.st.borrow_mut();
+            st.item = None;
+            st.current = None;
+            st.pending = None;
+            st.reason = None;
+        }
+        self.refresh_all();
+        if current {
+            let first = self.st.borrow().order.first().copied();
+            self.select_item(first);
+        }
+        true
     }
 
     // -------------------------------------------------------------------------- navigation
@@ -440,11 +521,15 @@ impl Shell {
             me.st.borrow_mut().drawer_open = false;
             me.refresh_dashboard();
         });
+        let me = self.clone();
+        ex.on_create_exam(move || me.create_exam());
 
         // setup
         let su = ui.global::<s::SetupVM>();
         let me = self.clone();
         su.on_cycle_key(move |row, v| me.cycle_key(row as usize, v as usize));
+        let me = self.clone();
+        su.on_replace_key(move |path| me.replace_key(&path));
         let me = self.clone();
         su.on_set_key(move |row, v, t| me.set_key(row as usize, v as usize, &t));
         let me = self.clone();
@@ -471,7 +556,9 @@ impl Shell {
         sc.on_open_sheet(move |serial, code| {
             if code.is_empty() {
                 me.say(
-                    format!("Sheet {serial}: the page viewer is served by omr-app"),
+                    format!(
+                        "Sheet {serial}: the page viewer is not built yet; its review items open from the codes on the right"
+                    ),
                     s::Tone::Info,
                 );
             } else {
@@ -480,6 +567,8 @@ impl Shell {
         });
         let me = self.clone();
         sc.on_toggle_pause(move || me.toggle_pause());
+        let me = self.clone();
+        sc.on_add_scans(move |text| me.add_scans(&text));
 
         // review
         let rv = ui.global::<s::ReviewVM>();
@@ -538,6 +627,8 @@ impl Shell {
         let me = self.clone();
         rv.on_choose_candidate(move |i| me.choose(Decision::Candidate(i as u8)));
         let me = self.clone();
+        rv.on_choose_reason(move |i| me.choose_reason(i));
+        let me = self.clone();
         rv.on_accept(move || me.accept());
         let me = self.clone();
         rv.on_apply_group(move || me.apply_group());
@@ -560,11 +651,28 @@ impl Shell {
         let me = self.clone();
         rv.on_toggle_help(move || me.toggle(|st| st.help = !st.help));
         let me = self.clone();
+        rv.on_use_student(move |t| me.use_student(&t));
+        let me = self.clone();
         rv.on_search(move |t| {
-            me.say(
-                format!("Roster search for \"{t}\" runs in omr-app (bidi-aware, fuzzy)"),
-                s::Tone::Info,
-            )
+            // a typed number decides an identity item; a name search is not built yet
+            let is_number = !t.trim().is_empty()
+                && t.chars().all(|c| c.is_ascii_digit() || c == ' ' || c == '-');
+            let identity = me
+                .st
+                .borrow()
+                .current
+                .as_ref()
+                .is_some_and(|c| c.kind == ReviewKind::Identity);
+            if is_number && identity {
+                me.use_student(&t);
+            } else {
+                me.say(
+                    format!(
+                        "Roster search by name (\"{t}\") is not built yet: type the student number, choose a candidate (1–3) or N (not on roster)"
+                    ),
+                    s::Tone::Info,
+                )
+            }
         });
         let me = self.clone();
         rv.on_key(move |t, ctrl, shift, alt| me.review_key(&t, ctrl, shift, alt));
@@ -578,25 +686,26 @@ impl Shell {
             }
         });
         let me = self.clone();
-        rs.on_release(move || {
-            me.say(
-                "Release needs the instructor's confirmation dialog (§13.4)",
-                s::Tone::Info,
-            )
-        });
+        rs.on_release(move || me.release());
+        rs.set_release_note(ss(
+            "Release is the instructor's deliberate act (§13.4): the score run and key version \
+             are frozen in the audit log and the exports are written, the Blackboard upload with \
+             them. A later change (a review decision, a key change, added scans) supersedes the \
+             release; release again then.",
+        ));
         let me = self.clone();
         rs.on_what_if(move || me.what_if());
         let me = self.clone();
         rs.on_check_action(move |i| me.check_action(i));
+        let me = self.clone();
+        rs.on_export_all(move || me.export());
+        let me = self.clone();
+        rs.on_export_blackboard(move |column| me.export_blackboard(&column));
 
         // outcomes
         let me = self.clone();
-        ui.global::<s::OutcomesVM>().on_export_tp154(move || {
-            me.say(
-                "TP-154 A.1 and B.1 export (XLSX, CSV, HTML) runs in omr-report",
-                s::Tone::Info,
-            )
-        });
+        ui.global::<s::OutcomesVM>()
+            .on_export_tp154(move || me.export());
     }
 
     fn toggle(&self, f: impl FnOnce(&mut State)) {
@@ -605,10 +714,148 @@ impl Shell {
     }
 
     fn request(&self, what: &str) {
+        if what == "New exam" && self.backend.borrow().can_create_exam() {
+            self.ui().global::<s::ExamsVM>().set_new_open(true);
+            return;
+        }
+        let how = match what {
+            "New exam" if self.backend.borrow().is_demo() => {
+                "this window shows invented demo data. Start `omr-desktop` without --demo (it \
+                 opens ~/OMR Exams) or with --workspace <your exams folder>, then New exam grades \
+                 your scans"
+            }
+            "New exam" => {
+                "grade the scans with `omr-desktop --grade <scans…> --template iau-ccsit-v1 \
+                 --questions N --key key.csv --workspace <this folder>` (or `omr grade`), and the \
+                 exam opens here"
+            }
+            "Stop the batch" => "a running batch grades to the end",
+            "Rescan pull list" => "`omr review list --lane capture` lists the pages to rescan",
+            "Queue filter" => "`omr review list --lane marks` lists one lane",
+            w if w.starts_with("Search for") => {
+                "the table lists every exam of this folder; narrow it with the filter chips above \
+                 it"
+            }
+            _ => "the `omr` command line has every command (`omr --help`)",
+        };
         self.say(
-            format!("{what}: handled by omr-app (not in the demo backend)"),
+            format!("{what}: not in the desktop shell yet; {how}"),
             s::Tone::Info,
         );
+    }
+
+    /// Validates the New-exam form and starts grading it; the new exam opens on the Scan
+    /// screen, which follows the run.
+    fn create_exam(&self) {
+        let ui = self.ui();
+        let ex = ui.global::<s::ExamsVM>();
+        let form = b::NewExam {
+            title: ex.get_new_title().to_string(),
+            course: ex.get_new_course().to_string(),
+            scans: ex.get_new_scans().to_string(),
+            sheet: ex.get_new_sheet().to_string(),
+            questions: ex.get_new_questions().to_string(),
+            options: ex.get_new_options().to_string(),
+            forms: ex.get_new_forms().to_string(),
+            key: ex.get_new_key().to_string(),
+            roster: ex.get_new_roster().to_string(),
+            clo: ex.get_new_clo().to_string(),
+        };
+        let r = self.backend.borrow_mut().create_exam(&form);
+        match r {
+            Ok((exam, what)) => {
+                ex.set_new_open(false);
+                // a fresh form next time (the sheet is kept: the same sheet is usual)
+                ex.set_new_title(SharedString::new());
+                ex.set_new_course(SharedString::new());
+                ex.set_new_scans(SharedString::new());
+                ex.set_new_questions(SharedString::new());
+                ex.set_new_options(SharedString::new());
+                ex.set_new_forms(SharedString::new());
+                ex.set_new_key(SharedString::new());
+                ex.set_new_roster(SharedString::new());
+                ex.set_new_clo(SharedString::new());
+                self.select_exam(&exam);
+                self.navigate(s::Page::Scan);
+                self.say(what, s::Tone::Info);
+            }
+            Err(e) => self.say(e.to_string(), s::Tone::Warning),
+        }
+    }
+
+    /// Releases the results through the backend (confirmed in the release bar).
+    fn release(&self) {
+        let Some(exam) = self.exam() else { return };
+        let r = self.backend.borrow_mut().release(&exam);
+        match r {
+            Ok(what) => {
+                self.say(what, s::Tone::Success);
+                self.refresh_dashboard();
+                self.refresh_results();
+            }
+            Err(e) => self.say(e.to_string(), s::Tone::Warning),
+        }
+    }
+
+    /// Replaces the answer key from the typed key file and rescores.
+    fn replace_key(&self, path: &str) {
+        let Some(exam) = self.exam() else { return };
+        let path = std::path::PathBuf::from(path.trim());
+        let r = self.backend.borrow_mut().replace_key(&exam, &path);
+        match r {
+            Ok(what) => {
+                let ui = self.ui();
+                let su = ui.global::<s::SetupVM>();
+                su.set_key_open(false);
+                su.set_key_path(SharedString::new());
+                self.say(what, s::Tone::Success);
+                self.refresh_setup();
+                self.refresh_results();
+                self.refresh_dashboard();
+            }
+            Err(e) => self.say(e.to_string(), s::Tone::Warning),
+        }
+    }
+
+    /// Writes the exam's exports (TP-154 tables included) through the backend.
+    fn export(&self) {
+        let Some(exam) = self.exam() else { return };
+        let r = self.backend.borrow_mut().export(&exam);
+        match r {
+            Ok(where_) => self.say(where_, s::Tone::Success),
+            Err(e) => self.say(e.to_string(), s::Tone::Warning),
+        }
+    }
+
+    /// Writes the Blackboard grade-center upload, into an existing column when one is given.
+    fn export_blackboard(&self, column: &str) {
+        let Some(exam) = self.exam() else { return };
+        let column = Some(column.trim()).filter(|c| !c.is_empty());
+        let r = self.backend.borrow_mut().export_blackboard(&exam, column);
+        match r {
+            Ok(where_) => self.say(where_, s::Tone::Success),
+            Err(e) => self.say(e.to_string(), s::Tone::Warning),
+        }
+    }
+
+    /// Starts adding the typed scan files or folders to the exam (graded again in the
+    /// background; the Scan screen follows it through `pump`).
+    fn add_scans(&self, text: &str) {
+        let Some(exam) = self.exam() else { return };
+        let paths = scan_paths(text);
+        let r = self.backend.borrow_mut().add_scans(&exam, &paths);
+        match r {
+            Ok(what) => {
+                let ui = self.ui();
+                let sc = ui.global::<s::ScanVM>();
+                sc.set_add_open(false);
+                sc.set_add_path(SharedString::new());
+                self.say(what, s::Tone::Info);
+                self.refresh_scan();
+                self.refresh_dashboard();
+            }
+            Err(e) => self.say(e.to_string(), s::Tone::Warning),
+        }
     }
 
     fn toggle_pause(&self) {
@@ -633,7 +880,7 @@ impl Shell {
 
     fn what_if(&self) {
         self.say(
-            "What-if preview re-scores in omr-app (§12.2)",
+            "What-if preview is not built yet (§12.2): change the key in Setup to rescore, then undo it there",
             s::Tone::Info,
         );
     }
@@ -751,6 +998,8 @@ impl Shell {
                     candidates: c.identity.as_ref().map_or(0, |e| e.candidates.len().min(3)),
                 },
                 Some((ReviewKind::Notice, _)) => KeyContext::Notice,
+                // Form items take the option keys too (the version bubbles); Blank, Multi and
+                // Unreadable are refused by `choose`.
                 Some((_, c)) => KeyContext::Mark {
                     options: c.bubbles.len(),
                 },
@@ -841,6 +1090,12 @@ impl Shell {
 
     /// Shows item `id` (or nothing) in the review frame.
     pub fn select_item(&self, id: Option<ItemId>) {
+        if self.st.borrow().item != id {
+            // a number typed for another booklet never carries over
+            self.ui()
+                .global::<s::ReviewVM>()
+                .set_student_entry(SharedString::new());
+        }
         let exam = self.exam();
         let item = match (exam, id) {
             (Some(e), Some(id)) => self.backend.borrow().review_item(&e, id),
@@ -850,6 +1105,9 @@ impl Shell {
             let mut st = self.st.borrow_mut();
             st.item = item.as_ref().map(|i| i.id);
             st.pending = item.as_ref().and_then(|i| i.current);
+            st.reason = None;
+            st.reasons_all = false;
+            st.typed_student = None;
             if let Some(code) = item.as_ref().map(|i| i.code.clone()) {
                 st.collapsed.remove(&code);
             }
@@ -884,8 +1142,10 @@ impl Shell {
             match (st.current.as_ref(), d) {
                 (None, _) => false,
                 (Some(c), Decision::Option(i)) => {
-                    matches!(c.kind, ReviewKind::Mark | ReviewKind::BlindVerify)
-                        && (i as usize) < c.bubbles.len()
+                    matches!(
+                        c.kind,
+                        ReviewKind::Mark | ReviewKind::Form | ReviewKind::BlindVerify
+                    ) && (i as usize) < c.bubbles.len()
                 }
                 (Some(c), Decision::Candidate(i)) => {
                     c.kind == ReviewKind::Identity
@@ -906,30 +1166,162 @@ impl Shell {
             let mut st = self.st.borrow_mut();
             // choosing the same thing twice clears it (toggle), as chips are checkable
             st.pending = if st.pending == Some(d) { None } else { Some(d) };
+            st.reason = None;
+            st.typed_student = None;
         }
         self.push_item();
     }
 
+    /// Picks the override reason `i` of those on offer (again: clears it); the last chip may
+    /// instead show every code or the first ones again.
+    pub fn choose_reason(&self, i: i32) {
+        {
+            let mut st = self.st.borrow_mut();
+            let code = usize::try_from(i)
+                .ok()
+                .and_then(|i| st.reason_codes.get(i).cloned());
+            match code.as_deref() {
+                None => return,
+                Some(MORE_REASONS) => st.reasons_all = !st.reasons_all,
+                Some(_) => st.reason = if st.reason == code { None } else { code },
+            }
+        }
+        self.push_item();
+    }
+
+    /// Identity items: takes the typed student number (digits only; spaces and dashes as
+    /// written are dropped) as the pending decision, in place of a listed candidate.
+    pub fn use_student(&self, text: &str) {
+        let id: String = text.chars().filter(char::is_ascii_digit).collect();
+        let ok = {
+            let st = self.st.borrow();
+            st.current
+                .as_ref()
+                .is_some_and(|c| c.kind == ReviewKind::Identity)
+        };
+        if !ok {
+            self.say(
+                "A student number decides identity items only: open the Identity lane",
+                s::Tone::Info,
+            );
+            return;
+        }
+        if id.is_empty() {
+            self.say(
+                "Type the student number as digits (the number written on the sheet)",
+                s::Tone::Warning,
+            );
+            return;
+        }
+        {
+            let mut st = self.st.borrow_mut();
+            st.pending = None;
+            st.reason = None;
+            st.typed_student = Some(id);
+        }
+        self.push_item();
+    }
+
+    /// True when the typed student number overrides the engine and no reason is chosen yet.
+    fn typed_reason_missing(&self, id: &str) -> bool {
+        let st = self.st.borrow();
+        let (Some(exam), Some(item)) = (st.exam.as_ref(), st.item) else {
+            return false;
+        };
+        st.reason.is_none()
+            && self
+                .backend
+                .borrow()
+                .needs_reason_for_student(exam, item, id)
+    }
+
+    /// The chosen reason needs a note the reviewer has not written (§14.4).
+    fn note_missing(&self) -> Option<String> {
+        let st = self.st.borrow();
+        let reason = st.reason.as_ref()?;
+        let c = st.current.as_ref()?;
+        let note = self.ui().global::<s::ReviewVM>().get_note();
+        (c.reasons_needing_note.contains(reason) && note.trim().is_empty())
+            .then(|| reason_words(reason))
+    }
+
+    /// True when committing `d` on the current item needs a reason the reviewer has not given.
+    fn reason_missing(&self, d: Decision) -> bool {
+        let st = self.st.borrow();
+        let (Some(exam), Some(item)) = (st.exam.as_ref(), st.item) else {
+            return false;
+        };
+        st.reason.is_none() && self.backend.borrow().needs_reason(exam, item, d)
+    }
+
     /// Commits the pending answer, or the suggestion when nothing was chosen.
     pub fn accept(&self) {
+        let typed = self.st.borrow().typed_student.clone();
+        if let Some(student_id) = typed {
+            if self.typed_reason_missing(&student_id) {
+                self.say(
+                    "This overrides the engine's suggestion: choose a reason first (§13.4)",
+                    s::Tone::Warning,
+                );
+                return;
+            }
+            if let Some(reason) = self.note_missing() {
+                self.say(
+                    format!(
+                        "The reason \"{reason}\" needs a note: write why in the note field (§14.4)"
+                    ),
+                    s::Tone::Warning,
+                );
+                return;
+            }
+            let note = self.ui().global::<s::ReviewVM>().get_note().to_string();
+            self.act(ReviewAction::SetStudent { student_id, note });
+            return;
+        }
         let (decision, accepted_suggestion) = {
             let st = self.st.borrow();
             let Some(c) = st.current.as_ref() else { return };
-            let sugg = c.suggestion.as_ref().map(|s| s.decision);
+            // a blind item is never committed with the engine's reading
+            let sugg = c
+                .suggestion
+                .as_ref()
+                .filter(|_| c.kind != ReviewKind::BlindVerify)
+                .map(|s| s.decision);
             match (st.pending, sugg, c.kind) {
                 (_, _, ReviewKind::Notice) => (Decision::Acknowledge, true),
                 (Some(p), s, _) => (p, Some(p) == s),
                 (None, Some(s), _) => (s, true),
-                (None, None, _) => {
+                (None, None, kind) => {
                     drop(st);
                     self.say(
-                        "Choose what is marked first (blind verify shows no suggestion)",
+                        if kind == ReviewKind::Identity {
+                            "Choose a candidate (1–3), N (not on roster), or type the student \
+                             number"
+                        } else {
+                            "Choose what is marked first (blind verify shows no suggestion)"
+                        },
                         s::Tone::Warning,
                     );
                     return;
                 }
             }
         };
+        if self.reason_missing(decision) {
+            self.say(
+                "This overrides the engine's suggestion: choose a reason first (§13.4)",
+                s::Tone::Warning,
+            );
+            return;
+        }
+        if let Some(reason) = self.note_missing() {
+            self.say(
+                format!(
+                    "The reason \"{reason}\" needs a note: write why in the note field (§14.4)"
+                ),
+                s::Tone::Warning,
+            );
+            return;
+        }
         let note = self.ui().global::<s::ReviewVM>().get_note().to_string();
         self.act(ReviewAction::Resolve {
             decision,
@@ -951,6 +1343,22 @@ impl Shell {
             st.pending.or(c.suggestion.as_ref().map(|s| s.decision))
         };
         if let Some(decision) = decision {
+            if self.reason_missing(decision) {
+                self.say(
+                    "This overrides the engine's suggestion: choose a reason first (§13.4)",
+                    s::Tone::Warning,
+                );
+                return;
+            }
+            if let Some(reason) = self.note_missing() {
+                self.say(
+                    format!(
+                        "The reason \"{reason}\" needs a note: write why in the note field (§14.4)"
+                    ),
+                    s::Tone::Warning,
+                );
+                return;
+            }
             self.act(ReviewAction::ApplyToGroup { decision });
         }
     }
@@ -977,11 +1385,18 @@ impl Shell {
                 "Applied {} to the group of {label}",
                 decision_word(*decision, &labels)
             ),
+            ReviewAction::SetStudent { student_id, .. } => {
+                format!("Recorded {label}: student {student_id}")
+            }
             ReviewAction::Defer => format!("Deferred {label}"),
             ReviewAction::Escalate => format!("Escalated {label} to the instructor"),
             ReviewAction::AddToRescan => format!("Added {label} to the rescan list"),
         };
-        let result = self.backend.borrow_mut().apply(&exam, item, action);
+        let reason = self.st.borrow().reason.clone();
+        let result = self
+            .backend
+            .borrow_mut()
+            .apply_with_reason(&exam, item, action, reason);
         match result {
             Ok(out) => {
                 let n = out.affected.len();
@@ -1177,15 +1592,39 @@ impl Shell {
         app.set_user_initials(ss(&d.user.initials));
         app.set_engine(ss(&d.engine));
         app.set_workspace(ss(&d.workspace));
+        app.set_data_note(ss(&d.data_note));
+        app.set_demo(self.backend.borrow().is_demo());
 
         let ex = ui.global::<s::ExamsVM>();
-        ex.set_term_label(ss(format!("{} · {}", d.term.label, d.term.gregorian)));
+        ex.set_can_create(self.backend.borrow().can_create_exam());
+        ex.set_new_note(ss(format!(
+            "Graded into a new folder of {}. Without a key file the key is inferred: the \
+             results stay provisional until you replace it in Setup.",
+            if d.workspace.is_empty() {
+                "the exams folder"
+            } else {
+                d.workspace.as_str()
+            }
+        )));
+        ex.set_term_label(ss(join(&[&d.term.label, &d.term.gregorian], " · ")));
         ex.set_sheets_week(ss(thousands(d.stats.sheets_this_week)));
         ex.set_sheets_today(ss(format!("+{} today", thousands(d.stats.sheets_today))));
         ex.set_open_exceptions(ss(thousands(d.stats.open_exceptions)));
         ex.set_open_errors(ss(format!("{} ERROR or BLOCKER", d.stats.open_errors)));
-        ex.set_median_review(ss(format!("{:.1}", d.stats.median_review_secs)));
-        ex.set_throughput(ss(format!("{:.0}", d.stats.throughput_pages_per_sec)));
+        match d.stats.median_review_secs {
+            Some(m) => {
+                ex.set_median_review(ss(format!("{m:.1}")));
+                ex.set_median_caption(ss("Marks lane, this week"));
+            }
+            None => {
+                ex.set_median_review(ss("–"));
+                ex.set_median_caption(ss("review times are not recorded yet"));
+            }
+        }
+        ex.set_throughput(ss(d
+            .stats
+            .throughput_pages_per_sec
+            .map_or("–".to_string(), |t| format!("{t:.0}"))));
 
         let statuses = [
             ("All", None),
@@ -1280,7 +1719,7 @@ impl Shell {
             .and_then(|id| d.exams.iter().find(|e| &e.id == id));
         ex.set_drawer_open(drawer_open && cur.is_some());
         if let Some(e) = cur {
-            app.set_course(ss(format!("{} {}", e.course_code, e.course_title)));
+            app.set_course(ss(join(&[&e.course_code, &e.course_title], " ")));
             app.set_assessment(ss(&e.assessment));
             app.set_term(ss(&e.term.label));
             app.set_term_gregorian(ss(&e.term.gregorian));
@@ -1291,9 +1730,13 @@ impl Shell {
                 b::ExamStatus::InReview if open.blocking() > 0 => (
                     "Review required".to_string(),
                     format!(
-                        "{} ERROR exceptions block release, and {} warnings need a look.",
+                        "{} ERROR exception{} block{} release, and {} warning{} need{} a look.",
                         open.blocking(),
-                        open.warn
+                        if open.blocking() == 1 { "" } else { "s" },
+                        if open.blocking() == 1 { "s" } else { "" },
+                        open.warn,
+                        if open.warn == 1 { "" } else { "s" },
+                        if open.warn == 1 { "s" } else { "" },
                     ),
                     b::Tone::Warning,
                 ),
@@ -1342,12 +1785,21 @@ impl Shell {
                 can_review: review_open > 0,
                 key_status: ss(&e.key_status),
                 mapped: e.mapped_items as i32,
+                mapped_word: ss(if e.mapping_approval {
+                    "approved"
+                } else {
+                    "mapped"
+                }),
                 total: e.total_items as i32,
-                roster: ss(format!("{} students", thousands(e.roster_count))),
+                roster: ss(if e.roster_count == 0 {
+                    "No roster".to_string()
+                } else {
+                    format!("{} students", thousands(e.roster_count))
+                }),
                 sections: ss(e.sections.join(", ")),
                 last_scan: ss(&e.last_scan),
                 batch_id: ss(&e.batch_id),
-                term: ss(format!("{} · {}", e.term.label, e.term.gregorian)),
+                term: ss(join(&[&e.term.label, &e.term.gregorian], " · ")),
                 term_ar: ss(&e.term.label_ar),
             });
         }
@@ -1410,8 +1862,10 @@ impl Shell {
         ]));
         su.set_versions(model(setup.keys.iter().map(|k| ss(&k.version)).collect()));
         su.set_options(model(t.option_labels.iter().map(ss).collect()));
+        su.set_has_roster(setup.roster_students > 0);
         su.set_key_status(ss(&setup.key_status));
         su.set_key_published(setup.key_published);
+        su.set_can_replace_key(self.backend.borrow().can_replace_key(&setup.exam));
         su.set_mapping_mode(ss(match setup.mapping_mode {
             b::MappingMode::Split => "Split mode: each row's weights sum to 1",
             b::MappingMode::Full => "Full mode: each mapped CLO gets the full item",
@@ -1505,11 +1959,13 @@ impl Shell {
                         b::MappingStatus::Draft => "draft",
                         b::MappingStatus::Proposed => "proposed",
                         b::MappingStatus::Approved => "approved",
+                        b::MappingStatus::InUse => "in use",
                     }),
                     status_tone: match r.status {
                         b::MappingStatus::Draft => s::Tone::Neutral,
                         b::MappingStatus::Proposed => s::Tone::Accent,
                         b::MappingStatus::Approved => s::Tone::Success,
+                        b::MappingStatus::InUse => s::Tone::Primary,
                     },
                 }
             })
@@ -1653,30 +2109,26 @@ impl Shell {
                     state,
                     code: ss(code),
                     severity: severity(sev),
-                    variant: (i % 4) as i32,
+                    variant: i as i32,
                     label: ss(format!("Sheet {}, {word}", t.serial)),
                 }
             })
             .collect();
         sc.set_thumbs(model(thumbs));
-        sc.set_thumb_images(model(self.st.borrow().thumbs.clone()));
-        let rejected: u32 = p
-            .exceptions
-            .iter()
-            .filter(|c| c.code == "CAP-002")
-            .map(|c| c.count)
-            .sum();
-        let review: u32 = p
-            .exceptions
-            .iter()
-            .filter(|c| c.code != "CAP-002" && c.severity >= b::Severity::Warn)
-            .map(|c| c.count)
-            .sum();
-        sc.set_rejected_count(ss(thousands(rejected)));
-        sc.set_review_count(ss(thousands(review)));
-        sc.set_auto_count(ss(thousands(
-            p.pages_done.saturating_sub(review + rejected),
-        )));
+        let blank = blank_sheet();
+        sc.set_thumb_images(model(
+            p.thumbnails
+                .iter()
+                .map(|t| t.image.as_ref().map_or_else(|| blank.clone(), image))
+                .collect(),
+        ));
+        // sheets, not exception items: a sheet with three open items is one sheet to review
+        sc.set_rejected_count(ss(thousands(p.sheets.rejected)));
+        sc.set_review_count(ss(thousands(p.sheets.review)));
+        sc.set_auto_count(ss(thousands(p.sheets.auto)));
+        sc.set_pausable(p.pausable);
+        sc.set_can_add(p.append.allowed && !p.running);
+        sc.set_add_note(ss(&p.append.note));
         sc.set_recon(model(
             p.reconciliation
                 .iter()
@@ -1723,7 +2175,11 @@ impl Shell {
         ));
         rv.set_resolved(q.resolved as i32);
         rv.set_total(q.total as i32);
-        rv.set_median(ss(format!("median {:.1} s / item", q.median_secs_per_item)));
+        rv.set_median(ss(q
+            .median_secs_per_item
+            .map_or("median time not recorded".to_string(), |m| {
+                format!("median {m:.1} s / item")
+            })));
         rv.set_audit_head(ss(&q.audit_head));
         rv.set_two_person(q.two_person_rule);
         ui.global::<s::App>()
@@ -1774,7 +2230,8 @@ impl Shell {
                         }
                         _ => g.code.clone(),
                     }),
-                    fills: model(it.fills.clone()),
+                    // the sparkline of a blind item stays empty, whatever the backend sent
+                    fills: model(if blind { Vec::new() } else { it.fills.clone() }),
                     selected,
                     blind,
                     deferred: it.deferred,
@@ -1797,7 +2254,10 @@ impl Shell {
         }
         rv.set_queue(model(entries));
         rv.set_selected_y(selected_y);
-        rv.set_empty_text(ss(format!("No open items in the {} lane", lane.label())));
+        rv.set_empty_text(ss(q
+            .unavailable
+            .clone()
+            .unwrap_or_else(|| format!("No open items in the {} lane", lane.label()))));
         {
             let mut st = self.st.borrow_mut();
             st.order = order;
@@ -1819,12 +2279,15 @@ impl Shell {
         let Some(c) = st.current.as_ref() else {
             rv.set_has_item(false);
             rv.set_code(SharedString::new());
+            rv.set_reason_needed(false);
+            rv.set_note_required(false);
             return;
         };
         rv.set_has_item(true);
         rv.set_help_text(ss(help_for(&c.code)));
         let kind = match c.kind {
-            ReviewKind::Mark => 0,
+            // a form item is decided in the mark frame: its options are the version bubbles
+            ReviewKind::Mark | ReviewKind::Form => 0,
             ReviewKind::BlindVerify => 1,
             ReviewKind::Identity => 2,
             ReviewKind::Notice => 3,
@@ -1834,15 +2297,20 @@ impl Shell {
         rv.set_code_title(ss(&c.code_title));
         rv.set_sub_reason(ss(&c.sub_reason));
         rv.set_severity(severity(c.severity));
-        let view = if st.registered {
-            "registered"
-        } else {
-            "original scan"
+        // without a separate original the crop is the scan itself, overlays projected onto it
+        let view = match (c.original.is_some(), st.registered) {
+            (false, _) => "scan",
+            (true, true) => "registered",
+            (true, false) => "original scan",
         };
         rv.set_caption(ss(match c.kind {
             ReviewKind::Mark | ReviewKind::BlindVerify => format!(
                 "Question {} · Form {} · booklet {} · page {} · {view}, {} dpi",
                 c.question, c.form, c.serial, c.page, c.dpi
+            ),
+            ReviewKind::Form => format!(
+                "Version bubbles · booklet {} · page {} · {view}, {} dpi",
+                c.serial, c.page, c.dpi
             ),
             ReviewKind::Identity => format!(
                 "Booklet {} · student number grid · {view}, {} dpi",
@@ -1850,7 +2318,11 @@ impl Shell {
             ),
             ReviewKind::Notice => format!("{} · {}", c.code, c.code_title),
         }));
-        rv.set_question_label(ss(format!("Question {}", c.question)));
+        rv.set_question_label(ss(if c.kind == ReviewKind::Form {
+            "Version".to_string()
+        } else {
+            format!("Question {}", c.question)
+        }));
         rv.set_crop(image(&c.crop));
         rv.set_crop_w(c.crop.width as f32);
         rv.set_crop_h(c.crop.height as f32);
@@ -1887,17 +2359,25 @@ impl Shell {
             }
         };
         rv.set_bubbles(model(c.bubbles.iter().map(bubble).collect()));
-        rv.set_fill_bars(model(if c.kind == ReviewKind::Mark {
-            c.bubbles.iter().map(bubble).collect()
-        } else {
-            Vec::new()
-        }));
+        rv.set_fill_bars(model(
+            if matches!(c.kind, ReviewKind::Mark | ReviewKind::Form) {
+                c.bubbles.iter().map(bubble).collect()
+            } else {
+                Vec::new()
+            },
+        ));
         rv.set_threshold(c.threshold);
+        rv.set_threshold_text(ss(format!(
+            "Threshold {:.2} · hysteresis band {:.2}–{:.2}",
+            c.threshold, c.band.0, c.band.1
+        )));
         rv.set_band_lo(c.band.0);
         rv.set_band_hi(c.band.1);
-        let sugg = c.suggestion.as_ref().map(|s| s.decision);
-        rv.set_has_suggestion(c.suggestion.is_some());
-        if let Some(sg) = &c.suggestion {
+        // blind: no suggestion reaches the frame, whatever the backend sent (§13.4)
+        let shown = c.suggestion.as_ref().filter(|_| !blind);
+        let sugg = shown.map(|s| s.decision);
+        rv.set_has_suggestion(shown.is_some());
+        if let Some(sg) = shown {
             rv.set_suggestion_letter(ss(decision_word(sg.decision, &labels)));
             rv.set_suggestion_word(ss(decision_word(sg.decision, &labels)));
             rv.set_suggestion_source(ss(match &sg.source {
@@ -1915,16 +2395,16 @@ impl Shell {
                 (ReviewKind::Identity, d) => {
                     format!("{} · posterior {:.2}", decision_word(d, &labels), sg.fill)
                 }
+                // a form is inferred from the answers, not read from a fill
+                (ReviewKind::Form, _) => {
+                    format!("Likelihood margin {:.1} nats", sg.margin)
+                }
                 (_, Decision::Option(_)) => {
                     format!("Filled {:.2} · margin {:.2}", sg.fill, sg.margin)
                 }
                 _ => format!("Top fill {:.2} · margin {:.2}", sg.fill, sg.margin),
             }));
-            rv.set_suggestion_tag(ss(format!(
-                "{} · {}",
-                c.code,
-                c.sub_reason.replace('_', " ")
-            )));
+            rv.set_suggestion_tag(ss(join(&[&c.code, &c.sub_reason.replace('_', " ")], " · ")));
         }
         let pending = st.pending;
         rv.set_options(model(
@@ -1944,6 +2424,8 @@ impl Shell {
                 (Decision::NotOnRoster, "Not on roster", "N"),
                 (Decision::Duplicate, "Duplicate", "D"),
             ],
+            // a booklet has exactly one form: only a version letter decides it
+            ReviewKind::Form => Vec::new(),
             _ => vec![
                 (Decision::Blank, "Blank", "Bksp"),
                 (Decision::Multi, "Multi", "Ctrl+M"),
@@ -1977,9 +2459,22 @@ impl Shell {
                         name_ar: ss(&cd.name_ar),
                         student_id: ss(&cd.student_id),
                         national_id: ss(&cd.national_id_masked),
-                        meta: ss(format!(
-                            "Sec {} · {} · {} · seat {}",
-                            cd.section, cd.campus, cd.track, cd.seat
+                        meta: ss(join(
+                            &[
+                                &if cd.section.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!("Sec {}", cd.section)
+                                },
+                                &cd.campus,
+                                &cd.track,
+                                &if cd.seat.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!("seat {}", cd.seat)
+                                },
+                            ],
+                            " · ",
                         )),
                         posterior: ss(format!("{:.2}", cd.posterior)),
                         channels: model(
@@ -2028,7 +2523,77 @@ impl Shell {
             c.typical_full_fill, c.answered
         )));
         rv.set_summary(ss(&c.summary));
+        // an override needs a reason (§13.4, the canonical codes of §14.4): the family's first
+        // codes and OTHER, the chosen one, and a last chip that lists every code on offer
+        let typed = st.typed_student.as_deref();
+        let needs = match typed {
+            Some(id) => st
+                .exam
+                .as_ref()
+                .is_some_and(|e| self.backend.borrow().needs_reason_for_student(e, c.id, id)),
+            None => pending.is_some_and(|p| {
+                st.exam
+                    .as_ref()
+                    .is_some_and(|e| self.backend.borrow().needs_reason(e, c.id, p))
+            }),
+        };
+        let mut codes: Vec<String> = if st.reasons_all {
+            c.reasons.clone()
+        } else {
+            let mut v: Vec<String> = c.reasons.iter().take(FIRST_REASONS).cloned().collect();
+            for extra in ["OTHER"].into_iter().chain(st.reason.as_deref()) {
+                if c.reasons.iter().any(|r| r == extra) && !v.iter().any(|r| r == extra) {
+                    v.push(extra.to_string());
+                }
+            }
+            v
+        };
+        let hidden = c.reasons.len().saturating_sub(codes.len());
+        if st.reasons_all || hidden > 0 {
+            codes.push(MORE_REASONS.into());
+        }
+        rv.set_reason_needed(needs && !c.reasons.is_empty());
+        rv.set_reasons(model(
+            codes
+                .iter()
+                .map(|code| {
+                    if code == MORE_REASONS {
+                        s::ChipVM {
+                            label: ss(if st.reasons_all {
+                                "Fewer reasons".to_string()
+                            } else {
+                                format!("{hidden} more reasons…")
+                            }),
+                            key: ss("more"),
+                            suggested: false,
+                            selected: false,
+                        }
+                    } else {
+                        s::ChipVM {
+                            label: ss(reason_words(code)),
+                            key: SharedString::new(),
+                            suggested: false,
+                            selected: st.reason.as_deref() == Some(code.as_str()),
+                        }
+                    }
+                })
+                .collect(),
+        ));
+        rv.set_note_required(
+            needs
+                && st
+                    .reason
+                    .as_ref()
+                    .is_some_and(|r| c.reasons_needing_note.contains(r)),
+        );
+        let reason_given = st.reason.is_some();
+        rv.set_typed_student(ss(typed.unwrap_or("")));
         let (label, enabled) = match (c.kind, pending) {
+            _ if needs && !reason_given => ("Choose a reason".to_string(), false),
+            (ReviewKind::Identity, _) if typed.is_some() => (
+                format!("Accept student {}", typed.unwrap_or_default()),
+                true,
+            ),
             (ReviewKind::Notice, _) => ("Acknowledge".to_string(), true),
             (ReviewKind::BlindVerify, None) => ("Choose what is marked".to_string(), false),
             (ReviewKind::Identity, None) => match sugg {
@@ -2078,7 +2643,9 @@ impl Shell {
         )));
         rv.set_contact(model(tiles));
         drop(st);
-        self.st.borrow_mut().contact_ids = contact_ids;
+        let mut st = self.st.borrow_mut();
+        st.contact_ids = contact_ids;
+        st.reason_codes = codes;
     }
 
     // -------------------------------------------------------------------------- refresh: results
@@ -2092,10 +2659,11 @@ impl Shell {
         let st = &r.stats;
         rs.set_key_label(ss(&r.key_label));
         rs.set_students(ss(thousands(st.students)));
-        rs.set_students_caption(ss(format!(
-            "of {} on roster · {} absent",
-            st.roster, st.absent
-        )));
+        rs.set_students_caption(ss(if st.roster == 0 {
+            "no roster: absences are unknown".to_string()
+        } else {
+            format!("of {} on roster · {} absent", st.roster, st.absent)
+        }));
         rs.set_mean(ss(format!("{:.1}", st.mean_pct)));
         rs.set_mean_caption(ss(format!(
             "median {:.0} % · SD {:.1}",
@@ -2111,13 +2679,22 @@ impl Shell {
         rs.set_pass_caption(ss(lowest_pass.map_or(String::new(), |g| {
             format!("≥ {:.0} % ({} or better)", g.lo, g.letter)
         })));
-        rs.set_alpha(ss(format!("{:.2}", st.alpha)));
-        rs.set_alpha_caption(ss(format!(
-            "Feldt 95 % CI {:.2}–{:.2}",
-            st.alpha_ci.0, st.alpha_ci.1
-        )));
-        rs.set_sem(ss(format!("{:.1}", st.sem_points)));
-        rs.set_sem_caption(ss("±1.96 SEM band at the cut"));
+        rs.set_alpha(ss(st
+            .alpha
+            .map_or("–".to_string(), |a| format!("{a:.2}"))));
+        rs.set_alpha_caption(ss(match (st.alpha, st.alpha_ci) {
+            (Some(_), Some((lo, hi))) => format!("Feldt 95 % CI {lo:.2}–{hi:.2}"),
+            (Some(_), None) => "no CI at this N".to_string(),
+            (None, _) => "not computable at this N".to_string(),
+        }));
+        rs.set_sem(ss(st
+            .sem_points
+            .map_or("–".to_string(), |x| format!("{x:.1}"))));
+        rs.set_sem_caption(ss(if st.sem_points.is_some() {
+            "±1.96 SEM band at the cut"
+        } else {
+            "needs α"
+        }));
         rs.set_open_errors(ss(st.open_errors.to_string()));
         rs.set_open_caption(ss(if st.open_errors > 0 {
             "ERROR · holds release"
@@ -2204,18 +2781,25 @@ impl Shell {
                             t
                         })
                         .unwrap_or_default();
+                    let q = if it.label.is_empty() {
+                        format!("Q{:02}", it.question)
+                    } else {
+                        it.label.clone()
+                    };
+                    // what was not computed reads "–", never 0
+                    let p = it.p.map_or("–".to_string(), |p| format!("{p:.2}"));
+                    let r = it.r_ir.map_or("–".to_string(), |r| signed(r, 2));
+                    let band = it.band.map_or("not computed", |b| b.word());
                     s::ItemRow {
-                        q: ss(format!("Q{:02}", it.question)),
-                        p: ss(format!("{:.2}", it.p)),
-                        r: ss(signed(it.r_ir, 2)),
-                        r_ci: ss(format!(
-                            "[{}, {}]",
-                            signed(it.r_ci.0, 2),
-                            signed(it.r_ci.1, 2)
-                        )),
-                        r_negative: it.r_ir < 0.0,
-                        steps: it.band.steps() as i32,
-                        band: ss(it.band.word()),
+                        q: ss(&q),
+                        p: ss(&p),
+                        r: ss(&r),
+                        r_ci: ss(it.r_ci.map_or("–".to_string(), |(lo, hi)| {
+                            format!("[{}, {}]", signed(lo, 2), signed(hi, 2))
+                        })),
+                        r_negative: it.r_ir.is_some_and(|r| r < 0.0),
+                        steps: it.band.map_or(0, |b| b.steps() as i32),
+                        band: ss(band),
                         shares: model(it.option_shares.iter().map(|&x| x as f32).collect()),
                         keyed: it.keyed.map_or(-1, |k| k as i32),
                         flag: ss(&flag_text),
@@ -2223,11 +2807,7 @@ impl Shell {
                         has_flag: flag.is_some(),
                         selected: false,
                         label: ss(format!(
-                            "Q{:02}, p {:.2}, r {}, {}{}",
-                            it.question,
-                            it.p,
-                            signed(it.r_ir, 2),
-                            it.band.word(),
+                            "{q}, p {p}, r {r}, {band}{}",
                             if flag_text.is_empty() {
                                 String::new()
                             } else {
@@ -2251,6 +2831,14 @@ impl Shell {
         ));
         rs.set_release_blocked(r.release_blocked.is_some());
         rs.set_release_reason(ss(r.release_blocked.unwrap_or_default()));
+        rs.set_can_export(true);
+        rs.set_blackboard_ready(r.blackboard_blocked.is_none());
+        rs.set_blackboard_note(ss(r.blackboard_blocked.unwrap_or_else(|| {
+            "Only final results go into the upload (Username = roster student ID, the raw score); \
+             students with an open ERROR item are left out, so Blackboard keeps their current \
+             value"
+                .into()
+        })));
     }
 
     // -------------------------------------------------------------------------- refresh: outcomes
@@ -2266,9 +2854,12 @@ impl Shell {
             b::ClassMethod::Average => "average μ",
             b::ClassMethod::ThresholdProportion => "π",
             b::ClassMethod::PerQuestion => "ρ (per question)",
+            b::ClassMethod::Levels => "attainment levels",
+            b::ClassMethod::Eamu => "EAMU bands",
         };
         ov.set_policy(ss(format!(
-            "Direct evidence · approved mappings only · T = {}, τ = {} · verdict on {method}, {} basis",
+            "Direct evidence · {} · T = {}, τ = {} · verdict on {method}, {} basis",
+            p.mapping_basis,
             pct(p.target),
             pct(p.tau),
             p.verdict_basis
@@ -2279,6 +2870,8 @@ impl Shell {
                 b::ClassMethod::Average => "Average",
                 b::ClassMethod::ThresholdProportion => "Threshold-proportion",
                 b::ClassMethod::PerQuestion => "Per-question",
+                b::ClassMethod::Levels => "Levels",
+                b::ClassMethod::Eamu => "EAMU",
             },
             pct(p.tau),
             pct(p.target)
@@ -2289,7 +2882,7 @@ impl Shell {
         let deciding = match p.class_method {
             b::ClassMethod::Average => 0,
             b::ClassMethod::ThresholdProportion => 1,
-            b::ClassMethod::PerQuestion => -1,
+            b::ClassMethod::PerQuestion | b::ClassMethod::Levels | b::ClassMethod::Eamu => -1,
         };
         let ci = |(lo, hi): (f64, f64)| format!("{:.0}–{:.0} %", lo * 100.0, hi * 100.0);
         let rows: Vec<s::CloRow> = o
@@ -2392,8 +2985,21 @@ impl Shell {
                 });
                 last = Some(r.domain);
             }
+            // characters per line of each wrapping column at its width (text-xs)
+            let lines = [
+                (&r.clo, 48),
+                (&r.methods, 24),
+                (&r.actual, 23),
+                (&r.comment, 36),
+            ]
+            .iter()
+            .map(|(t, per)| t.chars().count().div_ceil(*per))
+            .max()
+            .unwrap_or(1)
+            .clamp(1, 4);
             b1.push(s::B1Row {
                 header: false,
+                lines: lines as i32,
                 number: ss(&r.number),
                 clo: ss(&r.clo),
                 plo: ss(&r.plo),
@@ -2417,6 +3023,17 @@ impl Shell {
 impl Shell {
     /// Switches the review lane without selecting an item.
     /// Selects a cell of the mapping matrix (row = item index, col = CLO index).
+    /// Opens or closes the Add scans bar (Scan) and the Exports bar (Results).
+    /// Opens or closes the floating bars (screenshots): Add scans, Exports and the New-exam
+    /// form (opened only where the backend can create an exam).
+    pub fn set_bars(&self, add_scans: bool, exports: bool, new_exam: bool) {
+        let ui = self.ui();
+        ui.global::<s::ScanVM>().set_add_open(add_scans);
+        ui.global::<s::ResultsVM>().set_export_open(exports);
+        ui.global::<s::ExamsVM>()
+            .set_new_open(new_exam && self.backend.borrow().can_create_exam());
+    }
+
     pub fn select_cell(&self, row: usize, col: usize) {
         {
             let mut st = self.st.borrow_mut();
@@ -2460,6 +3077,19 @@ mod tests {
         assert_eq!(parse_weight("٠٫٥"), Ok(Some(0.5)));
         assert_eq!(parse_weight("½"), Ok(Some(0.5)));
         assert!(parse_weight("abc").is_err());
+    }
+
+    #[test]
+    fn scan_paths_split_and_expand_home() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let p = scan_paths(" day2/ ; \"b c.pdf\";;~/scans\n");
+        assert_eq!(p.len(), 3);
+        assert_eq!(p[0], std::path::PathBuf::from("day2/"));
+        assert_eq!(p[1], std::path::PathBuf::from("b c.pdf"));
+        if !home.is_empty() {
+            assert_eq!(p[2], std::path::Path::new(&home).join("scans"));
+        }
+        assert!(scan_paths(" ; ").is_empty());
     }
 
     #[test]

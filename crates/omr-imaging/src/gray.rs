@@ -147,6 +147,24 @@ impl GrayImage {
         }
     }
 
+    /// The image turned clockwise by `quarter_turns` × 90° (lossless; taken modulo 4). A
+    /// portrait scan of a landscape form becomes landscape after one or three turns.
+    pub fn rotated_quarter(&self, quarter_turns: u8) -> GrayImage {
+        let (w, h) = (self.width, self.height);
+        match quarter_turns % 4 {
+            0 => self.clone(),
+            // Clockwise: output (x, y) shows input (y, h − 1 − x); output is h × w.
+            1 => GrayImage::from_fn(h, w, |x, y| self.data[(h - 1 - x) * w + y]),
+            2 => GrayImage {
+                width: w,
+                height: h,
+                data: self.data.iter().rev().copied().collect(),
+            },
+            // Counter-clockwise: output (x, y) shows input (w − 1 − y, x).
+            _ => GrayImage::from_fn(h, w, |x, y| self.data[x * w + (w - 1 - y)]),
+        }
+    }
+
     /// The 256-bin histogram.
     pub fn histogram(&self) -> [u64; 256] {
         let mut h = [0u64; 256];
@@ -168,6 +186,20 @@ mod tests {
         assert_eq!(c.row(0), &[255, 10, 11]);
         assert_eq!(c.row(1), &[255, 20, 21]);
         assert_eq!(c.row(2), &[255, 255, 255]);
+    }
+
+    #[test]
+    fn quarter_turns_rotate_clockwise_and_compose() {
+        // 3 × 2:  a b c / d e f  →  clockwise: d a / e b / f c.
+        let img = GrayImage::from_fn(3, 2, |x, y| (x + 10 * y) as u8);
+        let cw = img.rotated_quarter(1);
+        assert_eq!((cw.width(), cw.height()), (2, 3));
+        assert_eq!(cw.row(0), &[10, 0]);
+        assert_eq!(cw.row(2), &[12, 2]);
+        assert_eq!(img.rotated_quarter(3).row(0), &[2, 12]);
+        assert_eq!(cw.rotated_quarter(1), img.rotated_quarter(2));
+        assert_eq!(cw.rotated_quarter(3), img);
+        assert_eq!(img.rotated_quarter(4), img);
     }
 
     #[test]

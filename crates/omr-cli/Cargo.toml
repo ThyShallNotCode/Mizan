@@ -20,9 +20,14 @@ serde_json.workspace = true
 hex.workspace = true
 rand.workspace = true
 rayon.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 omr-sim.workspace = true
 tempfile.workspace = true
 serde_json.workspace = true
-uuid.workspace = true
+# The legacy IAU fixtures shared with omr-app's tests (tests/acceptance_perf.rs).
+omr-recog.workspace = true
+omr-imaging.workspace = true
+image.workspace = true
+miniz_oxide.workspace = true

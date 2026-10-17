@@ -27,13 +27,17 @@ walkdir.workspace = true
 uuid.workspace = true
 csv.workspace = true
 calamine.workspace = true
+encoding_rs.workspace = true
 num-traits.workspace = true
 hex.workspace = true
 image.workspace = true
 num-rational.workspace = true
+rand.workspace = true
 
 [dev-dependencies]
 omr-sim.workspace = true
+miniz_oxide.workspace = true
+rust_xlsxwriter.workspace = true
 tempfile.workspace = true
-rand.workspace = true
+p384.workspace = true
 rand_chacha.workspace = true

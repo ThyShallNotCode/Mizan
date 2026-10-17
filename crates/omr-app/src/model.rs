@@ -40,6 +40,9 @@ pub enum PageStatus {
     Unattributed,
     /// Byte-identical duplicate of an ingested file (CAP-011).
     Duplicate,
+    /// A blank back or a page showing only bleed-through (CAP-012, INFO): dropped, never
+    /// collated, attributed or queued (§7.5).
+    Blank,
 }
 
 /// One page.
@@ -165,6 +168,14 @@ pub struct Booklet {
     pub identity: IdentityState,
     /// Booklet-level exceptions (MRK-015, IDN-003, SCO-005 …).
     pub exceptions: Vec<Exception>,
+    /// The section bubbled on the sheet (IAU sheet; empty when not bubbled or not read
+    /// confidently): the section of a rosterless exam, checked against the roster's
+    /// otherwise (IDN-004 `cross_section`).
+    #[serde(default)]
+    pub sheet_section: String,
+    /// The exam type bubbled on the sheet (IAU sheet), if confident.
+    #[serde(default)]
+    pub exam_type: String,
 }
 
 impl Booklet {
@@ -259,6 +270,25 @@ pub struct Timings {
     pub pages: usize,
 }
 
+/// The release of an exam's results (§10.8, §13.4): a deliberate act of the instructor, only
+/// when nothing blocks it. The Blackboard upload is written only for released results.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Release {
+    /// When (RFC 3339 UTC).
+    pub at_utc: String,
+    /// Who released (principal).
+    pub by: String,
+    /// The score run released.
+    pub score_run: String,
+    /// The key version in force.
+    pub key_version: u32,
+    /// SHA-384 (hex) of the released score run.
+    pub results_sha384: String,
+    /// What changed after the release (§10.8 post-release change), if anything: the results
+    /// must then be released again.
+    pub superseded: Option<String>,
+}
+
 /// The exam state.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
@@ -277,7 +307,10 @@ pub struct Session {
     /// review action.
     #[serde(skip, default)]
     pub pages: Vec<PageState>,
-    /// Booklets in canonical order.
+    /// Booklets in canonical order. Persisted apart from the session header, in chunks
+    /// (`booklets-NNNNN.json`), so a review action rewrites one chunk (a snapshot written
+    /// before chunks holds them here and is still read).
+    #[serde(default, skip_serializing)]
     pub booklets: Vec<Booklet>,
     /// Effective key.
     pub key: Option<EffectiveKey>,
@@ -289,9 +322,19 @@ pub struct Session {
     pub review: ReviewState,
     /// Timings of the grading run.
     pub timings: Timings,
+    /// The release of the results, if released.
+    #[serde(default)]
+    pub release: Option<Release>,
 }
 
 impl Session {
+    /// True when the results are released and nothing changed since.
+    pub fn released(&self) -> bool {
+        self.release
+            .as_ref()
+            .is_some_and(|r| r.superseded.is_none())
+    }
+
     /// Open ERROR/BLOCKER count across the queue.
     pub fn open_blocking(&self) -> usize {
         self.review
@@ -311,8 +354,40 @@ impl Session {
         if open > 0 {
             why.push(format!("{open} ERROR/BLOCKER open"));
         }
-        if self.key.is_none() {
-            why.push("no answer key".into());
+        match &self.key {
+            None => why.push("no answer key".into()),
+            // A key entry left empty refuses the score run (SCO-003, key incomplete): nothing
+            // is releasable until every question has its key or is voided.
+            Some(k) => {
+                let missing: Vec<String> = k
+                    .forms
+                    .iter()
+                    .enumerate()
+                    .take(if k.shared_items { 1 } else { k.forms.len() })
+                    .flat_map(|(f, cells)| {
+                        let form = self.definition.forms.get(f).cloned().unwrap_or_default();
+                        let shared = k.shared_items;
+                        cells
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, c)| **c == KeyCell::Missing)
+                            .map(move |(q, _)| {
+                                if shared {
+                                    format!("Q{}", q + 1)
+                                } else {
+                                    format!("{form}-Q{}", q + 1)
+                                }
+                            })
+                    })
+                    .collect();
+                if !missing.is_empty() {
+                    why.push(format!(
+                        "key incomplete (SCO-003): no key for {}; set each one (omr key set) or \
+                         void it with *",
+                        missing.join(", ")
+                    ));
+                }
+            }
         }
         (!why.is_empty()).then(|| why.join("; "))
     }

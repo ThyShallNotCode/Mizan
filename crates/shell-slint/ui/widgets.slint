@@ -613,6 +613,72 @@ export component EditCell inherits Rectangle {
     }
 }
 
+// A bordered single-line text field whose text is two-way: what is typed is in the view-model at
+// once, so a button pressed next (by mouse, key or assistive technology) reads it. One text-input
+// AT node with a unique label.
+export component TextField inherits Rectangle {
+    in-out property <string> text;
+    in property <string> label;
+    in property <string> placeholder;
+    in property <bool> mono;
+    in property <bool> arabic;
+    in property <bool> enabled: true;
+    callback accepted(string);
+    height: Theme.control-height;
+    border-radius: Theme.radius-md;
+    background: root.enabled ? Theme.surface-raised : Theme.surface-sunken;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.primary : Theme.border-strong;
+    forward-focus: input;
+    accessible-role: AccessibleRole.text-input;
+    accessible-label: root.label;
+    accessible-placeholder-text: root.placeholder;
+    accessible-value: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-set-value(v) => {
+        root.text = v;
+    }
+    TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: MouseCursor.text;
+        clicked => {
+            input.focus();
+        }
+    }
+    if root.text == "": Text {
+        x: Theme.space-sm;
+        width: parent.width - 2 * Theme.space-sm;
+        height: parent.height;
+        text: root.placeholder;
+        font-size: Theme.text-sm;
+        color: Theme.ink-3;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+    input := TextInput {
+        x: Theme.space-sm;
+        width: parent.width - 2 * Theme.space-sm;
+        height: parent.height;
+        text <=> root.text;
+        enabled: root.enabled;
+        single-line: true;
+        font-family: root.arabic ? Theme.font-arabic : root.mono ? Theme.font-mono : Theme.font-sans;
+        font-size: root.mono ? Theme.text-xs : Theme.text-sm;
+        color: Theme.ink;
+        vertical-alignment: center;
+        selection-background-color: Theme.primary-soft;
+        accessible-role: none;
+        accepted => {
+            root.accepted(self.text);
+        }
+    }
+    FocusRing {
+        active: input.has-focus;
+        corner: Theme.radius-md;
+    }
+}
+
 // The scanned paper with bubble overlays (DESIGN §4: overlays are theme-invariant; chrome never
 // sits on a bubble). Geometry comes in crop pixels; `scale` maps it to logical pixels.
 export component ScanPaper inherits Rectangle {
@@ -624,7 +690,11 @@ export component ScanPaper inherits Rectangle {
     in property <bool> show-overlays: true;
     in property <string> caption;
     in property <string> image-label;
-    width: root.crop-w * root.scale * 1px + 2 * 12px;
+    // narrow crops (a column of version bubbles) sit centred on a sheet wide enough for the
+    // caption
+    property <length> img-w: root.crop-w * root.scale * 1px;
+    property <length> img-x: (root.width - root.img-w) / 2;
+    width: max(root.caption == "" ? 0px : 420px, root.img-w + 2 * 12px);
     height: root.crop-h * root.scale * 1px + 12px + (root.caption == "" ? 12px : 36px);
     background: Theme.paper;
     border-radius: 2px;
@@ -632,9 +702,9 @@ export component ScanPaper inherits Rectangle {
     drop-shadow-offset-y: Theme.shadow-2-offset;
     drop-shadow-color: Theme.shadow-2-color;
     Image {
-        x: 12px;
+        x: root.img-x;
         y: 12px;
-        width: root.crop-w * root.scale * 1px;
+        width: root.img-w;
         height: root.crop-h * root.scale * 1px;
         source: root.source;
         image-fit: fill;
@@ -642,9 +712,9 @@ export component ScanPaper inherits Rectangle {
         accessible-label: root.image-label;
     }
     if root.show-overlays: Rectangle {
-        x: 12px;
+        x: root.img-x;
         y: 12px;
-        width: root.crop-w * root.scale * 1px;
+        width: root.img-w;
         height: root.crop-h * root.scale * 1px;
         for b in root.bubbles: BubbleOverlay {
             property <length> s: b.r * 2 * 1.6 * root.scale * 1px;

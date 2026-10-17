@@ -54,6 +54,10 @@ struct Tally {
     form_declared_correct: usize,
     form_inferred: usize,
     form_wrong: usize,
+    /// Pages dropped as blank backs (CAP-012): none of the real pages is blank.
+    blank: usize,
+    /// Smallest upright-vs-upside-down margin of the coarse correlation (milli).
+    orientation_margin_min_milli: i64,
 }
 
 fn run_exam(
@@ -84,6 +88,16 @@ fn run_exam(
     p.export(out).expect("export");
     let wall = t0.elapsed().as_secs_f64();
     let s = &p.session;
+    for pg in &s.pages {
+        t.blank += usize::from(pg.status == omr_app::model::PageStatus::Blank);
+        if let Some(m) = pg
+            .read
+            .as_ref()
+            .and_then(|r| r.registration["orientation_margin_milli"].as_i64())
+        {
+            t.orientation_margin_min_milli = t.orientation_margin_min_milli.min(m);
+        }
+    }
     for b in &s.booklets {
         let pg = &s.pages[b.pages[0]];
         let tag = tag_of(&s.sources[pg.source].name).expect("known file");
@@ -155,7 +169,10 @@ fn req_a1_real_iau_full_pipeline() {
     let root = scratch.unwrap_or_else(|_| tmp.path().to_path_buf());
     let _ = std::fs::remove_dir_all(root.join("test-cs522"));
     let _ = std::fs::remove_dir_all(root.join("test-arti503"));
-    let mut t = Tally::default();
+    let mut t = Tally {
+        orientation_margin_min_milli: i64::MAX,
+        ..Tally::default()
+    };
     let w1 = run_exam(&cs, 29, &root.join("test-cs522"), &reference, &mut t);
     let w2 = run_exam(&arti, 28, &root.join("test-arti503"), &reference, &mut t);
     let report = json!({
@@ -164,6 +181,7 @@ fn req_a1_real_iau_full_pipeline() {
         "ar": t.review as f64 / t.questions as f64,
         "student_number": {"exact": t.id_exact, "flagged": t.id_flagged, "wrong_unflagged": t.id_wrong_unflagged},
         "form": {"declared_correct": t.form_declared_correct, "inferred": t.form_inferred, "wrong": t.form_wrong},
+        "blank_pages": t.blank, "orientation_margin_min": t.orientation_margin_min_milli as f64 / 1000.0,
         "wall_s": w1 + w2, "pages_per_s": t.pages as f64 / (w1 + w2),
     });
     eprintln!("{report}");
@@ -175,4 +193,5 @@ fn req_a1_real_iau_full_pipeline() {
     assert!((t.review as f64) / (t.questions as f64) <= 0.005, "AR");
     assert_eq!(t.id_wrong_unflagged, 0, "wrong unflagged student numbers");
     assert_eq!(t.form_wrong, 0, "wrong declared forms");
+    assert_eq!(t.blank, 0, "no real sheet is a blank back");
 }

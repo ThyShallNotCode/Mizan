@@ -111,19 +111,28 @@ pub fn key_version(def: &ExamDefinition, key: &EffectiveKey) -> (KeyVersion, Vec
 }
 
 /// The L1 response of one question (§10.1): pending while an exception is open, never blank.
-fn l1_of(status: ResponseStatus, current: &Response) -> L1Response {
+/// An option the exam does not use (`options`) is pending too, never an option scoring cannot
+/// score: one booklet's stray mark never aborts the score run of the whole exam (the run
+/// raises SCO-008 for it instead).
+fn l1_of(status: ResponseStatus, current: &Response, options: u8) -> L1Response {
+    let outside = match current {
+        Response::Single(o) => *o >= options,
+        Response::Multi(v) | Response::Set(v) => v.iter().any(|o| *o >= options),
+        _ => false,
+    };
     match status {
         ResponseStatus::Pending => match current {
             Response::Unreadable { .. } => L1Response::Unreadable,
             _ => L1Response::Pending,
         },
+        _ if outside => L1Response::Pending,
         _ => L1Response::from(current),
     }
 }
 
 /// One booklet's L1 row (`None` when the booklet has no form). A held booklet (open MRK-015)
 /// is pending at every position.
-pub fn booklet_l1(b: &Booklet) -> Option<BookletL1> {
+pub fn booklet_l1(b: &Booklet, options: u8) -> Option<BookletL1> {
     let f = b.form?;
     let held = b.hold.is_some();
     let responses: Vec<L1Response> = b
@@ -133,7 +142,7 @@ pub fn booklet_l1(b: &Booklet) -> Option<BookletL1> {
             if held {
                 L1Response::Pending
             } else {
-                l1_of(q.status, &q.current)
+                l1_of(q.status, &q.current, options)
             }
         })
         .collect();
@@ -203,7 +212,7 @@ impl Scoring {
         let mut row_of = vec![None; session.booklets.len()];
         let mut booklets = Vec::new();
         for (i, b) in session.booklets.iter().enumerate() {
-            if let Some(l1) = booklet_l1(b) {
+            if let Some(l1) = booklet_l1(b, def.options) {
                 row_of[i] = Some(rows.len());
                 rows.push(i);
                 booklets.push(l1);
@@ -224,8 +233,12 @@ impl Scoring {
         for b in &snapshot.booklets {
             row_exceptions.push(project_one(b, &forms)?.1);
         }
-        let prep = omr_scoring::prepare(&snapshot, &forms)
-            .map_err(|e| AppError::Scoring(e.to_string()))?;
+        let prep = omr_scoring::prepare(&snapshot, &forms).map_err(|e| {
+            AppError::Scoring(format!(
+                "{e}; check that --questions, --options and --forms match the printed sheet and \
+                 the key, then grade again into a new folder"
+            ))
+        })?;
         let mut s = Self {
             forms,
             key: kv,
@@ -266,7 +279,8 @@ impl Scoring {
         let Some(row) = self.row_of.get(bi).copied().flatten() else {
             return Ok(());
         };
-        let Some(l1) = booklet_l1(b) else {
+        let options = self.forms.items.first().map_or(u8::MAX, |i| i.options);
+        let Some(l1) = booklet_l1(b, options) else {
             return Ok(());
         };
         let (one, ex) = project_one(&l1, &self.forms)?;

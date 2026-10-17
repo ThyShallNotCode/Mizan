@@ -10,9 +10,9 @@ actor thread belongs to `omr-app`).
 
 | Area | Items |
 |---|---|
-| Package (§14.1) | `Project::{create(root, NewProject, OpenOptions), open(root, OpenOptions)}`; `OpenOptions { device_id, clock, check_location, lock, verify_chain, signer }`; `PackagePaths` (`project.omr`, `project.db`, `objects/`, `spool/tmp/`, `snapshots/`, `cache/`, `exports/`, `.lock`); `ProjectHeader`; `FORMAT_MAJOR/MINOR`, `DEFAULT_LABEL` = `restricted` |
+| Package (§14.1) | `Project::{create(root, NewProject, OpenOptions), open(root, OpenOptions)}`; `OpenOptions { device_id, clock, check_location, lock, verify_chain, signer, verifier, external }` (a checkpoint verifier and externally held checkpoints, checked on open); `PackagePaths` (`project.omr`, `project.db`, `objects/`, `spool/tmp/`, `snapshots/`, `cache/`, `exports/`, `.lock`); `ProjectHeader`; `FORMAT_MAJOR/MINOR`, `DEFAULT_LABEL` = `restricted` |
 | Writes (§14.2 lanes) | `Project::decision(|tx| …)` (synchronous FULL), `Project::bulk(|tx| …)` (NORMAL, ≤ `BULK_GROUP_PAGES` = 50 pages), `Project::command(command_id, |tx| …)` → `CommandOutcome::{Applied, AlreadyApplied}`; every closure runs in one transaction under `catch_unwind` (error or panic → rollback, `StoreError::Panicked`); a failed automatic checkpoint after a commit never fails the committed command (`Project::auto_checkpoint_error`, retried after the next commit, returned by `batch_end`/`close`) |
-| `Tx` model writes (each appends its event in the same transaction) | `create_exam`, `put_template_revision`, `put_form_map` (master items, π_f/σ_f), `put_key_version` (append-only, event carries only the payload hash), `put_policy_version`, `pin(PinnedKind, body)`, `put_roster_snapshot`, `create_batch`/`close_batch`, `insert_object`, `add_page`, `spool_page` (CAP-011 on a byte-identical duplicate), `set_page_state`, `create_booklet`, `attach_page`, `create_recognition_run`, `record_page_recognition` (per-question response, auto-accepted, logit, codes; exceptions; registration quality; page → `read`), `raise_exception`, `create_identity_run`, `put_identity_decision` (plus an `identity_decision_log` row per decision), `record_review_action` (response correction + `ExceptionResolved`), `resolve_exceptions`
+| `Tx` model writes (each appends its event in the same transaction) | `create_exam`, `put_template_revision`, `put_form_map` (master items, π_f/σ_f), `put_key_version` (append-only, event carries only the payload hash), `put_policy_version`, `pin(PinnedKind, body)`, `put_roster_snapshot`, `create_batch`/`close_batch`, `insert_object`, `add_page`, `spool_page` (CAP-011 on a byte-identical duplicate), `set_page_state`, `create_booklet`, `renumber_booklets` (a later batch moves the rank serials of sheets without a printed serial; two phases keep (exam, serial) unique; booklets left without pages are `dissolved` past the top; `BookletRenumbered`), `attach_page`, `create_recognition_run`, `record_page_recognition` (per-question response, auto-accepted, logit, codes; exceptions; registration quality; page → `read`), `raise_exception`, `create_identity_run`, `put_identity_decision` (plus an `identity_decision_log` row per decision), `record_review_action` (response correction + `ExceptionResolved`), `resolve_exceptions`
 (human decision without a correction: identity, form, page-level items), `reopen_exceptions`
 (`ExceptionReopened`, the compensating event of an undone review action), `put_score_run`, `put_mapping_set`, `record_export`, `append_event`, `write_checkpoint`. Engine actors (`engine:<component>`) are refused for corrections, identity confirmations, key and policy versions (§14.4, §15.5); exceptions outside Appendix A are refused; one policy version number names one body |
 | Reads | `Project::reader()` / `Reader::new(&conn)`: `exam`, `template_revision`, `form_map`, `key_versions`, `key_version`, `policy_version`, `pinned`, `roster_rows`, `batch`, `pages`, `page`, `pages_for_object`, `question_results`, `exceptions(state)` (rebuilt through `Exception::new`: a stored code outside Appendix A is SYS-010), `identity_decisions`, `identity_history(run, booklet)` (every decision with the nonce that opens its event commitment), `corrections`, `score_run`, `mapping_set`, `objects`, `events`, `checkpoints`, `exports` (content-addressed rows are re-hashed on read; a mismatch is SYS-010) |
@@ -47,7 +47,10 @@ actor thread belongs to `omr-app`).
   `item_clo_map`, `export`, `events`, `checkpoint`, `commands`, `project_lease`, and
   `identity_decision_log` (schema v3: the projection keeps the latest identity decision, the
   log keeps every one, so a superseded human decision is never lost; v2 projects are
-  back-filled with their current decisions on migration).
+  back-filled with their current decisions on migration) and `review_note` (schema v4: a
+  reviewer's note under a random reference with a salted SHA-384; the event log carries only
+  `note:<ref>#sha384:…`, so a note can be erased without breaking the chain:
+  `Tx::put_note`, `Reader::note`).
   Content-addressed rows are keyed by the SHA-384 of their JCS form and never updated.
 - **§14.4** Hybrid model; `events` columns as specified; append-only triggers;
   `hash = SHA-384(prev_hash ‖ JCS(row without hash))`, genesis
@@ -56,6 +59,12 @@ actor thread belongs to `omr-app`).
   members, no floats); student-linked values as `{ref, sha384}` commitments; signed
   checkpoints every 1,000 events and at batch end and close; full verification on open and
   against externally held checkpoints (rewritten, removed, reordered or truncated history).
+  On open, `Reader::verify_projections` also replays the decision tables against their
+  events (every identity log row and correction opens its event commitment, every identity
+  projection row equals the latest log row, every key version equals its event); a table
+  edited behind the chain is `ChainError::ProjectionMismatch` (SYS-011).
+  `Project::open_read_only` runs the same checks on a read-only connection (dashboards).
+  `restrict_to_owner` makes the package and its folders 0700.
 - **§14.5** Write order stage → fsync → link without replace → fsync dir → row; BLAKE3 dedup
   address (non-security) and SHA-384 integrity; CAP-011 only for an exact duplicate confirmed
   by equal SHA-384 and length (an address hit with another SHA-384 is `ObjectCorrupt`, never a
@@ -84,7 +93,8 @@ actor thread belongs to `omr-app`).
   correction commitment opened against its event; engines refused for decision actions;
   Appendix A validation on write and read; CAP-011 needs an equal SHA-384; policy-version
   conflicts; a failed automatic checkpoint does not fail the committed command; v2 → v3
-  back-fill.
+  back-fill; decision tables edited behind the chain refused on open; reviewer notes stored
+  by salted reference and erasable.
 - `tests/crash.rs`: error and panic mid-batch roll back the whole batch; idempotent command
   retry; a real `abort()` of a child process in the middle of a second batch leaves the first
   batch intact and nothing of the second.

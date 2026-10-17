@@ -44,7 +44,7 @@ omr-app = { path = "crates/omr-app" }
 omr-sim = { path = "crates/omr-sim" }
 # serialization and errors
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
+serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
 thiserror = "2.0.21"
 anyhow = "1.0.104"
 uuid = { version = "1.28.0", features = ["v7", "serde"] }
@@ -80,6 +80,7 @@ rand_distr = "0.6.0"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 csv = "1.4.0"
 calamine = { version = "0.36.1", default-features = false }
+encoding_rs = "0.8.42"
 rust_xlsxwriter = "0.99.1"
 lopdf = "0.45.0"
 hayro-syntax = { version = "0.8.0", default-features = false, features = ["std"] }

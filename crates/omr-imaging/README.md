@@ -12,9 +12,18 @@ templates, sampling, warps and robust fits. Engine crate: no file or network I/O
 GrayImage::{new, from_raw, from_fn, width, height, row, get, get_or, set, crop, inverted, histogram}
 
 // Decode (bytes in, no file I/O). Y = 0.299 R + 0.587 G + 0.114 B; alpha over white; 16 → 8 bit.
-decode(&bytes) / decode_with_limits(&bytes, DecodeLimits { max_width, max_height, max_alloc })
+decode(&bytes) / decode_with_limits(&bytes, DecodeLimits { max_width, max_height, max_alloc,
+                                                           max_pixels })
+                              // 20,000 px per side and 100 megapixels, both checked from the
+                              // header before any pixel is decoded (TooLarge)
   -> Decoded { image, format: Png|Jpeg|Tiff, source_bits, had_colour, capture: CaptureKind }
 ImagingError::{BadDimensions, Unsupported, Decode, TooLarge}   // TooLarge / Decode → caller raises CAP-001
+jpeg_complete(&bytes)         // marker walk to EOI; a JPEG cut short is refused (Decode), never
+                              // decoded with gray-filled rows that could read as marks (§7.3)
+tiff_pages(&bytes) -> Option<TiffPages { offsets, broken }>     // IFD chain (classic, BigTIFF),
+                              // loops/out-of-file links stop it, ≤ TIFF_MAX_PAGES (5,000)
+decode_tiff_page(&bytes, &pages, index, limits)   // page k through the same decoder: the header's
+                              // first-IFD pointer is served as page k's offset (no copy)
 
 // Reduction and capture mode (§7.2, §8.5 bitonal mode, CAP-003).
 reduce_area(&img, f)          // f × f box mean, round half up; ceil(w/f) × ceil(h/f); edge blocks partial
@@ -25,6 +34,9 @@ half(&img)                    // 2 × 2 fast path (one pyramid level)
 Bitmap::new(w, h, stride, bits, black_is_one)   // packed 1-bit rows (CCITT G4 output, PDF BlackIs1)
 reduce_bitmap(&bitmap, 3)     // 600 → 200 dpi coverage gray: round(255 · white / 9)
 classify_capture(&img) -> CaptureKind::{Gray, Bitonal, ReducedBitonal { factor }}; .is_bitonal()
+ink_coverage(&img) -> InkCoverage { paper /* p90 */, dark_ppm /* < paper/2, 3 % margins */ }
+    .is_blank(2_000)          // blank back / bleed-through test (§8.9 CAP-012: < 0.2 % dark)
+img.rotated_quarter(k)        // lossless k × 90° clockwise (portrait scans of landscape forms)
 
 // Correlation (§8.4 Stage D). Sums are exact integers; flat windows score 0, never 1.
 FLAT_VARIANCE (2e-3 on a 0–1 scale), Integral (Σv, Σv²), PatchTemplate, ncc_patch, match_patch -> NccGrid

@@ -228,6 +228,22 @@ struct Tally {
     by_difficulty: BTreeMap<String, [u64; 3]>,
     review_reasons: BTreeMap<String, u64>,
     silent_examples: Vec<String>,
+    /// Sheets with at least one silent error (§23.1 sheet SER).
+    silent_sheets: std::collections::BTreeSet<u64>,
+    sheets: std::collections::BTreeSet<u64>,
+}
+
+/// One-sided 95 % upper bound on a rate with `k` events in `n` trials (§23.1: the upper limit
+/// of a two-sided 90 % Clopper–Pearson interval; 3.00/n, 4.74/n, 6.30/n for k = 0, 1, 2).
+/// `None` beyond k = 2, where the table stops.
+pub fn upper95(k: u64, n: u64) -> Option<f64> {
+    let c = match k {
+        0 => 3.00,
+        1 => 4.74,
+        2 => 6.30,
+        _ => return None,
+    };
+    Some(c / n.max(1) as f64)
 }
 
 fn diff_name(d: Difficulty) -> String {
@@ -237,6 +253,7 @@ fn diff_name(d: Difficulty) -> String {
 fn tally_page(t: &mut Tally, truth: &PageTruth, r: &OwnPageResult) {
     let by_q: BTreeMap<u16, &omr_model::QuestionOutcome> =
         r.questions.iter().map(|q| (q.question, q)).collect();
+    t.sheets.insert(truth.sheet);
     for qt in &truth.questions {
         t.questions += 1;
         let e = t.by_difficulty.entry(diff_name(qt.difficulty)).or_default();
@@ -257,6 +274,7 @@ fn tally_page(t: &mut Tally, truth: &PageTruth, r: &OwnPageResult) {
             };
             if o.response != want {
                 t.silent += 1;
+                t.silent_sheets.insert(truth.sheet);
                 e[1] += 1;
                 if t.silent_examples.len() < 20 {
                     t.silent_examples.push(format!(
@@ -313,6 +331,14 @@ fn tally_json(t: &Tally) -> Value {
         "silent_errors": t.silent,
         "ser": t.silent as f64 / t.auto.max(1) as f64,
         "ser_upper95_at_k0": if t.silent == 0 { 3.0 / t.auto.max(1) as f64 } else { f64::NAN },
+        // §23.1 definitions: SER = SE ÷ questions, bound one-sided 95 % (k ≤ 2), and at the
+        // DEFF floor of 2 (n_eff = n / 2, k_eff = ⌈k / 2⌉); sheet SER over sheets.
+        "ser_per_question": t.silent as f64 / n,
+        "ser_per_question_upper95": upper95(t.silent, t.questions),
+        "ser_per_question_upper95_deff2": upper95(t.silent.div_ceil(2), t.questions / 2),
+        "sheets": t.sheets.len(),
+        "sheets_with_silent_error": t.silent_sheets.len(),
+        "sheet_ser_upper95": upper95(t.silent_sheets.len() as u64, t.sheets.len() as u64),
         "review": t.review,
         "ar": t.review as f64 / n,
         "unreadable": t.unreadable,

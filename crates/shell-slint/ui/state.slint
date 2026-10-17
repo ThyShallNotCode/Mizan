@@ -20,6 +20,10 @@ export global App {
     in property <string> user-initials;
     in property <string> engine: "omr 0.1.0";
     in property <string> workspace;
+    // invented demo data (`--demo`): a banner on every screen says so
+    in property <bool> demo;
+    // where the data comes from (Settings · About)
+    in property <string> data-note;
     // last command result, e.g. "Recorded Q17: B" or a validation error
     in property <string> message;
     in property <Tone> message-tone: Tone.neutral;
@@ -81,6 +85,7 @@ export struct ExamDrawer {
     can-review: bool,
     key-status: string,
     mapped: int,
+    mapped-word: string,
     total: int,
     roster: string,
     sections: string,
@@ -102,6 +107,7 @@ export global ExamsVM {
     in property <string> open-exceptions;
     in property <string> open-errors;
     in property <string> median-review;
+    in property <string> median-caption;
     in property <string> throughput;
     in property <string> term-label;
     // incremented by Rust on Ctrl+K: the dashboard focuses its search field
@@ -114,6 +120,21 @@ export global ExamsVM {
     // open the selected exam on a page
     callback open(Page);
     callback close-drawer();
+    // the New-exam form (CR-04): what the instructor types; Rust validates and grades it
+    in-out property <bool> new-open;
+    in property <bool> can-create;
+    in property <string> new-note;
+    in-out property <string> new-title;
+    in-out property <string> new-course;
+    in-out property <string> new-scans;
+    in-out property <string> new-sheet: "iau-ccsit-v1";
+    in-out property <string> new-questions;
+    in-out property <string> new-options;
+    in-out property <string> new-forms;
+    in-out property <string> new-key;
+    in-out property <string> new-roster;
+    in-out property <string> new-clo;
+    callback create-exam();
 }
 
 // ------------------------------------------------------------------------------- setup
@@ -164,6 +185,7 @@ export struct KV {
 
 export global SetupVM {
     in property <bool> available;
+    in property <bool> has-roster: true;
     in property <[KV]> template;
     in property <string> template-id;
     in property <string> template-kind;
@@ -182,6 +204,11 @@ export global SetupVM {
     in property <string> sel-weight;
     in property <string> sel-note;
     in property <string> error;
+    // replace the whole key from a key file (CSV, TSV, any layout `omr grade` reads)
+    in-out property <bool> key-open;
+    in-out property <string> key-path;
+    in property <bool> can-replace-key;
+    callback replace-key(string);
     callback cycle-key(int, int);
     callback set-key(int, int, string);
     callback set-weight(int, int, string);
@@ -245,6 +272,14 @@ export global ScanVM {
     in property <string> engine;
     in property <int> workers;
     in property <int> review-open;
+    // a capture agent runs the batch (Pause and Stop); file imports cannot be paused
+    in property <bool> pausable: true;
+    // adding a later batch (another section, another day) to this exam, §8.1
+    in property <bool> can-add;
+    in property <string> add-note;
+    in-out property <bool> add-open;
+    in-out property <string> add-path;
+    callback add-scans(string);
     callback toggle-pause();
     callback open-review();
     callback open-code(string);
@@ -352,6 +387,15 @@ export global ReviewVM {
     in property <string> suggestion-tag;
     in property <[ChipVM]> options;
     in property <[ChipVM]> specials;
+    // the decision overrides the suggestion: a reason code is required (§13.4)
+    in property <bool> reason-needed;
+    in property <[ChipVM]> reasons;
+    // the chosen reason needs a note saying why (OTHER, SOLO_SELF_APPROVAL, §14.4)
+    in property <bool> note-required;
+    // identity items: a student number typed by the reviewer (pending until Accept)
+    in-out property <string> student-entry;
+    in property <string> typed-student;
+    callback use-student(string);
     in property <[Candidate]> candidates;
     in property <[ContactTile]> contact;
     in property <string> contact-caption;
@@ -377,6 +421,8 @@ export global ReviewVM {
     in property <int> zoom: 3;
     in-out property <string> note;
     in property <string> median;
+    // "Threshold 0.45 · hysteresis band 0.35–0.55"
+    in property <string> threshold-text;
     in property <string> audit-head;
     in property <bool> two-person;
     in property <string> help-text;
@@ -391,6 +437,7 @@ export global ReviewVM {
     callback toggle-group(string);
     callback choose-option(int);
     callback choose-special(int);
+    callback choose-reason(int);
     callback choose-candidate(int);
     callback accept();
     callback apply-group();
@@ -477,6 +524,17 @@ export global ResultsVM {
     in property <[CheckRow]> readiness;
     in property <bool> release-blocked;
     in property <string> release-reason;
+    // exports (§16.3): every file next to the project, and the Blackboard grade-center upload
+    in property <bool> can-export;
+    in property <bool> blackboard-ready;
+    in property <string> blackboard-note;
+    in-out property <bool> export-open;
+    // the release confirmation (§13.4): opened by "Release results…", confirmed by Release
+    in-out property <bool> release-open;
+    in property <string> release-note;
+    in-out property <string> blackboard-column;
+    callback export-all();
+    callback export-blackboard(string);
     in-out property <bool> show-key;
     in-out property <bool> grade-table;
     in property <int> selected-item: -1;
@@ -527,6 +585,8 @@ export struct B1Row {
     actual: string,
     comment: string,
     comment-tone: Tone,
+    // text lines the tallest cell wraps to (1–4); sets the row height
+    lines: int,
 }
 
 export global OutcomesVM {

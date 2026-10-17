@@ -1095,6 +1095,70 @@ impl Tx<'_> {
         Ok(())
     }
 
+    /// Renumbers booklets after a re-collation (`BookletRenumbered` per booklet whose serial
+    /// changes): the serial of a sheet without a printed serial is its canonical rank, which
+    /// moves when a later batch interleaves. `serials` gives the serial of every booklet of the
+    /// new collation that is already stored, `top` the highest serial of the new collation
+    /// (new booklets included, created afterwards). Every other booklet of the exam holds no
+    /// page any more: it is marked `dissolved` and moved past `top`. Two phases keep
+    /// (exam, serial) unique throughout.
+    pub fn renumber_booklets(
+        &mut self,
+        exam: &ExamId,
+        serials: &[(String, u32)],
+        top: u32,
+        actor: &Actor,
+    ) -> Result<()> {
+        let id = exam.to_string();
+        let rows: Vec<(String, i64, String)> = {
+            let mut st = self.conn().prepare(
+                "SELECT booklet_id, serial, state FROM booklet WHERE exam_id = ?1 \
+                 ORDER BY booklet_id",
+            )?;
+            st.query_map([&id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<std::result::Result<_, _>>()?
+        };
+        let want: BTreeMap<&str, u32> = serials.iter().map(|(b, s)| (b.as_str(), *s)).collect();
+        if let Some((b, _)) = serials
+            .iter()
+            .find(|(b, _)| !rows.iter().any(|r| r.0 == *b))
+        {
+            return Err(StoreError::NotFound(format!("booklet {b}")));
+        }
+        let lo = rows.iter().map(|r| r.1).min().unwrap_or(0).min(0) - 1;
+        for (k, (b, _, _)) in rows.iter().enumerate() {
+            self.conn().execute(
+                "UPDATE booklet SET serial = ?2 WHERE booklet_id = ?1",
+                params![b, lo - k as i64],
+            )?;
+        }
+        let mut next = i64::from(top);
+        for (b, old, state) in &rows {
+            let (serial, gone) = match want.get(b.as_str()) {
+                Some(s) => (i64::from(*s), false),
+                None => {
+                    next += 1;
+                    (next, true)
+                }
+            };
+            self.conn().execute(
+                "UPDATE booklet SET serial = ?2, state = CASE WHEN ?3 THEN 'dissolved' ELSE state \
+                 END, version = version + 1 WHERE booklet_id = ?1",
+                params![b, serial, gone],
+            )?;
+            if serial != *old || (gone && state != "dissolved") {
+                self.append_event(&NewEvent::new(
+                    "BookletRenumbered",
+                    "booklet",
+                    b,
+                    actor.clone(),
+                    json!({"serial": serial, "serial_before": old, "dissolved": gone}),
+                ))?;
+            }
+        }
+        Ok(())
+    }
+
     /// Attaches a page to a booklet (`PageAttached`).
     pub fn attach_page(
         &mut self,
@@ -1421,6 +1485,35 @@ impl Tx<'_> {
             )?;
         }
         Ok(id)
+    }
+
+    /// Stores a reviewer's note (§14.4): its text under a random reference with a random
+    /// 128-bit salt (`review_note`), and a `NoteRecorded` event carrying only the reference
+    /// and SHA-384(salt ‖ text). Returns the note reference for a [`Reason`]:
+    /// `note:<ref>#sha384:<first 128 bits>`. Deleting the row later shreds the note; the chain
+    /// still verifies.
+    pub fn put_note(&mut self, text: &str, actor: &Actor) -> Result<String> {
+        require_human(actor, "a reviewer's note")?;
+        let mut seed = uuid::Uuid::now_v7().as_bytes().to_vec();
+        seed.extend_from_slice(uuid::Uuid::now_v7().as_bytes());
+        let h = jcs::sha384(&seed);
+        let note_ref = hex::encode(&h[..16]);
+        let salt = hex::encode(&h[16..32]);
+        let mut buf = hex::decode(&salt).unwrap_or_default();
+        buf.extend_from_slice(text.as_bytes());
+        let digest = jcs::sha384_hex(&buf);
+        self.conn().execute(
+            "INSERT INTO review_note (note_ref, salt, body, sha384) VALUES (?1, ?2, ?3, ?4)",
+            params![note_ref, salt, text, digest],
+        )?;
+        self.append_event(&NewEvent::new(
+            "NoteRecorded",
+            "review_note",
+            &note_ref,
+            actor.clone(),
+            json!({"sha384": digest}),
+        ))?;
+        Ok(format!("note:{note_ref}#sha384:{}", &digest[..32]))
     }
 
     /// Resolves open exceptions without a response correction (`ExceptionResolved`): a human
@@ -2102,6 +2195,331 @@ impl<'a> Reader<'a> {
         .collect()
     }
 
+    /// Every response correction of the project, in event order (consistency checks of the
+    /// session snapshot: one query instead of one per booklet).
+    pub fn all_corrections(&self) -> Result<Vec<StoredCorrection>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT correction_id, booklet_id, position, old_response, new_response, \
+             reason_code, note_ref, actor_id, event_seq FROM response_correction \
+             ORDER BY event_seq, correction_id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, u16>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, Option<String>>(6)?,
+                r.get::<_, String>(7)?,
+                r.get::<_, i64>(8)?,
+            ))
+        })?;
+        rows.map(|t| {
+            let t = t?;
+            Ok(StoredCorrection {
+                correction_id: t.0,
+                booklet_id: t.1,
+                position: t.2,
+                old: serde_json::from_str(&t.3)?,
+                new: serde_json::from_str(&t.4)?,
+                reason_code: t.5,
+                note_ref: t.6,
+                actor_id: t.7,
+                event_seq: t.8,
+            })
+        })
+        .collect()
+    }
+
+    /// Every question result of a recognition run, keyed by (page, question).
+    pub fn run_question_results(
+        &self,
+        run_id: &str,
+    ) -> Result<BTreeMap<(String, u16), StoredQuestion>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT page_id, question, response, auto_accepted, logit_milli, codes \
+             FROM question_result WHERE run_id = ?1",
+        )?;
+        let rows = stmt.query_map([run_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, u16>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, bool>(3)?,
+                r.get::<_, i32>(4)?,
+                r.get::<_, String>(5)?,
+            ))
+        })?;
+        let mut out = BTreeMap::new();
+        for t in rows {
+            let (page, question, resp, auto_accepted, logit, codes) = t?;
+            out.insert(
+                (page, question),
+                StoredQuestion {
+                    question,
+                    response: serde_json::from_str(&resp)?,
+                    auto_accepted,
+                    logit: LogitMilli(logit),
+                    codes: codes.split_whitespace().map(str::to_owned).collect(),
+                },
+            );
+        }
+        Ok(out)
+    }
+
+    /// Every logged identity decision (booklet, event seq, student), in event order, across
+    /// every identity run.
+    pub fn identity_log(&self) -> Result<Vec<(String, i64, Option<String>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT booklet_id, event_seq, student_id FROM identity_decision_log \
+             ORDER BY event_seq",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The most recent event of a type, if any.
+    pub fn last_event(&self, event_type: &str) -> Result<Option<EventRecord>> {
+        let seq: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT max(seq) FROM events WHERE type = ?1",
+                [event_type],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        match seq {
+            Some(s) => Ok(crate::events::read_events(self.conn, s, 1)?
+                .into_iter()
+                .next()),
+            None => Ok(None),
+        }
+    }
+
+    /// Replays the decision projections against the events that recorded them (§14.4 hybrid
+    /// model, monthly projection replay in the MVP's form: on every open). Every logged
+    /// identity decision and every response correction must open its event's commitment
+    /// (`SHA-384(nonce ‖ JCS(value))`), every `identity_decision` row must equal the latest
+    /// decision logged for it, and every key version must carry the payload hash its
+    /// `KeyVersionPublished` event recorded. A state table edited behind the chain's back (a
+    /// student swapped in `identity_decision`, a correction or a key rewritten) fails here
+    /// although the chain itself verifies (SYS-011). Returns the number of rows checked.
+    pub fn verify_projections(&self) -> Result<usize> {
+        use crate::events::ChainError;
+        let bad = |table: &str, detail: String| {
+            StoreError::Chain(ChainError::ProjectionMismatch {
+                table: table.into(),
+                detail,
+            })
+        };
+        let opens = |nonce: &str, value: &Value, digest: Option<&str>| -> bool {
+            let Ok(mut buf) = hex::decode(nonce) else {
+                return false;
+            };
+            let Ok(text) = jcs::value_to_jcs(value) else {
+                return false;
+            };
+            buf.extend_from_slice(text.as_bytes());
+            digest == Some(jcs::sha384_hex(&buf).as_str())
+        };
+        let mut checked = 0;
+        // Identity decision log ↔ its events.
+        let mut stmt = self.conn.prepare(
+            "SELECT l.event_seq, l.run_id, l.booklet_id, l.student_id, l.status, \
+             l.commit_nonce, l.actor_id, e.type, e.entity_id, e.actor_id, e.payload \
+             FROM identity_decision_log l LEFT JOIN events e ON e.seq = l.event_seq \
+             ORDER BY l.event_seq",
+        )?;
+        type LogRow = (
+            i64,
+            String,
+            String,
+            Option<String>,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        );
+        let rows: Vec<LogRow> = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                    r.get(8)?,
+                    r.get(9)?,
+                    r.get(10)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut latest: BTreeMap<(String, String), (Option<String>, String, String)> =
+            BTreeMap::new();
+        for (seq, run, booklet, student, status, nonce, actor, ty, entity, ev_actor, payload) in
+            rows
+        {
+            let payload: Value = payload
+                .as_deref()
+                .and_then(|p| serde_json::from_str(p).ok())
+                .unwrap_or(Value::Null);
+            let target = json!({"student_id": student, "status": status});
+            let ok = matches!(ty.as_deref(), Some("IdentityDecided" | "IdentityConfirmed"))
+                && entity.as_deref() == Some(booklet.as_str())
+                && ev_actor.as_deref() == Some(actor.as_str())
+                && payload["run"].as_str() == Some(run.as_str())
+                && opens(&nonce, &target, payload["target"]["sha384"].as_str());
+            if !ok {
+                return Err(bad(
+                    "identity_decision_log",
+                    format!("the decision logged at event {seq} does not match that event"),
+                ));
+            }
+            latest.insert((run, booklet), (student, status, nonce));
+            checked += 1;
+        }
+        // Identity projection ↔ the latest logged decision.
+        let mut stmt = self.conn.prepare(
+            "SELECT run_id, booklet_id, student_id, status, commit_nonce FROM identity_decision",
+        )?;
+        let rows: Vec<(String, String, Option<String>, String, String)> = stmt
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        for (run, booklet, student, status, nonce) in rows {
+            if latest.get(&(run.clone(), booklet.clone())) != Some(&(student, status, nonce)) {
+                return Err(bad(
+                    "identity_decision",
+                    format!(
+                        "the decision of booklet {booklet} in run {run} is not the latest one \
+                         its events recorded"
+                    ),
+                ));
+            }
+            checked += 1;
+        }
+        // Response corrections ↔ their events.
+        let mut stmt = self.conn.prepare(
+            "SELECT c.event_seq, c.booklet_id, c.position, c.old_response, c.new_response, \
+             c.commit_nonce, c.actor_id, e.type, e.entity_id, e.actor_id, e.payload \
+             FROM response_correction c LEFT JOIN events e ON e.seq = c.event_seq \
+             ORDER BY c.correction_id",
+        )?;
+        type CorrRow = (
+            i64,
+            String,
+            i64,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        );
+        let rows: Vec<CorrRow> = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                    r.get(8)?,
+                    r.get(9)?,
+                    r.get(10)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        for (seq, booklet, position, old, new, nonce, actor, ty, entity, ev_actor, payload) in rows
+        {
+            let payload: Value = payload
+                .as_deref()
+                .and_then(|p| serde_json::from_str(p).ok())
+                .unwrap_or(Value::Null);
+            let pair = match (
+                serde_json::from_str::<Value>(&old),
+                serde_json::from_str::<Value>(&new),
+            ) {
+                (Ok(o), Ok(n)) => json!({"old": o, "new": n}),
+                _ => Value::Null,
+            };
+            let ok = ty.as_deref() == Some("ResponseCorrected")
+                && entity.as_deref() == Some(booklet.as_str())
+                && ev_actor.as_deref() == Some(actor.as_str())
+                && payload["position"].as_i64() == Some(position)
+                && opens(&nonce, &pair, payload["change"]["sha384"].as_str());
+            if !ok {
+                return Err(bad(
+                    "response_correction",
+                    format!("the correction recorded at event {seq} does not match that event"),
+                ));
+            }
+            checked += 1;
+        }
+        // Key versions ↔ their publication events (the payload hash itself is checked on
+        // every read of a key version).
+        let mut stmt = self.conn.prepare(
+            "SELECT k.exam_id, k.n, k.payload, k.payload_sha384, e.type, e.entity_id, e.payload \
+             FROM key_version k LEFT JOIN events e ON e.seq = k.created_seq",
+        )?;
+        type KeyRow = (
+            String,
+            i64,
+            Vec<u8>,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        );
+        let rows: Vec<KeyRow> = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        for (exam, n, payload, sha, ty, entity, ev_payload) in rows {
+            let ev: Value = ev_payload
+                .as_deref()
+                .and_then(|p| serde_json::from_str(p).ok())
+                .unwrap_or(Value::Null);
+            let ok = ty.as_deref() == Some("KeyVersionPublished")
+                && entity.as_deref() == Some(exam.as_str())
+                && ev["n"].as_i64() == Some(n)
+                && ev["payload_sha384"].as_str() == Some(sha.as_str())
+                && jcs::sha384_hex(&payload) == sha;
+            if !ok {
+                return Err(bad(
+                    "key_version",
+                    format!("key version {n} does not match its publication event"),
+                ));
+            }
+            checked += 1;
+        }
+        Ok(checked)
+    }
+
     /// A score run, checked against its results hash.
     pub fn score_run(&self, run_id: &str) -> Result<ScoreRun> {
         let (blob, sha): (Vec<u8>, String) = self
@@ -2170,6 +2588,29 @@ impl<'a> Reader<'a> {
     /// Stored checkpoints.
     pub fn checkpoints(&self) -> Result<Vec<crate::checkpoint::Checkpoint>> {
         crate::events::read_checkpoints(self.conn)
+    }
+
+    /// A reviewer's note by its reference (`None` when erased), checked against its hash.
+    pub fn note(&self, note_ref: &str) -> Result<Option<String>> {
+        let row: Option<(String, String, String)> = self
+            .conn
+            .query_row(
+                "SELECT salt, body, sha384 FROM review_note WHERE note_ref = ?1",
+                [note_ref],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        let Some((salt, body, sha)) = row else {
+            return Ok(None);
+        };
+        let mut buf = hex::decode(&salt).unwrap_or_default();
+        buf.extend_from_slice(body.as_bytes());
+        if jcs::sha384_hex(&buf) != sha {
+            return Err(StoreError::Integrity(format!(
+                "note {note_ref} hash mismatch"
+            )));
+        }
+        Ok(Some(body))
     }
 
     /// Export registry rows.

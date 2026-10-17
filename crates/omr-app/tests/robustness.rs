@@ -156,28 +156,82 @@ fn forms_declared_in_another_order_map_by_the_printed_letter() {
     }
 }
 
+/// §7.4: a second copy of a sheet (same verified serial and page, other bytes) is a rescan.
+/// When its marks agree with the first it is COL-003 (INFO): kept and linked, not graded, not
+/// queued. When they differ it is COL-004 (ERROR), held out and queued. Either way it never
+/// overwrites the graded copy or becomes a second booklet with the same serial.
 #[test]
-fn a_rescanned_sheet_with_the_same_serial_is_col004_not_a_failure() {
+fn a_rescanned_sheet_is_col003_when_marks_agree_and_col004_when_they_differ() {
     let dir = tempfile::tempdir().unwrap();
     let (images, _) = corpus(&dir.path().join("corpus"), 3, 12, 1, false);
     let files = files_of(&images);
-    // Re-encode one scan: same pixels (same verified serial), different bytes.
+    // Re-encode one scan: same pixels (same verified serial and marks), different bytes.
     let extra = dir.path().join("rescan");
     std::fs::create_dir_all(&extra).unwrap();
     let img = image::open(&files[0]).unwrap();
     img.save(extra.join("rescan.png")).unwrap();
     let def = definition(&["A", "B"]);
-    let p = grade(&def, &[images, extra], &dir.path().join("out"));
+    let p = grade(
+        &def,
+        &[images.clone(), extra.clone()],
+        &dir.path().join("out"),
+    );
     let s = &p.session;
-    // One booklet per serial; the second copy is held out with COL-004 (never overwritten,
-    // never a second booklet with the same serial).
     let mut serials: Vec<u32> = s.booklets.iter().map(|b| b.serial).collect();
     serials.sort_unstable();
     serials.dedup();
     assert_eq!(serials.len(), s.booklets.len());
     assert_eq!(s.booklets.len(), 3);
+    let rescans: Vec<_> = s
+        .pages
+        .iter()
+        .filter(|pg| pg.refusal.as_ref().is_some_and(|e| e.code == "COL-003"))
+        .collect();
+    assert_eq!(rescans.len(), 1);
+    assert_eq!(rescans[0].status, PageStatus::Duplicate);
+    assert_eq!(rescans[0].booklet, None);
+    assert!(p.queue(None).iter().all(|i| !i.code.starts_with("COL")));
     assert!(
-        p.queue(None).iter().any(|i| i.code == "COL-004"),
+        s.pages
+            .iter()
+            .all(|pg| pg.status != PageStatus::Unattributed)
+    );
+
+    // The same serial with other marks (a different sheet printed with that serial).
+    let t = Template::build(spec(1)).unwrap();
+    let key = ExamKey::from_bytes(KEY);
+    let sim = omr_sim::Simulator::new(&t, &key, 200);
+    let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
+    let serial = s.booklets[0].serial;
+    let form = s.booklets[0].form.unwrap() as u16 + 1;
+    let answers: Vec<omr_model::Response> = (0..QUESTIONS)
+        .map(|q| omr_model::Response::Single((q % u16::from(OPTIONS)) as u8))
+        .collect();
+    let script = omr_sim::SheetScript::from_responses(
+        &t,
+        form,
+        serial,
+        Some(roster_ids()[0].clone()),
+        &answers,
+        &omr_sim::MarkRates::clean(),
+        &mut rng,
+    );
+    let page = sim
+        .simulate(&script, omr_sim::Profile::Standard, &mut rng)
+        .unwrap()
+        .remove(0);
+    let other = dir.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    page.image
+        .save(other.join("same-serial-other-marks.png"))
+        .unwrap();
+    let p = grade(&def, &[images, other], &dir.path().join("out2"));
+    let s = &p.session;
+    assert_eq!(s.booklets.len(), 3);
+    assert!(
+        p.queue(None)
+            .iter()
+            .any(|i| i.code == "COL-004" && i.sub_reason.as_deref() == Some("marks_differ")),
         "COL-004 queued"
     );
     assert!(s.release_blocked().is_some());

@@ -18,12 +18,16 @@
 #![warn(missing_docs)]
 
 pub mod app;
+pub mod append;
+pub mod audit;
 pub mod crops;
+pub mod define;
 pub mod engine;
 pub mod exam;
 pub mod export;
 pub mod infer;
 pub mod ingest;
+pub mod keys;
 pub mod model;
 pub mod outcomes;
 pub mod pipeline;

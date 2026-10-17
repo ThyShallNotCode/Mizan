@@ -48,6 +48,10 @@ pub struct RegistrationQuality {
     pub coarse_ncc: f64,
     /// Coarse NCC minus the best NCC one lattice pitch away (aliasing guard).
     pub alias_margin: f64,
+    /// NCC of the chosen orientation minus the other's (upright vs upside down) at 1/32;
+    /// 1.0 when only one orientation fitted the page (orientation guard, §8.3).
+    #[serde(default)]
+    pub orientation_margin: f64,
     /// Template bubbles matched to a ring within the final radius.
     pub matched: u32,
     /// Template bubbles.
@@ -332,6 +336,7 @@ struct Coarse {
     affine: Affine,
     ncc: f64,
     alias_margin: f64,
+    orientation_margin: f64,
     upside_down: bool,
 }
 
@@ -418,6 +423,10 @@ fn coarse(
     };
     let upright = full(th0);
     let flipped = full(th0 + std::f64::consts::PI);
+    let orientation_margin = match (upright, flipped) {
+        (Some(u), Some(f)) => (u.2 - f.2).abs(),
+        _ => 1.0,
+    };
     let (th0, (e32x, e32y, _), upside_down) = match (upright, flipped) {
         (Some(u), Some(f)) if f.2 > u.2 => (th0 + std::f64::consts::PI, f, true),
         (Some(u), _) => (th0, u, false),
@@ -536,6 +545,7 @@ fn coarse(
         affine: Affine::new(a, b, t.x, c, d, t.y),
         ncc: cur.2,
         alias_margin: cur.2 - alt.2,
+        orientation_margin,
         upside_down,
     })
 }
@@ -634,6 +644,7 @@ pub(crate) fn register_with(
         affine: a0,
         ncc,
         alias_margin,
+        orientation_margin,
         upside_down,
     }) = co
     else {
@@ -650,6 +661,7 @@ pub(crate) fn register_with(
     };
     q.coarse_ncc = ncc;
     q.alias_margin = alias_margin;
+    q.orientation_margin = orientation_margin;
     if ncc < f64::from(cfg.coarse_min_ncc_milli) / 1000.0 {
         return fail(
             q,
@@ -660,6 +672,17 @@ pub(crate) fn register_with(
                 None,
                 format!("page does not correlate with the blank form (NCC {ncc:.3})"),
             ),
+        );
+    }
+    if orientation_margin < f64::from(cfg.orientation_min_margin_milli) / 1000.0 {
+        let detail = format!(
+            "orientation undecided: the page correlates with the blank form about as well \
+             upright as upside down (NCC margin {orientation_margin:.3}); rescan it upright"
+        );
+        return fail(
+            q,
+            rings,
+            reg_exc("REG-001", Severity::Blocker, None, detail),
         );
     }
     if alias_margin < f64::from(cfg.alias_min_margin_milli) / 1000.0 {

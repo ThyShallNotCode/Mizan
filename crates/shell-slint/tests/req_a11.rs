@@ -5,6 +5,8 @@
 //! Each test runs on its own thread with its own Slint platform (the testing backend, or the
 //! software-renderer platform for the render test).
 
+mod support;
+
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use shell_slint::backend::{Backend, Decision, ExamId, Lane, ReviewAction};
 use shell_slint::bind::Shell;
@@ -17,6 +19,7 @@ use slint::{ComponentHandle, Model};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use support::a11::{by_label, chord, key, one, selected_queue_row, special, tab, with_prefix};
 
 struct Harness {
     ui: AppWindow,
@@ -37,93 +40,6 @@ fn harness() -> Harness {
 
 fn cs211() -> ExamId {
     ExamId(CS211.into())
-}
-
-/// Distinct elements with exactly this accessible label. `find_all` reports an element once per
-/// level of its inheritance chain, so duplicates are folded by geometry.
-fn by_label(ui: &AppWindow, label: &str) -> Vec<ElementHandle> {
-    let mut seen = BTreeMap::new();
-    for e in ElementHandle::find_by_accessible_label(ui, label) {
-        let p = e.absolute_position();
-        let s = e.size();
-        let key = (
-            (p.x * 4.0) as i64,
-            (p.y * 4.0) as i64,
-            (s.width * 4.0) as i64,
-            (s.height * 4.0) as i64,
-        );
-        seen.entry(key).or_insert(e);
-    }
-    seen.into_values().collect()
-}
-
-/// The navigation tab with this label (a status pill may carry the same word).
-fn tab(ui: &AppWindow, label: &str) -> ElementHandle {
-    let v: Vec<_> = by_label(ui, label)
-        .into_iter()
-        .filter(|e| e.accessible_role() == Some(AccessibleRole::Tab))
-        .collect();
-    assert_eq!(v.len(), 1, "exactly one tab labelled {label:?}");
-    v.into_iter().next().unwrap()
-}
-
-fn one(ui: &AppWindow, label: &str) -> ElementHandle {
-    let v = by_label(ui, label);
-    assert_eq!(
-        v.len(),
-        1,
-        "exactly one control labelled {label:?}, found {}",
-        v.len()
-    );
-    v.into_iter().next().unwrap()
-}
-
-/// All distinct elements whose label starts with `prefix`.
-fn with_prefix(ui: &AppWindow, prefix: &str) -> Vec<(String, ElementHandle)> {
-    let mut out: BTreeMap<String, ElementHandle> = BTreeMap::new();
-    for e in ElementQuery::from_root(ui).match_descendants().find_all() {
-        if let Some(l) = e.accessible_label()
-            && l.starts_with(prefix)
-        {
-            out.entry(l.to_string()).or_insert(e);
-        }
-    }
-    out.into_iter().collect()
-}
-
-fn selected_queue_row(ui: &AppWindow) -> String {
-    let rows: Vec<String> = ElementQuery::from_root(ui)
-        .match_descendants()
-        .match_accessible_role(AccessibleRole::ListItem)
-        .find_all()
-        .into_iter()
-        .filter(|e| e.accessible_item_selected() == Some(true))
-        .filter_map(|e| e.accessible_label().map(|l| l.to_string()))
-        .collect();
-    rows.into_iter()
-        .find(|l| l.starts_with('Q') || l.starts_with("Booklet"))
-        .unwrap_or_default()
-}
-
-fn key(ui: &AppWindow, text: &str) {
-    ui.window()
-        .dispatch_event(WindowEvent::KeyPressed { text: text.into() });
-    ui.window()
-        .dispatch_event(WindowEvent::KeyReleased { text: text.into() });
-}
-
-fn special(ui: &AppWindow, k: Key) {
-    key(ui, &char::from(k).to_string());
-}
-
-fn chord(ui: &AppWindow, modifier: Key, text: &str) {
-    let m: String = char::from(modifier).to_string();
-    ui.window().dispatch_event(WindowEvent::KeyPressed {
-        text: m.clone().into(),
-    });
-    key(ui, text);
-    ui.window()
-        .dispatch_event(WindowEvent::KeyReleased { text: m.into() });
 }
 
 fn last_action(h: &Harness) -> (ReviewAction, String, bool) {
@@ -850,4 +766,176 @@ fn req_a11_outcomes_print_both_statistics_and_name_the_deciding_method() {
     let foot = ui.global::<OutcomesVM>().get_footnote();
     assert!(foot.contains("τ = 60 %") && foot.contains("T = 70 %") && foot.contains("π"));
     assert_eq!(with_prefix(ui, "Footnote: Actual level").len(), 1);
+}
+
+/// A backend that slips: it sends the engine's reading (a suggestion, fills, other answers)
+/// with blind-verify items. The shell must mask it again (§13.4), so nothing of it reaches the
+/// frame, the queue sparkline or the Enter key.
+struct Leaky(DemoBackend);
+
+impl Backend for Leaky {
+    fn dashboard(&self) -> shell_slint::backend::Dashboard {
+        self.0.dashboard()
+    }
+    fn default_exam(&self) -> Option<ExamId> {
+        self.0.default_exam()
+    }
+    fn exam_setup(&self, exam: &ExamId) -> Option<shell_slint::backend::ExamSetup> {
+        self.0.exam_setup(exam)
+    }
+    fn set_key(
+        &mut self,
+        exam: &ExamId,
+        version: usize,
+        question: u32,
+        answer: &str,
+    ) -> Result<(), shell_slint::backend::BackendError> {
+        self.0.set_key(exam, version, question, answer)
+    }
+    fn set_mapping_weight(
+        &mut self,
+        exam: &ExamId,
+        question: u32,
+        clo: usize,
+        weight: Option<f64>,
+    ) -> Result<(), shell_slint::backend::BackendError> {
+        self.0.set_mapping_weight(exam, question, clo, weight)
+    }
+    fn set_mapping_note(
+        &mut self,
+        exam: &ExamId,
+        question: u32,
+        clo: usize,
+        note: &str,
+    ) -> Result<(), shell_slint::backend::BackendError> {
+        self.0.set_mapping_note(exam, question, clo, note)
+    }
+    fn batch_progress(&self, exam: &ExamId) -> Option<shell_slint::backend::BatchProgress> {
+        self.0.batch_progress(exam)
+    }
+    fn review_queue(&self, exam: &ExamId, lane: Lane) -> shell_slint::backend::ReviewQueue {
+        let mut q = self.0.review_queue(exam, lane);
+        for it in q.groups.iter_mut().flat_map(|g| g.items.iter_mut()) {
+            if it.kind == shell_slint::backend::ReviewKind::BlindVerify {
+                it.fills = vec![0.05, 0.9, 0.1, 0.0, 0.0];
+            }
+        }
+        q
+    }
+    fn review_item(
+        &self,
+        exam: &ExamId,
+        item: shell_slint::backend::ItemId,
+    ) -> Option<shell_slint::backend::ReviewItem> {
+        let mut it = self.0.review_item(exam, item)?;
+        if it.kind == shell_slint::backend::ReviewKind::BlindVerify {
+            it.suggestion = Some(shell_slint::backend::Suggestion {
+                decision: Decision::Option(1),
+                source: shell_slint::backend::SuggestionSource::Engine,
+                fill: 0.9,
+                margin: 0.8,
+            });
+            for b in &mut it.bubbles {
+                b.fill = 0.9;
+                b.state = shell_slint::backend::MarkState::Filled;
+            }
+            it.other_fills = vec![0.8; 10];
+        }
+        Some(it)
+    }
+    fn apply(
+        &mut self,
+        exam: &ExamId,
+        item: shell_slint::backend::ItemId,
+        action: ReviewAction,
+    ) -> Result<shell_slint::backend::ApplyOutcome, shell_slint::backend::BackendError> {
+        self.0.apply(exam, item, action)
+    }
+    fn undo(
+        &mut self,
+        exam: &ExamId,
+    ) -> Result<Option<shell_slint::backend::ItemId>, shell_slint::backend::BackendError> {
+        self.0.undo(exam)
+    }
+    fn review_history(&self, exam: &ExamId) -> Vec<shell_slint::backend::DecisionRecord> {
+        self.0.review_history(exam)
+    }
+    fn results(&self, exam: &ExamId) -> Option<shell_slint::backend::Results> {
+        self.0.results(exam)
+    }
+    fn outcomes(&self, exam: &ExamId) -> Option<shell_slint::backend::Outcomes> {
+        self.0.outcomes(exam)
+    }
+}
+
+#[test]
+fn req_a11_blind_items_never_show_a_leaked_engine_reading() {
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = AppWindow::new().expect("window");
+    ui.global::<Theme>().set_reduce_motion(true);
+    let leaky = Rc::new(RefCell::new(Leaky(DemoBackend::new())));
+    let dynamic: Rc<RefCell<dyn Backend>> = leaky.clone();
+    let shell = Shell::bind(&ui, dynamic);
+    ui.show().expect("show");
+    shell.navigate(Page::Review);
+    let blind = leaky
+        .borrow()
+        .review_queue(&cs211(), Lane::Marks)
+        .groups
+        .iter()
+        .find(|g| g.code == "VERIFY")
+        .map(|g| g.items[0].id)
+        .expect("a blind item");
+    shell.select_item(Some(blind));
+    let rv = ui.global::<ReviewVM>();
+    assert!(!rv.get_has_suggestion(), "a leaked suggestion is masked");
+    assert!(by_label(&ui, "B, suggested").is_empty());
+    for b in rv.get_bubbles().iter() {
+        assert_eq!((b.fill, b.overlay), (0.0, false), "{}", b.label);
+    }
+    assert_eq!(rv.get_other_fills().row_count(), 0);
+    for row in rv.get_queue().iter().filter(|r| r.blind) {
+        assert_eq!(row.fills.row_count(), 0, "a blind sparkline stays empty");
+    }
+    // Enter with nothing chosen records nothing (the leaked suggestion is never committed)
+    let n = leaky.borrow().review_history(&cs211()).len();
+    shell.accept();
+    assert_eq!(leaky.borrow().review_history(&cs211()).len(), n);
+    assert_eq!(
+        one(&ui, "Choose what is marked").accessible_enabled(),
+        Some(false)
+    );
+}
+
+/// CR-04: demo data is marked on every screen (the rail carries "DEMO DATA" and says how to
+/// open real exams), and the demo backend releases nothing.
+#[test]
+fn req_a11_demo_data_is_marked_on_every_screen() {
+    let h = harness();
+    assert!(h.ui.global::<App>().get_demo());
+    for page in [
+        Page::Exams,
+        Page::Setup,
+        Page::Scan,
+        Page::Review,
+        Page::Results,
+        Page::Outcomes,
+        Page::Settings,
+    ] {
+        h.shell.navigate(page);
+        let mark = with_prefix(&h.ui, "Demo data: invented exams");
+        assert_eq!(mark.len(), 1, "{page:?}");
+        assert!(mark[0].0.contains("--workspace"), "{page:?}");
+    }
+    let e = h.demo.borrow_mut().release(&cs211()).unwrap_err();
+    assert!(e.to_string().contains("nothing is released"), "{e}");
+    // New exam on demo data says how to open real exams, never a form that grades nothing
+    h.shell.navigate(Page::Exams);
+    one(&h.ui, "New exam").invoke_accessible_default_action();
+    assert!(!h.ui.global::<ExamsVM>().get_new_open());
+    let msg = h.ui.global::<App>().get_message().to_string();
+    assert!(
+        msg.contains("demo data") && msg.contains("--workspace"),
+        "{msg}"
+    );
 }

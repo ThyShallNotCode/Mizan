@@ -339,7 +339,17 @@ fn a_review_decision_never_gives_one_student_two_booklets() {
     resolve(&mut p, dup[0], Decision::Student(student(1))).unwrap();
     let err = resolve(&mut p, dup[1], Decision::Student(student(1))).unwrap_err();
     assert_eq!(err.exit_code(), 6, "{err}");
-    resolve(&mut p, dup[1], Decision::Student(student(0))).unwrap();
+    // Another student than the engine proposed: an override, with its reason (§13.4).
+    p.apply_with_reason(
+        dup[1],
+        Action::Resolve {
+            decision: Decision::Student(student(0)),
+            accepted_suggestion: false,
+            note: String::new(),
+        },
+        Some(omr_app::review::ReviewReason::code("DUPLICATE_RESOLVED")),
+    )
+    .unwrap();
     let students: Vec<Option<String>> = p
         .session
         .booklets

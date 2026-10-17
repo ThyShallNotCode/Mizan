@@ -38,6 +38,9 @@ pub struct WorkPage {
     pub source_dpi: Option<u32>,
     /// Resolution of `image`, when known.
     pub dpi: Option<u32>,
+    /// Clockwise quarter turns applied to the decoded page before measuring (1: a portrait
+    /// scan of a landscape legacy form, §8.3); crops use the same turned image.
+    pub quarter_turns: u8,
 }
 
 /// One bubble of the crop geometry, in working-image pixels.
@@ -77,6 +80,12 @@ pub struct PageRead {
     pub student_id: Option<GridField>,
     /// Bubbled version / form grid.
     pub form_choice: Option<ChoiceRead>,
+    /// Bubbled section grid (IAU sheet).
+    #[serde(default)]
+    pub section: Option<GridField>,
+    /// Bubbled exam type (IAU sheet: midterm, final, …).
+    #[serde(default)]
+    pub exam_type: Option<ChoiceRead>,
     /// Form from a MAC-verified page code (authoritative, §10.3 priority 1).
     pub code_form: Option<FormCode>,
     /// Booklet serial from a MAC-verified page code.
@@ -294,6 +303,20 @@ impl Recognizer {
         let known_dpi = known_dpi.filter(|d| (MIN_TRUSTED_DPI..=MAX_TRUSTED_DPI).contains(d));
         match self {
             Recognizer::Legacy { engine, .. } => {
+                // Orientation before registration (§8.3): a legacy form has no tags, so a page
+                // whose aspect disagrees with the form's (a portrait scan of the landscape IAU
+                // sheet) is turned a quarter clockwise; registration then tells upright from
+                // upside down (REG-002), which covers 90° and 270°.
+                let (tw, th) = engine.template().frame_size();
+                let turns = u8::from(
+                    (tw > th) != (image.width() > image.height())
+                        && image.width() != image.height(),
+                );
+                let image = if turns == 1 {
+                    image.rotated_quarter(1)
+                } else {
+                    image
+                };
                 let src = known_dpi
                     .unwrap_or_else(|| engine.estimated_dpi(image.width(), image.height()));
                 let (num, den) = if known_dpi.is_some() {
@@ -311,6 +334,7 @@ impl Recognizer {
                     capture,
                     source_dpi: Some(src),
                     dpi: Some(WORKING_DPI),
+                    quarter_turns: turns,
                 }
             }
             Recognizer::Own { .. } => {
@@ -326,6 +350,7 @@ impl Recognizer {
                             capture,
                             source_dpi: Some(s),
                             dpi: Some(WORKING_DPI),
+                            quarter_turns: 0,
                         }
                     }
                     s => WorkPage {
@@ -333,6 +358,7 @@ impl Recognizer {
                         capture,
                         source_dpi: s,
                         dpi: s,
+                        quarter_turns: 0,
                     },
                 }
             }
@@ -343,7 +369,39 @@ impl Recognizer {
     pub fn measure(&self, page: &WorkPage, label: &str) -> Measured {
         match self {
             Recognizer::Legacy { engine, .. } => {
-                Measured::Legacy(Box::new(engine.measure_page(&page.image)), page.capture)
+                let mut m = engine.measure_page(&page.image);
+                if page.quarter_turns % 2 == 1 {
+                    // REG-002 records the whole turn: a quarter, plus 180° when registration
+                    // found the turned page upside down.
+                    let upside = m
+                        .registration_exceptions
+                        .iter()
+                        .any(|e| e.code == "REG-002");
+                    m.registration_exceptions.retain(|e| e.code != "REG-002");
+                    if m.registered() {
+                        m.registration_exceptions.push(
+                            Exception::must(
+                                "REG-002",
+                                omr_model::Severity::Info,
+                                omr_model::Scope::Page,
+                            )
+                            .with_target(omr_model::exceptions::Target {
+                                page: Some(label.to_string()),
+                                ..Default::default()
+                            })
+                            .with_detail(format!(
+                                "page scanned in portrait (rotated a quarter turn); read turned \
+                                 90° {}",
+                                if upside {
+                                    "counter-clockwise"
+                                } else {
+                                    "clockwise"
+                                }
+                            )),
+                        );
+                    }
+                }
+                Measured::Legacy(Box::new(m), page.capture)
             }
             Recognizer::Own {
                 engine,
@@ -476,6 +534,8 @@ impl Recognizer {
                     questions: r.questions,
                     student_id: Some(r.student_number),
                     form_choice: Some(r.version),
+                    section: Some(r.section),
+                    exam_type: Some(r.exam),
                     code_form: None,
                     code_serial: None,
                     exceptions: r.exceptions,
@@ -486,6 +546,7 @@ impl Recognizer {
                         "rms_px_milli": milli(q.rms_px),
                         "scale_milli": milli(q.scale),
                         "rotation_urad": (q.rotation_rad * 1e6).round() as i64,
+                        "orientation_margin_milli": milli(q.orientation_margin),
                     }),
                     level: r.level,
                     question_geom,
@@ -571,6 +632,8 @@ impl Recognizer {
                     questions: questions_kept,
                     student_id: r.student_id,
                     form_choice: r.form,
+                    section: None,
+                    exam_type: None,
                     code_form: code.map(|c| c.form),
                     code_serial: code.map(|c| c.serial.0),
                     exceptions: r.exceptions,

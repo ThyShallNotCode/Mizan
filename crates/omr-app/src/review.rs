@@ -7,6 +7,7 @@ use crate::engine::{BubbleGeom, GroupGeom};
 use crate::model::{PageStatus, ResponseStatus, Session};
 use omr_model::{Exception, Response, Severity};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Review lane (§13.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -292,6 +293,96 @@ pub enum Action {
     AddToRescan,
 }
 
+/// A reviewer's reason for a resolution or a key change (§13.4, §14.4): a code from the
+/// canonical list ([`reason_codes`]) and an optional note. Overriding the engine's proposal
+/// needs one; `OTHER` and `SOLO_SELF_APPROVAL` need a note too.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewReason {
+    /// Canonical reason code, e.g. `TEMPLATE_MISALIGN`.
+    pub code: String,
+    /// Free note (kept in the session; the audit event carries only its hash, §14.4).
+    #[serde(default)]
+    pub note: String,
+}
+
+impl ReviewReason {
+    /// A reason without a note.
+    pub fn code(code: &str) -> Self {
+        Self {
+            code: code.trim().to_ascii_uppercase(),
+            note: String::new(),
+        }
+    }
+
+    /// A reason with a note.
+    pub fn with_note(code: &str, note: &str) -> Self {
+        Self {
+            code: code.trim().to_ascii_uppercase(),
+            note: note.trim().to_string(),
+        }
+    }
+
+    /// Checks the code against the canonical list and the note rule (R10 wording).
+    pub fn validate(&self) -> Result<(), String> {
+        if !reason_codes().contains(&self.code.as_str()) {
+            return Err(format!(
+                "`{}` is not a reason code; use one of {}",
+                self.code,
+                reason_codes().join(", ")
+            ));
+        }
+        if omr_store::events::NOTE_REQUIRED.contains(&self.code.as_str()) && self.note.is_empty() {
+            return Err(format!("reason {} needs a note saying why", self.code));
+        }
+        Ok(())
+    }
+}
+
+/// The canonical reason codes (§14.4), in the specification's family order.
+pub fn reason_codes() -> &'static [&'static str] {
+    omr_store::events::REASON_CODES
+}
+
+/// The reason codes offered for an item, its family first (§14.4 families: marks; identity
+/// and collation; scoring), then the QA and governance codes (`ADJUDICATION`, `OTHER` …).
+pub fn reasons_for(kind: ItemKind, lane: Lane) -> Vec<&'static str> {
+    let family: &[&str] = match (kind, lane) {
+        (ItemKind::Mark, _) => &[
+            "AMBIGUOUS_MARK",
+            "ERASURE_RESIDUE",
+            "STRAY_MARK",
+            "MULTI_MARK_INTENT_NOTE",
+            "SCANNER_ARTIFACT",
+            "TEMPLATE_MISALIGN",
+            "ROW_SHIFT_CORRECTION",
+            "ACCOMMODATION_TRANSCRIPTION",
+        ],
+        (ItemKind::Identity, _) | (ItemKind::Notice, Lane::Capture | Lane::Identity) => &[
+            "ID_CORRECTION",
+            "NOT_ON_ROSTER",
+            "DUPLICATE_RESOLVED",
+            "ROSTER_DIFF_ACCEPTED",
+            "PROVISIONAL_STUDENT_ADDED",
+            "RESCAN_REPLACED",
+            "PAGE_ATTACHED",
+            "NOT_EXAM_MATERIAL",
+            "MISSING_PAGE_EXCUSED",
+        ],
+        _ => &[
+            "KEY_ERROR",
+            "KEY_CHALLENGE_UPHELD",
+            "ITEM_VOIDED_FLAWED",
+            "BONUS_AWARDED",
+            "CLERICAL_CORRECTION",
+            "SPECIAL_CONSIDERATION",
+            "POLICY_CORRECTION",
+        ],
+    };
+    let mut v: Vec<&'static str> = family.to_vec();
+    v.extend(["ADJUDICATION", "SOLO_SELF_APPROVAL", "OTHER"]);
+    v
+}
+
 /// What an action changed (for undo).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Change {
@@ -331,6 +422,9 @@ pub struct ReviewRecord {
     pub actor: String,
     /// True once compensated by an undo.
     pub undone: bool,
+    /// The reviewer's reason (§13.4), when one was given.
+    #[serde(default)]
+    pub reason: Option<ReviewReason>,
 }
 
 /// Queue and history.
@@ -340,6 +434,10 @@ pub struct ReviewState {
     pub items: Vec<ReviewItem>,
     /// Events.
     pub history: Vec<ReviewRecord>,
+    /// History records before this index belong to an earlier grading run (a batch was
+    /// appended since): their resolutions were carried over and they cannot be undone.
+    #[serde(default)]
+    pub sealed: usize,
 }
 
 impl ReviewState {
@@ -501,6 +599,29 @@ fn worst(ex: &[Exception]) -> Option<&Exception> {
         .min_by(|a, b| b.severity.cmp(&a.severity).then(a.code.cmp(&b.code)))
 }
 
+/// What an operator does about a page-level problem (R10): the next step for each capture,
+/// registration and collation code that holds a page out of grading.
+pub fn remedy(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "CAP-001" => crate::ingest::REMEDY_FILE,
+        "CAP-002" => "rescan the sheet at 200–300 dpi and add the new scan",
+        "CAP-004" => "scan the sheets again with JBIG2/MRC (\"compact PDF\") compression off",
+        "REG-001" => {
+            "check that the page is this exam's answer sheet; rescan it flat and upright, or \
+             acknowledge it as not exam material"
+        }
+        "IDN-001" | "IDN-002" => {
+            "grade the sheet in the exam it belongs to (or rescan it if the page code is \
+             damaged), or acknowledge it as not exam material"
+        }
+        "COL-004" => {
+            "check which copy is right: acknowledge the held copy as not exam material, or \
+             regrade without the wrong copy"
+        }
+        _ => return None,
+    })
+}
+
 fn title(code: &str) -> String {
     omr_model::exceptions::lookup(code)
         .map(|d| d.title.to_string())
@@ -567,9 +688,20 @@ pub fn build_queue(
                 let h = f32::from(r.hysteresis) / 1024.0;
                 (t, (0.08f32.min(t - h), t + h))
             });
-            let suggestion = suggestion_of(&qs.recognized.response);
+            // No proposal names an option the exam does not use (MRK-017 option_not_offered).
+            let suggestion = suggestion_of(&qs.recognized.response).filter(|d| match d {
+                Decision::Option(o) => usize::from(*o) < option_labels.len(),
+                Decision::Multi(v) => v.iter().all(|o| usize::from(*o) < option_labels.len()),
+                _ => true,
+            });
             let top = fills.iter().copied().fold(0.0f32, f32::max);
-            let mut it = blank_item(Lane::of(&e.code), ItemKind::Mark, &e);
+            // SYS-032 sits in the lane of the code it contradicts (§13.4).
+            let lane = if e.code == "SYS-032" {
+                Lane::Marks
+            } else {
+                Lane::of(&e.code)
+            };
+            let mut it = blank_item(lane, ItemKind::Mark, &e);
             it.booklet = Some(bi);
             it.page = Some(qs.page);
             it.question = Some(q as u16);
@@ -597,12 +729,38 @@ pub fn build_queue(
         }
     }
     // Identity: one item per booklet with an ERROR identity exception.
+    let held: BTreeMap<&str, usize> = session
+        .booklets
+        .iter()
+        .enumerate()
+        .filter_map(|(bi, b)| b.identity.student.as_deref().map(|s| (s, bi)))
+        .collect();
     for (bi, b) in session.booklets.iter().enumerate() {
         if let Some(e) = worst(&b.identity.exceptions) {
-            let mut it = blank_item(Lane::of(&e.code), ItemKind::Identity, e);
+            let lane = if e.code == "SYS-032" {
+                Lane::Identity
+            } else {
+                Lane::of(&e.code)
+            };
+            let mut it = blank_item(lane, ItemKind::Identity, e);
             it.booklet = Some(bi);
             it.page = b.pages.first().copied();
-            it.suggestion = b.identity.student.clone().map(Decision::Student);
+            // The engine's student, else (not on the roster, nothing assigned) the best roster
+            // candidate, e.g. the writer-error neighbour of a mis-bubbled ID (§9.5), unless
+            // another booklet already holds that student (accepting it would be refused with
+            // IDN-005: a dead end, CR-17); it stays a listed candidate.
+            it.suggestion = b
+                .identity
+                .student
+                .clone()
+                .or_else(|| {
+                    b.identity
+                        .candidates
+                        .first()
+                        .filter(|c| held.get(c.0.as_str()).is_none_or(|&o| o == bi))
+                        .map(|c| c.0.clone())
+                })
+                .map(Decision::Student);
             it.group_key = group_key(&e.code, e.sub_reason.as_deref(), "id", None, 0);
             if let Some(&p) = b.pages.first()
                 && let Some(r) = session.pages[p].read.as_ref()
@@ -665,7 +823,7 @@ pub fn build_queue(
         let mut ex: Vec<&Exception> = Vec::new();
         match p.status {
             PageStatus::Refused => ex.extend(p.refusal.iter()),
-            PageStatus::Duplicate => {}
+            PageStatus::Duplicate | PageStatus::Blank => {}
             PageStatus::Read | PageStatus::Unattributed => {
                 if let Some(r) = &p.read {
                     ex.extend(r.exceptions.iter().filter(|e| {
@@ -682,6 +840,29 @@ pub fn build_queue(
                 continue;
             }
             let mut it = blank_item(Lane::of(&e.code), ItemKind::Notice, e);
+            // Which file and page, and what to do (R10).
+            let name = session
+                .sources
+                .get(p.source)
+                .map(|s| {
+                    s.name
+                        .split(" (unreadable: ")
+                        .next()
+                        .unwrap_or("")
+                        .to_string()
+                })
+                .unwrap_or_default();
+            if !name.is_empty() && !it.detail.starts_with(&name) {
+                it.detail = format!("{name} page {}: {}", p.index + 1, it.detail);
+            }
+            let has_fix = ["rescan", "remove", "acknowledge", "again"]
+                .iter()
+                .any(|w| it.detail.contains(w));
+            if let Some(r) = remedy(&e.code)
+                && !has_fix
+            {
+                it.detail = format!("{}; {r}", it.detail);
+            }
             it.page = Some(pi);
             it.booklet = p.booklet;
             it.suggestion = Some(Decision::Acknowledge);

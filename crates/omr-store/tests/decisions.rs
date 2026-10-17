@@ -393,8 +393,10 @@ fn a_version_2_project_back_fills_its_identity_decisions_on_migration() {
     }
     {
         let c = Connection::open(root.join("project.db")).unwrap();
-        c.execute_batch("DROP TABLE identity_decision_log; PRAGMA user_version = 2;")
-            .unwrap();
+        c.execute_batch(
+            "DROP TABLE review_note; DROP TABLE identity_decision_log; PRAGMA user_version = 2;",
+        )
+        .unwrap();
         assert_eq!(
             omr_store::schema::schema_sha384(&c).unwrap(),
             omr_store::schema::canonical_schema_sha384(2).unwrap()
@@ -412,4 +414,190 @@ fn a_version_2_project_back_fills_its_identity_decisions_on_migration() {
         ev.payload["target"]["sha384"].as_str().unwrap(),
         commitment(&hist[0].commit_nonce, &target)
     );
+}
+
+#[test]
+fn booklets_are_renumbered_when_a_later_batch_interleaves() {
+    let d = tempfile::tempdir().unwrap();
+    let mut p = project_with_exam(&d.path().join("Exam.omrproj"));
+    let mk = |id: &str, serial: u32| BookletRecord {
+        booklet_id: id.into(),
+        exam_id: exam_id(),
+        serial,
+        form_code: Some(1),
+        bound_student: None,
+        state: "collated".into(),
+    };
+    p.decision(|tx| {
+        for (id, s) in [("bk-a", 1), ("bk-b", 2), ("bk-c", 3)] {
+            tx.create_booklet(&mk(id, s), &Actor::engine("collate"))?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    // A new sheet ranks first: a and b move up (a swap through serials in use), c is gone.
+    p.decision(|tx| {
+        tx.renumber_booklets(
+            &exam_id(),
+            &[("bk-a".into(), 3), ("bk-b".into(), 2)],
+            3,
+            &Actor::engine("collate"),
+        )?;
+        tx.create_booklet(&mk("bk-new", 1), &Actor::engine("collate"))
+    })
+    .unwrap();
+    let serial = |p: &Project, id: &str| -> i64 {
+        p.conn()
+            .query_row(
+                "SELECT serial FROM booklet WHERE booklet_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(
+        (
+            serial(&p, "bk-new"),
+            serial(&p, "bk-b"),
+            serial(&p, "bk-a"),
+            serial(&p, "bk-c")
+        ),
+        (1, 2, 3, 4)
+    );
+    let ev = p.reader().events(1, usize::MAX).unwrap();
+    let renumbered: Vec<&Value> = ev
+        .iter()
+        .filter(|e| e.event_type == "BookletRenumbered")
+        .map(|e| &e.payload)
+        .collect();
+    assert_eq!(renumbered.len(), 2, "b kept serial 2");
+    assert!(
+        renumbered
+            .iter()
+            .any(|v| v["dissolved"] == true && v["serial_before"] == 3)
+    );
+    // A later collation with more sheets moves the dissolved booklet past them again.
+    p.decision(|tx| {
+        tx.renumber_booklets(
+            &exam_id(),
+            &[("bk-new".into(), 1), ("bk-b".into(), 2), ("bk-a".into(), 3)],
+            5,
+            &Actor::engine("collate"),
+        )?;
+        tx.create_booklet(&mk("bk-x", 4), &Actor::engine("collate"))?;
+        tx.create_booklet(&mk("bk-y", 5), &Actor::engine("collate"))
+    })
+    .unwrap();
+    assert_eq!(serial(&p, "bk-c"), 6);
+    p.verify_chain(None, &[]).unwrap();
+}
+
+/// A decision table edited behind the chain (the triggers do not guard projections, and an
+/// attacker with the file drops them anyway) is refused on open, read-only too (SYS-011):
+/// the identity projection, its log and the response corrections are replayed against the
+/// commitments their events carry.
+#[test]
+fn decision_tables_edited_behind_the_chain_are_refused_on_open() {
+    use omr_store::{ChainError, StoreError};
+    let d = tempfile::tempdir().unwrap();
+    let make = |name: &str| {
+        let root = d.path().join(name);
+        let mut p = with_booklet(&root);
+        p.decision(|tx| {
+            tx.put_identity_decision(
+                &decision("pid-a", IdentityStatus::Confirmed),
+                &reviewer(),
+                Some(Reason::code("ID_CORRECTION")),
+            )?;
+            tx.record_review_action(&ReviewAction {
+                booklet_id: "bk-1".into(),
+                position: 2,
+                old: Response::Blank,
+                new: Response::Single(1),
+                reason: Reason::code("AMBIGUOUS_MARK"),
+                actor: reviewer(),
+                resolves: vec![],
+            })
+            .map(|_| ())
+        })
+        .unwrap();
+        p.close().unwrap();
+        root
+    };
+    // Untouched: the replay passes and counts every row.
+    let root = make("ok.omrproj");
+    let p = Project::open(&root, opts()).unwrap();
+    assert_eq!(p.reader().verify_projections().unwrap(), 3);
+    drop(p);
+    let edits = [
+        "UPDATE identity_decision SET student_id = 'pid-z'",
+        "UPDATE identity_decision_log SET student_id = 'pid-z'; \
+         UPDATE identity_decision SET student_id = 'pid-z'",
+        "UPDATE response_correction SET new_response = '{\"Single\":3}'",
+    ];
+    for (k, sql) in edits.iter().enumerate() {
+        let root = make(&format!("t{k}.omrproj"));
+        let c = rusqlite::Connection::open(root.join("project.db")).unwrap();
+        // The log's append-only trigger is dropped for the edit and put back verbatim, so
+        // the canonical-schema check passes and the replay is what catches it.
+        let trigger: String = c
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name = 'identity_decision_log_append_only'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        c.execute_batch("DROP TRIGGER identity_decision_log_append_only")
+            .unwrap();
+        c.execute_batch(sql).unwrap();
+        c.execute_batch(&trigger).unwrap();
+        drop(c);
+        for e in [
+            Project::open(&root, opts()).unwrap_err(),
+            Project::open_read_only(&root, opts()).unwrap_err(),
+        ] {
+            assert!(
+                matches!(e, StoreError::Chain(ChainError::ProjectionMismatch { .. })),
+                "edit {k}: {e}"
+            );
+            assert_eq!(e.exception().unwrap().code, "SYS-011");
+        }
+    }
+}
+
+/// A reviewer's note (§14.4, SEC-08): kept under a random reference with a random salt, the
+/// event citing only the reference and SHA-384(salt ‖ text); erasing the row shreds it and
+/// the chain still verifies.
+#[test]
+fn reviewer_notes_are_salted_references_and_can_be_erased() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("Exam.omrproj");
+    let mut p = with_booklet(&root);
+    let text = "student 2210345601 told me";
+    let a = p.decision(|tx| tx.put_note(text, &reviewer())).unwrap();
+    let b = p.decision(|tx| tx.put_note(text, &reviewer())).unwrap();
+    assert_ne!(a, b, "the same text never gives the same reference");
+    let (r, digest) = a
+        .strip_prefix("note:")
+        .and_then(|x| x.split_once("#sha384:"))
+        .unwrap();
+    assert_ne!(digest, &omr_store::jcs::sha384_hex(text.as_bytes())[..32]);
+    assert_eq!(p.reader().note(r).unwrap().as_deref(), Some(text));
+    let ev = p.reader().events(1, usize::MAX).unwrap();
+    assert!(
+        ev.iter()
+            .all(|e| !e.payload.to_string().contains("2210345601"))
+    );
+    assert!(
+        p.decision(|tx| tx.put_note("x", &Actor::engine("recog")))
+            .is_err()
+    );
+    // Erasure: the row goes, the chain stays.
+    p.conn()
+        .execute("DELETE FROM review_note WHERE note_ref = ?1", [r])
+        .unwrap();
+    assert_eq!(p.reader().note(r).unwrap(), None);
+    p.verify_chain(None, &[]).unwrap();
+    p.close().unwrap();
+    Project::open(&root, opts()).unwrap();
 }

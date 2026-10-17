@@ -332,6 +332,61 @@ impl CaptureKind {
     }
 }
 
+/// Ink statistics of a page for the blank-page test (§7.5, §8.9 CAP-012).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InkCoverage {
+    /// Paper level: the 90th percentile of the page's pixels.
+    pub paper: u8,
+    /// Pixels darker than half the paper level, per million, inside the page without a
+    /// 3 % margin on each side (scanner borders and edge shadows are not content).
+    pub dark_ppm: u32,
+}
+
+impl InkCoverage {
+    /// True below `max_ppm` dark pixels per million (§8.9: < 0.2 % = 2,000 ppm for CAP-012).
+    pub fn is_blank(&self, max_ppm: u32) -> bool {
+        self.dark_ppm < max_ppm
+    }
+}
+
+/// Dark-pixel coverage of a page for the blank-page test: a blank back or a page showing only
+/// bleed-through from its other side has (almost) no pixel darker than half the paper level,
+/// since printing and pencil marks seen through the sheet stay light gray. Every row and every
+/// second column is sampled (≈ 2 M pixels at 200 dpi).
+pub fn ink_coverage(img: &GrayImage) -> InkCoverage {
+    let (w, h) = (img.width(), img.height());
+    let mut hist = [0u64; 256];
+    for y in 0..h {
+        for &v in img.row(y).iter().step_by(2) {
+            hist[usize::from(v)] += 1;
+        }
+    }
+    let n: u64 = hist.iter().sum();
+    let mut acc = 0u64;
+    let mut paper = 255u8;
+    for (v, &c) in hist.iter().enumerate() {
+        acc += c;
+        if acc * 10 >= n * 9 {
+            paper = v as u8;
+            break;
+        }
+    }
+    let thr = paper / 2;
+    let (mx, my) = (w * 3 / 100, h * 3 / 100);
+    let (mut dark, mut total) = (0u64, 0u64);
+    for y in my..h.saturating_sub(my) {
+        let row = img.row(y);
+        for &v in row[mx..w.saturating_sub(mx).max(mx)].iter().step_by(2) {
+            total += 1;
+            dark += u64::from(v < thr);
+        }
+    }
+    InkCoverage {
+        paper,
+        dark_ppm: (dark * 1_000_000).checked_div(total).unwrap_or(0) as u32,
+    }
+}
+
 /// Classifies a page by its histogram: two levels → bitonal; only the coverage levels of an
 /// `f × f` box over a bitonal original (≥ 99.9 % of pixels, ≥ 3 levels used) → reduced bitonal.
 pub fn classify_capture(img: &GrayImage) -> CaptureKind {
@@ -365,6 +420,30 @@ pub fn classify_capture(img: &GrayImage) -> CaptureKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ink_coverage_tells_blank_and_bleed_through_from_content() {
+        // White paper with light gray bleed-through blobs and a dark scanner border.
+        let mut img = GrayImage::from_fn(400, 300, |x, y| {
+            if x < 4 || y < 4 {
+                0
+            } else if (100..160).contains(&x) && (100..140).contains(&y) {
+                200
+            } else {
+                240
+            }
+        });
+        let c = ink_coverage(&img);
+        assert_eq!(c.paper, 240);
+        assert!(c.is_blank(2_000), "{c:?}");
+        // Printed content: a dark grid of lines covers far more than 0.2 %.
+        for y in (20..280).step_by(20) {
+            for x in 20..380 {
+                img.set(x, y, 30);
+            }
+        }
+        assert!(!ink_coverage(&img).is_blank(2_000));
+    }
 
     #[test]
     fn reduce_area_rounds_like_pil() {

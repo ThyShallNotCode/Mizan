@@ -84,11 +84,11 @@ fn v1_project_migrates_on_open_with_snapshot_and_keeps_its_chain() {
         let p = project_with_exam(&root);
         p.close().unwrap();
     }
-    // Turn the database back into a version-1 database (drop the v3 and v2 objects).
+    // Turn the database back into a version-1 database (drop the v4, v3 and v2 objects).
     {
         let c = Connection::open(root.join("project.db")).unwrap();
         c.execute_batch(
-            "DROP TABLE identity_decision_log; \
+            "DROP TABLE review_note; DROP TABLE identity_decision_log; \
              DROP INDEX page_by_batch; DROP INDEX events_by_entity; \
              DROP INDEX exception_by_state; DROP INDEX question_result_by_page; \
              DROP TABLE export; PRAGMA user_version = 1;",

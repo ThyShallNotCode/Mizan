@@ -2,8 +2,9 @@
 //! `omr-sim` (truth by construction, standard profile, 200-dpi JPEG), graded through the whole
 //! pipeline (ingest → recognition → identity → scoring → outcomes → store → exports), reviewed
 //! through the API with the truth as the reviewer, and checked against an independent hand
-//! computation of every score. Also A5: identical outputs at 1 and 4 threads in shuffled input
-//! order; A4: rescoring after a review action and after a key change, timed.
+//! computation of every score. Also A5: byte-identical decision files at 1, 2 and 4 threads
+//! and in shuffled and reversed input order; A4: rescoring after a review action and after a
+//! key change, timed.
 
 use omr_app::exam::{self, CloDefinition, CloMapping, DomainLetter, OutcomeSetup, RosterStudent};
 use omr_app::model::ResponseStatus;
@@ -272,13 +273,19 @@ fn req_a1_a8_synthetic_sheets_grade_end_to_end() {
             }
             ItemKind::Notice => Decision::Acknowledge,
         };
-        p.apply(
+        // Overriding the engine's proposal takes a reason (§13.4): the item family's first.
+        let reason = p.overrides_engine(id, &d).then(|| {
+            let lane = p.session.review.item(id).unwrap().lane;
+            omr_app::review::ReviewReason::code(omr_app::review::reasons_for(kind, lane)[0])
+        });
+        p.apply_with_reason(
             id,
             Action::Resolve {
                 decision: d,
                 accepted_suggestion: false,
                 note: String::new(),
             },
+            reason,
         )
         .unwrap();
     }
@@ -385,6 +392,32 @@ fn req_a1_a8_synthetic_sheets_grade_end_to_end() {
     p.close().unwrap();
 }
 
+/// Exports that cite wall-clock state and are therefore excluded from the byte comparison:
+/// the XLSX workbooks and the HTML report carry the store's event-chain head in their
+/// document metadata (the chain hashes event times), `summary.json` holds the run's
+/// timings, and `manifest.json` lists the SHA-384 of every file above. Every other export,
+/// the decision files, must be byte-identical.
+const A5_EXCLUDED: [&str; 6] = [
+    "results.xlsx",
+    "item_analysis.xlsx",
+    "tp154.xlsx",
+    "report.html",
+    "summary.json",
+    "manifest.json",
+];
+
+/// Every exported file name in `dir`, sorted.
+fn exported(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap())
+        .filter(|e| e.file_type().unwrap().is_file())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    v.sort();
+    v
+}
+
 #[test]
 fn req_a5_outputs_identical_across_threads_and_input_order() {
     let dir = tempfile::tempdir().unwrap();
@@ -395,32 +428,160 @@ fn req_a5_outputs_identical_across_threads_and_input_order() {
         .map(|e| e.unwrap().path())
         .collect();
     files.sort();
+    // A seeded shuffle of the page files (one page per sheet here), and the reverse order.
     let mut shuffled = files.clone();
-    shuffled.reverse();
-    shuffled.rotate_left(5);
-    let a = dir.path().join("a");
-    let b = dir.path().join("b");
-    let pa = grade(&def, &files, &a, 1);
-    let pb = grade(&def, &shuffled, &b, 4);
-    for f in [
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(5);
+    for i in (1..shuffled.len()).rev() {
+        shuffled.swap(i, rng.random_range(0..=i));
+    }
+    assert_ne!(shuffled, files);
+    let mut reversed = files.clone();
+    reversed.reverse();
+    let runs: [(&str, usize, &[PathBuf]); 5] = [
+        ("t1", 1, &files),
+        ("t2", 2, &files),
+        ("t4", 4, &files),
+        ("t4-shuffled", 4, &shuffled),
+        ("t2-reversed", 2, &reversed),
+    ];
+    // Each run's open items are resolved the same way (the engine's proposal, else blank, not
+    // on the roster, or the first form) and the results released, so the review decisions
+    // and the Blackboard upload are compared too.
+    let graded = |inputs: &[PathBuf], out: &Path, threads: usize| {
+        let mut p = grade(&def, inputs, out, threads);
+        while let Some((id, kind, sugg)) = p
+            .queue(None)
+            .first()
+            .map(|i| (i.id, i.kind, i.suggestion.clone()))
+        {
+            let decision = match (kind, sugg) {
+                (omr_app::ItemKind::Notice, _) => omr_app::Decision::Acknowledge,
+                (_, Some(s)) => s,
+                (omr_app::ItemKind::Mark, None) => omr_app::Decision::Blank,
+                (omr_app::ItemKind::Identity, None) => omr_app::Decision::NotOnRoster,
+                (omr_app::ItemKind::Form, None) => omr_app::Decision::Form(0),
+            };
+            p.apply(
+                id,
+                omr_app::Action::Resolve {
+                    decision,
+                    accepted_suggestion: true,
+                    note: String::new(),
+                },
+            )
+            .unwrap();
+        }
+        p.release(None).unwrap();
+        p.export(out).unwrap();
+        p
+    };
+    let base_dir = dir.path().join(runs[0].0);
+    let base = graded(runs[0].2, &base_dir, runs[0].1);
+    let names = exported(&base_dir);
+    let mut compared: Vec<String> = Vec::new();
+    let mut differing: std::collections::BTreeSet<String> = Default::default();
+    for (name, threads, inputs) in &runs[1..] {
+        let out = dir.path().join(name);
+        let p = graded(inputs, &out, *threads);
+        assert_eq!(exported(&out), names, "{name}: another set of files");
+        for f in &names {
+            let same = read(&base_dir.join(f)) == read(&out.join(f));
+            if A5_EXCLUDED.contains(&f.as_str()) {
+                if !same {
+                    differing.insert(f.clone());
+                }
+                continue;
+            }
+            assert!(
+                same,
+                "{name}: {f} differs from the 1-thread run in name order"
+            );
+            if !compared.contains(f) {
+                compared.push(f.clone());
+            }
+        }
+        // Decisions (every question of every booklet, identities, forms) and the queue.
+        assert_eq!(base.session.booklets, p.session.booklets, "{name}");
+        assert_eq!(base.session.pages.len(), p.session.pages.len(), "{name}");
+        for (x, y) in base.session.pages.iter().zip(&p.session.pages) {
+            assert_eq!(
+                (&x.page_id, x.status, &x.read),
+                (&y.page_id, y.status, &y.read),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            base.session.review.items.len(),
+            p.session.review.items.len(),
+            "{name}"
+        );
+        for (x, y) in base
+            .session
+            .review
+            .items
+            .iter()
+            .zip(&p.session.review.items)
+        {
+            assert_eq!(
+                (
+                    x.code.as_str(),
+                    &x.sub_reason,
+                    x.severity,
+                    x.booklet,
+                    x.question,
+                    x.group_key,
+                    &x.suggestion
+                ),
+                (
+                    y.code.as_str(),
+                    &y.sub_reason,
+                    y.severity,
+                    y.booklet,
+                    y.question,
+                    y.group_key,
+                    &y.suggestion
+                ),
+                "{name}"
+            );
+        }
+    }
+    for must in [
         "results.csv",
         "item_analysis.csv",
         "test_stats.csv",
         "tp154_a1.csv",
         "tp154_b1.csv",
         "booklets.json",
+        "review_queue.json",
         "key.csv",
+        "blackboard_grade_center.csv",
     ] {
-        assert!(read(&a.join(f)) == read(&b.join(f)), "{f} differs");
-    }
-    // Decisions (every question of every booklet) and the queue are identical.
-    assert_eq!(pa.session.booklets, pb.session.booklets);
-    assert_eq!(pa.session.review.items.len(), pb.session.review.items.len());
-    for (x, y) in pa.session.review.items.iter().zip(&pb.session.review.items) {
-        assert_eq!(
-            (x.code.as_str(), x.booklet, x.question, x.group_key),
-            (y.code.as_str(), y.booklet, y.question, y.group_key)
+        assert!(
+            compared.iter().any(|f| f == must),
+            "{must} was not compared"
         );
+    }
+    eprintln!(
+        "A5: {} runs (1, 2, 4 threads; shuffled and reversed order) byte-identical in {} files \
+         ({}); excluded and differing: {differing:?}",
+        runs.len(),
+        compared.len(),
+        compared.join(", ")
+    );
+    if let Ok(dir) = std::env::var("OMR_ACCEPT_OUT") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            Path::new(&dir).join("a5-ownform-determinism.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "sheets": SHEETS,
+                "runs": runs.iter().map(|(n, t, _)| serde_json::json!({"run": n, "threads": t})).collect::<Vec<_>>(),
+                "byte_identical": compared,
+                "excluded": A5_EXCLUDED,
+                "excluded_and_differing": differing,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
     }
 }
 
@@ -480,6 +641,8 @@ fn req_a4_rescoring_is_incremental_and_fast() {
                 confirmed: false,
             },
             exceptions: vec![],
+            sheet_section: String::new(),
+            exam_type: String::new(),
         })
         .collect();
     let key = EffectiveKey {
@@ -506,6 +669,7 @@ fn req_a4_rescoring_is_incremental_and_fast() {
         exam_exceptions: vec![],
         review: Default::default(),
         timings: Default::default(),
+        release: None,
     };
     let mut sc = Scoring::build(&session).unwrap().unwrap();
     let before = sc.run.as_ref().unwrap().run_id.clone();
@@ -524,25 +688,86 @@ fn req_a4_rescoring_is_incremental_and_fast() {
     let full = Scoring::build(&session).unwrap().unwrap();
     assert_eq!(full.prep.l1_hash, sc.prep.l1_hash);
     assert_eq!(full.run.as_ref().unwrap(), sc.run.as_ref().unwrap());
-    // Key change.
-    let mut k2 = key.clone();
-    k2.forms[0][3] = KeyCell::Options(vec![1, 2]);
-    k2.version = 2;
-    let t = Instant::now();
-    sc.set_key(&def, &k2).unwrap();
-    let key_ms = t.elapsed().as_secs_f64() * 1e3;
+    // Key change: five different revisions of one entry, best of five (each is a real change:
+    // a new key version and a rescored run).
+    let mut key_ms = f64::MAX;
+    let mut last_run = sc.run.as_ref().unwrap().run_id.clone();
+    for k in 0..5u8 {
+        let mut k2 = key.clone();
+        k2.forms[0][3] = KeyCell::Options(vec![k % 5, (k + 1) % 5]);
+        k2.version = 2 + u32::from(k);
+        let t = Instant::now();
+        sc.set_key(&def, &k2).unwrap();
+        key_ms = key_ms.min(t.elapsed().as_secs_f64() * 1e3);
+        let run = sc.run.as_ref().unwrap().run_id.clone();
+        assert_ne!(run, last_run, "a key change is a new score run");
+        last_run = run;
+    }
+    // CR-14: a review action in the application also rewrites and binds the session snapshot
+    // (serialised, SHA-384, synced, `SnapshotSaved`): only the header and the changed booklet
+    // chunk, so it stays near the rescoring cost. Measured end to end at the same size and
+    // reported beside the rescoring figure the A4 budget applies to.
+    let pkg = tempfile::tempdir().unwrap();
+    let st = omr_app::store::StoreWriter::create(
+        &pkg.path().join("exam.omrproj"),
+        &def,
+        "2026-10-16T09:00:00Z",
+        "principal:test",
+    )
+    .unwrap();
+    let mut p = ExamProject::from_graded(omr_app::pipeline::Graded {
+        session,
+        scoring: Some(sc),
+        store: Some(st),
+    });
+    p.save().unwrap();
+    // The whole snapshot (header, booklet chunks and their index, pages).
+    let snapshot_bytes: u64 = std::fs::read_dir(pkg.path().join("exam.omrproj").join("cache"))
+        .unwrap()
+        .map(|e| e.unwrap().metadata().unwrap().len())
+        .sum();
+    let mut action_ms = f64::MAX;
+    for k in 0..5 {
+        let t = Instant::now();
+        p.session.booklets[321].questions[9].current = Response::Single(k);
+        p.session.booklets[321].questions[9].status = ResponseStatus::Changed;
+        let b = p.session.booklets[321].clone();
+        p.scoring.as_mut().unwrap().update_booklet(321, &b).unwrap();
+        p.touch(321);
+        p.save().unwrap();
+        action_ms = action_ms.min(t.elapsed().as_secs_f64() * 1e3);
+    }
     eprintln!(
-        "A4: review-action rescoring {best:.1} ms, key-change rescoring {key_ms:.1} ms (10,000 × 100)"
+        "A4: review-action rescoring {best:.1} ms, key-change rescoring {key_ms:.1} ms (10,000 × 100, best of 5); with the snapshot save {action_ms:.0} ms ({:.1} MB snapshot)",
+        snapshot_bytes as f64 / 1e6
     );
-    if let Ok(path) = std::env::var("OMR_A4_OUT") {
+    if let Ok(dir) = std::env::var("OMR_ACCEPT_OUT") {
+        std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
-            path,
-            format!("{{\"review_action_rescore_ms\": {best:.2}, \"key_change_rescore_ms\": {key_ms:.2}}}"),
+            Path::new(&dir).join("a4-app-rescoring.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "booklets": 10_000, "items": n_q, "best_of": 5,
+                "review_action_rescore_ms": best, "key_change_rescore_ms": key_ms,
+                "review_action_with_snapshot_save_ms": action_ms,
+                "snapshot_bytes": snapshot_bytes,
+                "budget_ms": 50, "release_build": !cfg!(debug_assertions),
+            }))
+            .unwrap(),
         )
         .unwrap();
     }
-    // Generous bound for unoptimised test builds; the release figure is reported (A4 ≤ 50 ms).
-    assert!(best < 2_000.0 && key_ms < 2_000.0);
+    if cfg!(debug_assertions) {
+        // Unoptimised builds only report; the budget is asserted in release.
+        assert!(best < 2_000.0 && key_ms < 2_000.0);
+    } else {
+        assert!(best <= 50.0, "A4 review action {best:.1} ms > 50 ms");
+        assert!(key_ms <= 50.0, "A4 key change {key_ms:.1} ms > 50 ms");
+        // The whole snapshot is never rewritten per action (it was 0.9 s at this size).
+        assert!(
+            action_ms <= 250.0,
+            "review action with its save {action_ms:.0} ms"
+        );
+    }
 }
 
 #[test]
@@ -647,6 +872,25 @@ fn req_a10_corrupt_inputs_inferred_key_and_view_models() {
     // ---- View-models for the shell.
     let sum = p.summary_vm();
     assert_eq!(sum.sheets_scanned, 8);
+    // CR-18: a batch-scope INFO note counts as INFO, never as a warning that needs a look.
+    {
+        let before = sum.open_exceptions;
+        let mut q = omr_app::ExamProject::from_graded(omr_app::pipeline::Graded {
+            session: p.session.clone(),
+            scoring: None,
+            store: None,
+        });
+        q.session.batch_exceptions.push(
+            omr_model::Exception::must(
+                "MRK-016",
+                omr_model::Severity::Info,
+                omr_model::Scope::Batch,
+            )
+            .with_sub_reason("prior_model"),
+        );
+        let after = q.summary_vm().open_exceptions;
+        assert_eq!((after.info, after.warn), (before.info + 1, before.warn));
+    }
     assert!(sum.key_status.contains("INFERRED"));
     let setup = p.setup_vm();
     assert_eq!(setup.keys.len(), 2);

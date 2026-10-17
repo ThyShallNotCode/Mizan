@@ -1,0 +1,5 @@
+clo,domain,title,plo,questions,weight,note
+CLO1,K,Describe the basic data structures,K1,1-8,1,
+CLO2,S,Analyse the cost of an algorithm,S1,9-15,1,
+CLO3,S,Choose a data structure for a problem,S2,16-24,1,
+CLO4,V,Work to a professional standard,V1,25-30,1,
