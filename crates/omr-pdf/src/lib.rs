@@ -36,7 +36,7 @@ pub use extract::{
     PageOutcome, PdfDocument, Placement, RefusedPage,
 };
 pub use raster::{BitImage, GrayImage8, JpegStream, Orientation, PageRaster};
-pub use reduce::{reduce_bilevel, reduce_bilevel_to_dpi, reduce_gray};
+pub use reduce::{reduce_bilevel, reduce_bilevel_to_dpi, reduce_gray, reduce_gray_to_dpi};
 
 use omr_model::{Exception, Scope, Severity};
 use thiserror::Error;

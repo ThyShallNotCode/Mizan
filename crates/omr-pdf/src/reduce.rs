@@ -235,6 +235,32 @@ fn reduce_rational(img: &BitImage, s: u64, d: u64) -> Result<GrayImage8, PdfErro
     Ok(out)
 }
 
+/// Reduces an 8-bit gray image from `src_dpi` to `dst_dpi` by exact area coverage at any ratio
+/// (`omr_imaging::resample_to_dpi`: integer weights, round half up; an integer ratio equals
+/// [`reduce_gray`]). `dst_dpi ≥ src_dpi` returns a copy.
+pub fn reduce_gray_to_dpi(
+    img: &GrayImage8,
+    src_dpi: u32,
+    dst_dpi: u32,
+) -> Result<GrayImage8, PdfError> {
+    if src_dpi == 0 || dst_dpi == 0 {
+        return Err(PdfError::Unsupported("zero dpi".into()));
+    }
+    if dst_dpi >= src_dpi {
+        return Ok(img.clone());
+    }
+    let g = omr_imaging::GrayImage::from_raw(
+        img.width() as usize,
+        img.height() as usize,
+        img.as_raw().to_vec(),
+    )
+    .map_err(|e| PdfError::Corrupt(e.to_string()))?;
+    let r = omr_imaging::resample_to_dpi(&g, src_dpi, dst_dpi);
+    let (w, h) = (r.width() as u32, r.height() as u32);
+    GrayImage8::from_raw(w, h, r.into_raw())
+        .ok_or_else(|| PdfError::Corrupt("resampled size mismatch".into()))
+}
+
 /// Box-averages an 8-bit gray image by an integer factor (edge blocks average what they cover).
 pub fn reduce_gray(img: &GrayImage8, f: u32) -> Result<GrayImage8, PdfError> {
     if f <= 1 {
@@ -294,6 +320,25 @@ mod tests {
             (v >> 7).is_multiple_of(3)
         })
         .unwrap()
+    }
+
+    #[test]
+    fn gray_reduction_at_any_ratio() {
+        let g = GrayImage8::from_raw(9, 6, (0..54u32).map(|i| ((i * 37) % 256) as u8).collect())
+            .unwrap();
+        // 300 → 200 dpi: 9 × 6 → 6 × 4, every pixel the exact area mean.
+        let r = reduce_gray_to_dpi(&g, 300, 200).unwrap();
+        assert_eq!((r.width(), r.height()), (6, 4));
+        // Pixel (0, 0) covers input [0, 1.5)²: weights 4, 2, 2, 1 (quarter pixels).
+        let v = |x: u32, y: u32| u32::from(g.get(x, y));
+        let want = (4 * v(0, 0) + 2 * v(1, 0) + 2 * v(0, 1) + v(1, 1) + 4) / 9;
+        assert_eq!(u32::from(r.get(0, 0)), want);
+        // Integer ratios equal the box reduction; no enlargement.
+        assert_eq!(
+            reduce_gray_to_dpi(&g, 600, 200).unwrap(),
+            reduce_gray(&g, 3).unwrap()
+        );
+        assert_eq!(reduce_gray_to_dpi(&g, 200, 300).unwrap(), g);
     }
 
     #[test]

@@ -14,6 +14,15 @@ path = "src/main.rs"
 [dependencies]
 omr-app.workspace = true
 omr-model.workspace = true
+omr-forms = { workspace = true, features = ["render"] }
 clap.workspace = true
-anyhow.workspace = true
 serde_json.workspace = true
+hex.workspace = true
+rand.workspace = true
+rayon.workspace = true
+
+[dev-dependencies]
+omr-sim.workspace = true
+tempfile.workspace = true
+serde_json.workspace = true
+uuid.workspace = true

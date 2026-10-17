@@ -1,0 +1,654 @@
+//! End to end on generated sheets (no real data): own-form sheets rendered and "scanned" by
+//! `omr-sim` (truth by construction, standard profile, 200-dpi JPEG), graded through the whole
+//! pipeline (ingest → recognition → identity → scoring → outcomes → store → exports), reviewed
+//! through the API with the truth as the reviewer, and checked against an independent hand
+//! computation of every score. Also A5: identical outputs at 1 and 4 threads in shuffled input
+//! order; A4: rescoring after a review action and after a key change, timed.
+
+use omr_app::exam::{self, CloDefinition, CloMapping, DomainLetter, OutcomeSetup, RosterStudent};
+use omr_app::model::ResponseStatus;
+use omr_app::{
+    Action, Decision, ExamDefinition, ExamProject, FormKey, GradeOptions, IdSchemeChoice, ItemKind,
+    KeySource, TemplateChoice,
+};
+use omr_forms::{ExamKey, Template, TemplateSpec};
+use omr_model::{CancelMode, ExamId, Response};
+use omr_sim::{CorpusConfig, Expected, PageTruth};
+use rand::{RngExt, SeedableRng};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+const QUESTIONS: u16 = 40;
+const OPTIONS: u8 = 4;
+const SHEETS: u32 = 24;
+const KEY: [u8; 32] = [0x5a; 32];
+
+fn spec() -> TemplateSpec {
+    let mut s = TemplateSpec::standard(
+        ExamId(uuid_from(0x0190_aaaa_bbbb_7ccc_8ddd_0000_0000_0077)),
+        QUESTIONS,
+        OPTIONS,
+        CancelMode::EraseOnly,
+    );
+    s.forms = 2;
+    s.title = "Synthetic quiz".into();
+    s
+}
+
+fn uuid_from(v: u128) -> uuid::Uuid {
+    uuid::Uuid::from_u128(v)
+}
+
+fn roster_ids() -> Vec<String> {
+    (0..SHEETS)
+        .map(|i| format!("4210{:05}", 100 + i * 7))
+        .collect()
+}
+
+/// Keys per form (seeded), as letters.
+fn keys() -> Vec<Vec<u8>> {
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(99);
+    (0..2)
+        .map(|_| {
+            (0..QUESTIONS)
+                .map(|_| rng.random_range(0..OPTIONS))
+                .collect()
+        })
+        .collect()
+}
+
+/// Writes the corpus (images + truth) and returns (image folder, truth by serial).
+fn corpus(dir: &Path) -> (PathBuf, BTreeMap<u32, PageTruth>) {
+    let t = Template::build(spec()).unwrap();
+    let mut cfg = CorpusConfig::standard(SHEETS, 20_261_017);
+    cfg.roster = roster_ids();
+    cfg.threads = 4;
+    omr_sim::corpus::write_corpus(&t, &ExamKey::from_bytes(KEY), &cfg, dir).unwrap();
+    let truth = omr_sim::corpus::read_truth(&dir.join("truth.jsonl")).unwrap();
+    let by_serial = truth.into_iter().map(|p| (p.booklet, p)).collect();
+    (dir.join("images"), by_serial)
+}
+
+fn definition() -> ExamDefinition {
+    let mut d = ExamDefinition::new(
+        "Quiz 1",
+        TemplateChoice::Generated(Box::new(spec())),
+        QUESTIONS,
+        OPTIONS,
+        vec!["A".into(), "B".into()],
+        CancelMode::EraseOnly,
+    );
+    d.course_code = "CS 101".into();
+    d.page_code_key_hex = Some(hex::encode(KEY));
+    let k = keys();
+    d.key = KeySource::Provided {
+        forms: ["A", "B"]
+            .iter()
+            .zip(&k)
+            .map(|(f, ks)| FormKey {
+                form: (*f).into(),
+                answers: ks
+                    .iter()
+                    .map(|&o| char::from(b'A' + o).to_string())
+                    .collect(),
+            })
+            .collect(),
+    };
+    d.roster = Some(
+        roster_ids()
+            .into_iter()
+            .enumerate()
+            .map(|(i, id)| RosterStudent {
+                id,
+                name: format!("Student {i}"),
+                name_ar: String::new(),
+                section: if i % 2 == 0 {
+                    "101".into()
+                } else {
+                    "102".into()
+                },
+                numeric_cell: false,
+            })
+            .collect(),
+    );
+    d.id_scheme = IdSchemeChoice::Digits(9);
+    d.outcomes = Some(OutcomeSetup {
+        clos: vec![
+            CloDefinition {
+                code: "CLO1".into(),
+                title: "Recall".into(),
+                title_ar: String::new(),
+                domain: DomainLetter::K,
+                plo: "K1".into(),
+            },
+            CloDefinition {
+                code: "CLO2".into(),
+                title: "Apply".into(),
+                title_ar: String::new(),
+                domain: DomainLetter::S,
+                plo: "S1".into(),
+            },
+        ],
+        mapping: (1..=QUESTIONS)
+            .map(|q| CloMapping {
+                question: q,
+                clo: if q <= 20 {
+                    "CLO1".into()
+                } else {
+                    "CLO2".into()
+                },
+                weight: "1".into(),
+                note: String::new(),
+            })
+            .collect(),
+        split: false,
+        policy: exam::PolicyChoice::Default,
+    });
+    d.exam_id = d.derived_exam_id();
+    d.validate().unwrap();
+    d
+}
+
+fn grade(def: &ExamDefinition, inputs: &[PathBuf], out: &Path, threads: usize) -> ExamProject {
+    let opts = GradeOptions {
+        threads,
+        project_dir: Some(out.join("project.omrproj")),
+        snapshot_utc: Some("2026-10-16T09:00:00Z".into()),
+        operator: "principal:test".into(),
+        max_pages: None,
+    };
+    let mut p = ExamProject::grade(def, inputs, &opts, &|_| {}).unwrap();
+    p.export(out).unwrap();
+    p
+}
+
+fn decision_of(r: &Response) -> Decision {
+    match r {
+        Response::Single(o) => Decision::Option(*o),
+        Response::Blank => Decision::Blank,
+        Response::Multi(v) | Response::Set(v) => Decision::Multi(v.clone()),
+        Response::Unreadable { .. } => Decision::Unreadable,
+    }
+}
+
+/// The reviewed truth of a question: the auto response, or the intended one for review.
+fn final_truth(q: &omr_sim::QuestionTruth) -> Response {
+    match &q.expected {
+        Expected::Auto(r) => r.clone(),
+        Expected::Review => q.intended.clone(),
+    }
+}
+
+fn read(path: &Path) -> Vec<u8> {
+    std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+#[test]
+fn req_a1_a8_synthetic_sheets_grade_end_to_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let (images, truth) = corpus(&dir.path().join("corpus"));
+    let def = definition();
+    let out = dir.path().join("out");
+    let mut p = grade(&def, std::slice::from_ref(&images), &out, 4);
+    let s = &p.session;
+    assert_eq!(s.pages.len(), SHEETS as usize);
+    assert_eq!(s.booklets.len(), SHEETS as usize);
+
+    // ---- Recognition against the truth (A1): SER = 0, no review-truth auto-accepted.
+    let (mut auto, mut silent, mut review_truth_auto, mut reviewed) = (0, 0, 0, 0);
+    for b in &s.booklets {
+        let t = &truth[&b.serial];
+        assert_eq!(
+            b.form,
+            Some(usize::from(t.form) - 1),
+            "booklet {}",
+            b.serial
+        );
+        assert_eq!(b.identity.student.as_deref(), t.student_id.as_deref());
+        for (q, qs) in b.questions.iter().enumerate() {
+            let qt = &t.questions[q];
+            if qs.status == ResponseStatus::Auto {
+                auto += 1;
+                match &qt.expected {
+                    Expected::Auto(r) if *r != qs.current => silent += 1,
+                    Expected::Review => review_truth_auto += 1,
+                    _ => {}
+                }
+            } else {
+                reviewed += 1;
+            }
+        }
+    }
+    let total = usize::from(QUESTIONS) * SHEETS as usize;
+    let ar = reviewed as f64 / total as f64;
+    eprintln!("auto {auto}, silent {silent}, review-truth auto {review_truth_auto}, AR {ar:.4}");
+    assert_eq!(silent, 0, "silent errors");
+    assert_eq!(review_truth_auto, 0, "review-truth questions auto-accepted");
+    assert!(ar <= 0.03, "AR {ar}");
+
+    // ---- Outputs exist.
+    for f in [
+        "results.csv",
+        "results.xlsx",
+        "item_analysis.csv",
+        "test_stats.csv",
+        "item_analysis.xlsx",
+        "tp154_a1.csv",
+        "tp154_b1.csv",
+        "tp154.xlsx",
+        "report.html",
+        "review_queue.json",
+        "booklets.json",
+        "summary.json",
+        "key.csv",
+        "manifest.json",
+    ] {
+        assert!(out.join(f).is_file(), "{f} missing");
+    }
+    assert!(out.join("project.omrproj/project.omr").is_file());
+
+    // ---- Review every open item with the truth (audited events + incremental rescoring).
+    let open: Vec<(u64, ItemKind, Option<usize>, Option<u16>)> = p
+        .queue(None)
+        .iter()
+        .map(|i| (i.id, i.kind, i.booklet, i.question))
+        .collect();
+    for (id, kind, b, q) in open {
+        let d = match kind {
+            ItemKind::Mark => {
+                let bk = &p.session.booklets[b.unwrap()];
+                decision_of(&final_truth(
+                    &truth[&bk.serial].questions[usize::from(q.unwrap())],
+                ))
+            }
+            ItemKind::Identity => {
+                let bk = &p.session.booklets[b.unwrap()];
+                Decision::Student(truth[&bk.serial].student_id.clone().unwrap())
+            }
+            ItemKind::Form => {
+                let bk = &p.session.booklets[b.unwrap()];
+                Decision::Form((truth[&bk.serial].form - 1) as u8)
+            }
+            ItemKind::Notice => Decision::Acknowledge,
+        };
+        p.apply(
+            id,
+            Action::Resolve {
+                decision: d,
+                accepted_suggestion: false,
+                note: String::new(),
+            },
+        )
+        .unwrap();
+    }
+    assert!(p.queue(None).is_empty());
+    assert_eq!(p.session.release_blocked(), None);
+    p.export(&out).unwrap();
+
+    // ---- Scores against an independent hand computation (A8).
+    let k = keys();
+    let csv = String::from_utf8(read(&out.join("results.csv"))[3..].to_vec()).unwrap();
+    let rows: Vec<Vec<String>> = csv
+        .lines()
+        .map(|l| {
+            l.split(',')
+                .map(|c| c.trim_matches('"').to_string())
+                .collect()
+        })
+        .collect();
+    assert_eq!(rows.len(), 1 + SHEETS as usize);
+    let col = |name: &str| rows[0].iter().position(|h| h == name).unwrap();
+    let (c_id, c_bk, c_raw, c_pct, c_letter, c_status) = (
+        col("Student ID"),
+        col("Booklet"),
+        col("Raw score"),
+        col("Percent"),
+        col("Letter"),
+        col("Status"),
+    );
+    for row in &rows[1..] {
+        let serial: u32 = row[c_bk].parse().unwrap();
+        let t = &truth[&serial];
+        let f = usize::from(t.form) - 1;
+        let correct = t
+            .questions
+            .iter()
+            .filter(|q| final_truth(q) == Response::Single(k[f][usize::from(q.question)]))
+            .count();
+        let pct = correct as f64 * 100.0 / f64::from(QUESTIONS);
+        let letter = match pct {
+            x if x >= 95.0 => "A+",
+            x if x >= 90.0 => "A",
+            x if x >= 85.0 => "B+",
+            x if x >= 80.0 => "B",
+            x if x >= 75.0 => "C+",
+            x if x >= 70.0 => "C",
+            x if x >= 65.0 => "D+",
+            x if x >= 60.0 => "D",
+            _ => "F",
+        };
+        assert_eq!(row[c_status], "scored");
+        assert_eq!(row[c_id], t.student_id.clone().unwrap());
+        assert_eq!(
+            row[c_raw].parse::<f64>().unwrap(),
+            correct as f64,
+            "booklet {serial}"
+        );
+        assert_eq!(row[c_pct], format!("{pct:.2}"), "booklet {serial}");
+        assert_eq!(row[c_letter], letter, "booklet {serial}");
+    }
+
+    // ---- Undo re-opens the latest item and restores the response.
+    let n_open = p.queue(None).len();
+    let reopened = p.undo().unwrap().unwrap();
+    assert_eq!(p.queue(None).len(), n_open + 1);
+    assert!(p.session.review.item(reopened).unwrap().is_open());
+
+    // ---- The store holds the audited chain.
+    let st = p.store().unwrap();
+    st.verify().unwrap();
+    assert!(st.event_count() > 100);
+    p.close().unwrap();
+}
+
+#[test]
+fn req_a5_outputs_identical_across_threads_and_input_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let (images, _) = corpus(&dir.path().join("corpus"));
+    let def = definition();
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&images)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    files.sort();
+    let mut shuffled = files.clone();
+    shuffled.reverse();
+    shuffled.rotate_left(5);
+    let a = dir.path().join("a");
+    let b = dir.path().join("b");
+    let pa = grade(&def, &files, &a, 1);
+    let pb = grade(&def, &shuffled, &b, 4);
+    for f in [
+        "results.csv",
+        "item_analysis.csv",
+        "test_stats.csv",
+        "tp154_a1.csv",
+        "tp154_b1.csv",
+        "booklets.json",
+        "key.csv",
+    ] {
+        assert!(read(&a.join(f)) == read(&b.join(f)), "{f} differs");
+    }
+    // Decisions (every question of every booklet) and the queue are identical.
+    assert_eq!(pa.session.booklets, pb.session.booklets);
+    assert_eq!(pa.session.review.items.len(), pb.session.review.items.len());
+    for (x, y) in pa.session.review.items.iter().zip(&pb.session.review.items) {
+        assert_eq!(
+            (x.code.as_str(), x.booklet, x.question, x.group_key),
+            (y.code.as_str(), y.booklet, y.question, y.group_key)
+        );
+    }
+}
+
+#[test]
+fn req_a4_rescoring_is_incremental_and_fast() {
+    // A synthetic 10,000 × 100 session without images: measure the review-action and
+    // key-change rescoring paths (A4 budget 50 ms, release build).
+    use omr_app::model::{
+        Booklet, EffectiveKey, FormSource, IdentityState, KeyCell, QuestionState, Session,
+    };
+    use omr_app::score::Scoring;
+    let n_q = 100u16;
+    let mut def = ExamDefinition::new(
+        "A4",
+        TemplateChoice::Legacy("iau-ccsit-v1".into()),
+        n_q,
+        5,
+        vec!["A".into()],
+        CancelMode::EraseOnly,
+    );
+    def.key = KeySource::Inferred;
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(4);
+    let booklets: Vec<Booklet> = (0..10_000u32)
+        .map(|i| Booklet {
+            booklet_id: format!("bk-{i:06}"),
+            serial: i + 1,
+            pages: vec![],
+            declared_form: Some(0),
+            declared_text: "A".into(),
+            form: Some(0),
+            form_source: FormSource::Bubbled,
+            inference: None,
+            questions: (0..n_q)
+                .map(|q| {
+                    let r = Response::Single(rng.random_range(0..5u8));
+                    QuestionState {
+                        recognized: omr_model::QuestionOutcome {
+                            question: q,
+                            response: r.clone(),
+                            auto_accepted: true,
+                            logit: omr_model::LogitMilli(9000),
+                            exceptions: vec![],
+                        },
+                        current: r,
+                        status: ResponseStatus::Auto,
+                        page: 0,
+                    }
+                })
+                .collect(),
+            identity: IdentityState {
+                read: String::new(),
+                student: Some(format!("9{i:08}")),
+                status: omr_identity::IdentityStatus::NeedsConfirmation,
+                candidates: vec![],
+                exceptions: vec![],
+                confirmed: false,
+            },
+            exceptions: vec![],
+        })
+        .collect();
+    let key = EffectiveKey {
+        version: 1,
+        inferred: false,
+        forms: vec![
+            (0..n_q)
+                .map(|q| KeyCell::Options(vec![(q % 5) as u8]))
+                .collect(),
+        ],
+        points: vec!["1".into(); usize::from(n_q)],
+        shared_items: true,
+    };
+    let mut session = Session {
+        schema: 1,
+        definition: def.clone(),
+        snapshot_utc: "2026-10-16T09:00:00Z".into(),
+        manifest: Default::default(),
+        sources: vec![],
+        pages: vec![],
+        booklets,
+        key: Some(key.clone()),
+        batch_exceptions: vec![],
+        exam_exceptions: vec![],
+        review: Default::default(),
+        timings: Default::default(),
+    };
+    let mut sc = Scoring::build(&session).unwrap().unwrap();
+    let before = sc.run.as_ref().unwrap().run_id.clone();
+    // Review action: one response changed in one booklet.
+    let mut best = f64::MAX;
+    for k in 0..5 {
+        session.booklets[123].questions[7].current = Response::Single(k);
+        session.booklets[123].questions[7].status = ResponseStatus::Changed;
+        let t = Instant::now();
+        sc.update_booklet(123, &session.booklets[123]).unwrap();
+        best = best.min(t.elapsed().as_secs_f64() * 1e3);
+    }
+    let after = sc.run.as_ref().unwrap().run_id.clone();
+    assert_ne!(before, after);
+    // The incremental path equals a full rebuild.
+    let full = Scoring::build(&session).unwrap().unwrap();
+    assert_eq!(full.prep.l1_hash, sc.prep.l1_hash);
+    assert_eq!(full.run.as_ref().unwrap(), sc.run.as_ref().unwrap());
+    // Key change.
+    let mut k2 = key.clone();
+    k2.forms[0][3] = KeyCell::Options(vec![1, 2]);
+    k2.version = 2;
+    let t = Instant::now();
+    sc.set_key(&def, &k2).unwrap();
+    let key_ms = t.elapsed().as_secs_f64() * 1e3;
+    eprintln!(
+        "A4: review-action rescoring {best:.1} ms, key-change rescoring {key_ms:.1} ms (10,000 × 100)"
+    );
+    if let Ok(path) = std::env::var("OMR_A4_OUT") {
+        std::fs::write(
+            path,
+            format!("{{\"review_action_rescore_ms\": {best:.2}, \"key_change_rescore_ms\": {key_ms:.2}}}"),
+        )
+        .unwrap();
+    }
+    // Generous bound for unoptimised test builds; the release figure is reported (A4 ≤ 50 ms).
+    assert!(best < 2_000.0 && key_ms < 2_000.0);
+}
+
+#[test]
+fn req_a10_corrupt_inputs_inferred_key_and_view_models() {
+    let dir = tempfile::tempdir().unwrap();
+    let corpus_dir = dir.path().join("corpus");
+    let t = Template::build(spec()).unwrap();
+    let mut cfg = CorpusConfig::standard(8, 77);
+    cfg.roster = roster_ids();
+    cfg.threads = 4;
+    omr_sim::corpus::write_corpus(&t, &ExamKey::from_bytes(KEY), &cfg, &corpus_dir).unwrap();
+    let images = corpus_dir.join("images");
+    // A corrupt JPEG, a truncated PDF and a byte-identical duplicate join the batch.
+    let first = std::fs::read_dir(&images)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .min()
+        .unwrap();
+    let extra = dir.path().join("extra");
+    std::fs::create_dir_all(&extra).unwrap();
+    std::fs::write(
+        extra.join("broken.jpg"),
+        b"\xff\xd8\xff\xe0 not really a jpeg",
+    )
+    .unwrap();
+    std::fs::write(
+        extra.join("truncated.pdf"),
+        b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog",
+    )
+    .unwrap();
+    std::fs::copy(&first, extra.join("again.jpg")).unwrap();
+    let mut def = definition();
+    def.key = KeySource::Inferred;
+    def.outcomes = None;
+    let out = dir.path().join("out");
+    let p = grade(&def, &[images.clone(), extra.clone()], &out, 3);
+    let s = &p.session;
+    use omr_app::model::PageStatus;
+    let count = |st: PageStatus| s.pages.iter().filter(|p| p.status == st).count();
+    assert_eq!(count(PageStatus::Read), 8);
+    assert_eq!(
+        count(PageStatus::Refused),
+        2,
+        "CAP-001 for the corrupt files"
+    );
+    assert_eq!(count(PageStatus::Duplicate), 1, "CAP-011 for the duplicate");
+    for pg in s.pages.iter().filter(|p| p.status == PageStatus::Refused) {
+        assert_eq!(pg.refusal.as_ref().unwrap().code, "CAP-001");
+    }
+    let capture = p.queue(Some(omr_app::Lane::Capture));
+    assert_eq!(
+        capture.iter().filter(|i| i.code == "CAP-001").count(),
+        2,
+        "refused pages queue in the Capture lane"
+    );
+    // Inferred key: SCO-003 `inferred_key` blocks release; every output is marked.
+    assert!(s.key.as_ref().unwrap().inferred);
+    assert!(
+        p.queue(Some(omr_app::Lane::Scoring))
+            .iter()
+            .any(|i| i.code == "SCO-003" && i.sub_reason.as_deref() == Some("inferred_key"))
+    );
+    assert!(s.release_blocked().unwrap().contains("INFERRED"));
+    let names: Vec<String> = std::fs::read_dir(&out)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n != "manifest.json" && n != "project.omrproj")
+        .collect();
+    assert!(!names.is_empty());
+    for n in &names {
+        assert!(n.contains("-INFERRED"), "{n} not marked");
+    }
+    let csv = String::from_utf8(read(&out.join("results-INFERRED.csv"))).unwrap();
+    assert!(csv.contains("KEY INFERRED"));
+    let html = String::from_utf8(read(&out.join("report-INFERRED.html"))).unwrap();
+    assert!(html.contains("KEY INFERRED"));
+    // The inferred key is each form's modal confident response (checked against the truth:
+    // the simulated students answer at random, so this is the mode, not the real key).
+    let truth: Vec<PageTruth> =
+        omr_sim::corpus::read_truth(&corpus_dir.join("truth.jsonl")).unwrap();
+    let ek = s.key.as_ref().unwrap();
+    for f in 0..2usize {
+        for q in 0..usize::from(QUESTIONS) {
+            let mut counts = [0u32; OPTIONS as usize];
+            for t in truth.iter().filter(|t| usize::from(t.form) == f + 1) {
+                if let Expected::Auto(Response::Single(o)) = &t.questions[q].expected {
+                    counts[usize::from(*o)] += 1;
+                }
+            }
+            let best = *counts.iter().max().unwrap();
+            match &ek.forms[f][q] {
+                omr_app::model::KeyCell::Options(v) => {
+                    assert_eq!(v.len(), 1);
+                    assert_eq!(counts[usize::from(v[0])], best, "form {f} q{q}");
+                }
+                omr_app::model::KeyCell::Void => assert_eq!(best, 0, "form {f} q{q}"),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    // ---- View-models for the shell.
+    let sum = p.summary_vm();
+    assert_eq!(sum.sheets_scanned, 8);
+    assert!(sum.key_status.contains("INFERRED"));
+    let setup = p.setup_vm();
+    assert_eq!(setup.keys.len(), 2);
+    assert!(!setup.key_published);
+    let q = p.review_queue_vm(omr_app::Lane::Capture);
+    assert!(q.groups.iter().any(|g| g.code == "CAP-001"));
+    assert!(!q.audit_head.is_empty());
+    let res = p.results_vm().unwrap();
+    assert_eq!(res.students, 8);
+    assert!(res.release_blocked.is_some());
+    assert_eq!(res.grades.iter().map(|g| g.count).sum::<u32>(), 8);
+    // A mark item renders its crop (RGBA from the stored original) with bubble overlays.
+    let mut tracker = omr_app::vm::ProgressTracker::default();
+    tracker.push(&omr_app::Progress::Started {
+        pages: 2,
+        workers: 2,
+    });
+    let snap = tracker.snapshot();
+    assert_eq!((snap.pages_total, snap.workers), (2, 2));
+    if let Some(item) = p.queue(Some(omr_app::Lane::Marks)).first().map(|i| i.id) {
+        let v = p.review_item_vm(item).unwrap();
+        assert_eq!(
+            v.crop.rgba.len(),
+            (v.crop.width * v.crop.height * 4) as usize
+        );
+        assert!(v.crop.width > 20 && !v.bubbles.is_empty());
+        assert!(v.suggestion.is_some() || v.code == "CAP-009");
+    }
+    let notice = p
+        .queue(Some(omr_app::Lane::Scoring))
+        .first()
+        .map(|i| i.id)
+        .unwrap();
+    assert!(p.review_item_vm(notice).unwrap().notice.is_some());
+    // The dashboard lists graded exams below a workspace folder (read-only, no store lock).
+    let exams = omr_app::vm::list_exams(dir.path());
+    assert_eq!(exams.len(), 1);
+    assert_eq!(exams[0].1.sheets_scanned, 8);
+}

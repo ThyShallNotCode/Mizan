@@ -3,8 +3,9 @@
 //!
 //! - [`gray`]: the 8-bit [`GrayImage`] (255 = white; pixel `(x, y)` covers `[x, x+1) × [y, y+1)`).
 //! - [`decode`]: PNG / JPEG / TIFF bytes → luma, with decoder limits (no file I/O).
-//! - [`reduce`]: integer area reduction, packed 1-bit [`Bitmap`] → coverage gray
-//!   (600 → 200 dpi = 3 × 3), capture classification (bitonal → CAP-003).
+//! - [`reduce`]: integer area reduction, exact fractional area resampling (any ratio, e.g.
+//!   300 → 200 dpi), packed 1-bit [`Bitmap`] → coverage gray (600 → 200 dpi = 3 × 3), capture
+//!   classification (bitonal → CAP-003).
 //! - [`ncc`]: exact-integer NCC with the zero-variance guard, Gaussian ring templates, a fast
 //!   ring-candidate map, local maxima with parabolic sub-pixel refinement.
 //! - [`sample`]: integer bilinear sampling, affine resampling, disk sums.
@@ -39,7 +40,10 @@ pub use ncc::{
     FLAT_VARIANCE, Integral, NccGrid, PatchTemplate, Peak, ResponseMap, RingHit, RingKernel,
     local_maxima, match_patch, ncc_patch, parabolic_offset, ring_map_fast,
 };
-pub use reduce::{Bitmap, CaptureKind, classify_capture, half, reduce_area, reduce_bitmap};
+pub use reduce::{
+    Bitmap, CaptureKind, classify_capture, half, reduce_area, reduce_bitmap, resample_area,
+    resample_to_dpi, resampled_size,
+};
 pub use rng::SplitMix64;
 pub use sample::{DiskSum, bilinear, disk_sum, resample_affine, resample_affine_offset};
 pub use warp::{Affine, Decomposition, Homography, QuadWarp, Warp};

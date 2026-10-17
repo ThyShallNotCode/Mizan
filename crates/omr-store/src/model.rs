@@ -1423,6 +1423,73 @@ impl Tx<'_> {
         Ok(id)
     }
 
+    /// Resolves open exceptions without a response correction (`ExceptionResolved`): a human
+    /// decision on an identity, form or page-level item (§13.1). `decision` is a short code
+    /// (e.g. `acknowledge`, `form`, `student`) recorded in the payload; no student-linked
+    /// value enters the event.
+    pub fn resolve_exceptions(
+        &mut self,
+        ids: &[i64],
+        actor: &Actor,
+        reason: Reason,
+        decision: &str,
+    ) -> Result<()> {
+        require_human(actor, "resolving an exception")?;
+        reason.validate()?;
+        for &x in ids {
+            let n = self.conn().execute(
+                "UPDATE exception SET state = 'resolved' WHERE exception_id = ?1 AND state = 'open'",
+                params![x],
+            )?;
+            if n != 1 {
+                return Err(StoreError::NotFound(format!("open exception {x}")));
+            }
+            let ev = self.append_event(
+                &NewEvent::new(
+                    "ExceptionResolved",
+                    "exception",
+                    &x.to_string(),
+                    actor.clone(),
+                    json!({"decision": decision}),
+                )
+                .with_reason(reason.clone()),
+            )?;
+            self.conn().execute(
+                "UPDATE exception SET resolved_seq = ?2 WHERE exception_id = ?1",
+                params![x, ev.seq],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Reopens resolved exceptions (`ExceptionReopened`): the compensating event of an undone
+    /// review action. The resolving event is never rewritten (§4.7, §14.4).
+    pub fn reopen_exceptions(&mut self, ids: &[i64], actor: &Actor, reason: Reason) -> Result<()> {
+        require_human(actor, "reopening an exception")?;
+        reason.validate()?;
+        for &x in ids {
+            let n = self.conn().execute(
+                "UPDATE exception SET state = 'open', resolved_seq = NULL \
+                 WHERE exception_id = ?1 AND state = 'resolved'",
+                params![x],
+            )?;
+            if n != 1 {
+                return Err(StoreError::NotFound(format!("resolved exception {x}")));
+            }
+            self.append_event(
+                &NewEvent::new(
+                    "ExceptionReopened",
+                    "exception",
+                    &x.to_string(),
+                    actor.clone(),
+                    json!({}),
+                )
+                .with_reason(reason.clone()),
+            )?;
+        }
+        Ok(())
+    }
+
     /// Stores a score run (derived, persisted; `ScoreRunComputed`). Idempotent by Run ID.
     pub fn put_score_run(&mut self, exam: &ExamId, run: &ScoreRun, actor: &Actor) -> Result<bool> {
         let blob = serde_json::to_vec(run)?;

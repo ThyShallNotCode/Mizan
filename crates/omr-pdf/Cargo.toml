@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 omr-model.workspace = true
+omr-imaging.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 hayro-syntax.workspace = true

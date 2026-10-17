@@ -258,8 +258,9 @@ impl ExtractedPage {
 
     /// 8-bit coverage gray at `dst_dpi` in the **stored** orientation (no rotation). Bilevel
     /// pages use [`reduce::reduce_bilevel_to_dpi`]; gray pages a box reduction for integer
-    /// ratios (other ratios are returned at native resolution). `None` for JPEG pages, which
-    /// `omr-imaging` decodes.
+    /// ratios and exact area coverage for any other reduction ([`reduce::reduce_gray_to_dpi`],
+    /// e.g. 300 → 200 dpi); a gray page at or below `dst_dpi` is returned at its native
+    /// resolution. `None` for JPEG pages, which `omr-imaging` decodes.
     pub fn reduced(&self, dst_dpi: u32) -> Result<Option<GrayImage8>, PdfError> {
         let Some(src) = self.nominal_dpi() else {
             return Err(PdfError::Unsupported(
@@ -271,6 +272,8 @@ impl ExtractedPage {
             PageRaster::Gray(g) => {
                 if src > dst_dpi && src % dst_dpi == 0 {
                     reduce::reduce_gray(g, src / dst_dpi).map(Some)
+                } else if src > dst_dpi && dst_dpi > 0 {
+                    reduce::reduce_gray_to_dpi(g, src, dst_dpi).map(Some)
                 } else {
                     Ok(Some(g.clone()))
                 }

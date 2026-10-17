@@ -79,6 +79,7 @@ rand_distr = "0.6.0"
 # data and io
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 csv = "1.4.0"
+calamine = { version = "0.36.1", default-features = false }
 rust_xlsxwriter = "0.99.1"
 lopdf = "0.45.0"
 hayro-syntax = { version = "0.8.0", default-features = false, features = ["std"] }

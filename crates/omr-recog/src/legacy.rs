@@ -266,21 +266,61 @@ impl LegacyEngine {
         &self.prior
     }
 
-    /// The integer box factor that brings a scan of `width × height` px to the template's
-    /// working resolution (e.g. 3 for a 600-dpi page against a 200-dpi template); never < 1.
-    /// Header DPI is distrusted (§8.2), so the factor comes from the page size.
+    /// The nearest integer box factor for a scan of `width × height` px (e.g. 3 for a 600-dpi
+    /// page against a 200-dpi template); never < 1. Header DPI is distrusted (§8.2), so the
+    /// factor comes from the page size. Only exact for integer ratios: use
+    /// [`Self::working_ratio`] / [`Self::to_working_resolution`] for any ratio (300 dpi = 2/3).
     pub fn working_factor(&self, width: usize, height: usize) -> usize {
         let (tw, th) = self.template.frame_size();
         let r = (width as f64 / f64::from(tw)).max(height as f64 / f64::from(th));
         (r.round() as usize).max(1)
     }
 
-    /// The page at working resolution: area-reduced by [`Self::working_factor`] (bitonal input
-    /// becomes coverage gray, §7.2 bitonal mode). For packed 1-bit data use
-    /// `omr_imaging::reduce_bitmap` with the same factor.
+    /// The capture resolution implied by a page of `width × height` px (header DPI distrusted,
+    /// §8.2): the page/frame ratio × the template dpi, snapped to a common scanner resolution
+    /// when within 10 % (scanners auto-crop, so the page size is only approximate), else
+    /// rounded to 10 dpi.
+    pub fn estimated_dpi(&self, width: usize, height: usize) -> u32 {
+        const COMMON: [u32; 13] = [
+            100, 150, 200, 240, 250, 300, 360, 400, 500, 600, 720, 800, 1200,
+        ];
+        let (tw, th) = self.template.frame_size();
+        let r = (width as f64 / f64::from(tw)).max(height as f64 / f64::from(th));
+        let est = r * self.template.dpi();
+        if !est.is_finite() || est < 1.0 {
+            return self.template.dpi().round().max(1.0) as u32;
+        }
+        COMMON
+            .iter()
+            .copied()
+            .min_by(|&a, &b| {
+                (est - f64::from(a))
+                    .abs()
+                    .total_cmp(&(est - f64::from(b)).abs())
+            })
+            .filter(|&c| (est - f64::from(c)).abs() <= 0.10 * f64::from(c))
+            .unwrap_or_else(|| ((est / 10.0).round() as u32).max(1) * 10)
+    }
+
+    /// The rational scale `(num, den)` (output px per input px, reduced) that brings a scan of
+    /// `width × height` px to the template's working resolution: template dpi ÷
+    /// [`Self::estimated_dpi`]. `(1, 3)` for a 600-dpi page against the 200-dpi IAU template,
+    /// `(2, 3)` for 300 dpi, `(1, 2)` for 400 dpi; `(1, 1)` at the template resolution.
+    pub fn working_ratio(&self, width: usize, height: usize) -> (u32, u32) {
+        let dst = self.template.dpi().round().max(1.0) as u32;
+        let src = self.estimated_dpi(width, height);
+        let g = gcd_u32(dst, src);
+        (dst / g, src / g)
+    }
+
+    /// The page at working resolution, by exact area coverage at [`Self::working_ratio`]
+    /// (`omr_imaging::resample_area`; an integer ratio is the box reduction of
+    /// [`Self::working_factor`], so 600 → 200 dpi is unchanged). Bitonal input becomes coverage
+    /// gray (§7.2 bitonal mode). For packed 1-bit data at an integer ratio use
+    /// `omr_imaging::reduce_bitmap`.
     pub fn to_working_resolution(&self, page: &GrayImage) -> GrayImage {
-        let f = self.working_factor(page.width(), page.height());
-        omr_imaging::reduce_area(page, f)
+        let (num, den) = self.working_ratio(page.width(), page.height());
+        omr_imaging::resample_area(page, num, den)
     }
 
     /// Page stage: registration and measurement (pure; safe to run in parallel per page).
@@ -539,6 +579,13 @@ impl LegacyEngine {
             exceptions,
         }
     }
+}
+
+fn gcd_u32(mut a: u32, mut b: u32) -> u32 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a.max(1)
 }
 
 /// The `omr_model::IdColumnRead` state of an ID-grid column decision. The contract
