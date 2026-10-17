@@ -489,7 +489,7 @@ path refuses all 143 legacy pages with REG-001 rather than mis-reading them).
 | Student numbers, recognition only | 140 exact, 3 flagged, 0 wrong |
 | Section (recognition) | 142 exact, 1 flagged, 0 wrong |
 | Version (recognition) | 142 exact, 1 flagged, 0 wrong |
-| Version / form, whole app | 140 declared and correct, 3 inferred (all correct), 0 wrong |
+| Version / form, whole app | 140 declared and correct, 0 declared wrong; 3 inferred from the answers: 1 faint bubble, inferred as the version the reference shows; 2 blank bubbles, which the reference cannot check, both queued for confirmation (SCO-005) |
 | Exam type (recognition) | 141 exact, 2 flagged, 0 wrong |
 | Pages taken for blank backs | 0; every page's upright-vs-upside-down margin ≥ 0.511 (gate 0.20) |
 | Throughput (`omr bench`, 4 threads) | **73.2 pages/s** recognition, 67.8 pages/s full pipeline (19.4 and 36.9 pages/s at 1 and 2 threads; 76–89 at 4 threads in earlier, quieter runs) |
