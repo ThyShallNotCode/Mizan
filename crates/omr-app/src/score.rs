@@ -121,19 +121,27 @@ fn l1_of(status: ResponseStatus, current: &Response) -> L1Response {
     }
 }
 
-/// One booklet's L1 row (`None` when the booklet has no form).
+/// One booklet's L1 row (`None` when the booklet has no form). A held booklet (open MRK-015)
+/// is pending at every position.
 pub fn booklet_l1(b: &Booklet) -> Option<BookletL1> {
     let f = b.form?;
+    let held = b.hold.is_some();
     let responses: Vec<L1Response> = b
         .questions
         .iter()
-        .map(|q| l1_of(q.status, &q.current))
+        .map(|q| {
+            if held {
+                L1Response::Pending
+            } else {
+                l1_of(q.status, &q.current)
+            }
+        })
         .collect();
     let open: BTreeSet<u16> = b
         .questions
         .iter()
         .enumerate()
-        .filter(|(_, q)| q.status == ResponseStatus::Pending)
+        .filter(|(_, q)| held || q.status == ResponseStatus::Pending)
         .map(|(j, _)| j as u16)
         .collect();
     let mut l1 = BookletL1::present(b.serial, b.student(), FormCode(f as u16 + 1), responses);

@@ -155,6 +155,10 @@ pub struct Booklet {
     pub form_source: FormSource,
     /// Inference evidence.
     pub inference: Option<FormInference>,
+    /// A booklet-level blocking code (MRK-015 blank booklet) that holds the whole score as
+    /// pending until a reviewer acknowledges it (never auto-scored 0).
+    #[serde(default)]
+    pub hold: Option<String>,
     /// Questions `0..n` (exam order).
     pub questions: Vec<QuestionState>,
     /// Identity.
@@ -241,11 +245,11 @@ pub struct Timings {
     pub identity_ms: f64,
     /// Form inference, key, score run.
     pub scoring_ms: f64,
-    /// Outcomes + analytics.
+    /// Item analysis + outcomes at the last export.
     pub analysis_ms: f64,
     /// Store writes after recognition.
     pub store_ms: f64,
-    /// Reports and exports.
+    /// Reports and exports at the last export (analysis included).
     pub export_ms: f64,
     /// Total.
     pub total_ms: f64,
@@ -268,7 +272,10 @@ pub struct Session {
     pub manifest: EngineManifest,
     /// Inputs.
     pub sources: Vec<SourceInfo>,
-    /// Pages in canonical order (source SHA-384, page index).
+    /// Pages in canonical order (source SHA-384, page index). Persisted once, apart from the
+    /// session (`pages.json`): pages never change after grading, the session does with every
+    /// review action.
+    #[serde(skip, default)]
     pub pages: Vec<PageState>,
     /// Booklets in canonical order.
     pub booklets: Vec<Booklet>,

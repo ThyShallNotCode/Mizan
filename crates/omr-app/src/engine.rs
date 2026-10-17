@@ -22,6 +22,10 @@ use std::ops::Range;
 
 /// Working resolution of every engine (dpi).
 pub const WORKING_DPI: u32 = 200;
+/// Lowest PDF placement resolution trusted as the capture resolution.
+pub const MIN_TRUSTED_DPI: u32 = 100;
+/// Highest PDF placement resolution trusted as the capture resolution.
+pub const MAX_TRUSTED_DPI: u32 = 1200;
 
 /// A page brought to the engine's working resolution.
 #[derive(Clone, Debug)]
@@ -284,6 +288,10 @@ impl Recognizer {
         capture: CaptureKind,
         known_dpi: Option<u32>,
     ) -> WorkPage {
+        // A placement resolution outside any scanner's range (a PDF page box that does not
+        // match its image, e.g. 72 dpi or a degenerate matrix) is not trusted: the page size
+        // decides instead. This also bounds the enlargement of a hostile input.
+        let known_dpi = known_dpi.filter(|d| (MIN_TRUSTED_DPI..=MAX_TRUSTED_DPI).contains(d));
         match self {
             Recognizer::Legacy { engine, .. } => {
                 let src = known_dpi

@@ -1,11 +1,13 @@
 //! Key and form inference (§10.3).
 //!
 //! - **Inferred key** (explicit opt-in): per form, per question, the modal *confident*
-//!   (auto-accepted single) response of the booklets whose form is declared confidently.
+//!   (auto-accepted single) response of the booklets whose form is declared confidently (on a
+//!   one-form exam: every booklet with a form).
 //!   Ties go to the lower option; a question with no confident response is voided.
 //! - **Form inference**: LL_f(n) = Σ_j log p̂_{π_f(j)}(r_{n,j}) over the categories options +
-//!   blank + multi, with p̂ from the confirmed booklets of the form when it has ≥ 20 of them,
-//!   else the small-class fallback built from the form's key. Decision table: declared =
+//!   blank + multi, with p̂ from the confirmed booklets of the form when it has ≥ 20 of them
+//!   (leave-one-out for a booklet that declares the form), else the small-class fallback built
+//!   from the form's key. Decision table: declared =
 //!   argmax → accept; declared ≠ argmax with ΔLL ≥ 10 nats → IDN-003 (ERROR, never
 //!   auto-switch); declared ≠ argmax below 10 nats → keep declared; nothing declared →
 //!   provisional argmax + SCO-005 `inferred` (ERROR).
@@ -46,7 +48,11 @@ pub fn infer_key(
             (0..questions)
                 .map(|q| {
                     let mut counts = vec![0u32; m];
-                    for b in booklets.iter().filter(|b| b.declared_form == Some(f)) {
+                    // The booklets of form f before inference: declared by code or bubble, or
+                    // every booklet of a one-form exam (whose version bubble is often blank).
+                    for b in booklets.iter().filter(|b| {
+                        b.declared_form == Some(f) || (n_forms == 1 && b.form == Some(f))
+                    }) {
                         if let Some(Response::Single(o)) = evidence(b, q)
                             && usize::from(*o) < m
                             && b.questions[q].status == ResponseStatus::Auto
@@ -67,13 +73,22 @@ pub fn infer_key(
         .collect()
 }
 
-/// Per-form category log-probabilities per question: `lp[f][q][c]`.
+/// The response model of one form (§10.3).
+enum FormModel {
+    /// Empirical category counts per question (`counts[q][c]`, `n[q]`) from the booklets that
+    /// declare the form (≥ 20 of them); evaluated leave-one-out for those booklets.
+    Empirical { counts: Vec<Vec<u32>>, n: Vec<u32> },
+    /// The small-class fallback built from the key: `lp[q][c]`.
+    Fallback(Vec<Vec<f64>>),
+}
+
+/// Per-form response models.
 fn model(
     booklets: &[Booklet],
     keys: &[Vec<KeyCell>],
     questions: usize,
     options: u8,
-) -> Vec<Vec<Vec<f64>>> {
+) -> Vec<FormModel> {
     let m = usize::from(options);
     let k = m + 2;
     // Class-wide blank/multi rates and proportion correct (all booklets with a known form).
@@ -111,22 +126,22 @@ fn model(
                 .iter()
                 .filter(|b| b.declared_form == Some(f))
                 .collect();
-            (0..questions)
-                .map(|q| {
-                    if conf.len() >= 20 {
-                        let mut c = vec![0u32; k];
-                        let mut n = 0u32;
-                        for b in &conf {
-                            if let Some(cat) = evidence(b, q).and_then(|r| category(r, m)) {
-                                c[cat] += 1;
-                                n += 1;
-                            }
+            if conf.len() >= 20 {
+                let mut counts = vec![vec![0u32; k]; questions];
+                let mut n = vec![0u32; questions];
+                for b in &conf {
+                    for q in 0..questions {
+                        if let Some(cat) = evidence(b, q).and_then(|r| category(r, m)) {
+                            counts[q][cat] += 1;
+                            n[q] += 1;
                         }
-                        let den = f64::from(n) + 0.5 * (m as f64 + 2.0);
-                        c.iter()
-                            .map(|&x| ((f64::from(x) + 0.5) / den).ln())
-                            .collect()
-                    } else {
+                    }
+                }
+                return FormModel::Empirical { counts, n };
+            }
+            FormModel::Fallback(
+                (0..questions)
+                    .map(|q| {
                         let n = f64::from(seen[q]);
                         let pb = (f64::from(blanks[q]) + 0.5) / (n + 1.0);
                         let pm = (f64::from(multis[q]) + 0.5) / (n + 1.0);
@@ -149,15 +164,16 @@ fn model(
                         lp[m] = pb.ln();
                         lp[m + 1] = pm.ln();
                         lp
-                    }
-                })
-                .collect()
+                    })
+                    .collect(),
+            )
         })
         .collect()
 }
 
 /// Infers forms; returns per booklet the inference evidence (booklets without usable
-/// responses get `None`).
+/// responses get `None`). A booklet is scored against an empirical model of its own declared
+/// form **leave-one-out**, so its own responses never vouch for its declaration.
 pub fn infer_forms(
     booklets: &[Booklet],
     keys: &[Vec<KeyCell>],
@@ -168,30 +184,46 @@ pub fn infer_forms(
         return vec![None; booklets.len()];
     }
     let m = usize::from(options);
-    let lp = model(booklets, keys, questions, options);
+    let models = model(booklets, keys, questions, options);
     booklets
         .iter()
         .map(|b| {
-            let mut used = 0;
-            let ll: Vec<f64> = (0..keys.len())
-                .map(|f| {
+            let ll: Vec<f64> = models
+                .iter()
+                .enumerate()
+                .map(|(f, fm)| {
+                    let own = b.declared_form == Some(f);
                     (0..questions)
                         .filter_map(|q| {
                             let c = b.questions.get(q).and_then(|s| category(&s.current, m))?;
-                            Some(lp[f][q][c])
+                            Some(match fm {
+                                FormModel::Fallback(lp) => lp[q][c],
+                                FormModel::Empirical { counts, n } => {
+                                    let (mut x, mut nq) = (counts[q][c], n[q]);
+                                    if own
+                                        && let Some(e) = evidence(b, q).and_then(|r| category(r, m))
+                                    {
+                                        nq = nq.saturating_sub(1);
+                                        if e == c {
+                                            x = x.saturating_sub(1);
+                                        }
+                                    }
+                                    let den = f64::from(nq) + 0.5 * (m as f64 + 2.0);
+                                    ((f64::from(x) + 0.5) / den).ln()
+                                }
+                            })
                         })
                         .sum()
                 })
                 .collect();
-            for q in 0..questions {
-                if b.questions
-                    .get(q)
-                    .and_then(|s| category(&s.current, m))
-                    .is_some()
-                {
-                    used += 1;
-                }
-            }
+            let used = (0..questions)
+                .filter(|&q| {
+                    b.questions
+                        .get(q)
+                        .and_then(|s| category(&s.current, m))
+                        .is_some()
+                })
+                .count();
             if used == 0 {
                 return None;
             }

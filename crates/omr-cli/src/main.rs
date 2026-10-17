@@ -184,19 +184,19 @@ enum ReviewCmd {
         #[arg(long)]
         decision: Option<String>,
         /// Apply the decision to the item's whole group.
-        #[arg(long)]
+        #[arg(long, requires = "decision")]
         group: bool,
         /// Defer to the end of the queue.
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["decision", "escalate", "rescan", "undo"])]
         defer: bool,
         /// Escalate to the instructor.
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["decision", "rescan", "undo"])]
         escalate: bool,
         /// Add to the rescan pull list.
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["decision", "undo"])]
         rescan: bool,
         /// Undo the latest review event.
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["decision", "item"])]
         undo: bool,
         /// Reviewer principal.
         #[arg(long, default_value = "principal:reviewer")]
@@ -277,10 +277,7 @@ fn definition(a: &ExamArgs, key_forms: Option<Vec<String>>) -> Result<ExamDefini
         ),
         (None, Some(p)) => {
             let (spec, key) = read_spec(p)?;
-            let opts = match spec.options {
-                omr_forms::OptionCounts::Uniform(n) => n,
-                _ => 5,
-            };
+            let opts = spec.options.max();
             let forms = (1..=spec.forms)
                 .map(|f| FormCode(f).letter().to_string())
                 .collect();
@@ -498,6 +495,9 @@ fn project_dir(p: &Path) -> PathBuf {
 
 fn cmd_grade(g: GradeArgs) -> Result<(), AppError> {
     let def = build_def(&g)?;
+    if let Some(t) = &g.snapshot_time {
+        omr_app::pipeline::check_snapshot_utc(t)?;
+    }
     std::fs::create_dir_all(&g.out)?;
     let proj = g.out.join("project.omrproj");
     if proj.exists() {
@@ -764,6 +764,14 @@ fn cmd_bench(b: BenchArgs) -> Result<(), AppError> {
     let first_dir = scratch.join(format!("ttfr-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&first_dir);
     std::fs::create_dir_all(&first_dir)?;
+    // The run spools copies of the originals: removed on every exit path, errors included.
+    struct RemoveOnDrop(PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = RemoveOnDrop(first_dir.clone());
     let maxt = b.threads.iter().copied().max().unwrap_or(0);
     let pool = omr_app::pipeline::pool(maxt)?;
     let t0 = Instant::now();
@@ -798,7 +806,6 @@ fn cmd_bench(b: BenchArgs) -> Result<(), AppError> {
             serde_json::to_vec_pretty(&report).map_err(|e| AppError::Internal(e.to_string()))?,
         )?;
     }
-    let _ = std::fs::remove_dir_all(&first_dir);
     Ok(())
 }
 
@@ -816,7 +823,10 @@ fn run(cli: Cli) -> Result<(), AppError> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match run(cli) {
+    // A panic is an internal error (exit 70), never Rust's default 101.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(cli)))
+        .unwrap_or_else(|_| Err(AppError::Internal("unexpected panic (see above)".into())));
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("omr: {e}");

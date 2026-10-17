@@ -18,6 +18,9 @@ ImagingError::{BadDimensions, Unsupported, Decode, TooLarge}   // TooLarge / Dec
 
 // Reduction and capture mode (§7.2, §8.5 bitonal mode, CAP-003).
 reduce_area(&img, f)          // f × f box mean, round half up; ceil(w/f) × ceil(h/f); edge blocks partial
+resample_area(&img, num, den) // any rational scale num/den by exact area coverage (integer weights,
+                              // u64 sums, round half up); 2/3 = 300 → 200 dpi; 1/f ≡ reduce_area(f)
+resample_to_dpi(&img, src, dst), resampled_size(w, h, num, den)
 half(&img)                    // 2 × 2 fast path (one pyramid level)
 Bitmap::new(w, h, stride, bits, black_is_one)   // packed 1-bit rows (CCITT G4 output, PDF BlackIs1)
 reduce_bitmap(&bitmap, 3)     // 600 → 200 dpi coverage gray: round(255 · white / 9)
@@ -54,6 +57,11 @@ SplitMix64 (seeded sampling), linalg::{solve, sym_eigen}
   final square roots and divisions are floating point (IEEE correctly rounded everywhere).
 - Sampling quantises coordinates to 1/256 px with 8-bit weights; affine resampling steps in
   1/65,536-px fixed point.
+- `resample_area` weighs each source pixel by its exact overlap with the output footprint in
+  units of 1/num source pixel (integers ≤ min(num, den)); sums are exact `u64`, so fractional
+  working resolutions (300 → 200 dpi) are identical on every machine. Tests compare it with a
+  brute-force rational oracle for several ratios and sizes, and check that `1/f` equals
+  `reduce_area(f)`.
 - Robust fits use a seeded SplitMix64; ties in nearest-neighbour queries go to the lower index;
   no `HashMap` and no fused multiply-add.
 

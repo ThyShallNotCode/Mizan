@@ -29,9 +29,11 @@ pub const RECOG_RUN: &str = "recog-final-1";
 pub const IDENTITY_RUN: &str = "identity-1";
 /// Session snapshot file name (in the package's `cache/`).
 pub const SESSION_FILE: &str = "session.json";
+/// Page snapshot file name (in the package's `cache/`).
+pub const PAGES_FILE: &str = "pages.json";
 
-/// Open exception rows by (page ID, question): (row ID, code).
-type PageQuestionRows = BTreeMap<(String, Option<u16>), Vec<(i64, String)>>;
+/// Open exception rows by (page ID, question): (row ID, code, sub-reason).
+type PageQuestionRows = BTreeMap<(String, Option<u16>), Vec<(i64, String, Option<String>)>>;
 
 fn store_err(e: omr_store::StoreError) -> AppError {
     AppError::Store(e.to_string())
@@ -384,6 +386,7 @@ impl StoreWriter {
         }
         // Page recognition (bulk lane) and refusals.
         let n_q = usize::from(session.definition.questions);
+        let mut refused_rows: BTreeMap<String, Vec<i64>> = BTreeMap::new();
         for chunk in session.pages.chunks(omr_store::project::BULK_GROUP_PAGES) {
             self.project
                 .bulk(|tx| {
@@ -407,14 +410,17 @@ impl StoreWriter {
                             }
                             (PageStatus::Refused, _) => {
                                 if let Some(e) = &p.refusal {
-                                    tx.set_page_state(
-                                        &p.page_id,
-                                        PageState::Quarantined,
-                                        Some(&e.code),
-                                        &Actor::engine("ingest"),
-                                    )
-                                    .or_else(|_| Ok::<(), omr_store::StoreError>(()))?;
-                                    tx.raise_exception(e, &Actor::engine("ingest"))?;
+                                    // Unreadable files have no original and no page row.
+                                    if session.sources[p.source].blake3.is_some() {
+                                        tx.set_page_state(
+                                            &p.page_id,
+                                            PageState::Quarantined,
+                                            Some(&e.code),
+                                            &Actor::engine("ingest"),
+                                        )?;
+                                    }
+                                    let id = tx.raise_exception(e, &Actor::engine("ingest"))?;
+                                    refused_rows.entry(p.page_id.clone()).or_default().push(id);
                                 }
                             }
                             _ => {}
@@ -426,6 +432,7 @@ impl StoreWriter {
         }
         // Identity run and decisions; booklet, batch and exam exceptions.
         let mut raised: BTreeMap<(usize, String), Vec<i64>> = BTreeMap::new();
+        let mut missing: BTreeMap<(usize, usize), Vec<i64>> = BTreeMap::new();
         let mut exam_rows: BTreeMap<String, Vec<i64>> = BTreeMap::new();
         self.project
             .decision(|tx| {
@@ -453,6 +460,19 @@ impl StoreWriter {
                     for e in b.identity.exceptions.iter().chain(&b.exceptions) {
                         let id = tx.raise_exception(e, &Actor::engine("identity"))?;
                         raised.entry((bi, e.code.clone())).or_default().push(id);
+                    }
+                    // Questions of a missing page (COL-001): no page row holds them, so they
+                    // are raised here (pending, never blank).
+                    for (q, qs) in b.questions.iter().enumerate() {
+                        for e in qs
+                            .recognized
+                            .exceptions
+                            .iter()
+                            .filter(|e| e.code == "COL-001")
+                        {
+                            let id = tx.raise_exception(e, &Actor::engine("collate"))?;
+                            missing.entry((bi, q)).or_default().push(id);
+                        }
                     }
                 }
                 for e in session
@@ -482,7 +502,11 @@ impl StoreWriter {
                 by_page_q
                     .entry((p.clone(), s.exception.target.question))
                     .or_default()
-                    .push((s.exception_id, s.exception.code.clone()));
+                    .push((
+                        s.exception_id,
+                        s.exception.code.clone(),
+                        s.exception.sub_reason.clone(),
+                    ));
             }
         }
         for it in &mut session.review.items {
@@ -490,8 +514,18 @@ impl StoreWriter {
             it.store_exceptions = match it.kind {
                 ItemKind::Mark => page_id
                     .and_then(|p| by_page_q.get(&(p, it.question)))
-                    .map(|v| v.iter().map(|x| x.0).collect())
-                    .unwrap_or_default(),
+                    .map(|v| v.iter().map(|x| x.0).collect::<Vec<_>>())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .chain(
+                        it.booklet
+                            .zip(it.question)
+                            .and_then(|(b, q)| missing.get(&(b, usize::from(q))))
+                            .into_iter()
+                            .flatten()
+                            .copied(),
+                    )
+                    .collect(),
                 ItemKind::Identity | ItemKind::Form => it
                     .booklet
                     .map(|b| {
@@ -511,9 +545,15 @@ impl StoreWriter {
                     })
                     .unwrap_or_default(),
                 ItemKind::Notice => match (page_id, it.booklet) {
+                    (Some(p), _) if refused_rows.contains_key(&p) => refused_rows[&p].clone(),
                     (Some(p), _) if it.code != "MRK-015" => by_page_q
                         .get(&(p, None))
-                        .map(|v| v.iter().filter(|x| x.1 == it.code).map(|x| x.0).collect())
+                        .map(|v| {
+                            v.iter()
+                                .filter(|x| x.1 == it.code && x.2 == it.sub_reason)
+                                .map(|x| x.0)
+                                .collect()
+                        })
                         .unwrap_or_default(),
                     (_, Some(b)) => raised
                         .get(&(b, it.code.clone()))

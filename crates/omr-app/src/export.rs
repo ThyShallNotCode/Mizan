@@ -21,12 +21,16 @@ use std::path::Path;
 pub const INFERRED_BANNER: &str = "KEY INFERRED FROM THE SHEETS (modal confident response per form and question) - PROVISIONAL, NOT RELEASABLE (SCO-003 inferred_key)";
 
 /// What was written.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ExportSummary {
     /// File names written (relative to the export folder).
     pub files: Vec<String>,
     /// SHA-384 of the canonical export manifest.
     pub manifest_sha384: String,
+    /// Item analysis + outcomes (ms).
+    pub analysis_ms: f64,
+    /// Everything (ms).
+    pub total_ms: f64,
 }
 
 fn rep(e: omr_report::ReportError) -> AppError {
@@ -276,8 +280,10 @@ pub fn write_all(p: &ExamProject, dir: &Path) -> Result<ExportSummary, AppError>
         format!("{} {}", def.course_code, def.title)
     };
     let m = meta(p, &title);
+    let t0 = std::time::Instant::now();
     let analytics = p.analytics();
     let outcomes = p.outcomes();
+    let analysis_ms = t0.elapsed().as_secs_f64() * 1e3;
     if let Some(sc) = &p.scoring
         && let Ok(run) = &sc.run
     {
@@ -435,5 +441,7 @@ pub fn write_all(p: &ExamProject, dir: &Path) -> Result<ExportSummary, AppError>
     Ok(ExportSummary {
         files: names,
         manifest_sha384: manifest.sha384_hex(),
+        analysis_ms,
+        total_ms: t0.elapsed().as_secs_f64() * 1e3,
     })
 }

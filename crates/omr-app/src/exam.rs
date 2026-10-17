@@ -411,6 +411,15 @@ impl ExamDefinition {
                 if self.forms.len() > 4 {
                     return bad(format!("{name} prints versions A–D only"));
                 }
+                if let Some(f) = self
+                    .forms
+                    .iter()
+                    .find(|f| !["A", "B", "C", "D"].contains(&f.as_str()))
+                {
+                    return bad(format!(
+                        "{name} prints versions A–D; form `{f}` cannot be bubbled"
+                    ));
+                }
             }
             TemplateChoice::Generated(spec) => {
                 if spec.questions < self.questions {
@@ -432,6 +441,23 @@ impl ExamDefinition {
                         self.forms.len()
                     ));
                 }
+                // Page codes name the printed form letter; every declared form must be one.
+                let printed: Vec<String> = (1..=spec.forms)
+                    .map(|f| omr_model::FormCode(f).letter().to_string())
+                    .collect();
+                if let Some(f) = self.forms.iter().find(|f| !printed.contains(f)) {
+                    return bad(format!(
+                        "form `{f}` is not printed on this sheet (forms {})",
+                        printed.join(", ")
+                    ));
+                }
+                if spec.options.max() != self.options {
+                    return bad(format!(
+                        "the sheet prints {} options per question; the exam declares {}",
+                        spec.options.max(),
+                        self.options
+                    ));
+                }
                 if self.page_code_key_hex.is_none() {
                     return bad(
                         "a generated sheet needs its page-code key (exam key hex) to verify pages"
@@ -440,6 +466,11 @@ impl ExamDefinition {
                 }
                 self.page_code_key()?;
             }
+        }
+        if let IdSchemeChoice::Digits(n) = self.id_scheme
+            && !(1..=20).contains(&n)
+        {
+            return bad(format!("a student-ID scheme of {n} digits: 1–20 supported"));
         }
         if !self.points.is_empty() && self.points.len() != usize::from(self.questions) {
             return bad(format!(
@@ -453,6 +484,13 @@ impl ExamDefinition {
                 .map_err(|e| AppError::Definition(format!("points `{p}`: {e}")))?;
         }
         if let KeySource::Provided { forms } = &self.key {
+            if let Some(f) = self
+                .forms
+                .iter()
+                .find(|f| !forms.iter().any(|k| &k.form == *f))
+            {
+                return bad(format!("no key for form {f}"));
+            }
             for k in forms {
                 if !self.forms.contains(&k.form) {
                     return bad(format!("key for unknown form `{}`", k.form));

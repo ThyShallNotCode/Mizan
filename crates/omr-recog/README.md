@@ -25,8 +25,11 @@ let engine = LegacyEngine::new(template, &blank_png_bytes, LegacyConfig::bitonal
 engine.stamp(&mut manifest);        // template_sha384 + config_sha384 (EngineManifest, §14.6)
 engine.config_sha384(), engine.template_sha384(), engine.prior() /* β_p⁰ */, engine.template()
 
-// Working resolution: integer box factor from the page size (header DPI distrusted, §8.2).
-engine.working_factor(w, h); engine.to_working_resolution(&gray)    // 600 dpi bitonal → 200 dpi
+// Working resolution from the page size (header DPI distrusted, §8.2): the page/frame ratio ×
+// template dpi snapped to a scanner resolution, then exact area resampling at any ratio.
+engine.estimated_dpi(w, h); engine.working_ratio(w, h) /* (1,3) 600 dpi, (2,3) 300, (1,2) 400 */
+engine.to_working_resolution(&gray)    // omr_imaging::resample_area; 600 dpi bitonal → 200 dpi
+engine.working_factor(w, h)            // nearest integer factor (packed 1-bit data)
 // (packed 1-bit data: omr_imaging::reduce_bitmap(&bitmap, engine.working_factor(w, h)))
 
 // Page stage (pure; one task per page in omr-app).
@@ -165,10 +168,13 @@ hysteresis, ID grids never auto-accepted), §8.9 (20 px bubble gate, coverage �
 - Thresholds marked *initial* in `config.rs` (candidate NCC, min rings, alias margin, matched
   fractions, support radius) need corpus calibration (§23.5); the bitonal thresholds were
   validated on one university's real sheets only.
-- **Known gaps** (independent review): `working_factor` is an integer box factor, so a 300-dpi
-  scan (ratio 1.5) is not brought to 200 dpi and fails registration (REG-001/004, every bubble
-  UNREADABLE, never blank); `multi_review` and `cancel_mode` come from the engine config
-  (`Never`, erase-only), not from the exam via `PageRequest`; there is no ring-visibility or
+- **Fixed:** 300- and 400-dpi pages are brought to 200 dpi by exact fractional area resampling
+  (`working_ratio`, `tests/fractional_dpi.rs`: the IAU blank form rendered at 300 dpi as gray
+  JPEG and PNG and at 400 dpi with pencil marks registers and reads every answer, the student
+  number and the version; 600-dpi pages keep the bit-identical 3 × 3 box).
+- **Known gaps** (independent review): `multi_review` and `cancel_mode` come from the engine
+  config, not from `PageRequest` (`omr-app` builds the engine with the exam's `multi_review`;
+  legacy sheets are erase-only); there is no ring-visibility or
   white-out check (§8.6 F5/F12), so a sticker or white-out over an unfilled bubble reads as
   blank; β_p is a median, so a position where most "unfilled" instances are light marks would
   get an inflated baseline (capped at 0.35); a lone erasure residue that clears θ_sel on a

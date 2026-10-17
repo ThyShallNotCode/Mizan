@@ -1204,7 +1204,11 @@ impl ExamProject {
                 a.items
                     .iter()
                     .map(|i| ItemStats {
-                        question: i.item as u32 + 1,
+                        // Master items are per form when the forms' keys differ (`B-Q3`):
+                        // the printed question is the position within the form's block.
+                        question: (i.item % usize::from(self.session.definition.questions).max(1))
+                            as u32
+                            + 1,
                         label: i.label.clone(),
                         p: i.p.unwrap_or(0.0),
                         r_ir: i.r_ir.unwrap_or(0.0),

@@ -47,6 +47,7 @@ JpegStream { data, width, height, components, progressive, invert, adobe_transfo
 reduce_bilevel(&bit, f)               // integer factor; f = 3 has a SWAR fast path
 reduce_bilevel_to_dpi(&bit, src, dst) // integer ratios → box; others → exact area weights
 reduce_gray(&gray, f)                 // box average of an 8-bit image
+reduce_gray_to_dpi(&gray, src, dst)   // any reduction by exact area coverage (omr-imaging)
 
 // Lower level: ccitt::decode(data, w, h, &CcittParams), flate::inflate(data, expected, &PredictorParams)
 ```
@@ -131,9 +132,11 @@ Results on the 5 IAU PDFs (143 pages, 600-dpi G4, ≈ 35.5 MP each), release bui
 - Colour images are reduced to luma (BT.601) without ICC (`moxcms`, §7.3); CMYK uses a naive
   formula. Dropout-channel selection (§8.2) therefore needs the JPEG path or a later change.
 - The coverage reduction lives here (see above) rather than in `omr-imaging`.
-- `reduced()` / `working_gray()` reduce 8-bit gray pages only by integer ratios; other ratios
-  (e.g. 300 → 200 dpi) return the image at its native resolution (compare its size with the
-  page's `nominal_dpi()`). Bilevel pages use exact area weights at any ratio.
+- `reduced()` / `working_gray()` reduce 8-bit gray pages at any ratio (integer ratios by box,
+  others, e.g. 300 → 200 dpi, by `omr_imaging::resample_to_dpi`'s exact area coverage; this
+  added `omr-imaging` as a dependency); a gray page at or below the target is returned at its
+  native resolution. Bilevel pages use exact area weights at any ratio. JPEG pages are decoded
+  by the caller (`omr-app` resamples them the same way).
 - `hayro-syntax` decodes cross-reference and object streams inside its parser without an output
   bound; that cannot be limited from this crate. `omr-app` should parse untrusted PDFs in a
   memory-capped worker (§4.4) until the parser offers a limit. LZW-compressed content streams

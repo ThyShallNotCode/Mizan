@@ -309,6 +309,9 @@ pub struct Change {
     pub identity_before: Option<(Option<String>, bool)>,
     /// Form before (form, source), when changed.
     pub form_before: Option<(Option<usize>, crate::model::FormSource)>,
+    /// Booklet score hold before (MRK-015 acknowledged), when changed.
+    #[serde(default)]
+    pub hold_before: Option<Option<String>>,
     /// Store exception rows resolved by this change.
     pub resolved_rows: Vec<i64>,
 }

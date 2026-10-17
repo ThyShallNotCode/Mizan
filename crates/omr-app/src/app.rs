@@ -12,7 +12,7 @@ use crate::review::{
     Action, Change, Decision, ItemKind, ItemState, Lane, ReviewItem, ReviewRecord,
 };
 use crate::score::Scoring;
-use crate::store::{SESSION_FILE, StoreWriter};
+use crate::store::{PAGES_FILE, SESSION_FILE, StoreWriter};
 use omr_analytics::{AnalysisData, AnalyticsConfig, AnalyticsReport};
 use omr_imaging::GrayImage;
 use omr_model::{Response, Severity};
@@ -86,17 +86,27 @@ impl ExamProject {
         }
     }
 
-    /// Reopens a graded exam from its project package (session snapshot + store).
-    pub fn open(project_dir: &Path, operator: &str) -> Result<Self, AppError> {
-        let snap = project_dir.join("cache").join(SESSION_FILE);
-        let text = std::fs::read(&snap).map_err(|e| {
+    /// Reads the session snapshot (`cache/session.json` + `cache/pages.json`).
+    fn read_session(project_dir: &Path) -> Result<Session, AppError> {
+        let cache = project_dir.join("cache");
+        let text = std::fs::read(cache.join(SESSION_FILE)).map_err(|e| {
             AppError::NotFound(format!(
                 "{}: no graded exam here ({e}); run `omr grade` first",
                 project_dir.display()
             ))
         })?;
-        let session: Session = serde_json::from_slice(&text)
+        let mut session: Session = serde_json::from_slice(&text)
             .map_err(|e| AppError::Store(format!("session snapshot: {e}")))?;
+        let pages = std::fs::read(cache.join(PAGES_FILE))
+            .map_err(|e| AppError::Store(format!("page snapshot: {e}")))?;
+        session.pages = serde_json::from_slice(&pages)
+            .map_err(|e| AppError::Store(format!("page snapshot: {e}")))?;
+        Ok(session)
+    }
+
+    /// Reopens a graded exam from its project package (session snapshot + store).
+    pub fn open(project_dir: &Path, operator: &str) -> Result<Self, AppError> {
+        let session = Self::read_session(project_dir)?;
         let store = StoreWriter::open(project_dir, &session.definition, operator)?;
         let scoring = Scoring::build(&session)?;
         Ok(Self {
@@ -110,17 +120,9 @@ impl ExamProject {
     }
 
     /// Opens a graded exam read-only from its session snapshot (no store lock): dashboards and
-    /// previews. Review actions on it are not audited, so they are refused.
+    /// previews (crops need the store, so they are unavailable).
     pub fn open_read_only(project_dir: &Path) -> Result<Self, AppError> {
-        let snap = project_dir.join("cache").join(SESSION_FILE);
-        let text = std::fs::read(&snap).map_err(|e| {
-            AppError::NotFound(format!(
-                "{}: no graded exam here ({e})",
-                project_dir.display()
-            ))
-        })?;
-        let session: Session = serde_json::from_slice(&text)
-            .map_err(|e| AppError::Store(format!("session snapshot: {e}")))?;
+        let session = Self::read_session(project_dir)?;
         let scoring = Scoring::build(&session)?;
         Ok(Self {
             session,
@@ -149,19 +151,32 @@ impl ExamProject {
         self.store.as_ref()
     }
 
-    /// Saves the session snapshot into the package's `cache/` (atomic rename).
+    /// Saves the session snapshot into the package's `cache/` (atomic renames). The page
+    /// snapshot (bubble geometry for crops) is written once.
     pub fn save(&self) -> Result<(), AppError> {
         let Some(st) = &self.store else {
             return Ok(());
         };
         let dir = st.cache_dir();
         std::fs::create_dir_all(&dir)?;
-        let tmp = dir.join(format!("{SESSION_FILE}.tmp"));
-        let bytes = serde_json::to_vec(&self.session)
-            .map_err(|e| AppError::Internal(format!("session snapshot: {e}")))?;
-        std::fs::write(&tmp, bytes)?;
-        std::fs::rename(&tmp, dir.join(SESSION_FILE))?;
-        Ok(())
+        let write = |name: &str, bytes: Vec<u8>| -> Result<(), AppError> {
+            let tmp = dir.join(format!("{name}.tmp"));
+            std::fs::write(&tmp, bytes)?;
+            std::fs::rename(&tmp, dir.join(name))?;
+            Ok(())
+        };
+        if !dir.join(PAGES_FILE).exists() {
+            write(
+                PAGES_FILE,
+                serde_json::to_vec(&self.session.pages)
+                    .map_err(|e| AppError::Internal(format!("page snapshot: {e}")))?,
+            )?;
+        }
+        write(
+            SESSION_FILE,
+            serde_json::to_vec(&self.session)
+                .map_err(|e| AppError::Internal(format!("session snapshot: {e}")))?,
+        )
     }
 
     /// Closes the store.
@@ -198,14 +213,16 @@ impl ExamProject {
             .cloned()
             .ok_or_else(|| AppError::NotFound(format!("review item {item_id}")))?;
         let lane = item.lane;
+        // A resolved item stays resolved; only `undo` re-opens it (with its booklet data and
+        // the store's exception rows).
+        if !item.is_open() {
+            return Err(AppError::Review(format!(
+                "item {item_id} is already resolved (use undo to re-open it)"
+            )));
+        }
         let mut changes = Vec::new();
         match &action {
             Action::Resolve { decision, .. } => {
-                if !item.is_open() {
-                    return Err(AppError::Review(format!(
-                        "item {item_id} is already resolved"
-                    )));
-                }
                 changes.push(self.resolve_one(&item, decision)?);
             }
             Action::ApplyToGroup { decision } => {
@@ -248,6 +265,7 @@ impl ExamProject {
                     response_before: None,
                     identity_before: None,
                     form_before: None,
+                    hold_before: None,
                     resolved_rows: Vec::new(),
                 });
                 let (state, ty) = match action {
@@ -300,6 +318,7 @@ impl ExamProject {
             response_before: None,
             identity_before: None,
             form_before: None,
+            hold_before: None,
             resolved_rows: Vec::new(),
         };
         let decision = match decision {
@@ -426,6 +445,27 @@ impl ExamProject {
                         "{s} is not on the roster; choose N (not on roster) instead"
                     )));
                 }
+                // Two booklets never resolve to one student by a review decision (IDN-005): a
+                // student already held by another booklet whose identity is settled (no open
+                // identity item) is refused.
+                if let Some(s) = &student
+                    && let Some(other) = self.session.booklets.iter().enumerate().find(|(oi, o)| {
+                        *oi != bi
+                            && o.identity.student.as_deref() == Some(s.as_str())
+                            && !self.session.review.items.iter().any(|it| {
+                                it.kind == ItemKind::Identity
+                                    && it.booklet == Some(*oi)
+                                    && it.is_open()
+                            })
+                    })
+                {
+                    return Err(AppError::Review(format!(
+                        "{s} is already the student of {} (IDN-005); choose another student or \
+                         N (not on roster)",
+                        other.1.label()
+                    )));
+                }
+                let b = &mut self.session.booklets[bi];
                 change.identity_before = Some((b.identity.student.clone(), b.identity.confirmed));
                 b.identity.student = student.clone();
                 b.identity.confirmed = true;
@@ -486,8 +526,26 @@ impl ExamProject {
                     } else {
                         "ADJUDICATION"
                     };
-                    st.resolve(&item.store_exceptions, reason, "acknowledge")?;
+                    if item.store_exceptions.is_empty() {
+                        st.event(
+                            "ReviewItemAcknowledged",
+                            "review_item",
+                            &item.id.to_string(),
+                            json!({"code": item.code}),
+                        )?;
+                    } else {
+                        st.resolve(&item.store_exceptions, reason, "acknowledge")?;
+                    }
                     change.resolved_rows = item.store_exceptions.clone();
+                }
+                // Acknowledging a blank booklet releases its held score (scored as marked).
+                if let Some(bi) = item.booklet
+                    && self.session.booklets[bi].hold.as_deref() == Some(item.code.as_str())
+                {
+                    change.hold_before = Some(self.session.booklets[bi].hold.take());
+                    if let Some(s) = self.scoring.as_mut() {
+                        s.update_booklet(bi, &self.session.booklets[bi])?;
+                    }
                 }
             }
         }
@@ -556,6 +614,12 @@ impl ExamProject {
                     s.update_booklet(bi, &self.session.booklets[bi])?;
                 }
             }
+            if let (Some(hold), Some(bi)) = (&c.hold_before, item.booklet) {
+                self.session.booklets[bi].hold = hold.clone();
+                if let Some(s) = self.scoring.as_mut() {
+                    s.update_booklet(bi, &self.session.booklets[bi])?;
+                }
+            }
             if let (Some((form, src)), Some(bi)) = (&c.form_before, item.booklet) {
                 let b = &mut self.session.booklets[bi];
                 b.form = *form;
@@ -581,36 +645,50 @@ impl ExamProject {
         Ok(Some(rec.item))
     }
 
-    /// Sets the key of one question of one form (`answer`: "", "B", "A|C", "*") — a new key
-    /// version, rescored without re-projecting (L2, A4).
-    pub fn set_key(&mut self, form: usize, question: usize, answer: &str) -> Result<(), AppError> {
+    /// Sets the key of one question of one form — `form` is the 0-based index into the
+    /// definition's forms, `question` the **1-based** printed question (as in the mapping
+    /// editor and the shell); `answer`: "", "B", "A|C" or "A,C", "*" — a new key version,
+    /// rescored without re-projecting (L2, A4). With identical forms (shared master items)
+    /// every form's copy of the key changes together.
+    pub fn set_key(&mut self, form: usize, question: u32, answer: &str) -> Result<(), AppError> {
         let def = self.session.definition.clone();
-        if form >= def.forms.len() || question >= usize::from(def.questions) {
+        if form >= def.forms.len() || question == 0 || question > u32::from(def.questions) {
             return Err(AppError::NotFound(format!(
-                "form {form} question {}",
-                question + 1
+                "form {form} question {question}"
             )));
         }
+        let q = question as usize - 1;
         let cell: KeyCell = parse_key_entry(answer, def.options)
             .map_err(AppError::Review)?
             .into();
-        let Some(key) = self.session.key.as_mut() else {
+        let Some(mut key) = self.session.key.clone() else {
             return Err(AppError::Scoring("the exam has no key yet".into()));
         };
-        let f = if key.shared_items { 0 } else { form };
-        key.forms[f][question] = cell;
+        if key.shared_items {
+            for f in key.forms.iter_mut() {
+                f[q] = cell.clone();
+            }
+        } else {
+            key.forms[form][q] = cell;
+        }
         key.version += 1;
-        let key = key.clone();
+        // Rescore first, then commit: a refused change leaves the key in force untouched.
         match self.scoring.as_mut() {
-            Some(s) => s.set_key(&def, &key)?,
-            None => self.scoring = Scoring::build(&self.session)?,
+            Some(s) => {
+                s.set_key(&def, &key)?;
+                self.session.key = Some(key.clone());
+            }
+            None => {
+                self.session.key = Some(key.clone());
+                self.scoring = Scoring::build(&self.session)?;
+            }
         }
         if let Some(st) = self.store.as_mut() {
             st.event(
                 "KeyEntryChanged",
                 "exam",
                 &def.exam_id.to_string(),
-                json!({"form": form as u64 + 1, "question": question as u64 + 1, "key_version": key.version}),
+                json!({"form": form as u64 + 1, "question": question, "key_version": key.version}),
             )?;
         }
         self.save()?;
@@ -820,6 +898,8 @@ impl ExamProject {
     /// Writes every export to `dir` (see [`crate::export`]).
     pub fn export(&mut self, dir: &Path) -> Result<crate::export::ExportSummary, AppError> {
         let summary = crate::export::write_all(self, dir)?;
+        self.session.timings.analysis_ms = summary.analysis_ms;
+        self.session.timings.export_ms = summary.total_ms;
         if let Some(st) = self.store.as_mut() {
             if let Some(Ok(run)) = self.scoring.as_ref().map(|s| &s.run) {
                 st.put_score_run(run)?;

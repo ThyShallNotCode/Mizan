@@ -109,6 +109,49 @@ pub fn now_utc() -> String {
     )
 }
 
+/// Checks a report snapshot time: RFC 3339 UTC, `YYYY-MM-DDTHH:MM:SS[.fff]Z` (§17.1). Checked
+/// before any work, so a bad value never leaves a graded project without its exports.
+pub fn check_snapshot_utc(s: &str) -> Result<(), AppError> {
+    let bad = || {
+        AppError::Definition(format!(
+            "snapshot time {s:?} is not RFC 3339 UTC (YYYY-MM-DDTHH:MM:SS[.fff]Z)"
+        ))
+    };
+    let b = s.as_bytes();
+    if b.len() < 20 || !matches!(b[b.len() - 1], b'Z' | b'z') {
+        return Err(bad());
+    }
+    let num = |r: std::ops::Range<usize>| -> Option<u32> {
+        s.get(r)
+            .filter(|t| t.bytes().all(|c| c.is_ascii_digit()))
+            .and_then(|t| t.parse().ok())
+    };
+    let seps = [(4, b'-'), (7, b'-'), (13, b':'), (16, b':')];
+    if !seps.iter().all(|&(i, c)| b[i] == c) || !matches!(b[10], b'T' | b't') {
+        return Err(bad());
+    }
+    let (Some(_y), Some(mo), Some(d), Some(h), Some(mi), Some(se)) = (
+        num(0..4),
+        num(5..7),
+        num(8..10),
+        num(11..13),
+        num(14..16),
+        num(17..19),
+    ) else {
+        return Err(bad());
+    };
+    let frac = &s[19..s.len() - 1];
+    let frac_ok = frac.is_empty()
+        || (frac.len() >= 2
+            && frac.starts_with('.')
+            && frac[1..].bytes().all(|c| c.is_ascii_digit()));
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || se > 60 || !frac_ok
+    {
+        return Err(bad());
+    }
+    Ok(())
+}
+
 fn ms(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1e3
 }
@@ -185,8 +228,9 @@ pub fn grade_sources(
     progress: &(dyn Fn(&Progress) + Sync),
 ) -> Result<Graded, AppError> {
     def.validate()?;
-    let recognizer = Recognizer::new(def)?;
     let snapshot_utc = opts.snapshot_utc.clone().unwrap_or_else(now_utc);
+    check_snapshot_utc(&snapshot_utc)?;
+    let recognizer = Recognizer::new(def)?;
     let mut timings = Timings {
         threads: pool.current_num_threads(),
         ..Timings::default()
@@ -201,7 +245,17 @@ pub fn grade_sources(
             Err((p, e)) => broken.push((k, p, e)),
         }
     }
-    files.sort_by(|a, b| a.1.sha384.cmp(&b.1.sha384).then(a.0.cmp(&b.0)));
+    // Byte-identical files: the original is the first by name and path, never by input
+    // position, so the same set of files yields the same outputs in any order (A5).
+    files.sort_by(|a, b| {
+        a.1.sha384
+            .cmp(&b.1.sha384)
+            .then_with(|| a.1.name.cmp(&b.1.name))
+            .then_with(|| a.1.path.cmp(&b.1.path))
+            .then(a.0.cmp(&b.0))
+    });
+    // Unreadable files follow, by path (not by input position: A5).
+    broken.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
     let mut source_infos: Vec<SourceInfo> = Vec::new();
     let mut source_files: Vec<Option<SourceFile>> = Vec::new();
     let mut first_of: BTreeMap<String, usize> = BTreeMap::new();
@@ -352,20 +406,23 @@ pub fn grade_sources(
                     })
                 };
                 // Provisional result for the live view (single-page prior).
-                let prov = match &out.measured {
-                    Some(m) => {
-                        let r = recognizer.decide(m, &prior, &t.page_id);
-                        ProvisionalPage {
-                            page_id: t.page_id.clone(),
-                            questions: r.questions.len(),
-                            auto_accepted: r.questions.iter().filter(|q| q.auto_accepted).count(),
-                            worst_code: r
-                                .exceptions
-                                .iter()
-                                .max_by_key(|e| e.severity)
-                                .map(|e| (e.code.clone(), e.severity)),
-                        }
-                    }
+                let provisional = out.measured.as_ref().and_then(|m| {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        recognizer.decide(m, &prior, &t.page_id)
+                    }))
+                    .ok()
+                });
+                let prov = match provisional {
+                    Some(r) => ProvisionalPage {
+                        page_id: t.page_id.clone(),
+                        questions: r.questions.len(),
+                        auto_accepted: r.questions.iter().filter(|q| q.auto_accepted).count(),
+                        worst_code: r
+                            .exceptions
+                            .iter()
+                            .max_by_key(|e| e.severity)
+                            .map(|e| (e.code.clone(), e.severity)),
+                    },
                     None => ProvisionalPage {
                         page_id: t.page_id.clone(),
                         questions: 0,
@@ -418,20 +475,34 @@ pub fn grade_sources(
         }
         baselines.insert(*key, b);
     }
-    let reads: Vec<Option<PageRead>> = pool.install(|| {
+    // A panic while deciding one page quarantines that page (CAP-001), never the batch.
+    let reads: Vec<Result<Option<PageRead>, ()>> = pool.install(|| {
         staged
             .par_iter()
             .zip(tasks.par_iter())
             .map(|(s, t)| {
-                let m = s.measured.as_ref()?;
+                let Some(m) = s.measured.as_ref() else {
+                    return Ok(None);
+                };
                 let b = &baselines[&(m.bitonal(), s.source_dpi)];
-                Some(recognizer.decide(m, b, &t.page_id))
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    recognizer.decide(m, b, &t.page_id)
+                }))
+                .map(Some)
+                .map_err(|_| ())
             })
             .collect()
     });
     let mut pages: Vec<PageState> = Vec::with_capacity(tasks.len());
-    for ((t, s), r) in tasks.iter().zip(staged).zip(reads) {
-        let mut r = r;
+    for ((t, mut s), r) in tasks.iter().zip(staged).zip(reads) {
+        let mut r = match r {
+            Ok(r) => r,
+            Err(()) => {
+                s.refusal
+                    .get_or_insert_with(|| ingest::cap001(&t.page_id, "decision engine panic"));
+                None
+            }
+        };
         // Batch-scope exceptions (CAP-003 bitonal) are de-duplicated per batch (§13.2).
         if let Some(r) = r.as_mut() {
             r.exceptions.retain(|e| {
@@ -452,6 +523,28 @@ pub fn grade_sources(
         } else {
             PageStatus::Unattributed
         };
+        // A page that is not attributed to this exam is never dropped silently: when the
+        // engine raised nothing blocking (e.g. a verified page code of another template
+        // revision), it is a foreign form (IDN-002, BLOCKER) for the Capture lane.
+        if status == PageStatus::Unattributed
+            && let Some(r) = r.as_mut()
+            && !r.exceptions.iter().any(|e| e.severity >= Severity::Error)
+        {
+            r.exceptions.push(
+                Exception::must("IDN-002", Severity::Blocker, Scope::Page)
+                    .with_target(Target {
+                        page: Some(t.page_id.clone()),
+                        ..Target::default()
+                    })
+                    .with_detail(format!(
+                        "page not attributed to this exam's sheet ({}); never graded",
+                        r.registration
+                            .get("route")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("not registered")
+                    )),
+            );
+        }
         let refusal = s.refusal.or_else(|| {
             t.duplicate_of.map(|d| {
                 Exception::must("CAP-011", Severity::Info, Scope::Page)
@@ -591,32 +684,43 @@ fn collate(
 ) -> Vec<Booklet> {
     let n = usize::from(def.questions);
     let multi_page = rec.page_count() > 1;
-    // Groups of page indices.
+    let page_no = |pages: &[PageState], i: usize| pages[i].read.as_ref().map_or(1, |r| r.page_no);
+    // Groups of page indices. A second page with the same verified serial and template page
+    // (a rescan that is not byte-identical) is held out with COL-004: it never overwrites the
+    // first copy (canonical order) and never becomes a second booklet with the same serial.
     let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut held: Vec<(usize, u32)> = Vec::new();
+    let mut by_serial: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+    let mut generic: Vec<usize> = Vec::new();
+    for (i, p) in pages.iter().enumerate() {
+        if p.status != PageStatus::Read {
+            continue;
+        }
+        match p.read.as_ref().and_then(|r| r.code_serial) {
+            Some(s) if s > 0 => by_serial.entry(s).or_default().push(i),
+            _ => generic.push(i),
+        }
+    }
+    for (s, idx) in by_serial {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut g = Vec::new();
+        for i in idx {
+            if seen.insert(page_no(pages, i)) {
+                g.push(i);
+            } else {
+                held.push((i, s));
+            }
+        }
+        groups.push(g);
+    }
     if !multi_page {
-        for (i, p) in pages.iter().enumerate() {
-            if p.status == PageStatus::Read {
-                groups.push(vec![i]);
-            }
-        }
+        groups.extend(generic.into_iter().map(|i| vec![i]));
     } else {
-        let mut by_serial: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
-        let mut generic: Vec<usize> = Vec::new();
-        for (i, p) in pages.iter().enumerate() {
-            if p.status != PageStatus::Read {
-                continue;
-            }
-            match p.read.as_ref().and_then(|r| r.code_serial) {
-                Some(s) if s > 0 => by_serial.entry(s).or_default().push(i),
-                _ => generic.push(i),
-            }
-        }
-        groups.extend(by_serial.into_values());
         generic.sort_by_key(|&i| tasks[i].input_order);
         let mut cur: Vec<usize> = Vec::new();
         for i in generic {
-            let pno = pages[i].read.as_ref().map_or(1, |r| r.page_no);
-            if pno <= 1 && !cur.is_empty() {
+            let pno = page_no(pages, i);
+            if (pno <= 1 || cur.iter().any(|&c| page_no(pages, c) == pno)) && !cur.is_empty() {
                 groups.push(std::mem::take(&mut cur));
             }
             cur.push(i);
@@ -624,7 +728,28 @@ fn collate(
         if !cur.is_empty() {
             groups.push(cur);
         }
-        groups.sort_by(|a, b| pages[a[0]].page_id.cmp(&pages[b[0]].page_id));
+    }
+    // Canonical order: by the first page (pages are in content order).
+    groups.sort_by_key(|g| g[0]);
+    for &(i, serial) in &held {
+        let p = &mut pages[i];
+        p.status = PageStatus::Unattributed;
+        let id = p.page_id.clone();
+        if let Some(r) = p.read.as_mut() {
+            r.exceptions.push(
+                Exception::must("COL-004", Severity::Error, Scope::Booklet)
+                    .with_target(Target {
+                        page: Some(id),
+                        booklet: Some(serial),
+                        ..Target::default()
+                    })
+                    .with_detail(format!(
+                        "booklet {serial} page {} was scanned again with different content; \
+                         the first copy is graded, this one is held out",
+                        r.page_no
+                    )),
+            );
+        }
     }
     let max_code_serial = groups
         .iter()
@@ -647,6 +772,7 @@ fn collate(
         let mut id_read = None;
         let (mut declared_form, mut declared_text, mut form_source) =
             (None, String::new(), FormSource::Unknown);
+        let mut code_unknown = false;
         for &pi in &g {
             pages[pi].booklet = Some(bi);
             let Some(r) = pages[pi].read.as_ref() else {
@@ -677,11 +803,24 @@ fn collate(
                 id_read = r.student_id.clone();
             }
             if let Some(f) = r.code_form {
-                let k = usize::from(f.0).saturating_sub(1);
-                if k < def.forms.len() {
-                    declared_form = Some(k);
-                    declared_text = def.forms[k].clone();
-                    form_source = FormSource::Code;
+                // The verified code names a printed form: map it by its letter, never by
+                // position (the definition may list the forms in another order).
+                let lab = usize::from(f.0)
+                    .checked_sub(1)
+                    .and_then(|k| labels.get(k))
+                    .cloned()
+                    .unwrap_or_else(|| f.letter().to_string());
+                declared_text = lab.clone();
+                match def.forms.iter().position(|x| *x == lab) {
+                    Some(k) => {
+                        declared_form = Some(k);
+                        form_source = FormSource::Code;
+                        code_unknown = false;
+                    }
+                    None => {
+                        declared_form = None;
+                        code_unknown = true;
+                    }
                 }
             } else if declared_form.is_none()
                 && let Some(c) = &r.form_choice
@@ -730,23 +869,44 @@ fn collate(
             .as_ref()
             .map(|g: &omr_recog::GridField| g.text())
             .unwrap_or_default();
+        let single = def.forms.len() == 1 && !code_unknown;
+        if code_unknown && def.forms.len() == 1 {
+            // Several forms are inferred and reviewed in `resolve_key`; a one-form exam has
+            // nothing to infer, so the booklet waits for a reviewer's form decision.
+            exceptions.push(
+                Exception::must("SCO-005", Severity::Error, Scope::Booklet)
+                    .with_sub_reason("code_form_not_in_exam")
+                    .with_target(Target {
+                        booklet: Some(serial),
+                        ..Target::default()
+                    })
+                    .with_detail(format!(
+                        "the verified page code names form {declared_text}, which this exam does \
+                         not declare ({}); not scored until a reviewer decides",
+                        def.forms.join(", ")
+                    )),
+            );
+        }
+        // A blank booklet (MRK-015) is never scored 0 automatically: its score is held as
+        // pending until a reviewer acknowledges it (§8.8).
+        let hold = exceptions
+            .iter()
+            .find(|e| e.code == "MRK-015" && e.severity >= Severity::Error)
+            .map(|e| e.code.clone());
         booklets.push(Booklet {
             booklet_id: format!("bk-{serial:06}"),
             serial,
             pages: g,
             declared_form,
             declared_text,
-            form: if def.forms.len() == 1 {
-                Some(0)
-            } else {
-                declared_form
-            },
-            form_source: if def.forms.len() == 1 && declared_form.is_none() {
+            form: if single { Some(0) } else { declared_form },
+            form_source: if single && declared_form.is_none() {
                 FormSource::Bubbled
             } else {
                 form_source
             },
             inference: None,
+            hold,
             questions,
             identity: IdentityState {
                 read: read_text,

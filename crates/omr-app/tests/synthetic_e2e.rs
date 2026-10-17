@@ -339,6 +339,39 @@ fn req_a1_a8_synthetic_sheets_grade_end_to_end() {
         assert_eq!(row[c_letter], letter, "booklet {serial}");
     }
 
+    // ---- A key change is a new key version, rescored without re-projecting (L2).
+    let run_before = p
+        .scoring
+        .as_ref()
+        .unwrap()
+        .run
+        .as_ref()
+        .unwrap()
+        .run_id
+        .clone();
+    let k0 = k[0][0];
+    p.set_key(0, 1, &char::from(b'A' + (k0 + 1) % OPTIONS).to_string())
+        .unwrap();
+    let run_after = p
+        .scoring
+        .as_ref()
+        .unwrap()
+        .run
+        .as_ref()
+        .unwrap()
+        .run_id
+        .clone();
+    assert_ne!(run_before, run_after);
+    assert_eq!(p.session.key.as_ref().unwrap().version, 2);
+    p.set_key(0, 1, &char::from(b'A' + k0).to_string()).unwrap();
+    assert_eq!(p.session.key.as_ref().unwrap().version, 3);
+    // Mapping edits recompute outcomes on the next query.
+    let before = p.outcomes().unwrap().result.clos[0].stats.n;
+    p.set_mapping_weight(1, 1, Some(0.5)).unwrap();
+    assert!(p.outcomes().is_some());
+    assert_eq!(p.outcomes().unwrap().result.clos[0].stats.n, before);
+    assert!(p.set_mapping_weight(1, 1, Some(1.5)).is_err());
+
     // ---- Undo re-opens the latest item and restores the response.
     let n_open = p.queue(None).len();
     let reopened = p.undo().unwrap().unwrap();
@@ -420,6 +453,7 @@ fn req_a4_rescoring_is_incremental_and_fast() {
             form: Some(0),
             form_source: FormSource::Bubbled,
             inference: None,
+            hold: None,
             questions: (0..n_q)
                 .map(|q| {
                     let r = Response::Single(rng.random_range(0..5u8));
@@ -651,4 +685,144 @@ fn req_a10_corrupt_inputs_inferred_key_and_view_models() {
     let exams = omr_app::vm::list_exams(dir.path());
     assert_eq!(exams.len(), 1);
     assert_eq!(exams[0].1.sheets_scanned, 8);
+}
+
+/// A one-page PDF whose page is a single full-page gray image (raw or DCT), placed on A4 so
+/// that the effective resolution is `dpi`.
+fn pdf_with_image(width: usize, height: usize, data: &[u8], dct: bool, dpi: f64) -> Vec<u8> {
+    let (w_pt, h_pt) = (width as f64 * 72.0 / dpi, height as f64 * 72.0 / dpi);
+    let content = format!("q {w_pt:.4} 0 0 {h_pt:.4} 0 0 cm /Im0 Do Q");
+    let mut out: Vec<u8> = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n".to_vec();
+    let mut offsets = Vec::new();
+    let mut obj = |out: &mut Vec<u8>, body: &[u8]| {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", offsets.len()).as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    };
+    obj(&mut out, b"<< /Type /Catalog /Pages 2 0 R >>");
+    obj(&mut out, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    obj(
+        &mut out,
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w_pt:.4} {h_pt:.4}] \
+             /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>"
+        )
+        .as_bytes(),
+    );
+    obj(
+        &mut out,
+        format!(
+            "<< /Length {} >>\nstream\n{content}\nendstream",
+            content.len() + 1
+        )
+        .as_bytes(),
+    );
+    let mut img = format!(
+        "<< /Type /XObject /Subtype /Image /Width {width} /Height {height} \
+         /ColorSpace /DeviceGray /BitsPerComponent 8 {}/Length {} >>\nstream\n",
+        if dct { "/Filter /DCTDecode " } else { "" },
+        data.len()
+    )
+    .into_bytes();
+    img.extend_from_slice(data);
+    img.extend_from_slice(b"\nendstream");
+    obj(&mut out, &img);
+    let xref = out.len();
+    out.extend_from_slice(
+        format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes(),
+    );
+    for o in &offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            offsets.len() + 1
+        )
+        .as_bytes(),
+    );
+    out
+}
+
+#[test]
+fn own_form_sheets_at_300_dpi_as_jpeg_and_in_pdfs_are_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let corpus_dir = dir.path().join("corpus");
+    let t = Template::build(spec()).unwrap();
+    let mut cfg = CorpusConfig::standard(3, 300);
+    cfg.dpi = 300;
+    cfg.roster = roster_ids();
+    cfg.threads = 3;
+    omr_sim::corpus::write_corpus(&t, &ExamKey::from_bytes(KEY), &cfg, &corpus_dir).unwrap();
+    let truth: BTreeMap<u32, PageTruth> =
+        omr_sim::corpus::read_truth(&corpus_dir.join("truth.jsonl"))
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.booklet, p))
+            .collect();
+    let images = corpus_dir.join("images");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&images)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    files.sort();
+    let check = |p: &ExamProject, expect: usize| {
+        let s = &p.session;
+        assert_eq!(
+            s.booklets.len(),
+            expect,
+            "{:?}",
+            s.pages
+                .iter()
+                .map(|p| (p.status, p.refusal.clone()))
+                .collect::<Vec<_>>()
+        );
+        for b in &s.booklets {
+            let t = &truth[&b.serial];
+            for (q, qs) in b.questions.iter().enumerate() {
+                if qs.status == ResponseStatus::Auto
+                    && let Expected::Auto(r) = &t.questions[q].expected
+                {
+                    assert_eq!(*r, qs.current, "booklet {} q{q}", b.serial);
+                }
+            }
+            let auto = b
+                .questions
+                .iter()
+                .filter(|q| q.status == ResponseStatus::Auto)
+                .count();
+            assert!(auto >= usize::from(QUESTIONS) - 3, "auto {auto}");
+            assert_eq!(b.identity.student.as_deref(), t.student_id.as_deref());
+        }
+        for pg in &s.pages {
+            // A4 at 200 dpi is 1654 px wide; the simulated scan adds a margin.
+            let w = pg.working.unwrap().0;
+            assert!((1600..1800).contains(&w), "resampled to 200 dpi: {w}");
+            assert_eq!(pg.source_dpi, Some(300));
+        }
+    };
+    // 300-dpi JPEG files.
+    let def = definition();
+    let p = grade(&def, &files, &dir.path().join("jpeg"), 2);
+    check(&p, 3);
+    // The same sheets as 300-dpi PDFs: one raw gray image, one DCT (JPEG) image.
+    let d0 = omr_imaging::decode(&std::fs::read(&files[0]).unwrap())
+        .unwrap()
+        .image;
+    let raw = pdf_with_image(d0.width(), d0.height(), d0.as_raw(), false, 300.0);
+    let jpeg = std::fs::read(&files[1]).unwrap();
+    let d1 = omr_imaging::decode(&jpeg).unwrap().image;
+    let dct = pdf_with_image(d1.width(), d1.height(), &jpeg, true, 300.0);
+    let pdfs = dir.path().join("pdfs");
+    std::fs::create_dir_all(&pdfs).unwrap();
+    std::fs::write(pdfs.join("raw.pdf"), raw).unwrap();
+    std::fs::write(pdfs.join("dct.pdf"), dct).unwrap();
+    let p = grade(
+        &def,
+        std::slice::from_ref(&pdfs),
+        &dir.path().join("pdf"),
+        2,
+    );
+    check(&p, 2);
 }

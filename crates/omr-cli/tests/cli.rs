@@ -318,6 +318,66 @@ fn omr_cli_exit_codes_for_bad_input() {
     // Review of a folder without a graded exam: not found (7).
     let o = omr(&["review", "list", "--project", p(d)]);
     assert_eq!(o.status.code(), Some(7));
-    // clap usage errors exit 2.
+    // A bad snapshot time is refused before any work (2), leaving no project behind.
+    let o = omr(&[
+        "grade",
+        p(d),
+        "--template",
+        "iau-ccsit-v1",
+        "--questions",
+        "29",
+        "--snapshot-time",
+        "17/10/2026",
+        "--out",
+        p(&out),
+    ]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(!out.join("project.omrproj").exists());
+    // A form the legacy sheet cannot bubble (2); an ID scheme of 0 digits (2).
+    for extra in [["--forms", "A,E"], ["--id-scheme", "digits:0"]] {
+        let mut args = vec![
+            "grade",
+            p(d),
+            "--template",
+            "iau-ccsit-v1",
+            "--questions",
+            "29",
+            "--out",
+            p(&out),
+        ];
+        args.extend(extra);
+        assert_eq!(omr(&args).status.code(), Some(2), "{extra:?}");
+    }
+    // clap usage errors exit 2, also for review flags that exclude each other.
     assert_eq!(omr(&["grade"]).status.code(), Some(2));
+    assert_eq!(
+        omr(&[
+            "review",
+            "resolve",
+            "--project",
+            p(d),
+            "--undo",
+            "--item",
+            "1"
+        ])
+        .status
+        .code(),
+        Some(2)
+    );
+    assert_eq!(
+        omr(&[
+            "review",
+            "resolve",
+            "--project",
+            p(d),
+            "--item",
+            "1",
+            "--defer",
+            "--decision",
+            "A"
+        ])
+        .status
+        .code(),
+        Some(2)
+    );
 }
