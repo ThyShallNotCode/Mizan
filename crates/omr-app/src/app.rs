@@ -320,6 +320,32 @@ impl ExamProject {
                     Decision::Multi(v) if v.len() >= 2 && v.iter().all(|&o| o < def.options) => {
                         Response::Multi(v.clone())
                     }
+                    // "Multi" without options (the shell's key `M`): the proposal's marks, or
+                    // every option whose fill reaches the review band.
+                    Decision::Multi(v) if v.is_empty() => {
+                        let bi = item.booklet.unwrap_or(0);
+                        let q = usize::from(item.question.unwrap_or(0));
+                        let marked: Vec<u8> =
+                            match &self.session.booklets[bi].questions[q].recognized.response {
+                                Response::Multi(m) => m.clone(),
+                                _ => {
+                                    let lo = item.crop.as_ref().map_or(0.08, |c| c.band.0);
+                                    item.fills
+                                        .iter()
+                                        .enumerate()
+                                        .filter(|(_, f)| **f >= lo)
+                                        .map(|(o, _)| o as u8)
+                                        .collect()
+                                }
+                            };
+                        if marked.len() < 2 {
+                            return Err(AppError::Review(
+                                "fewer than two marked options: choose the options of the multi"
+                                    .into(),
+                            ));
+                        }
+                        Response::Multi(marked)
+                    }
                     Decision::Unreadable => {
                         new_state = ItemState::Rescan;
                         Response::Unreadable { bubbles: vec![] }
@@ -589,6 +615,95 @@ impl ExamProject {
         }
         self.save()?;
         Ok(())
+    }
+
+    /// Sets or clears (`None`) the weight of question `question` (1-based) toward CLO `clo`
+    /// (index), `0 < w ≤ 1`; outcomes recompute on the next query (§11.2).
+    pub fn set_mapping_weight(
+        &mut self,
+        question: u16,
+        clo: usize,
+        weight: Option<f64>,
+    ) -> Result<(), AppError> {
+        let def = &mut self.session.definition;
+        if question == 0 || question > def.questions {
+            return Err(AppError::NotFound(format!("question {question}")));
+        }
+        let o = def
+            .outcomes
+            .as_mut()
+            .ok_or_else(|| AppError::Review("the exam has no CLOs".into()))?;
+        let code = o
+            .clos
+            .get(clo)
+            .map(|c| c.code.clone())
+            .ok_or_else(|| AppError::NotFound(format!("CLO {clo}")))?;
+        let pos = o
+            .mapping
+            .iter()
+            .position(|m| m.question == question && m.clo == code);
+        match weight {
+            None => {
+                if let Some(i) = pos {
+                    o.mapping.remove(i);
+                }
+            }
+            Some(w) if w > 0.0 && w <= 1.0 && w.is_finite() => {
+                let text = format!("{:.4}", w)
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_string();
+                match pos {
+                    Some(i) => o.mapping[i].weight = text,
+                    None => o.mapping.push(crate::exam::CloMapping {
+                        question,
+                        clo: code.clone(),
+                        weight: text,
+                        note: String::new(),
+                    }),
+                }
+            }
+            Some(w) => {
+                return Err(AppError::Review(format!("weight {w} outside 0 < w ≤ 1")));
+            }
+        }
+        let exam = def.exam_id.to_string();
+        if let Some(st) = self.store.as_mut() {
+            st.event(
+                "MappingChanged",
+                "exam",
+                &exam,
+                json!({"question": question, "clo": code, "weight": weight.map(|w| format!("{w}"))}),
+            )?;
+        }
+        self.save()
+    }
+
+    /// Sets the note of a mapping cell (the cell must exist).
+    pub fn set_mapping_note(
+        &mut self,
+        question: u16,
+        clo: usize,
+        note: &str,
+    ) -> Result<(), AppError> {
+        let o = self
+            .session
+            .definition
+            .outcomes
+            .as_mut()
+            .ok_or_else(|| AppError::Review("the exam has no CLOs".into()))?;
+        let code = o
+            .clos
+            .get(clo)
+            .map(|c| c.code.clone())
+            .ok_or_else(|| AppError::NotFound(format!("CLO {clo}")))?;
+        let m = o
+            .mapping
+            .iter_mut()
+            .find(|m| m.question == question && m.clo == code)
+            .ok_or_else(|| AppError::NotFound(format!("mapping Q{question} → {code}")))?;
+        m.note = note.to_string();
+        self.save()
     }
 
     /// Item analysis of the current run (§12).
