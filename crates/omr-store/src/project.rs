@@ -474,8 +474,14 @@ impl Project {
         // The marker is written last: a crash before this point leaves no openable project.
         let marker = jcs::to_jcs(&p.header)?;
         let tmp = p.paths.root.join("project.omr.tmp");
-        fs::write(&tmp, marker.as_bytes())?;
-        File::open(&tmp)?.sync_all()?;
+        {
+            // Synced through the writing handle: Windows refuses FlushFileBuffers on a
+            // read-only one.
+            use std::io::Write;
+            let mut f = File::create(&tmp)?;
+            f.write_all(marker.as_bytes())?;
+            f.sync_all()?;
+        }
         fs::rename(&tmp, &p.paths.marker)?;
         p.touch_lease()?;
         Ok(p)
