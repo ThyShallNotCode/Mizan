@@ -1,14 +1,21 @@
 # Unsigned release builds of `omr` and `omr-desktop` for Linux and Windows, kept as workflow
-# artifacts for 7 days (artifact storage on a private repository is limited). These are CI
-# builds, not production releases: a production release is built from a protected tag on the
-# university's self-hosted runner, signed in the in-Kingdom release enclave and approved by two
-# release approvers, and that build is compared with these (spec §24.2).
+# artifacts for 7 days (artifact storage on a private repository is limited). A manual run on
+# main with a release tag also publishes them as a GitHub pre-release. These are CI builds, not
+# production releases: a production release is built from a protected tag on the university's
+# self-hosted runner, signed in the in-Kingdom release enclave and approved by two release
+# approvers, and that build is compared with these (spec §24.2). So the pre-release tags carry a
+# suffix (v0.1.0-preview.1) and leave the plain v0.1.0 to the enclave (scripts/release-tag.sh).
 name: Release builds
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Publish as a GitHub pre-release with this tag, for example v0.1.0-preview.1 (main only). Empty only builds.
+        type: string
+        default: ""
   # On pull requests only when the build itself changes, to spare Actions minutes.
   pull_request:
     paths:
@@ -16,13 +23,15 @@ on:
       - .cargo/**
       - Cargo.toml
       - Cargo.lock
+      - scripts/release-tag.sh
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: true
+  # A publishing run has a group of its own, so a later push to main cannot cancel it halfway.
+  group: ${{ inputs.release_tag && format('publish-{0}', inputs.release_tag) || format('release-{0}', github.ref) }}
+  cancel-in-progress: ${{ !inputs.release_tag }}
 
 jobs:
   build:
@@ -68,6 +77,19 @@ jobs:
           Get-PSDrive -PSProvider FileSystem | Format-Table Name,Used,Free
 
       - uses: actions/checkout@v4
+
+      # Before the long build, so a mistyped tag fails in seconds.
+      - name: Check the release tag
+        if: inputs.release_tag
+        shell: bash
+        env:
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::Pre-releases are published from main only, not $GITHUB_REF"
+            exit 1
+          fi
+          bash scripts/release-tag.sh "$TAG"
 
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
@@ -137,3 +159,109 @@ jobs:
           path: dist/
           retention-days: 7
           if-no-files-found: error
+
+  # Archives the two builds and writes the release notes. Runs after every build, so pull
+  # requests check it too; only a run with a release tag keeps the result for publishing.
+  assets:
+    name: release assets
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.name.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Name the release
+        id: name
+        env:
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          if [ -n "$TAG" ]; then
+            version=$(bash scripts/release-tag.sh "$TAG")
+          else
+            version="ci-${GITHUB_SHA::7}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: omr-*
+          path: artifacts
+
+      - name: Archive the builds
+        env:
+          VERSION: ${{ steps.name.outputs.version }}
+        run: |
+          linux="mizan-$VERSION-x86_64-unknown-linux-gnu"
+          windows="mizan-$VERSION-x86_64-pc-windows-msvc"
+          mkdir -p staging release
+          mv "artifacts/omr-x86_64-unknown-linux-gnu/omr-${GITHUB_SHA::7}-x86_64-unknown-linux-gnu" "staging/$linux"
+          mv "artifacts/omr-x86_64-pc-windows-msvc/omr-${GITHUB_SHA::7}-x86_64-pc-windows-msvc" "staging/$windows"
+          # Artifacts do not keep file modes, so the Linux programs get their execute bit back.
+          chmod 755 "staging/$linux/omr" "staging/$linux/omr-desktop"
+          (cd "staging/$linux" && sha256sum -c SHA256SUMS)
+          (cd "staging/$windows" && sha256sum -c SHA256SUMS)
+          tar -C staging --owner=0 --group=0 --numeric-owner -czf "release/$linux.tar.gz" "$linux"
+          (cd staging && zip -qr "../release/$windows.zip" "$windows")
+          (cd release && sha256sum "$linux.tar.gz" "$windows.zip" > SHA256SUMS && cat SHA256SUMS)
+          glibc=$(objdump -T "staging/$linux/omr" "staging/$linux/omr-desktop" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1)
+          cat > notes.md <<EOF
+          Unsigned test build of Mizan from commit $GITHUB_SHA, built by GitHub Actions run $GITHUB_RUN_ID with Rust 1.97.0.
+
+          **This is not a production release.** Production releases will be built and signed in the university's release enclave, from a tag that both release approvers approve (spec §24.2). These programs are unsigned: Windows SmartScreen warns about them, and devices that enforce App Control or AppLocker may block them.
+
+          ## Downloads
+
+          | File | For |
+          |---|---|
+          | \`$windows.zip\` | 64-bit Windows 10 or 11 (tested in CI on Windows Server 2025 only) |
+          | \`$linux.tar.gz\` | 64-bit Linux with glibc ${glibc#GLIBC_} or newer (built on Ubuntu 24.04) |
+
+          Each archive holds \`omr\` (the command line) and \`omr-desktop\` (the desktop app), with \`BUILD.txt\`, the font licence \`OFL.txt\` and a \`SHA256SUMS\` of the two programs. The \`SHA256SUMS\` attached here covers the two archives.
+
+          ## Before you use it
+
+          - **Windows:** do not grade real exams with this build yet. These protections are not built: refusing OneDrive and other sync folders, owner-only file permissions and DPAPI-protected keys. The Windows build passes the full test suite in CI, but the desktop app has not yet been opened in a real window on Windows.
+          - **Linux:** the desktop app needs fontconfig and libxkbcommon-x11 (on Debian or Ubuntu: \`sudo apt install libfontconfig1 libxkbcommon-x11-0\`).
+          - Keep exam folders on university devices, never in a synced cloud folder (README, section 8).
+          EOF
+          cat notes.md
+
+      - name: Keep the assets for publishing
+        if: inputs.release_tag
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: |
+            release/
+            notes.md
+          retention-days: 7
+          if-no-files-found: error
+
+  # The only job that may write to the repository: it creates the tag and the pre-release.
+  publish:
+    name: publish the pre-release
+    needs: assets
+    if: github.event_name == 'workflow_dispatch' && inputs.release_tag && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+          VERSION: ${{ needs.assets.outputs.version }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --silent 2>/dev/null; then
+            echo "::error::The tag $TAG already exists; publish under the next one"
+            exit 1
+          fi
+          gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --prerelease --title "Mizan $VERSION (unsigned test build)" --notes-file notes.md

@@ -66,6 +66,13 @@ This makes two programs: `target/release/omr` (the command line) and
 `target/release/omr-desktop` (the desktop app). Copy them to a folder on your `PATH`, or call
 them by their full path. `omr --help` and `omr <command> --help` list every option.
 
+**Test builds.** The repository's Releases page has unsigned pre-releases (`v0.1.0-preview.1`
+and later) for 64-bit Windows (a zip) and Linux (a tar.gz), each with both programs. They are
+test builds, not production releases, which will be built and signed in the university's
+release enclave (spec §24.2). Windows SmartScreen warns about unsigned programs; read §8 before
+grading real exams on Windows. To publish the next one, run the *Release builds* workflow on
+main with a new tag; `scripts/release-tag.sh` checks it.
+
 ## 2. Grade a folder of scans
 
 Scan each exam into one folder: PDF or TIFF straight from the scanner (600-dpi black and white,
