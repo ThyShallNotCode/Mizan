@@ -21,8 +21,15 @@ command line and from the desktop app `omr-desktop`, on Linux.
   licence review the spec requires before parallel runs and benchmarking (Q-08, the
   university's legal affairs, due 2026-12-01) is still open, so its head-to-head figures stay
   inside the university (spec §3.5).
-- **Not proven yet:** identity against a real roster, and Windows (the app has been built and
-  run on Linux only).
+- **Windows:** CI runs the same gate (formatting, clippy, every workspace test, the
+  architecture rules) on Windows (MSVC) as on Linux. Still to build for Windows:
+  - refusal of OneDrive and other sync folders;
+  - owner-only file permissions;
+  - DPAPI-protected keys;
+  - an installer.
+
+  The desktop app has not yet run in a real window (see `docs/IMPLEMENTATION.md`).
+- **Not proven yet:** identity against a real roster.
 - What the MVP covers and what it defers: [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md).
   The full design: [`docs/TECHNICAL_DESIGN.md`](docs/TECHNICAL_DESIGN.md).
 

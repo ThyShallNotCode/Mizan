@@ -105,7 +105,14 @@ expectation tied to the real exams out of the repository.
 - Typst rendering (§6.2): the MVP renders through SVG behind the same API.
 - TWAIN/eSCL capture agents (§7.1) and hot-folder watching; the MVP imports files and folders (`omr grade`, `omr add`, the desktop's New exam and Add scans).
 - SVG and PNG sheet output (§6.2); `omr sheet render` writes PDF.
-- Packaging, installers and the Windows/macOS builds (§24): the MVP has been built and tested on Linux only, and the desktop app has run headless (testing backend and software-rendered screenshots), never in a real window.
+- Packaging, installers and the macOS build (§24). The desktop app has run headless (testing backend and software-rendered screenshots), never in a real window.
+- The Windows platform layer. Windows is built and tested in CI (MSVC, static C runtime), but these are deferred:
+  - the §14.2 Windows signals (`GetDriveTypeW`, the file-system type, Cloud Files sync roots, which include OneDrive Known Folder Move);
+  - owner-only ACLs (§19.3);
+  - keys protected with DPAPI in the local, not roaming, profile (§19.2);
+  - the audit principal from `USERNAME`;
+  - a GUI-subsystem desktop app with a native error dialog;
+  - cross-OS decision identity through a pure-Rust `libm` (§9.4).
 - Streaming ingest (§7.4) and the per-run decode budget and per-page watchdog (§22.3–§22.4): files are size-checked before they are read and images by their header before they are decoded, but each input file is read whole into memory.
 - The read-access log (§19.5 `access_log`): reveals of student numbers and crop exports are audit events; views in the desktop app are not logged.
 - Licence enforcement (§5.4: `cargo-deny`, the notices file, Slint's AboutSlint widget).

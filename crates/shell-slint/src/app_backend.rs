@@ -3004,30 +3004,35 @@ impl Opened {
 }
 
 /// A path for the status bar: `~` for the home folder, and the last folders only when long.
+/// Split on either separator and joined with the platform's, so Windows paths keep their tail.
 fn short_path(p: &Path) -> String {
+    let sep = std::path::MAIN_SEPARATOR;
     let mut text = p.display().to_string();
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
+    if let Some(home) = std::env::home_dir()
         && let Ok(rest) = p.strip_prefix(&home)
     {
-        text = format!("~/{}", rest.display());
+        text = format!("~{sep}{}", rest.display());
     }
     if text.chars().count() <= 48 {
         return text;
     }
-    let parts: Vec<&str> = text.split('/').filter(|s| !s.is_empty()).collect();
+    let parts: Vec<&str> = text
+        .split(std::path::is_separator)
+        .filter(|s| !s.is_empty())
+        .collect();
     let mut tail = String::new();
     for part in parts.iter().rev() {
         let next = if tail.is_empty() {
             (*part).to_string()
         } else {
-            format!("{part}/{tail}")
+            format!("{part}{sep}{tail}")
         };
         if next.chars().count() > 44 {
             break;
         }
         tail = next;
     }
-    format!("…/{tail}")
+    format!("…{sep}{tail}")
 }
 
 fn short_page(page_id: &str) -> String {
@@ -5060,6 +5065,28 @@ impl Backend for AppBackend {
 mod tests {
     use super::*;
     use omr_app::exam::TemplateChoice;
+
+    #[test]
+    fn long_paths_keep_their_last_folders_on_every_os() {
+        let sep = std::path::MAIN_SEPARATOR;
+        let p: PathBuf = [
+            "a-workspace-folder-with-a-long-name",
+            "CS 522 Final exam, second semester",
+            "exports",
+            "blackboard_grade_center.csv",
+        ]
+        .iter()
+        .collect();
+        let s = short_path(&p);
+        assert!(s.starts_with(&format!("…{sep}")), "{s}");
+        assert!(
+            s.ends_with(&format!("exports{sep}blackboard_grade_center.csv")),
+            "{s}"
+        );
+        assert!(s.chars().count() <= 46, "{s}");
+        let short: PathBuf = ["exams", "midterm.csv"].iter().collect();
+        assert_eq!(short_path(&short), short.display().to_string());
+    }
 
     #[test]
     fn dates_and_labels() {

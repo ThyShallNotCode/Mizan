@@ -57,3 +57,47 @@ jobs:
 
       - name: Gate
         run: ./scripts/check.sh
+
+  windows:
+    name: check.sh on Windows (MSVC)
+    # Windows is the primary platform (spec §24.1). Same gate, same pinned toolchain.
+    runs-on: windows-2025
+    timeout-minutes: 180
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      # The Windows counterpart of the swap step above: rustc needs about 6 GB for the generated
+      # desktop UI module, more than the 2-core runner's 7 GB of RAM can hold beside a second job.
+      - name: Enlarge the pagefile for the desktop UI compile
+        uses: al-cheb/configure-pagefile-action@v1.4
+        with:
+          minimum-size: 16GB
+          maximum-size: 24GB
+          disk-root: "C:"
+
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Gate
+        shell: bash
+        run: ./scripts/check.sh
+
+      # .cargo/config.toml links the C runtime statically; prove it, since a clean Windows 11 PC
+      # has no VCRUNTIME140.dll.
+      - name: The executables need no Visual C++ runtime
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          foreach ($exe in "target\debug\omr.exe", "target\debug\omr-desktop.exe") {
+            $deps = & $dumpbin.FullName /dependents $exe | Out-String
+            Write-Output $deps
+            if ($deps -match "(?i)vcruntime|msvcp") { throw "$exe needs the Visual C++ runtime" }
+          }

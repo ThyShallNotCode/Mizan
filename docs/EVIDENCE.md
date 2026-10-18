@@ -771,9 +771,14 @@ These limits apply to the MVP as measured here.
   licence review it needs (Q-08) is still open. Scoring on the real exams is proven
   with keys verified by agents (§4.1) and read from the instructors' key sheets, not yet
   confirmed by the instructors in the app.
-- **Platforms.** Built and tested on Linux only; Windows 10/11, the spec's primary platform,
-  and macOS have not been built, and there is no installer (spec §24). The desktop app has run
-  headless (the testing backend and software-rendered screenshots), never in a real window.
+- **Platforms.**
+  - **Tested on:** Linux, and Windows 10/11 (the spec's primary platform) in CI: windows-2025,
+    `x86_64-pc-windows-msvc`, the C runtime linked statically, the same `scripts/check.sh` gate.
+  - **Not built:** macOS. There is no installer (spec §24).
+  - **Not implemented on Windows yet** (`docs/IMPLEMENTATION.md`): the §14.2 sync-folder and
+    network checks, owner-only ACLs and DPAPI key protection.
+  - **Desktop app:** has run headless only (the testing backend and software-rendered
+    screenshots), never in a real window.
 
 **Recognition and review**
 - Classical rules only; the learned mark classifier (spec §8.7) is deferred. A light second
