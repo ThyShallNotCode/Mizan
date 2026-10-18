@@ -31,11 +31,14 @@ pub mod keys;
 pub mod keysheet;
 pub mod model;
 pub mod outcomes;
+pub mod parallel;
 pub mod pipeline;
+pub mod remark;
 pub mod review;
 pub mod score;
 pub mod store;
 pub mod vm;
+pub mod xlsx;
 
 pub use app::{ApplyOutcome, ExamProject};
 pub use exam::{

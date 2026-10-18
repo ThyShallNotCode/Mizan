@@ -830,17 +830,36 @@ impl ExamProject {
                             .clos
                             .iter()
                             .map(|c| {
-                                o.mapping
+                                // A cell stands for every version's row of (q, CLO): rows for
+                                // one version only are labelled with their versions.
+                                let rows: Vec<&crate::exam::CloMapping> = o
+                                    .mapping
                                     .iter()
-                                    .find(|m| m.question == q && m.clo == c.code)
-                                    .map_or((None, String::new()), |m| {
-                                        (
-                                            omr_scoring::parse_points(&m.weight)
-                                                .ok()
-                                                .and_then(|w| w.to_f64()),
-                                            m.note.clone(),
-                                        )
-                                    })
+                                    .filter(|m| m.question == q && m.clo == c.code)
+                                    .collect();
+                                rows.first().map_or((None, String::new()), |m| {
+                                    let note = if rows.iter().any(|m| !m.form.is_empty()) {
+                                        let forms: Vec<&str> = rows
+                                            .iter()
+                                            .map(|m| {
+                                                if m.form.is_empty() {
+                                                    "every version"
+                                                } else {
+                                                    m.form.as_str()
+                                                }
+                                            })
+                                            .collect();
+                                        format!("version {} only: {}", forms.join(", "), m.note)
+                                    } else {
+                                        m.note.clone()
+                                    };
+                                    (
+                                        omr_scoring::parse_points(&m.weight)
+                                            .ok()
+                                            .and_then(|w| w.to_f64()),
+                                        note,
+                                    )
+                                })
                             })
                             .collect(),
                     })

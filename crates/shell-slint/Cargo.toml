@@ -22,6 +22,8 @@ omr-app.workspace = true
 omr-model.workspace = true
 omr-analytics.workspace = true
 omr-outcomes.workspace = true
+# Exact points of a Remark import as text (`exact_text`), as omr-app hands them over.
+omr-scoring.workspace = true
 # `omr-desktop --grade --spec spec.json` reads the own-form spec (as `omr grade` does).
 serde_json.workspace = true
 slint.workspace = true
@@ -40,6 +42,9 @@ image.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
 tempfile.workspace = true
+# Synthetic Remark Office OMR graded workbooks (tests/support/synthetic_remark.rs): invented
+# rows in the documented export layout, never a real export. R8: dev-only.
+rust_xlsxwriter.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true

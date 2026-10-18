@@ -285,7 +285,144 @@ export global SetupVM {
     callback set-key(int, int, string);
     callback set-weight(int, int, string);
     callback set-note(int, int, string);
+    // imported item → CLO rows waiting for approval (§11.2), and a CLO file to replace them
+    in property <int> mappings-proposed;
+    in-out property <string> clo-path;
+    callback approve-mappings();
+    callback replace-clos(string);
     callback select-cell(int, int);
+}
+
+// ------------------------------------------------------------------- Remark migration
+
+// One version of a Remark import (segment label and its facts).
+export struct RmVersion {
+    label: string,
+    selected: bool,
+    a11y: string,
+}
+
+// One question of the version shown: the key entry (hidden until revealed), its exact points
+// and its learning objective.
+export struct RmRow {
+    q: string,
+    key: string,
+    points: string,
+    objective: string,
+}
+
+// A learning objective imported as a CLO with weight-1 mappings, "imported, needs review".
+export struct RmObjective {
+    code: string,
+    label: string,
+    detail: string,
+}
+
+// A workbook row Remark graded as a student that is the instructor's key sheet: excluded.
+export struct RmKeySheet {
+    title: string,
+    detail: string,
+}
+
+// A question to adjudicate in the parallel run, with its bubble-row crop.
+export struct CmpDiff {
+    q: string,
+    booklet: string,
+    student: string,
+    remark: string,
+    ours: string,
+    status: string,
+    tone: Tone,
+    findings: string,
+    has-crop: bool,
+    label: string,
+}
+
+// A line of a parallel-run card (identity difference, total, key-sheet effect, workbook).
+export struct CmpLine {
+    title: string,
+    detail: string,
+    tone: Tone,
+}
+
+export struct CmpTile {
+    label: string,
+    value: string,
+    caption: string,
+    tone: Tone,
+}
+
+// The Remark migration (spec §3.5, PAR-09; §23.7): the import read on the New-exam form or in
+// Setup (shown for review, applied by the instructor), and the parallel run in Results.
+export global RemarkVM {
+    // which import the fields show: 0 none, 1 the New-exam form's, 2 the current exam's (Setup)
+    in property <int> context;
+    in property <bool> can-new;
+    in property <bool> can-setup;
+    // the import panel inside the New-exam form, the Setup bar and its summary
+    in-out property <bool> new-panel;
+    in-out property <bool> setup-bar;
+    in-out property <bool> setup-open;
+    in-out property <string> path;
+    in-out property <string> points-path;
+    in property <bool> has;
+    in property <bool> refused;
+    in property <string> refusal;
+    in property <string> remedy;
+    in property <string> suggestion;
+    in property <string> title;
+    in property <string> files;
+    in property <[RmVersion]> versions;
+    in property <int> version;
+    in property <[KV]> facts;
+    in property <string> key-counts;
+    in property <[RmRow]> rows;
+    in property <[RmObjective]> objectives;
+    in property <[RmKeySheet]> key-sheets;
+    in property <[KV]> workbooks;
+    in property <[string]> notes;
+    in property <string> applies;
+    in property <bool> can-apply;
+    in property <string> apply-label;
+    in-out property <bool> show-key;
+    // the New-exam form uses the import (its key, points and learning objectives)
+    in property <bool> new-using;
+    in property <string> new-using-text;
+    callback read(string, string);
+    callback use-suggested();
+    callback select-version(int);
+    callback apply();
+    callback discard();
+    callback clear-new();
+    // the parallel run in Results (Restricted; head-to-head figures stay inside the university)
+    in property <bool> can-compare;
+    in-out property <bool> cmp-bar;
+    in-out property <bool> cmp-open;
+    in-out property <string> cmp-path;
+    in property <bool> cmp-has;
+    in property <string> banner;
+    in property <bool> cmp-refused;
+    in property <string> cmp-refusal;
+    in property <string> cmp-remedy;
+    in property <string> cmp-suggestion;
+    in property <string> cmp-title;
+    in property <string> cmp-points;
+    in property <[CmpTile]> cmp-tiles;
+    in property <[CmpDiff]> diffs;
+    in property <[image]> diff-crops;
+    in property <[CmpLine]> identity;
+    in property <[CmpLine]> totals;
+    in property <[CmpLine]> cmp-key-sheets;
+    in property <[CmpLine]> cmp-workbooks;
+    // what holds release: the differences queued in Review, or nothing (the report alone)
+    in property <string> cmp-hold;
+    in property <bool> cmp-can-queue;
+    in-out property <string> save-path;
+    callback compare(string);
+    callback cmp-use-suggested();
+    callback cmp-use-exam-points();
+    callback save(string);
+    callback queue();
 }
 
 // ------------------------------------------------------------------------------- scan

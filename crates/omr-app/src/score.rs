@@ -38,8 +38,8 @@ pub fn master_item(key: &EffectiveKey, n_questions: usize, f: usize, q: usize) -
 /// its own items (no cross-form mapping declared).
 pub fn form_map(def: &ExamDefinition, key: &EffectiveKey) -> Result<FormMap, AppError> {
     let n = usize::from(def.questions);
-    let pts = |q: usize| -> Result<omr_scoring::Points, AppError> {
-        let s = key.points.get(q).map(String::as_str).unwrap_or("1");
+    let pts = |f: usize, q: usize| -> Result<omr_scoring::Points, AppError> {
+        let s = key.points_of(f).get(q).map(String::as_str).unwrap_or("1");
         parse_points(s).map_err(|e| AppError::Definition(format!("points `{s}`: {e}")))
     };
     let n_forms = if key.shared_items { 1 } else { def.forms.len() };
@@ -49,7 +49,7 @@ pub fn form_map(def: &ExamDefinition, key: &EffectiveKey) -> Result<FormMap, App
             items.push(MasterItem::sba(
                 item_label(key, &def.forms, f, q),
                 def.options,
-                pts(q)?,
+                pts(f, q)?,
             ));
         }
     }

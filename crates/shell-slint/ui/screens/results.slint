@@ -5,7 +5,8 @@ import {
     StatusPill, Tag, Breadcrumb, TableRow, TableHeaderCell, TableCell, SeverityGlyph, Keycap,
     GhostButton,
 } from "../theme.slint";
-import { App, ResultsVM, ItemRow, Page, SetupVM } from "../state.slint";
+import { App, ResultsVM, ItemRow, Page, SetupVM, RemarkVM } from "../state.slint";
+import { ParallelRunView, CompareBar } from "remark.slint";
 import {
     Icons, ThemeToggle, Centered, SectionLabel, StatusText, Hatch, StepMeter, ShareSpark, EmptyState,
     MessageText, Segment, SegmentGroup, TextField,
@@ -567,7 +568,21 @@ export component ResultsScreen inherits Rectangle {
                         icon: Icons.export;
                         enabled: ResultsVM.available;
                         clicked => {
+                            RemarkVM.cmp-bar = false;
                             ResultsVM.export-open = !ResultsVM.export-open;
+                        }
+                    }
+                }
+                Centered {
+                    SecondaryButton {
+                        text: root.narrow ? "Remark…" : "Compare with Remark…";
+                        enabled: ResultsVM.available && RemarkVM.can-compare;
+                        accessible-label: "Compare with Remark export…";
+                        accessible-description: "The parallel run (§23.7): this exam beside Remark's graded workbooks of the same sheets, every difference with its crop (Restricted)";
+                        clicked => {
+                            ResultsVM.export-open = false;
+                            ResultsVM.release-open = false;
+                            RemarkVM.cmp-bar = !RemarkVM.cmp-bar;
                         }
                     }
                 }
@@ -589,6 +604,7 @@ export component ResultsScreen inherits Rectangle {
                         accessible-description: ResultsVM.release-blocked ? "Blocked: " + ResultsVM.release-reason : "Release is a deliberate act of the instructor";
                         clicked => {
                             ResultsVM.export-open = false;
+                            RemarkVM.cmp-bar = false;
                             ResultsVM.release-open = true;
                         }
                     }
@@ -637,7 +653,11 @@ export component ResultsScreen inherits Rectangle {
                 }
             }
         }
-        if ResultsVM.available: VerticalLayout {
+        if ResultsVM.available && RemarkVM.cmp-open: ParallelRunView {
+            vertical-stretch: 1;
+            narrow: root.narrow;
+        }
+        if ResultsVM.available && !RemarkVM.cmp-open: VerticalLayout {
             vertical-stretch: 1;
             padding: Theme.space-xl;
             spacing: Theme.space-lg;
@@ -942,6 +962,12 @@ export component ResultsScreen inherits Rectangle {
     // the bar floats over the screen, so opening it never pushes the status bar out of a
     // 1280 × 800 window
     if ResultsVM.available && ResultsVM.export-open: ExportBar {
+        x: Theme.space-lg;
+        y: Theme.top-bar-height + Theme.space-sm;
+        width: root.width - 2 * Theme.space-lg;
+        height: self.preferred-height;
+    }
+    if ResultsVM.available && RemarkVM.cmp-bar: CompareBar {
         x: Theme.space-lg;
         y: Theme.top-bar-height + Theme.space-sm;
         width: root.width - 2 * Theme.space-lg;

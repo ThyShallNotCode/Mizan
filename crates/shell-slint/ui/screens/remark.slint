@@ -1,0 +1,955 @@
+// The Remark migration (spec §3.5, PAR-09) and the parallel run (§23.7): the import of Remark
+// Office OMR's graded Excel exports, shown for review before it is applied (on the New-exam
+// form and in Setup), and the comparison of a graded exam with them (Results), under the
+// Restricted / Q-08 banner. Rust fills `RemarkVM` from omr-app; nothing here decides.
+
+import {
+    Theme, Tone, Severity, Card, PrimaryButton, SecondaryButton, GhostButton, StatusPill, Tag,
+    StatTile, SeverityGlyph, TableRow, TableHeaderCell, Chip,
+} from "../theme.slint";
+import { RemarkVM, RmRow, CmpDiff, CmpLine } from "../state.slint";
+import { Centered, SectionLabel, KVLine, TextField, Segment, SegmentGroup } from "../widgets.slint";
+import { ListView, ScrollView } from "std-widgets.slint";
+
+// The classification banner of the parallel run (DESIGN §9.6: "Restricted", warning-soft, lock
+// glyph): student numbers and answers, head-to-head figures inside the university (Q-08).
+export component RestrictedBanner inherits Rectangle {
+    in property <string> text;
+    background: Theme.warning-soft;
+    border-radius: Theme.radius-md;
+    border-width: 1px;
+    border-color: Theme.warning;
+    accessible-role: AccessibleRole.text;
+    accessible-label: "Restricted: " + root.text;
+    HorizontalLayout {
+        padding-left: Theme.space-md;
+        padding-right: Theme.space-md;
+        padding-top: Theme.space-sm;
+        padding-bottom: Theme.space-sm;
+        spacing: Theme.space-sm;
+        Centered {
+            Path {
+                width: 14px;
+                height: 14px;
+                viewbox-width: 12;
+                viewbox-height: 12;
+                stroke: Theme.warning;
+                stroke-width: 1.4px;
+                fill: transparent;
+                commands: "M 2.6 5.4 L 9.4 5.4 L 9.4 11 L 2.6 11 Z M 4 5.4 L 4 3.6 A 2 2 0 0 1 8 3.6 L 8 5.4 M 6 7.4 L 6 9";
+                accessible-role: none;
+            }
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: root.text;
+            font-size: Theme.text-xs;
+            font-weight: Theme.weight-medium;
+            color: Theme.ink;
+            vertical-alignment: center;
+            wrap: word-wrap;
+            accessible-role: none;
+        }
+        @children
+    }
+}
+
+// A refusal with what to do (R10); `suggested` offers the points the import suggests (the
+// instructor's decision, never assumed) and `exam-points` the exam's own points.
+export component RemarkRefusal inherits Rectangle {
+    in property <string> message;
+    in property <string> remedy;
+    in property <string> suggestion;
+    in property <bool> exam-points;
+    callback use-suggested();
+    callback use-exam-points();
+    background: Theme.error-soft;
+    border-radius: Theme.radius-md;
+    border-width: 1px;
+    border-color: Theme.error;
+    VerticalLayout {
+        padding: Theme.space-md;
+        spacing: Theme.space-sm;
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+            VerticalLayout {
+                padding-top: 3px;
+                SeverityGlyph {
+                    severity: Severity.error;
+                    size: 12px;
+                }
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: "Refused: nothing was imported or changed";
+                font-size: Theme.text-md;
+                font-weight: Theme.weight-semibold;
+                color: Theme.error;
+                accessible-role: AccessibleRole.text;
+            }
+        }
+        Text {
+            text: root.message;
+            font-size: Theme.text-sm;
+            color: Theme.ink;
+            wrap: word-wrap;
+            accessible-role: AccessibleRole.text;
+        }
+        Text {
+            text: "What to do: " + root.remedy;
+            font-size: Theme.text-sm;
+            font-weight: Theme.weight-medium;
+            color: Theme.ink;
+            wrap: word-wrap;
+            accessible-role: AccessibleRole.text;
+        }
+        if root.suggestion != "": Text {
+            text: "Suggested points: " + root.suggestion;
+            font-family: Theme.font-mono;
+            font-size: Theme.text-xs;
+            color: Theme.ink-2;
+            wrap: word-wrap;
+            accessible-role: AccessibleRole.text;
+        }
+        if root.suggestion != "" || root.exam-points: HorizontalLayout {
+            spacing: Theme.space-sm;
+            alignment: start;
+            if root.suggestion != "": SecondaryButton {
+                text: "Use the suggested points";
+                accessible-description: "Gives the suggested points as your decision and reads again; every Remark total is still checked";
+                clicked => {
+                    root.use-suggested();
+                }
+            }
+            if root.exam-points: SecondaryButton {
+                text: "Use this exam's points";
+                accessible-description: "Compares with the points this exam is graded with, checked against every Remark total";
+                clicked => {
+                    root.use-exam-points();
+                }
+            }
+        }
+    }
+}
+
+// The workbook and points fields of an import (the Setup bar and the New-exam panel).
+export component RemarkFields inherits HorizontalLayout {
+    spacing: Theme.space-md;
+    init => {
+        books.focus();
+    }
+    books := TextField {
+        horizontal-stretch: 3;
+        label: "Remark workbooks";
+        placeholder: "Remark's graded Excel exports (.xlsx), ; between several (its .rmx/.aky files are never opened)";
+        text <=> RemarkVM.path;
+        mono: true;
+        accepted(v) => {
+            if (v != "") {
+                RemarkVM.read(RemarkVM.path, RemarkVM.points-path);
+            }
+        }
+    }
+    TextField {
+        horizontal-stretch: 1;
+        label: "Points file (optional)";
+        placeholder: "points.csv (optional)";
+        text <=> RemarkVM.points-path;
+        mono: true;
+    }
+    Centered {
+        PrimaryButton {
+            text: "Read export";
+            key-hint: "Enter";
+            enabled: RemarkVM.path != "";
+            accessible-description: "Reads the workbooks and shows the import for your review; nothing changes until you apply it";
+            clicked => {
+                RemarkVM.read(RemarkVM.path, RemarkVM.points-path);
+            }
+        }
+    }
+}
+
+// One question of the version shown: key (hidden until revealed), exact points, objective.
+component RemarkRowView inherits Rectangle {
+    in property <RmRow> data;
+    in property <int> index;
+    height: 30px;
+    background: mod(root.index, 2) == 1 ? Theme.surface-sunken.with-alpha(0.45) : transparent;
+    accessible-role: AccessibleRole.list-item;
+    accessible-label: "Q" + root.data.q + ": " + root.data.points + " points" + (RemarkVM.show-key ? ", key " + (root.data.key == "" ? "missing" : root.data.key) : "") + (root.data.objective != "" ? ", learning objective " + root.data.objective + ", imported, needs review" : "");
+    HorizontalLayout {
+        padding-left: Theme.space-lg;
+        padding-right: Theme.space-lg;
+        spacing: Theme.space-md;
+        Text {
+            width: 44px;
+            text: "Q" + root.data.q;
+            font-family: Theme.font-mono;
+            font-size: Theme.text-xs;
+            font-weight: Theme.weight-semibold;
+            color: Theme.ink;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+        Text {
+            width: 52px;
+            text: RemarkVM.show-key ? (root.data.key == "" ? "–" : root.data.key) : "•";
+            font-family: Theme.font-mono;
+            font-size: Theme.text-sm;
+            font-weight: Theme.weight-semibold;
+            color: RemarkVM.show-key ? Theme.primary : Theme.ink-3;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+        Text {
+            width: 56px;
+            text: root.data.points;
+            font-family: Theme.font-mono;
+            font-size: Theme.text-sm;
+            color: Theme.ink;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            spacing: Theme.space-sm;
+            alignment: start;
+            if root.data.objective != "": Centered {
+                Tag {
+                    text: root.data.objective;
+                    tone: Tone.accent;
+                }
+            }
+            if root.data.objective != "": Text {
+                text: "imported, needs review";
+                font-size: Theme.text-2xs;
+                color: Theme.accent-ink;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+        }
+    }
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.border;
+    }
+}
+
+// The import's versions: per version the facts, and per question the key (as counts until the
+// instructor reveals it), the exact points and the learning objective.
+export component RemarkImportCard inherits Card {
+    in property <bool> compact;
+    inset: 0;
+    VerticalLayout {
+        HorizontalLayout {
+            padding: root.compact ? Theme.space-md : Theme.space-lg;
+            padding-bottom: Theme.space-sm;
+            spacing: Theme.space-md;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Theme.space-2xs;
+                alignment: start;
+                Text {
+                    text: RemarkVM.title;
+                    font-size: root.compact ? Theme.text-md : Theme.text-lg;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.ink;
+                    overflow: elide;
+                    accessible-role: AccessibleRole.text;
+                }
+                Text {
+                    text: RemarkVM.files;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.text-2xs;
+                    color: Theme.ink-2;
+                    overflow: elide;
+                    accessible-role: AccessibleRole.text;
+                }
+            }
+            if RemarkVM.versions.length > 1: VerticalLayout {
+                alignment: start;
+                SegmentGroup {
+                    for v[i] in RemarkVM.versions: Segment {
+                        text: v.label;
+                        label: v.a11y;
+                        selected: v.selected;
+                        clicked => {
+                            RemarkVM.select-version(i);
+                        }
+                    }
+                }
+            }
+        }
+        VerticalLayout {
+            padding-left: root.compact ? Theme.space-md : Theme.space-lg;
+            padding-right: root.compact ? Theme.space-md : Theme.space-lg;
+            padding-bottom: Theme.space-sm;
+            spacing: 2px;
+            for f in RemarkVM.facts: KVLine {
+                label: f.label;
+                value: f.value;
+                tone: f.tone;
+            }
+            if !root.compact: VerticalLayout {
+                spacing: 2px;
+                for w in RemarkVM.workbooks: KVLine {
+                    label: w.label;
+                    value: w.value;
+                    mono: true;
+                }
+            }
+        }
+        HorizontalLayout {
+            padding-left: root.compact ? Theme.space-md : Theme.space-lg;
+            padding-right: root.compact ? Theme.space-md : Theme.space-lg;
+            padding-bottom: Theme.space-sm;
+            spacing: Theme.space-sm;
+            Text {
+                horizontal-stretch: 1;
+                text: "Key: " + RemarkVM.key-counts + (RemarkVM.show-key ? "" : " (letters hidden: the key is exam-confidential)");
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                vertical-alignment: center;
+                overflow: elide;
+                accessible-role: AccessibleRole.text;
+            }
+            Centered {
+                Chip {
+                    text: RemarkVM.show-key ? "Hide key" : "Reveal key";
+                    selected: RemarkVM.show-key;
+                    clicked => {
+                        RemarkVM.show-key = !RemarkVM.show-key;
+                    }
+                }
+            }
+        }
+        TableRow {
+            header: true;
+            TableHeaderCell {
+                text: "Q";
+                width: 44px + Theme.space-lg;
+            }
+            TableHeaderCell {
+                text: "Key";
+                width: 52px + Theme.space-md;
+                align: center;
+            }
+            TableHeaderCell {
+                text: "Points";
+                width: 56px + Theme.space-md;
+                align: right;
+            }
+            TableHeaderCell {
+                text: "Learning objective → CLO (weight 1)";
+                horizontal-stretch: 1;
+            }
+        }
+        ListView {
+            vertical-stretch: 1;
+            for r[i] in RemarkVM.rows: RemarkRowView {
+                data: r;
+                index: i;
+            }
+        }
+    }
+}
+
+// The learning objectives (CLOs with weight-1 mappings, "imported, needs review") and the
+// key-sheet rows Remark graded as students (excluded), in one scrolled card.
+export component RemarkSideCard inherits Card {
+    title: "Learning objectives · key sheets";
+    subtitle: RemarkVM.context == 2 && RemarkVM.objectives.length > 0
+        ? "Objectives listed for review: a graded exam's CLO mapping cannot be replaced here yet (create the exam from this import with New exam). Key sheets graded as students are excluded"
+        : "Objectives become CLOs with weight-1 mappings, imported, needs review; key sheets graded as students are excluded";
+    ScrollView {
+        vertical-stretch: 1;
+        min-height: 48px;
+        preferred-height: 48px;
+        content-width: self.visible-width;
+        VerticalLayout {
+            spacing: Theme.space-sm;
+            alignment: start;
+            if RemarkVM.objectives.length == 0: Text {
+                text: "No learning objectives in the export";
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+            }
+            for o in RemarkVM.objectives: Rectangle {
+                accessible-role: AccessibleRole.list-item;
+                accessible-label: "Learning objective " + o.label + ": " + o.detail + ", imported, needs review";
+                height: co.preferred-height;
+                co := VerticalLayout {
+                    spacing: 2px;
+                    HorizontalLayout {
+                        spacing: Theme.space-sm;
+                        alignment: start;
+                        Centered {
+                            Tag {
+                                text: o.code;
+                                tone: Tone.accent;
+                            }
+                        }
+                        Text {
+                            text: o.label + " · imported, needs review";
+                            font-size: Theme.text-xs;
+                            color: Theme.accent-ink;
+                            vertical-alignment: center;
+                            accessible-role: none;
+                        }
+                    }
+                    Text {
+                        text: o.detail;
+                        font-size: Theme.text-2xs;
+                        color: Theme.ink-2;
+                        wrap: word-wrap;
+                        accessible-role: none;
+                    }
+                }
+            }
+            for k in RemarkVM.key-sheets: Rectangle {
+                accessible-role: AccessibleRole.list-item;
+                accessible-label: "Key sheet excluded: " + k.title + ", " + k.detail;
+                height: ck.preferred-height;
+                ck := VerticalLayout {
+                    spacing: 2px;
+                    HorizontalLayout {
+                        spacing: Theme.space-sm;
+                        alignment: start;
+                        Centered {
+                            StatusPill {
+                                text: "key sheet · excluded";
+                                tone: Tone.warning;
+                                accessible-role: none;
+                            }
+                        }
+                    }
+                    Text {
+                        text: k.title + " · " + k.detail;
+                        font-size: Theme.text-2xs;
+                        color: Theme.ink-2;
+                        wrap: word-wrap;
+                        accessible-role: none;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// What applying does, and the instructor's decision.
+export component RemarkApplyCard inherits Card {
+    // Setup: the way back to the matrix, inside the card (the import stays waiting)
+    in property <bool> show-back;
+    callback back();
+    title: RemarkVM.context == 1 ? "Use this import" : "Apply the import";
+    vertical-stretch: 0;
+    VerticalLayout {
+        spacing: Theme.space-sm;
+        // in the body, not the subtitle: a long consequence wraps over several lines
+        Text {
+            text: RemarkVM.applies;
+            font-size: Theme.text-xs;
+            color: Theme.ink-2;
+            wrap: word-wrap;
+        }
+        PrimaryButton {
+            text: RemarkVM.apply-label;
+            enabled: RemarkVM.can-apply;
+            accessible-description: RemarkVM.applies;
+            clicked => {
+                RemarkVM.apply();
+            }
+        }
+        for n in RemarkVM.notes: Text {
+            text: n;
+            font-size: Theme.text-2xs;
+            color: Theme.ink-2;
+            wrap: word-wrap;
+        }
+        GhostButton {
+            text: "Put the import aside";
+            accessible-description: "Drops the import; nothing was changed";
+            clicked => {
+                RemarkVM.discard();
+            }
+        }
+        if root.show-back: GhostButton {
+            text: "Key and CLO mapping";
+            accessible-description: "Back to the answer key and CLO mapping matrix; the import stays waiting";
+            clicked => {
+                root.back();
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------------- parallel run
+
+// One question to adjudicate: the bubble row as scanned (the marks outlined), Remark's reading,
+// ours and our status.
+component CmpDiffRow inherits Rectangle {
+    in property <CmpDiff> data;
+    in property <image> crop;
+    in property <int> index;
+    in property <length> crop-w;
+    height: 60px;
+    background: mod(root.index, 2) == 1 ? Theme.surface-sunken.with-alpha(0.45) : transparent;
+    accessible-role: AccessibleRole.list-item;
+    accessible-label: root.data.label;
+    // settled differences carry a bar on the inline-start edge (never colour alone)
+    if root.data.tone == Tone.error: Rectangle {
+        x: 0;
+        width: 3px;
+        height: parent.height;
+        background: Theme.error;
+    }
+    HorizontalLayout {
+        padding-left: Theme.space-md;
+        padding-right: Theme.space-md;
+        spacing: Theme.space-md;
+        Text {
+            width: 40px;
+            text: root.data.q;
+            font-family: Theme.font-mono;
+            font-size: Theme.text-sm;
+            font-weight: Theme.weight-semibold;
+            color: Theme.ink;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+        Centered {
+            Rectangle {
+                width: root.crop-w;
+                height: 46px;
+                border-radius: Theme.radius-sm;
+                background: Theme.scan-backdrop;
+                clip: true;
+                if root.data.has-crop: Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: root.crop;
+                    image-fit: contain;
+                    accessible-role: none;
+                }
+                if !root.data.has-crop: Text {
+                    text: "no image";
+                    font-size: Theme.text-2xs;
+                    color: Theme.ink-3;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+            }
+        }
+        VerticalLayout {
+            width: 80px;
+            alignment: center;
+            Text {
+                text: "Remark";
+                font-size: Theme.text-2xs;
+                color: Theme.ink-2;
+                horizontal-alignment: center;
+                accessible-role: none;
+            }
+            Text {
+                text: root.data.remark;
+                font-family: Theme.font-mono;
+                font-size: Theme.text-md;
+                font-weight: Theme.weight-semibold;
+                color: Theme.ink;
+                horizontal-alignment: center;
+                overflow: elide;
+                accessible-role: none;
+            }
+        }
+        VerticalLayout {
+            width: 80px;
+            alignment: center;
+            Text {
+                text: "Ours";
+                font-size: Theme.text-2xs;
+                color: Theme.ink-2;
+                horizontal-alignment: center;
+                accessible-role: none;
+            }
+            Text {
+                text: root.data.ours;
+                font-family: Theme.font-mono;
+                font-size: Theme.text-md;
+                font-weight: Theme.weight-semibold;
+                color: Theme.tone-fg(root.data.tone);
+                horizontal-alignment: center;
+                overflow: elide;
+                accessible-role: none;
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            alignment: center;
+            spacing: 3px;
+            HorizontalLayout {
+                alignment: start;
+                StatusPill {
+                    text: root.data.status;
+                    tone: root.data.tone;
+                    max-pill-width: 320px;
+                    accessible-role: none;
+                }
+            }
+            Text {
+                text: root.data.booklet + " · " + root.data.student + (root.data.findings != "" ? " · " + root.data.findings : "");
+                font-size: Theme.text-2xs;
+                color: Theme.ink-2;
+                overflow: elide;
+                accessible-role: none;
+            }
+        }
+    }
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.border;
+    }
+}
+
+component CmpLines inherits VerticalLayout {
+    in property <[CmpLine]> lines;
+    in property <string> prefix;
+    spacing: Theme.space-sm;
+    alignment: start;
+    for l in root.lines: Rectangle {
+        accessible-role: AccessibleRole.list-item;
+        accessible-label: root.prefix + l.title + (l.detail == "" ? "" : ", " + l.detail);
+        height: ll.preferred-height;
+        ll := VerticalLayout {
+            spacing: 2px;
+            HorizontalLayout {
+                spacing: Theme.space-xs + 2px;
+                VerticalLayout {
+                    padding-top: 3px;
+                    width: 10px;
+                    Path {
+                        width: 10px;
+                        height: 10px;
+                        viewbox-width: 12;
+                        viewbox-height: 12;
+                        stroke-width: 1.5px;
+                        stroke: Theme.tone-fg(l.tone);
+                        fill: l.tone == Tone.error || l.tone == Tone.warning ? Theme.tone-fg(l.tone) : transparent;
+                        commands: l.tone == Tone.success ? "M 1.2 6 A 4.8 4.8 0 1 1 10.8 6 A 4.8 4.8 0 1 1 1.2 6 Z M 3.6 6.2 L 5.3 7.9 L 8.5 4.4"
+                            : l.tone == Tone.error ? "M 6 0.6 L 11.4 6 L 6 11.4 L 0.6 6 Z"
+                            : l.tone == Tone.warning ? "M 6 1 L 11.4 10.6 L 0.6 10.6 Z"
+                            : "M 1.2 6 A 4.8 4.8 0 1 1 10.8 6 A 4.8 4.8 0 1 1 1.2 6 Z";
+                        accessible-role: none;
+                    }
+                }
+                Text {
+                    horizontal-stretch: 1;
+                    text: l.title;
+                    font-size: Theme.text-xs;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.ink;
+                    wrap: word-wrap;
+                    accessible-role: none;
+                }
+            }
+            if l.detail != "": Text {
+                text: l.detail;
+                font-size: Theme.text-2xs;
+                color: Theme.ink-2;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+        }
+    }
+}
+
+// The parallel run (§23.7) in place of the results: every difference with its crop, the
+// identity differences, the totals that are not Remark's, the key sheets Remark graded as
+// students, and the Restricted report.
+export component ParallelRunView inherits VerticalLayout {
+    in property <bool> narrow;
+    property <length> side-w: root.narrow ? 360px : 420px;
+    property <length> crop-w: root.narrow ? 196px : 236px;
+    padding: Theme.space-xl;
+    padding-top: Theme.space-lg;
+    spacing: Theme.space-md;
+    RestrictedBanner {
+        text: RemarkVM.banner;
+        Centered {
+            GhostButton {
+                text: "Back to results";
+                accessible-description: "Closes the parallel run; it is not saved until you save the report";
+                clicked => {
+                    RemarkVM.cmp-open = false;
+                }
+            }
+        }
+    }
+    if RemarkVM.cmp-refused: RemarkRefusal {
+        message: RemarkVM.cmp-refusal;
+        remedy: RemarkVM.cmp-remedy;
+        suggestion: RemarkVM.cmp-suggestion;
+        exam-points: true;
+        use-suggested => {
+            RemarkVM.cmp-use-suggested();
+        }
+        use-exam-points => {
+            RemarkVM.cmp-use-exam-points();
+        }
+    }
+    if RemarkVM.cmp-refused: Rectangle {
+        vertical-stretch: 1;
+    }
+    if !RemarkVM.cmp-refused: HorizontalLayout {
+        spacing: Theme.space-md;
+        for t in RemarkVM.cmp-tiles: StatTile {
+            horizontal-stretch: 1;
+            label: t.label;
+            value: t.value;
+            caption: t.caption;
+            caption-tone: t.tone;
+        }
+    }
+    if !RemarkVM.cmp-refused: HorizontalLayout {
+        vertical-stretch: 1;
+        spacing: Theme.space-lg;
+        Card {
+            horizontal-stretch: 1;
+            inset: 0;
+            VerticalLayout {
+                VerticalLayout {
+                    padding: Theme.space-lg;
+                    padding-bottom: Theme.space-md;
+                    spacing: Theme.space-2xs;
+                    HorizontalLayout {
+                        spacing: Theme.space-md;
+                        Text {
+                            horizontal-stretch: 1;
+                            text: "Differences to adjudicate";
+                            font-size: Theme.text-lg;
+                            font-weight: Theme.weight-semibold;
+                            color: Theme.ink;
+                            overflow: elide;
+                            vertical-alignment: center;
+                            accessible-role: AccessibleRole.text;
+                        }
+                        if RemarkVM.cmp-can-queue: Centered {
+                            PrimaryButton {
+                                text: "Queue for review";
+                                accessible-description: "Puts each settled difference from an answer this exam auto-accepted in Review, where it holds release until you decide it; each decision is recorded";
+                                clicked => {
+                                    RemarkVM.queue();
+                                }
+                            }
+                        }
+                    }
+                    Text {
+                        text: "Remark's reading beside ours wherever it differs from our settled answer, and on every question still pending review here. " + RemarkVM.cmp-title + " · totals: this exam's own grades · Remark's points " + RemarkVM.cmp-points;
+                        font-size: Theme.text-xs;
+                        color: Theme.ink-2;
+                        wrap: word-wrap;
+                        accessible-role: AccessibleRole.text;
+                    }
+                    Text {
+                        text: RemarkVM.cmp-hold;
+                        font-size: Theme.text-xs;
+                        color: RemarkVM.cmp-can-queue ? Theme.warning : Theme.ink-2;
+                        wrap: word-wrap;
+                        accessible-role: AccessibleRole.text;
+                    }
+                }
+                TableRow {
+                    header: true;
+                    TableHeaderCell {
+                        text: "Q";
+                        width: 40px + Theme.space-md;
+                    }
+                    TableHeaderCell {
+                        text: "Sheet as scanned";
+                        width: root.crop-w + Theme.space-md;
+                    }
+                    TableHeaderCell {
+                        text: "Readings";
+                        width: 160px + 2 * Theme.space-md;
+                    }
+                    TableHeaderCell {
+                        text: "Status · booklet · student · findings";
+                        horizontal-stretch: 1;
+                    }
+                }
+                if RemarkVM.diffs.length == 0: Text {
+                    vertical-stretch: 1;
+                    text: "No difference: every compared question is our settled answer and Remark's reading";
+                    font-size: Theme.text-sm;
+                    color: Theme.ink-2;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                if RemarkVM.diffs.length > 0: ListView {
+                    vertical-stretch: 1;
+                    for d[i] in RemarkVM.diffs: CmpDiffRow {
+                        data: d;
+                        crop: RemarkVM.diff-crops[i];
+                        index: i;
+                        crop-w: root.crop-w;
+                    }
+                }
+            }
+        }
+        VerticalLayout {
+            width: root.side-w;
+            spacing: Theme.space-lg;
+            Card {
+                vertical-stretch: 1;
+                title: "Identity, totals and key sheets";
+                subtitle: RemarkVM.identity.length == 0 && RemarkVM.totals.length == 0 && RemarkVM.cmp-key-sheets.length == 0 ? "Every booklet paired by its student number; every total of this exam equals Remark's" : "Pairings to check, this exam's totals not (yet) Remark's, and the key sheets Remark graded as students (student numbers masked)";
+                ScrollView {
+                    vertical-stretch: 1;
+                    min-height: 48px;
+                    preferred-height: 48px;
+                    content-width: self.visible-width;
+                    VerticalLayout {
+                        spacing: Theme.space-md;
+                        alignment: start;
+                        if RemarkVM.identity.length > 0: SectionLabel {
+                            text: "IDENTITY DIFFERENCES";
+                        }
+                        CmpLines {
+                            lines: RemarkVM.identity;
+                            prefix: "Identity difference: ";
+                        }
+                        if RemarkVM.totals.length > 0: SectionLabel {
+                            text: "TOTALS";
+                        }
+                        CmpLines {
+                            lines: RemarkVM.totals;
+                            prefix: "Total: ";
+                        }
+                        if RemarkVM.cmp-key-sheets.length > 0: SectionLabel {
+                            text: "KEY SHEETS GRADED AS STUDENTS";
+                        }
+                        CmpLines {
+                            lines: RemarkVM.cmp-key-sheets;
+                            prefix: "Key sheets: ";
+                        }
+                    }
+                }
+            }
+            Card {
+                title: "Workbooks and report";
+                subtitle: "Restricted report: HTML, CSV and JSON with this banner, a signed manifest, owner-only files (no sync folder), an audited export";
+                vertical-stretch: 0;
+                VerticalLayout {
+                    spacing: Theme.space-sm;
+                    CmpLines {
+                        lines: RemarkVM.cmp-workbooks;
+                        prefix: "Workbook: ";
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.space-sm;
+                        TextField {
+                            horizontal-stretch: 1;
+                            label: "Report folder";
+                            placeholder: "Folder for the Restricted report";
+                            text <=> RemarkVM.save-path;
+                            mono: true;
+                        }
+                        Centered {
+                            PrimaryButton {
+                                text: "Save report";
+                                enabled: RemarkVM.save-path != "";
+                                accessible-description: "Writes the Restricted parallel-run report into the folder (rerun on the exam as it stands)";
+                                clicked => {
+                                    RemarkVM.save(RemarkVM.save-path);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The bar that starts the parallel run (floating over Results, as the Exports bar does).
+export component CompareBar inherits Rectangle {
+    background: Theme.surface-raised;
+    border-radius: Theme.radius-lg;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    drop-shadow-blur: Theme.shadow-2-blur;
+    drop-shadow-offset-y: Theme.shadow-2-offset;
+    drop-shadow-color: Theme.shadow-2-color;
+    init => {
+        field.focus();
+    }
+    FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                RemarkVM.cmp-bar = false;
+                return accept;
+            }
+            return reject;
+        }
+        VerticalLayout {
+            padding-left: Theme.space-lg;
+            padding-right: Theme.space-lg;
+            padding-top: Theme.space-md;
+            padding-bottom: Theme.space-md;
+            spacing: Theme.space-xs;
+            HorizontalLayout {
+                spacing: Theme.space-md;
+                Text {
+                    text: "Parallel run with Remark";
+                    font-size: Theme.text-md;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                }
+                field := TextField {
+                    horizontal-stretch: 1;
+                    label: "Remark workbooks to compare";
+                    placeholder: "Remark's graded Excel exports of these sheets (.xlsx), and optionally a handwritten-ID .csv (file,page,student_id); ; between several";
+                    text <=> RemarkVM.cmp-path;
+                    mono: true;
+                    accepted(v) => {
+                        if (v != "") {
+                            RemarkVM.compare(v);
+                        }
+                    }
+                }
+                Centered {
+                    PrimaryButton {
+                        text: "Compare";
+                        key-hint: "Enter";
+                        enabled: RemarkVM.cmp-path != "";
+                        accessible-description: "Compares this exam with Remark's graded workbooks of the same sheets; nothing is written";
+                        clicked => {
+                            RemarkVM.compare(RemarkVM.cmp-path);
+                        }
+                    }
+                }
+                Centered {
+                    GhostButton {
+                        text: "Cancel";
+                        clicked => {
+                            RemarkVM.cmp-bar = false;
+                        }
+                    }
+                }
+            }
+            Text {
+                text: "Restricted: student numbers and answers; head-to-head figures stay inside the university and leave it only after the licence review (spec §3.5, Q-08)";
+                font-size: Theme.text-xs;
+                color: Theme.warning;
+                wrap: word-wrap;
+            }
+        }
+    }
+}

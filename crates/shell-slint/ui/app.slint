@@ -6,7 +6,7 @@
 // the screens, whose layout depends on the width), which Slint 1.18 deprecates and may panic on.
 
 import { Theme, Tone, NavRail, NavItem } from "theme.slint";
-import { App, ExamsVM, SetupVM, ScanVM, ReviewVM, ResultsVM, OutcomesVM, Page } from "state.slint";
+import { App, ExamsVM, SetupVM, ScanVM, ReviewVM, ResultsVM, OutcomesVM, RemarkVM, Page } from "state.slint";
 import { Icons } from "widgets.slint";
 import { ExamsScreen } from "screens/exams.slint";
 import { SetupScreen } from "screens/setup.slint";
@@ -17,7 +17,7 @@ import { OutcomesScreen } from "screens/outcomes.slint";
 import { SettingsScreen } from "screens/settings.slint";
 import { Palette } from "std-widgets.slint";
 
-export { Theme, App, ExamsVM, SetupVM, ScanVM, ReviewVM, ResultsVM, OutcomesVM, Page }
+export { Theme, App, ExamsVM, SetupVM, ScanVM, ReviewVM, ResultsVM, OutcomesVM, RemarkVM, Page }
 
 export component AppWindow inherits Window {
     title: "OMR Correction";

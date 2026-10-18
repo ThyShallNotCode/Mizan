@@ -109,6 +109,28 @@ keysheet::stack_warnings(&def, &ks)       // a version given by several key shee
 keysheet::rectified_row(&img, g, &labels, &marked, scale, LABEL_LEAD_PITCHES)  // the row crop
                                          // with the question number printed beside it
 
+// Remark Office OMR (§3.5, PAR-09; §23.7): remark.rs reads the documented graded Excel export
+// only (never Remark's .rmx/.aky), parallel.rs compares it with a graded exam.
+let wbs = remark::read_workbook_files(&[graded_xlsx…])?;   // Student Response / Statistics /
+                                           // Test Statistics reports; names never read
+let given = exam::read_points_file(bytes, questions)?;     // `question,points[_A,_B]`, optional
+let imp = remark::import(&wbs, &given)?;   // one key per version, exact points (learning-objective
+                                           // groups, else solved from the totals), every Remark
+                                           // total reproduced or refused with what to do
+remark::suggest_points(&wbs, &given)?      // a refusal's hint: points a determined version leaves,
+                                           // else a learning objective's equal split
+imp.summary() / key_csv() / clo_csv() / version_map_csv() / write(dir)  // the CLI's files
+def.set_key_points(&imp.key_points()); def.outcomes = imp.outcome_setup();  // points per version,
+                                           // CLO rows "imported, needs review" (proposed)
+let mut run = exam.compare_remark(&wbs, &parallel::CompareOptions { given_points, handwritten, crops })?;
+exam.queue_parallel_differences(&mut run)? // each settled difference from an auto-accepted answer
+                                           // a MRK-001 parallel_run_disagreement item that holds
+                                           // release; its decision a FieldLabelRecorded event
+exam.export_parallel_run(&run, &dir)?      // Restricted report: HTML + CSVs + summary.json, signed
+                                           // manifest, `ExportCreated` (purpose `parallel-run`)
+exam.approve_mappings(approver, note)?     // imported CLO rows approved (MappingApproved, §11.2)
+exam.replace_outcomes(clo_csv, name)?      // the CLO mapping replaced (MappingReplaced), no regrade
+
 // View-models for shell-slint (vm.rs; plain Rust, field names of shell `backend.rs`).
 exam.summary_vm() / setup_vm() / review_queue_vm(lane) / review_item_vm(id) / history_vm()
 exam.results_vm() / outcomes_vm();  vm::list_exams(workspace_dir);  vm::ProgressTracker
@@ -136,7 +158,7 @@ exam.results_vm() / outcomes_vm();  vm::list_exams(workspace_dir);  vm::Progress
 | Exports | `export.rs` | item analysis with flag stability (§12.2: each rank 1–4 flag's share of bootstrap resamples and its low-confidence label, `analytics_with_stability`); `results.csv/.xlsx`, `item_analysis.csv/.xlsx`, `test_stats.csv`, `tp154_a1.csv`, `tp154_b1.csv`, `tp154.xlsx`, `report.html`, `review_queue.json`, `booklets.json`, `summary.json`, `key.csv`, `blackboard_grade_center.csv`, `manifest.json` (SHA-384 per file) |
 | Blackboard upload | `export.rs` | Blackboard Learn "work offline" grade-center CSV (§16.3, PAR-08; format and sources cited in `blackboard_csv`): `"Username","<course> <title> [Total Pts: <max> Score]"` (+ ` \|<column ID>` for an existing column), one row per student whose result is final (Scored, no open blocking item on the booklet, none at batch/exam scope, no open unattributed page); no names or sections; UTF-8 BOM, CRLF, quoted fields, formula guard; never for an inferred key or a rosterless exam; Restricted label in the manifest (CSV rule) |
 | Append (§8.1, §13.4) | `append.rs` | `add_scans`: every stored original (read back verified) + the new files graded again as one batch set (same baselines, collation, serials and queue as grading all at once); a supplied key stays in force (an inferred one is inferred again, a new version when it changed); review states carry over by stable key (kind, code, sub-reason, question, booklet's first page or page); a human value the re-run auto-reads differently is kept and queued as SYS-032 `rerun_disagrees_with_override`, also when a cleaner rescan in the new batch now supersedes the copy the reviewer decided on (the booklet is found through the COL-003 link); store: `batch-N`, `recog-final-N` (parent the previous run), `identity-N`, earlier open exceptions superseded (`RERUN_ACCEPTED`), `BookletRenumbered` for moved serials, `PageAttached` only for pages that moved; earlier review events stay in the history, sealed against undo |
-| Key files, rosters | `exam.rs` | key CSV: header or none, one row per question or per version, a single column; BOM, CRLF, UTF-16, Windows-1256; comma, semicolon or tab; lowercase, spaces, `Q7`/`7.`/Arabic-Indic numbers, Arabic headers and option letters; `A\|C`, `A/C`, `A,C`, `AC`, `A or C`; `*`/`void`/`ملغى`; each malformed line refused with its line number and the fix (R10). Rosters: English/Arabic header aliases below title rows; IDs: `.0` dropped and full-precision `E+` expanded (flagged), lossy `2.2E+09` and decimals refused with the Excel fix; leading zeros restored when exactly one padded length fits the ID scheme; duplicate/empty IDs and national IDs refuse the roster (§9.2 rule 4: Appendix A has no roster-import code; the validation report blocks) |
+| Key files, rosters | `exam.rs` | key CSV: header or none, one row per question or per version, a single column; a `points` column or one per version (`points_A`, `points_B`: `read_key_file_full`, `ExamDefinition::form_points`); BOM, CRLF, UTF-16, Windows-1256; comma, semicolon or tab; lowercase, spaces, `Q7`/`7.`/Arabic-Indic numbers, Arabic headers and option letters; `A\|C`, `A/C`, `A,C`, `AC`, `A or C`; `*`/`void`/`ملغى`; each malformed line refused with its line number and the fix (R10). Rosters: English/Arabic header aliases below title rows; IDs: `.0` dropped and full-precision `E+` expanded (flagged), lossy `2.2E+09` and decimals refused with the Excel fix; leading zeros restored when exactly one padded length fits the ID scheme; duplicate/empty IDs and national IDs refuse the roster (§9.2 rule 4: Appendix A has no roster-import code; the validation report blocks) |
 | Reasons (§13.4, §14.4) | `app.rs`, `review.rs` | a group action refused by one member part way (e.g. one student given to two booklets) is recorded and undone, so nothing changes (exit 6, "resolve the items one by one"); `apply_with_reason`: the canonical code on every event of the action (`ResponseCorrected`, `IdentityConfirmed`, `ExceptionResolved`, `BookletFormConfirmed` …), a note only as `note:<ref>#sha384:…`, its text in the store's `review_note` table (salted digest, erasable); overriding the engine's proposal without a reason is refused (exit 6) listing the item family's codes; `OTHER`/`SOLO_SELF_APPROVAL` need a note; confirmations default to the item's code; key changes carry `KEY_ERROR`/`CLERICAL_CORRECTION` (or the given reason) on a published key version |
 
 **Determinism (A5).** Pages are ordered by content (source SHA-384, page index; key sheets
@@ -203,6 +225,116 @@ routes the rows) and **never auto-accepted**: the instructor confirms a rendered
 - An appended batch (`add_scans`) waits for the confirmation; a confirmation carries over while
   the same scans are the version's key sheets.
 
+## Remark import and the parallel run (§3.5, PAR-09, §23.7)
+
+**Import** (`remark.rs`, `omr import remark`). Only Remark's documented Excel export is read
+(§3.5 legal constraints): the *Student Response Report* (header `Student ID, Student Name,
+[Section No, Gender,] Version1, Total, Percent, Grade, Answers1…N`, then the `Answer Key` row
+with the total possible, one row per student, the `Mean` footer), the *Student Statistics
+Report* (learning-objective groups `Q1 (1-8)` with each student's `points / possible`) and the
+*Test Statistics Report* (the class statistics Remark reported). Header variants are found by
+name; IDs typed as numbers (`2210000001.0`) are repaired, IDs Excel turned into `2.2E+09`
+(digits lost) are counted in the summary; empty cells and `BLANK` are blank; student names are
+never read. A row is a footer only when its ID cell is a word and its answer columns hold
+statistics (or it has a known label, or no total), so a student whose ID Remark wrote as
+`ERROR` is read; a second `Answer Key` row is refused. Sheets are streamed through `xlsx.rs`
+(sparse cells; a value beyond 100,000 rows or 2,048 columns, or parts declaring more than
+512 MB decompressed, refused). A learning-objective header naming a question the export does
+not have is refused; questions in no objective, or in several, are named. The same workbook
+given twice is refused. Workbooks of one exam merge by version (`Version1`, or the key
+when the column is empty); the workbooks of a version must give the same key, total possible
+and learning objectives, else the import is refused naming the files.
+- **Points** per version: the learning-objective groups' points split equally over their
+  questions, taken only when the totals and the students' group points allow no other split
+  (when some of a group's questions were answered right by exactly the same students, any
+  split fits: refused naming the group, its questions and the equal split as a hint, F4);
+  questions in no group, or every question without groups, solved **exactly** from
+  the totals (`omr_scoring::solve_points`: exact elimination modulo a 61-bit prime, the
+  fractions rebuilt and verified in rationals, the Answer Key's total possible as one more
+  equation); points the instructor gives are kept. If the equal split
+  does not reproduce the totals, the group points become equations too. Whatever the source,
+  the points must reproduce **every** row's Remark total and every group's points exactly, else
+  refused naming the rows. Questions the totals cannot tell apart (e.g. answered right by
+  everyone, or by exactly the same students) are refused naming them, with the points a fully
+  determined version leaves for them when the versions are one exam in two orders, else a
+  learning objective's equal split (the hint, and `suggest_points`; the instructor gives them
+  with `--points` or the desktop's explicit choice, the import never assumes them).
+- **Key sheets graded as students**: a row whose ID is one repeated digit, or whose answers are
+  the key with full marks, is reported, never counted as a student.
+- **AND keys** (`A+C`, `A&C`, `A and C`, Remark's partial-credit syntax, §10.1) in the Answer
+  Key row or a key file are refused with what to write instead (`A|C` for either answer, `*`
+  to void): they are not scored yet, and reading them as "either" would credit half answers.
+- **Notes**: each learning objective's points and question count per version, a warning when
+  they differ between the versions (Remark groups printed positions), and that every CLO is
+  written in domain K (the export has no domain).
+- **Files**: `key.csv` (`question,A,B,points` or `…,points_A,points_B` when the versions carry
+  different points), `clo.csv` (each learning objective a CLO, weight-1 mappings with `form`,
+  `status` "imported, needs review" and `source` "Remark import": proposed rows, so TP-154 is
+  watermarked draft until approved, SCO-032), `version_map.csv` (workbook → version, Remark's
+  version text, rows, points source; Remark's export has no cross-version item map, so each
+  version is scored in its printed order), and `manifest.json` (classification `restricted`,
+  each file's and each source workbook's SHA-384, signed with this computer's key). Written
+  owner-only, never into a sync folder (SYS-015).
+
+**CLO mappings of a graded exam** (`app.rs`, `omr clo approve|replace`, Setup in the desktop):
+`approve_mappings` makes every imported, unapproved row `approved` by the named approver
+(`CloMapping::approved_by`; its source kept), records `MappingApproved` and publishes the mapping
+set, so the TP-154 tables leave the draft watermark (SCO-032) without grading again;
+`replace_outcomes` replaces the CLOs and mapping with a CLO file (versions checked; rows for one
+version refused when the versions share one item set), records `MappingReplaced`, and the
+outcomes recompute from the same score run.
+
+**Per-version points in the exam** (`exam.rs`, `pipeline.rs`, `score.rs`): `points_A`/`points_B`
+columns of a key file set `ExamDefinition::form_points`; versions with other points (or CLO rows
+of their own, `CloMapping::form`) never share master items, and each version's items carry its
+own points (key sheets confirmed later follow the same rule, `EffectiveKey::can_share_items`).
+`read_key_file` (one points column) refuses a file whose versions differ and names
+`read_key_file_full`. On an exam whose CLO rows are per version, the Setup grid's edits
+(`set_mapping_weight`, `set_mapping_note`) are refused: one cell stands for several rows; the
+`form` column of `clo.csv` changes them.
+
+**Parallel run** (`parallel.rs`, `omr compare remark`). Booklets are matched to Remark rows by
+student ID (a number cell that lost its leading zeros too) when the answers agree as two
+readings of one sheet do (at least half identical, and half of those where either departs from
+the key, once there are 4 such questions; an ID match that fails it is paired last, if nothing
+better is found, and reported as `SameIdAnswersDiffer`), then a booklet whose grid read is
+incomplete to the one row whose ID agrees with every digit read confidently (not an identity
+difference: our IDN-004 item waits in review), then the rest by answers (the same version,
+≥ 80 % identical answers and ≥ 80 % where either departs from the key, two more than any
+alternative), each reported as an identity difference: a different ID, Remark's ID equal to
+the handwritten number when it is known (`--handwritten`), or a Remark row without a student
+number (`ERROR …`). A booklet with no row and a row with no booklet are listed; a workbook none
+of whose rows is a booklet is another section's, listed and not compared; when no row of any
+workbook pairs with a booklet, the workbooks are refused (another test's). Per question:
+Remark's answer, ours and our status; every difference with its rectified bubble-row crop, and
+every question pending review here with Remark's reading beside our proposal.
+Per student: **the exam's own totals** (its score run: its points, voids and policy, the
+figures it releases) against Remark's total and total possible, a provisional total with what
+it becomes when its pending questions are resolved as Remark read them, the exam's Saudi
+letter; and, as a secondary check of the readings only, the "answers only" total (Remark's key
+and imported points applied to our answers). The questions whose points differ between the
+exam and Remark, and each version whose maximum differs from Remark's total possible, are
+listed (no total can agree there). The learning objectives (CLO results, §3.5 item 6): per
+settled booklet and objective, the exam's points on its questions beside Remark's subtotal. Key sheets Remark graded as students: Remark's reported mean, SD, top,
+KR-20 and α beside the same statistics recomputed from its rows with and without them (Remark
+divides by N, computes KR-20 on the number right and α on the weighted item scores); only rows
+whose ID is one repeated digit count as key sheets, and a row with every answer right under a
+student-like ID and no booklet is a *possible key sheet or perfect score*, with the statistics
+shown both with and without it. **Release**: the report alone holds nothing and says so;
+`queue_parallel_differences` makes each settled difference from an auto-accepted answer a
+Marks-lane MRK-001 `parallel_run_disagreement` (ERROR) item with both readings and the bubble
+row: the answer waits for review (provisional total, release held), accepting keeps the exam's
+reading, another answer needs a reason, and every decision is a `FieldLabelRecorded` event
+(engine loss, incumbent loss); the comparison is `ParallelRunCompared`; a later batch carries
+open items over. Refused on released results. **Licence**: the report and the CLI state the
+Q-08 licence review as recorded in `licence_review.json` in the private key folder
+(`{"q08": "cleared" | "refused", "by", "date"}`; none recorded: open, an internal check); a
+recorded refusal stops the comparison. The report
+(`parallel_run.html`, `parallel_run_{students,questions,identity}.csv`,
+`parallel_run_summary.json`, `manifest.json`) carries the Restricted banner (head-to-head
+figures stay inside the university, spec §3.5, Q-08), is written only where asked (SYS-015;
+owner-only files; signed manifest) and is recorded as `ExportCreated`.
+
 ## Inferred key mode
 
 `KeySource::Inferred` is an explicit opt-in (`omr grade --infer-key`) for runs without a key:
@@ -246,8 +378,14 @@ Synthetic (committed, `tests/synthetic_e2e.rs`, no real data; `omr-sim` is a dev
 
 | `tests/adversarial.rs` | hostile inputs, each with its Appendix A code, never a panic or a silent wrong score: zero-byte (each its own CAP-001), truncated PDF/JPEG/PNG, encrypted and mislabelled files → CAP-001 naming the file and the fix; a 3-page TIFF → 3 booklets, a damaged chain → 2 + CAP-001; noise, black, text, every-bubble-filled and own-form pages in a legacy exam (and an IAU sheet in an own-form exam) → REG-001/IDN-002 held; a form-C sheet in an A/B (and an A-only) exam → IDN-002; JPEG at 150 (CAP-002 WARN), 300, 400 dpi read exactly, 75 dpi → CAP-002 ERROR (legacy and own forms, 0 silent errors); rescans and a page fed twice → COL-003 (the copy with fewer abstentions graded), another sheet with the same number → IDN-005; void + `A\|C` key (A or C credited, A+C not, maximum 28); review → key change → undo, append → undo, a group decision refused part way and a cleaner rescan in a later batch (SYS-032): incremental = full rebuild, chain verifies; an incomplete key blocks release; all of it byte-identical at 1/2/3/4 threads, reversed and shuffled; `req_a2_a_500_page_pdf_keeps_memory_bounded_and_throughput` (`#[ignore]`, release): one 500-page own-form PDF (223 MiB) through the whole app at 4 threads: 81.9 pages/s with store (acceptance run of 2026-10-17; 79–82 in other runs), peak memory +223 to +276 MiB (the PDF once plus at most ≈ 85 KB per page; retaining decoded pages would cost ≈ 1.9 GB), 0 silent errors in 19,886 auto-accepted answers |
 
+| `tests/remark_import.rs` (§3.5) | synthetic workbooks in Remark's layout (invented IDs and Arabic names): learning-objective groups give each version's points (two sections merged, a key-sheet row reported, an Excel-typed ID, a `BLANK` version), the CLO file read back as proposed per-version mappings and the key file as per-version points; points solved exactly without groups (header without Section No/Gender, footer skipped); two questions everyone answered right refused naming them, settled by a given point; the points a determined version leaves suggested; keys or learning objectives that disagree between workbooks refused naming the files; a hand-edited total refused naming its row; an exam defined from the files scores each version with its own points; verification round (EVIDENCE §5.1): a student row whose ID Remark wrote as a word does not end the rows, a 100-question export solved from the totals, a learning objective of another test refused and gaps named, IDs in scientific notation named, a far-corner cell refused (never an abort, rosters too), a decompression bomb refused, a workbook given twice refused; fifth round (EVIDENCE §5.2): a learning objective whose questions the students do not tell apart refused, never split equally on a guess (settled by given points), the equal split taken where it is the only one |
+| `tests/remark_compare.rs` (§23.7) | seven IAU sheets rendered on the blank form and graded with the imported key and points, compared with four workbooks (two of another section, not compared): 3 pairs by ID, 1 by an ID completing our incomplete read, 2 by answers (a different ID; the handwritten ID), a booklet with no row, a row with no booklet, another section's workbook not compared, one answer Remark read otherwise (its crop), a question pending review (the provisional total equals Remark's once resolved as Remark read it), weighted totals and letters, the key sheet's effect on Remark's reported statistics (reproduced exactly), the Restricted report (banner in every file, private files, signed manifest, `ExportCreated`), a sync folder refused (SYS-015), another exam's workbook refused; a booklet carrying another section's student's number paired with its own row (that section stays out of scope), another test of the same students refused, a per-version CLO cell not edited silently and labelled with its version; fifth round (EVIDENCE §5.2): the totals are the exam's score run (graded at 1 point per question against weighted exports: no total equal, every point and maximum difference listed), settled differences queued for review hold release and become field labels (engine loss, incumbent loss; undo; reopen), carried over a later batch, the learning-objective subtotals compared, imported CLO rows approved and replaced without grading again (with the per-version objective notes and the domain-K note), a perfect score without a booklet a possible key sheet never counted as one, the licence review stated and a recorded refusal stopping the comparison |
+
 Real data (`tests/real_iau_e2e.rs`, skipped unless `OMR_IAU_PDF_DIR` and `OMR_IAU_REFERENCE`
-are set; aggregates only): the five IAU student PDFs (the folder's key-sheet PDFs are left out)
+are set; aggregates only; `tests/real_iau_remark.rs` also needs `OMR_REMARK_DIR`, Remark's graded
+workbooks of the two exams: the import, weighted grading with the imported points and the
+parallel run were performed internally, and their head-to-head figures stay inside the
+university, spec §3.5, Q-08): the five IAU student PDFs (the folder's key-sheet PDFs are left out)
 as two exams with `--infer-key` (CS 522: 92 pages, 29 questions; ARTI 503: 51 pages, 28
 questions). `tests/real_iau_scored.rs` (also `OMR_IAU_KEYS`) grades them with the instructors'
 real keys and again with their key sheets; see `docs/EVIDENCE.md` §4.

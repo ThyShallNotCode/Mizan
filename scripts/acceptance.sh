@@ -157,6 +157,19 @@ if [ -n "${OMR_IAU_PDF_DIR:-}" ] && [ -n "${OMR_IAU_REFERENCE:-}" ]; then
     rm -f "$OMR_E2E_REPORT"
     run R omr-app real_iau_e2e 1 req_a1_real
     cp "$OMR_E2E_REPORT" "$OMR_ACCEPT_OUT/real-e2e.json" 2>/dev/null || true
+    # Scoring with the instructors' keys and key sheets (EVIDENCE §4.1).
+    if [ -n "${OMR_IAU_KEYS:-}" ]; then
+        run R omr-app real_iau_scored 1
+    fi
+    # The parallel run with Remark (EVIDENCE §5): pass or fail only. Its report and counts are
+    # Restricted (spec §3.5, Q-08): they go to the private work folder, never to the evidence;
+    # OMR_REMARK_EXPECT (restricted, outside the repository) holds what the run must find.
+    if [ -n "${OMR_IAU_KEYS:-}" ] && [ -n "${OMR_REMARK_DIR:-}" ]; then
+        export OMR_REMARK_REPORT="${OMR_REMARK_REPORT:-$WORK/remark-report}"
+        mkdir -p "$OMR_REMARK_REPORT"
+        chmod 700 "$OMR_REMARK_REPORT"
+        run R omr-app real_iau_remark 1
+    fi
     echo "acceptance: omr bench on the real PDFs"
     load0=$(cut -d' ' -f1 /proc/loadavg)
     if "$CARGO_TARGET_DIR/release/omr" bench "$OMR_IAU_PDF_DIR" --template iau-ccsit-v1 \

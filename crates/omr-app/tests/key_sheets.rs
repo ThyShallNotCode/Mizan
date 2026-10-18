@@ -894,3 +894,56 @@ fn a_key_correction_after_confirmation_survives_a_rescan_of_the_key_sheet() {
     assert_eq!(p.session.key.as_ref().unwrap().forms[0][1].text(), fixed);
     p.close().unwrap();
 }
+
+/// Verification round (Remark import, per-version points): versions whose key sheets give
+/// the same answers but whose points differ (`form_points`, as a Remark import writes them
+/// when its versions shuffle questions of different weights) keep one item set per version
+/// after the confirmation. Regression: the confirmation shared the items whenever the
+/// answers agreed, and version B was scored with version A's points.
+#[test]
+fn confirmed_key_sheets_keep_each_versions_points() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("scans");
+    let e = iau();
+    let same: Vec<Option<u8>> = (0..N).map(|q| Some(key(0, q))).collect();
+    let mut files = Vec::new();
+    for (k, v) in [(0u8, 0u8), (1, 1)] {
+        let id = format!("22104511{k:02}");
+        let img = sheet(&e, &Marks::new(&same, &id, Some(v)), 300 + u64::from(k));
+        files.push(write(&dir, &format!("student-{k}.png"), &png(&img)));
+    }
+    for (v, marker) in [(0u8, '0'), (1, '9')] {
+        let id: String = std::iter::repeat_n(marker, 10).collect();
+        let img = sheet(&e, &Marks::new(&same, &id, Some(v)), 310 + u64::from(v));
+        files.push(write(&dir, &format!("key-{v}.png"), &png(&img)));
+    }
+    let mut def = legacy_def("Final", N, &["A", "B"], KeySource::None);
+    def.form_points
+        .insert("B".into(), vec!["2".to_string(); usize::from(N)]);
+    def.validate().unwrap();
+    let out = tmp.path().join("exam");
+    let mut p = grade(&def, &files, &out, 2);
+    p.confirm_key_sheets(None, Vec::new(), None).unwrap();
+    let key = p.session.key.as_ref().unwrap();
+    assert!(
+        !key.shared_items,
+        "versions with their own points share no items"
+    );
+    let sc = p.scoring.as_ref().unwrap();
+    let run = sc.run.as_ref().unwrap();
+    for (k, want) in [(0usize, i128::from(N)), (1, 2 * i128::from(N))] {
+        let bi = p
+            .session
+            .booklets
+            .iter()
+            .position(|b| b.student() == Some(format!("22104511{k:02}").as_str()))
+            .unwrap();
+        let row = sc.row_of[bi].unwrap();
+        assert_eq!(
+            run.students[row].raw,
+            omr_scoring::exact(want, 1),
+            "student {k}"
+        );
+    }
+    p.close().unwrap();
+}

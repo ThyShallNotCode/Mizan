@@ -239,6 +239,11 @@ struct Opened {
     keysheets: RefCell<Option<Option<b::KeySheetSummary>>>,
     /// Flag stability (§12.2) of a score run: its run ID and the stability job's report.
     stability: RefCell<Option<(String, omr_analytics::StabilityReport)>>,
+    /// A Remark import read in Setup and not applied yet (§3.5).
+    remark: Option<HeldImport>,
+    /// What the last parallel run with Remark read (§23.7): the report is written from a
+    /// rerun on the exam as it stands.
+    parallel: Option<b::RemarkRequest>,
 }
 
 /// Key-sheet files read in memory for an exam (`omr key read`): the recognizer's reading, held
@@ -266,6 +271,8 @@ impl Opened {
             preview: None,
             keysheets: RefCell::new(None),
             stability: RefCell::new(None),
+            remark: None,
+            parallel: None,
         }
     }
 
@@ -306,6 +313,8 @@ pub struct AppBackend {
     /// Flag-stability jobs running on the spawner's threads (§12.3: a background job, never on
     /// the synchronous regrade path): exam, score-run ID and the channel of its report.
     stability_jobs: RefCell<Vec<StabilityJob>>,
+    /// A Remark import read on the New-exam form and not used yet (§3.5).
+    remark_new: Option<HeldImport>,
 }
 
 struct StabilityJob {
@@ -350,6 +359,7 @@ impl AppBackend {
             spawn: None,
             reloaded: Vec::new(),
             stability_jobs: RefCell::new(Vec::new()),
+            remark_new: None,
         }
     }
 
@@ -512,7 +522,24 @@ impl AppBackend {
         i.clo = path(&form.clo);
         i.title = text(&form.title);
         i.course = text(&form.course);
-        let (definition, warnings) = omr_app::define::define(&i).map_err(app_err)?;
+        // the key, its exact points per version and the learning objectives from a Remark
+        // import read on this form (§3.5): applied to the definition as omr-app gives them
+        let remark = match text(&form.remark) {
+            None => None,
+            Some(named) => Some(self.remark_for_new_exam(&named, &mut i, &key_sheets)?),
+        };
+        let (mut definition, warnings) = omr_app::define::define(&i).map_err(app_err)?;
+        if let Some(imp) = &remark {
+            definition.key = omr_app::exam::KeySource::Provided {
+                forms: imp.form_keys(),
+            };
+            definition.set_key_points(&imp.key_points());
+            if let Some(o) = imp.outcome_setup() {
+                definition.outcomes = Some(o);
+            }
+            definition.exam_id = definition.derived_exam_id();
+            definition.validate().map_err(app_err)?;
+        }
         // the inputs exist and hold scans before anything is created
         let files = omr_app::ingest::collect_paths(&inputs).map_err(app_err)?;
         let dir = omr_app::define::new_exam_dir(&workspace, &definition);
@@ -541,8 +568,18 @@ impl AppBackend {
                 job.activity.insert(0, format!("{now} · roster: {w}"));
             }
         }
+        if let (Some(imp), Some(job)) = (&remark, self.job.as_mut()) {
+            let now = snapshot_label(&omr_app::pipeline::now_utc());
+            for line in remark_activity(imp) {
+                job.activity.insert(0, format!("{now} · {line}"));
+            }
+        }
+        self.remark_new = None;
         self.default = Some(exam.clone());
-        let key = if !key_sheets.is_empty() {
+        let key = if remark.is_some() {
+            "; the key and its points per version come from the Remark import, the learning \
+             objectives as CLO mappings flagged imported, needs review"
+        } else if !key_sheets.is_empty() {
             "; the key is read from the key sheets and waits for your confirmation in Setup \
              (nothing is scored until then)"
         } else if i.infer_key {
@@ -559,6 +596,76 @@ impl AppBackend {
                 dir.display()
             ),
         ))
+    }
+
+    /// The Remark import held for the New-exam form, checked against what the form says
+    /// (`named`: the workbooks it lists) and the form's other fields; sets the questions and
+    /// versions it gives and that no key is inferred.
+    fn remark_for_new_exam(
+        &self,
+        named: &str,
+        i: &mut omr_app::define::Inputs,
+        key_sheets: &[PathBuf],
+    ) -> Result<omr_app::remark::RemarkImport, BackendError> {
+        let bad = |m: String| BackendError::Invalid(m);
+        let held = self.remark_new.as_ref().ok_or_else(|| {
+            bad(
+                "Remark import: the export read on this form is no longer held; read it again \
+                 with Import from Remark export…"
+                    .into(),
+            )
+        })?;
+        let files: Vec<String> = held.files.iter().map(|f| file_label(f)).collect();
+        if files.join("; ") != named.trim() {
+            return Err(bad(format!(
+                "Remark import: the form lists {named} but the export read is {}; read it again \
+                 with Import from Remark export…",
+                files.join("; ")
+            )));
+        }
+        let imp = &held.imp;
+        if i.key.is_some() {
+            return Err(bad(
+                "Answer key file: the key comes from the Remark import; clear the key file, or \
+                 clear the import"
+                    .into(),
+            ));
+        }
+        if !key_sheets.is_empty() {
+            return Err(bad(
+                "Key sheets: the key comes from the Remark import; clear the key sheets, or \
+                 clear the import"
+                    .into(),
+            ));
+        }
+        if i.questions != imp.questions {
+            return Err(bad(format!(
+                "Number of questions: the Remark export has {} questions (not {}); type {} or \
+                 clear the import",
+                imp.questions, i.questions, imp.questions
+            )));
+        }
+        let forms = imp.forms();
+        if let Some(f) = i.forms.as_ref().filter(|f| !f.is_empty() && **f != forms) {
+            return Err(bad(format!(
+                "Form letters: the Remark export gives versions {} (not {}); type {} or clear \
+                 the import",
+                forms.join(","),
+                f.join(","),
+                forms.join(",")
+            )));
+        }
+        let objectives = imp.versions.iter().any(|v| !v.groups.is_empty());
+        if objectives && i.clo.is_some() {
+            return Err(bad(
+                "CLO mapping file: the learning objectives come from the Remark import; clear \
+                 the CLO file, or clear the import"
+                    .into(),
+            ));
+        }
+        i.forms = Some(forms);
+        i.infer_key = false;
+        Ok(imp.clone())
     }
 
     /// True while a grading run or an added batch is in progress (screenshots wait for it).
@@ -1513,12 +1620,31 @@ impl Opened {
                         note: n.clone(),
                     })
                     .collect(),
-                // the core has no approval workflow: a mapping in the definition is the
-                // mapping in force (attainment uses it), never shown as approved
-                status: if r.cells.iter().any(|c| c.0.is_some()) {
-                    b::MappingStatus::InUse
-                } else {
-                    b::MappingStatus::Draft
+                // imported rows are proposed until approved (§11.2); the coordinator's own
+                // rows are the mapping in force (attainment uses them), never "approved"
+                status: {
+                    let rows: Vec<&omr_app::CloMapping> = def
+                        .outcomes
+                        .as_ref()
+                        .map(|o| {
+                            o.mapping
+                                .iter()
+                                .filter(|m| u32::from(m.question) == r.question)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if rows
+                        .iter()
+                        .any(|m| !m.imported.is_empty() && m.approved_by.is_empty())
+                    {
+                        b::MappingStatus::Proposed
+                    } else if rows.iter().any(|m| !m.approved_by.is_empty()) {
+                        b::MappingStatus::Approved
+                    } else if r.cells.iter().any(|c| c.0.is_some()) {
+                        b::MappingStatus::InUse
+                    } else {
+                        b::MappingStatus::Draft
+                    }
                 },
             })
             .collect();
@@ -1538,6 +1664,12 @@ impl Opened {
         b::ExamSetup {
             exam: exam.clone(),
             roster_students: def.roster.as_ref().map_or(0, |r| r.len() as u32),
+            mappings_proposed: def.outcomes.as_ref().map_or(0, |o| {
+                o.mapping
+                    .iter()
+                    .filter(|m| !m.imported.is_empty() && m.approved_by.is_empty())
+                    .count() as u32
+            }),
             template: b::TemplateInfo {
                 id: v.template.id.clone(),
                 kind: if v.template.legacy {
@@ -3135,6 +3267,804 @@ fn job_batch(j: &Job, opened: Option<&Opened>) -> b::BatchProgress {
 
 // ------------------------------------------------------------------------------------ trait
 
+// ------------------------------------------------------------ Remark migration (§3.5, §23.7)
+
+/// A Remark import held for review until it is applied: to a new exam (the New-exam form) or
+/// to a graded exam's key (Setup).
+struct HeldImport {
+    /// The workbook files as given.
+    files: Vec<PathBuf>,
+    imp: omr_app::remark::RemarkImport,
+    /// How the points were settled when the instructor gave some ("" when none).
+    points_note: String,
+    /// The student numbers of the export's rows (key sheets left out): whether the export is
+    /// this exam's is checked against its students before it may replace its key.
+    ids: BTreeSet<String>,
+}
+
+/// The student numbers of the workbooks' rows (digits only; key sheets and unread IDs left
+/// out).
+fn row_ids(wbs: &[omr_app::remark::RemarkWorkbook]) -> BTreeSet<String> {
+    wbs.iter()
+        .flat_map(|w| w.rows.iter())
+        .filter(|r| {
+            r.key_sheet.is_none()
+                && r.student_id
+                    .trim()
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || c == ' ' || c == '-')
+        })
+        .map(|r| digits(&r.student_id))
+        .filter(|d| !d.is_empty())
+        .collect()
+}
+
+fn file_label(p: &Path) -> String {
+    p.file_name().map_or_else(
+        || p.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
+/// The message of an omr-app error without its kind prefix (a refusal's reason).
+fn app_message(e: &AppError) -> String {
+    match e {
+        AppError::Definition(m)
+        | AppError::Input(m)
+        | AppError::Store(m)
+        | AppError::Scoring(m)
+        | AppError::Review(m)
+        | AppError::NotFound(m)
+        | AppError::Internal(m) => m.clone(),
+        AppError::Io(e) => e.to_string(),
+    }
+}
+
+/// Points given, as text: "version A: question 6 → 0.75, question 10 → 0.75".
+fn given_text(g: &omr_app::remark::GivenPoints) -> String {
+    g.iter()
+        .filter_map(|(form, col)| {
+            let qs: Vec<String> = col
+                .iter()
+                .enumerate()
+                .filter_map(|(q, v)| v.as_ref().map(|v| format!("question {} → {v}", q + 1)))
+                .collect();
+            (!qs.is_empty()).then(|| {
+                if form.is_empty() {
+                    qs.join(", ")
+                } else {
+                    format!("version {form}: {}", qs.join(", "))
+                }
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// `1-8,11,13-14` from 1-based questions.
+fn question_ranges(qs: &[u16]) -> String {
+    let mut v = qs.to_vec();
+    v.sort_unstable();
+    v.dedup();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < v.len() {
+        let mut j = i;
+        while j + 1 < v.len() && v[j + 1] == v[j] + 1 {
+            j += 1;
+        }
+        out.push(if i == j {
+            v[i].to_string()
+        } else {
+            format!("{}-{}", v[i], v[j])
+        });
+        i = j + 1;
+    }
+    out.join(",")
+}
+
+/// A refusal of the import or the parallel run in this window's words: the core's reason
+/// (which names the files, rows or questions; its command-line flag named as this window's
+/// way) and what to do here (R10).
+fn remark_refusal(
+    e: &AppError,
+    suggestion: Option<&omr_app::remark::GivenPoints>,
+    compare: bool,
+) -> b::RemarkRefusal {
+    let message = app_message(e)
+        .replace(
+            "give the points with --points FILE",
+            if compare {
+                "give the points (this exam's, or a points file read by the import in Setup)"
+            } else {
+                "give the points in a points file"
+            },
+        )
+        .replace("with --points FILE", "with a points file");
+    let suggestion = suggestion.map(given_text).unwrap_or_default();
+    let points =
+        message.contains("do not determine the points") || message.contains("do not reproduce");
+    let remedy = if !suggestion.is_empty() {
+        if compare {
+            "Choose Use the suggested points if they are right (your decision: they are never \
+             assumed), or Use this exam's points"
+        } else {
+            "Choose Use the suggested points if they are right (your decision: the import never \
+             assumes them), or write the points in a file (question,points_A) and give it in \
+             Points file"
+        }
+    } else if points && compare {
+        "Choose Use this exam's points (checked against every Remark total), or check the \
+         grading in Remark and export again"
+    } else if points {
+        "Write the points in a file (question,points or question,points_A,points_B; a question \
+         left empty is solved from the totals), give it in Points file and read again"
+    } else {
+        "Give the graded Excel workbooks Remark exported for this exam (.xlsx: the Advanced \
+         Grade reports with the Student Response Report), ; between several. Remark's .rmx and \
+         .aky files are never opened"
+    };
+    b::RemarkRefusal {
+        message,
+        remedy: remedy.into(),
+        suggestion,
+    }
+}
+
+fn no_workbooks() -> b::RemarkRefusal {
+    b::RemarkRefusal {
+        message: "No Remark workbook given".into(),
+        remedy: "Type the graded Excel workbooks Remark exported for this exam (.xlsx), ; \
+                 between several"
+            .into(),
+        suggestion: String::new(),
+    }
+}
+
+/// The points the request gives (and how, for the summary): none, the import's suggestion
+/// (the instructor's explicit choice), or the exam's own points.
+fn given_points(
+    wbs: &[omr_app::remark::RemarkWorkbook],
+    points: &b::RemarkPoints,
+    def: Option<&ExamDefinition>,
+) -> Result<(omr_app::remark::GivenPoints, String), AppError> {
+    use omr_app::remark::{self, GivenPoints};
+    match points {
+        b::RemarkPoints::FromWorkbooks | b::RemarkPoints::File(_) => {
+            Ok((GivenPoints::new(), String::new()))
+        }
+        b::RemarkPoints::Suggested => {
+            let s = remark::suggest_points(wbs, &GivenPoints::new())?;
+            if !s.values().any(|c| c.iter().any(Option::is_some)) {
+                return Err(AppError::Input(
+                    "the workbooks leave no points to suggest: every version's points follow \
+                     from its learning objectives or totals, or none is fully determined"
+                        .into(),
+                ));
+            }
+            let text = given_text(&s);
+            Ok((
+                s,
+                format!(
+                    "given by you as suggested ({text}): Remark's totals alone do not determine \
+                     them; the values are those another version, fully determined, leaves, or a \
+                     learning objective's points split equally"
+                ),
+            ))
+        }
+        b::RemarkPoints::Exam => {
+            let def = def.ok_or_else(|| {
+                AppError::Input("there is no exam whose points could be used".into())
+            })?;
+            let g: GivenPoints = def
+                .forms
+                .iter()
+                .cloned()
+                .zip(def.points_by_form())
+                .map(|(f, p)| (f, p.into_iter().map(Some).collect()))
+                .collect();
+            Ok((
+                g,
+                "this exam's points, checked against every Remark total".into(),
+            ))
+        }
+    }
+}
+
+/// Reads the workbooks of `req` and imports them (omr-app does the reading, R4); a refusal
+/// with what to do, and the points the import suggests when the totals leave some open.
+fn read_import(
+    req: &b::RemarkRequest,
+    def: Option<&ExamDefinition>,
+) -> Result<HeldImport, b::RemarkRefusal> {
+    use omr_app::remark::{self, GivenPoints};
+    if req.workbooks.is_empty() {
+        return Err(no_workbooks());
+    }
+    if let b::RemarkPoints::File(f) = &req.points {
+        let (wbs, imp) = remark::import_files(&req.workbooks, Some(f))
+            .map_err(|e| remark_refusal(&e, None, false))?;
+        return Ok(HeldImport {
+            files: req.workbooks.clone(),
+            imp,
+            ids: row_ids(&wbs),
+            points_note: format!(
+                "the points given in {} are kept; the others come from the workbooks",
+                file_label(f)
+            ),
+        });
+    }
+    let wbs =
+        remark::read_workbook_files(&req.workbooks).map_err(|e| remark_refusal(&e, None, false))?;
+    let (given, points_note) =
+        given_points(&wbs, &req.points, def).map_err(|e| remark_refusal(&e, None, false))?;
+    match remark::import(&wbs, &given) {
+        Ok(imp) => Ok(HeldImport {
+            files: req.workbooks.clone(),
+            imp,
+            points_note,
+            ids: row_ids(&wbs),
+        }),
+        Err(e) => {
+            let suggestion = (req.points == b::RemarkPoints::FromWorkbooks)
+                .then(|| remark::suggest_points(&wbs, &GivenPoints::new()).ok())
+                .flatten()
+                .filter(|g| g.values().any(|c| c.iter().any(Option::is_some)));
+            Err(remark_refusal(&e, suggestion.as_ref(), false))
+        }
+    }
+}
+
+fn key_sheet_why(k: &omr_app::remark::KeySheetRowInfo) -> String {
+    use omr_app::remark::KeySheetKind;
+    match k.kind {
+        KeySheetKind::RepeatedDigitId => format!(
+            "student ID of one repeated digit{}",
+            if k.answers_equal_key && k.full_marks {
+                "; answers equal the key, full marks"
+            } else {
+                ""
+            }
+        ),
+        KeySheetKind::AnswersEqualKey => "answers equal the key with full marks: a key sheet, \
+                                          or a student with every answer right (check)"
+            .into(),
+    }
+}
+
+/// The import as the instructor reviews it.
+fn import_view(
+    h: &HeldImport,
+    applies: String,
+    can_apply: bool,
+    objectives: bool,
+) -> b::RemarkImportView {
+    use omr_scoring::exact_text;
+    let imp = &h.imp;
+    let versions = imp
+        .versions
+        .iter()
+        .map(|v| {
+            let missing = v.key.iter().filter(|k| k.trim().is_empty()).count();
+            let several = v.key.iter().filter(|k| k.contains(['|', '&', ','])).count();
+            let distinct: BTreeSet<String> = v.points.iter().map(exact_text).collect();
+            b::RemarkVersion {
+                form: v.form.clone(),
+                remark_version: v.remark_version.clone(),
+                workbooks: v.workbooks.clone(),
+                key: v.key.clone(),
+                key_counts: format!(
+                    "{} {} · {} with several answers · {} missing",
+                    v.key.len() - missing,
+                    if v.key.len() - missing == 1 {
+                        "entry"
+                    } else {
+                        "entries"
+                    },
+                    several,
+                    missing
+                ),
+                points: v.points.iter().map(exact_text).collect(),
+                points_source: v.points_source.describe().to_string(),
+                total: exact_text(&v.total_possible),
+                distinct: distinct.into_iter().collect::<Vec<_>>().join(", "),
+                students: v.students,
+                key_sheet_rows: v.key_sheet_rows,
+                reproduced: v.totals_reproduced,
+                rows_checked: v.rows_checked,
+                group_points_checked: v.group_points_checked,
+                objectives: v
+                    .groups
+                    .iter()
+                    .map(|g| b::RemarkObjective {
+                        code: g.name.clone(),
+                        label: g.label.clone(),
+                        questions: question_ranges(&g.questions),
+                        points: exact_text(&g.possible),
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+    b::RemarkImportView {
+        files: h.files.iter().map(|f| file_label(f)).collect(),
+        refusal: None,
+        questions: imp.questions,
+        versions,
+        workbooks: imp
+            .workbooks
+            .iter()
+            .map(|w| b::RemarkWorkbook {
+                file: w.file.clone(),
+                digest: short_hash(&w.sha384),
+                form: w.form.clone(),
+                students: w.students,
+                key_sheets: w.key_sheets,
+                footer_rows: w.footer_rows,
+                objectives: w.groups,
+            })
+            .collect(),
+        key_sheets: imp
+            .key_sheet_rows
+            .iter()
+            .map(|k| b::RemarkKeySheetRow {
+                workbook: k.file.clone(),
+                row: k.row,
+                masked_id: k.masked_id.clone(),
+                why: key_sheet_why(k),
+            })
+            .collect(),
+        notes: imp
+            .notes
+            .iter()
+            .map(|n| omr_app::export::mask_numbers(n))
+            .collect(),
+        points_note: h.points_note.clone(),
+        applies,
+        can_apply,
+        objectives_applied: objectives,
+    }
+}
+
+fn refused_import(files: &[PathBuf], r: b::RemarkRefusal) -> b::RemarkImportView {
+    b::RemarkImportView {
+        files: files.iter().map(|f| file_label(f)).collect(),
+        refusal: Some(r),
+        ..Default::default()
+    }
+}
+
+/// What applying the import to a new exam does.
+fn new_exam_applies(imp: &omr_app::remark::RemarkImport) -> String {
+    let objectives: BTreeSet<&str> = imp
+        .versions
+        .iter()
+        .flat_map(|v| v.groups.iter().map(|g| g.name.as_str()))
+        .collect();
+    format!(
+        "Use this import fills the form with {} questions and versions {}; the exam is graded \
+         with this key and these points (exact, per version){}",
+        imp.questions,
+        imp.forms().join(", "),
+        if objectives.is_empty() {
+            "; the export has no learning objectives (give a CLO mapping file if you have one)"
+                .to_string()
+        } else {
+            format!(
+                ", and the {} learning objective(s) become CLO mappings with weight 1 flagged \
+                 imported, needs review (proposed: the TP-154 tables stay a draft until they are \
+                 approved)",
+                objectives.len()
+            )
+        }
+    )
+}
+
+/// The activity-log lines of a new exam created from a Remark import (counts only).
+fn remark_activity(imp: &omr_app::remark::RemarkImport) -> Vec<String> {
+    let mut out = vec![format!(
+        "Remark import · {} workbook(s) · versions {} · {} questions · key and exact points per \
+         version",
+        imp.workbooks.len(),
+        imp.forms().join(", "),
+        imp.questions
+    )];
+    let objectives: BTreeSet<&str> = imp
+        .versions
+        .iter()
+        .flat_map(|v| v.groups.iter().map(|g| g.name.as_str()))
+        .collect();
+    if !objectives.is_empty() {
+        out.push(format!(
+            "Remark import · {} learning objective(s) as CLO mappings, weight 1, imported, \
+             needs review",
+            objectives.len()
+        ));
+    }
+    if !imp.key_sheet_rows.is_empty() {
+        out.push(format!(
+            "Remark import · {} key-sheet row(s) graded as students in Remark: excluded",
+            imp.key_sheet_rows.len()
+        ));
+    }
+    out
+}
+
+/// Whether the import fits a graded exam, and what applying it does there.
+fn setup_applies(h: &HeldImport, p: &ExamProject) -> (String, bool) {
+    let imp = &h.imp;
+    let def = &p.session.definition;
+    if imp.questions != def.questions {
+        return (
+            format!(
+                "Not applicable: the Remark export has {} questions and this exam {}; import the \
+                 export of this exam, or create a new exam with it (New exam → Import from Remark \
+                 export…)",
+                imp.questions, def.questions
+            ),
+            false,
+        );
+    }
+    let forms = imp.forms();
+    if forms.iter().collect::<BTreeSet<_>>() != def.forms.iter().collect::<BTreeSet<_>>() {
+        return (
+            format!(
+                "Not applicable: the Remark export gives version(s) {} and this exam has {}; \
+                 import every version's workbook of this exam",
+                forms.join(", "),
+                def.forms.join(", ")
+            ),
+            false,
+        );
+    }
+    // the export is this exam's: some of its students are this exam's (a Remark export
+    // carries no exam identity, only its rows)
+    let ours: BTreeSet<String> = p
+        .session
+        .booklets
+        .iter()
+        .filter_map(|b| b.student().map(digits))
+        .chain(def.roster.iter().flatten().map(|r| digits(&r.id)))
+        .filter(|d| !d.is_empty())
+        .collect();
+    if !h.ids.is_empty() && !ours.is_empty() && h.ids.is_disjoint(&ours) {
+        return (
+            format!(
+                "Not applicable: none of the export's {} student numbers is a student of this \
+                 exam, so it is another exam's or another section's export; import the export \
+                 of this exam's sheets",
+                h.ids.len()
+            ),
+            false,
+        );
+    }
+    // a graded exam's points are fixed with its stored form map (omr-store keeps it
+    // immutable): only a key with the same points can replace its key
+    let differ = points_differences(imp, def);
+    if p.scoring.is_some() && !differ.is_empty() {
+        return (
+            format!(
+                "Not applicable here: this exam was graded with other points ({}{}) and a graded \
+                 exam's points are fixed once its form map is stored. Create the exam from this \
+                 import (New exam → Import from Remark export…) to grade with Remark's points, \
+                 or compare this exam with Remark in Results",
+                differ
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; "),
+                if differ.len() > 3 {
+                    format!("; {} questions in all", differ.len())
+                } else {
+                    String::new()
+                }
+            ),
+            false,
+        );
+    }
+    let next = p.session.key.as_ref().map_or(1, |k| k.version + 1);
+    (
+        format!(
+            "Apply puts this key in force as key version {next}: the exam is rescored and the \
+             change audited with the workbooks' SHA-384"
+        ),
+        true,
+    )
+}
+
+/// The questions whose imported points differ from the exam's ("version A question 9: 1 here,
+/// 0.5 in Remark").
+fn points_differences(imp: &omr_app::remark::RemarkImport, def: &ExamDefinition) -> Vec<String> {
+    let num = |s: &str| s.trim().parse::<f64>().ok();
+    let mut out = Vec::new();
+    for (form, ours) in def.forms.iter().zip(def.points_by_form()) {
+        let Some(theirs) = imp.points_of(form) else {
+            continue;
+        };
+        for (q, (a, b)) in ours.iter().zip(theirs).enumerate() {
+            let b = omr_scoring::exact_text(b);
+            let same = match (num(a), num(&b)) {
+                (Some(x), Some(y)) => (x - y).abs() < 1e-9,
+                _ => a.trim() == b,
+            };
+            if !same {
+                out.push(format!(
+                    "version {form} question {}: {a} here, {b} in Remark",
+                    q + 1
+                ));
+            }
+        }
+    }
+    out
+}
+
+fn stats_text(
+    mean: Option<f64>,
+    sd: Option<f64>,
+    max: Option<f64>,
+    max_pct: Option<f64>,
+    kr20: Option<f64>,
+    alpha: Option<f64>,
+) -> String {
+    let f = |x: Option<f64>, d: usize| x.map_or_else(|| "–".to_string(), |v| format!("{v:.d$}"));
+    format!(
+        "mean {}, SD {}, top {}{}, KR-20 {}, α {}",
+        f(mean, 2),
+        f(sd, 2),
+        f(max, 2),
+        max_pct.map_or_else(String::new, |p| format!(" ({p:.0} %)")),
+        f(kr20, 3),
+        f(alpha, 3)
+    )
+}
+
+/// The parallel run as the instructor adjudicates it (student numbers masked on screen; the
+/// saved report has them).
+fn parallel_view(
+    run: &omr_app::parallel::ParallelRun,
+    files: &[PathBuf],
+    points: &str,
+) -> b::ParallelRunView {
+    use omr_app::export::mask_numbers;
+    use omr_app::parallel::Agreement;
+    use omr_scoring::exact_text;
+    let c = &run.counts;
+    let mut differences: Vec<b::ParallelDifference> = run
+        .disagreements
+        .iter()
+        .map(|d| b::ParallelDifference {
+            booklet: d.page.clone(),
+            student: mask_numbers(&d.student),
+            question: u32::from(d.question),
+            remark: d.remark.clone(),
+            ours: d.ours.clone(),
+            status: d.status.clone(),
+            agreement: match d.agreement {
+                Agreement::Differ => b::ParallelAgreement::Differ,
+                Agreement::DifferPending => b::ParallelAgreement::DifferPending,
+                _ => b::ParallelAgreement::AgreePending,
+            },
+            findings: d.findings.clone(),
+            crop: d.crop.as_ref().map(marked_crop),
+        })
+        .collect();
+    // settled differences first, then pending ones that differ, then pending ones that agree
+    differences.sort_by_key(|d| match d.agreement {
+        b::ParallelAgreement::Differ => 0,
+        b::ParallelAgreement::DifferPending => 1,
+        b::ParallelAgreement::AgreePending => 2,
+    });
+    let pts = |x: &omr_scoring::Exact| exact_text(x);
+    b::ParallelRunView {
+        banner: omr_app::parallel::RESTRICTED_BANNER.to_string(),
+        files: files.iter().map(|f| file_label(f)).collect(),
+        refusal: None,
+        points: if points.is_empty() {
+            let sources: BTreeSet<&str> = run
+                .import
+                .versions
+                .iter()
+                .map(|v| v.points_source.describe())
+                .collect();
+            if sources.len() == 1 {
+                sources.into_iter().collect::<String>()
+            } else {
+                run.import
+                    .versions
+                    .iter()
+                    .map(|v| format!("version {}: {}", v.form, v.points_source.describe()))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            }
+        } else {
+            points.to_string()
+        },
+        counts: b::ParallelCounts {
+            booklets: c.booklets,
+            remark_rows: c.remark_rows,
+            out_of_scope_rows: c.out_of_scope_rows,
+            key_sheet_rows: c.key_sheet_rows,
+            paired_by_id: c.paired_by_id,
+            paired_by_partial_id: c.paired_by_partial_id,
+            paired_by_answers: c.paired_by_answers,
+            questions: c.questions,
+            agree: c.agree,
+            agree_pending: c.agree_pending,
+            differ: c.differ,
+            differ_pending: c.differ_pending,
+            totals_settled: c.totals_settled,
+            totals_settled_equal: c.totals_settled_equal,
+            totals_provisional: c.totals_provisional,
+            totals_provisional_equal_if_remark: c.totals_provisional_equal_if_remark,
+            totals_not_graded: c.totals_not_graded,
+            answers_only_equal: c.answers_only_equal,
+            identity: c.identity.values().sum(),
+            key_differences: c.key_differences,
+            points_differences: c.points_differences,
+            maximum_differences: c.maximum_differences,
+            not_queued: c.not_queued,
+            held_in_review: c.held_in_review,
+        },
+        hold: run.hold_text(),
+        points_differences: run
+            .points_differences
+            .iter()
+            .map(|(f, q, o, r)| format!("version {f} question {q}: {o} here, {r} in Remark"))
+            .collect(),
+        maximum_differences: run
+            .maximum_differences
+            .iter()
+            .map(|(f, o, r)| format!("version {f}: {o} here, {r} in Remark"))
+            .collect(),
+        differences,
+        identity: run
+            .identity
+            .iter()
+            .map(|i| b::ParallelIdentity {
+                kind: i.kind.describe().to_string(),
+                booklet: i.booklet.clone(),
+                ours: {
+                    let id = if i.our_id.is_empty() {
+                        "no student number".to_string()
+                    } else {
+                        mask_numbers(&i.our_id)
+                    };
+                    if i.our_flags.is_empty() {
+                        id
+                    } else {
+                        format!("{id} · {}", i.our_flags.join(", "))
+                    }
+                },
+                remark: match (i.remark_row.is_empty(), i.remark_id.is_empty()) {
+                    (true, _) => "no row".to_string(),
+                    (false, true) => format!("{} · no student number", i.remark_row),
+                    (false, false) => {
+                        format!("{} · {}", i.remark_row, mask_numbers(&i.remark_id))
+                    }
+                },
+                detail: mask_numbers(&i.detail),
+            })
+            .collect(),
+        totals: run
+            .students
+            .iter()
+            .filter(|s| s.remark.is_some() && (!s.settled || !s.equals_remark()))
+            .map(|s| b::ParallelTotal {
+                booklet: s.label.clone(),
+                student: mask_numbers(&s.our_id),
+                ours: format!("{} / {}", pts(&s.ours), pts(&s.max)),
+                remark: s.remark.as_ref().map(pts).unwrap_or_default(),
+                pending: question_ranges(&s.pending),
+                if_remark: if s.settled {
+                    String::new()
+                } else {
+                    pts(&s.ours_if_remark)
+                },
+                grades: format!("{} · Remark {}", s.grade_ours, s.grade_remark),
+            })
+            .collect(),
+        key_sheets: run
+            .key_sheets
+            .iter()
+            .map(|k| b::ParallelKeySheets {
+                workbook: k.workbook.clone(),
+                rows: k.rows.len(),
+                reported: k.reported.as_ref().map_or_else(
+                    || "not in the workbook".to_string(),
+                    |r| stats_text(r.mean, r.sd, r.max, None, r.kr20, r.alpha),
+                ),
+                with: stats_text(
+                    k.with.mean,
+                    k.with.sd,
+                    k.with.max,
+                    k.with.max_percent,
+                    k.with.kr20,
+                    k.with.alpha,
+                ),
+                without: stats_text(
+                    k.without.mean,
+                    k.without.sd,
+                    k.without.max,
+                    k.without.max_percent,
+                    k.without.kr20,
+                    k.without.alpha,
+                ),
+            })
+            .collect(),
+        workbooks: run
+            .workbooks
+            .iter()
+            .map(|w| b::ParallelWorkbook {
+                file: w.file.clone(),
+                form: w.form.clone(),
+                rows: w.rows,
+                key_sheets: w.key_sheets,
+                paired: w.paired,
+                in_scope: w.in_scope,
+            })
+            .collect(),
+        key_differences: run
+            .key_differences
+            .iter()
+            .map(|(f, q, _, _)| format!("version {f} question {q}"))
+            .collect(),
+    }
+}
+
+/// Runs the parallel run of `req` on the opened exam (omr-app reads the workbooks and the
+/// stored originals for the crops).
+fn run_parallel(
+    o: &Opened,
+    req: &b::RemarkRequest,
+) -> Result<(omr_app::parallel::ParallelRun, String), b::RemarkRefusal> {
+    use omr_app::remark::{self, GivenPoints};
+    if req.workbooks.is_empty() {
+        return Err(no_workbooks());
+    }
+    if matches!(req.points, b::RemarkPoints::File(_)) {
+        return Err(b::RemarkRefusal {
+            message: "A points file is read by the import, not by the parallel run".into(),
+            remedy: "Use this exam's points, or import the export with its points file in Setup \
+                     first"
+                .into(),
+            suggestion: String::new(),
+        });
+    }
+    let wbs =
+        remark::read_workbook_files(&req.workbooks).map_err(|e| remark_refusal(&e, None, true))?;
+    let def = &o.p.session.definition;
+    let (given, note) =
+        given_points(&wbs, &req.points, Some(def)).map_err(|e| remark_refusal(&e, None, true))?;
+    let mut handwritten = Vec::new();
+    for f in &req.handwritten {
+        let bytes = std::fs::read(f).map_err(|e| b::RemarkRefusal {
+            message: format!("{}: {e}", f.display()),
+            remedy: "Check the path of the handwritten-ID file (file,page,student_id)".into(),
+            suggestion: String::new(),
+        })?;
+        handwritten.extend(
+            omr_app::parallel::read_handwritten_csv(&bytes)
+                .map_err(|e| remark_refusal(&e, None, true))?,
+        );
+    }
+    let opts = omr_app::parallel::CompareOptions {
+        given_points: given,
+        handwritten,
+        crops: true,
+    };
+    match o.p.compare_remark(&wbs, &opts) {
+        Ok(run) => Ok((run, note)),
+        Err(e) => {
+            let suggestion = (req.points == b::RemarkPoints::FromWorkbooks)
+                .then(|| remark::suggest_points(&wbs, &GivenPoints::new()).ok())
+                .flatten()
+                .filter(|g| g.values().any(|c| c.iter().any(Option::is_some)));
+            Err(remark_refusal(&e, suggestion.as_ref(), true))
+        }
+    }
+}
+
 impl Backend for AppBackend {
     fn dashboard(&self) -> b::Dashboard {
         let mut exams: Vec<b::ExamSummary> = Vec::new();
@@ -3545,10 +4475,12 @@ impl Backend for AppBackend {
 
     fn replace_key(&mut self, exam: &ExamId, path: &Path) -> Result<String, BackendError> {
         self.with_mut(exam, |o| {
-            // read by omr-app (rule R4), as the key of a new exam is
-            let (forms, points) =
-                omr_app::define::read_key_path(path, &o.p.session.definition).map_err(app_err)?;
-            o.p.replace_key(forms, points, None).map_err(app_err)?;
+            // read by omr-app (rule R4), with every points column (`points`, `points_A` …)
+            let kf = omr_app::define::read_key_path_full(path, &o.p.session.definition)
+                .map_err(app_err)?;
+            let has_points = kf.points.all.is_some() || !kf.points.per_form.is_empty();
+            o.p.replace_key_points(kf.forms, has_points.then_some(&kf.points), None)
+                .map_err(app_err)?;
             let v = o.p.session.key.as_ref().map_or(0, |k| k.version);
             Ok(match o.p.session.release_blocked() {
                 Some(why) => format!(
@@ -3826,6 +4758,254 @@ impl Backend for AppBackend {
         })
     }
 
+    fn can_import_remark(&self, exam: Option<&ExamId>) -> bool {
+        match exam {
+            None => self.workspace.is_some(),
+            Some(e) => self.with(e, |o| o.read_only.is_none()).unwrap_or(false),
+        }
+    }
+
+    fn read_remark_import(
+        &mut self,
+        exam: Option<&ExamId>,
+        request: &b::RemarkRequest,
+    ) -> Result<b::RemarkImportView, BackendError> {
+        let Some(exam) = exam else {
+            if self.workspace.is_none() {
+                return Err(BackendError::Denied(
+                    "No exams folder is open: start omr-desktop with --workspace DIR (or without \
+                     flags, for ~/OMR Exams)"
+                        .into(),
+                ));
+            }
+            self.remark_new = None;
+            return Ok(match read_import(request, None) {
+                Ok(h) => {
+                    let view = import_view(&h, new_exam_applies(&h.imp), true, true);
+                    self.remark_new = Some(h);
+                    view
+                }
+                Err(r) => refused_import(&request.workbooks, r),
+            });
+        };
+        self.with_mut(exam, |o| {
+            o.remark = None;
+            let def = o.p.session.definition.clone();
+            Ok(match read_import(request, Some(&def)) {
+                Ok(h) => {
+                    let (applies, can) = setup_applies(&h, &o.p);
+                    let view = import_view(&h, applies, can, false);
+                    o.remark = Some(h);
+                    view
+                }
+                Err(r) => refused_import(&request.workbooks, r),
+            })
+        })
+    }
+
+    fn discard_remark_import(&mut self, exam: Option<&ExamId>) {
+        match exam {
+            None => self.remark_new = None,
+            Some(e) => {
+                if let Some(o) = self.opened.borrow_mut().get_mut(e) {
+                    o.remark = None;
+                }
+            }
+        }
+    }
+
+    fn apply_remark_import(&mut self, exam: &ExamId) -> Result<String, BackendError> {
+        let operator = self.operator.clone();
+        self.with_mut(exam, |o| {
+            let Some(h) = o.remark.as_ref() else {
+                return Err(BackendError::Invalid(
+                    "No Remark import is waiting: read the export with Import from Remark \
+                     export…, check the summary, then Apply"
+                        .into(),
+                ));
+            };
+            let (why, fits) = setup_applies(h, &o.p);
+            if !fits {
+                return Err(BackendError::Invalid(why));
+            }
+            let forms = h.imp.form_keys();
+            // the same points are kept as the exam stores them (a graded exam's are fixed)
+            let points = (o.p.scoring.is_none()
+                || !points_differences(&h.imp, &o.p.session.definition).is_empty())
+            .then(|| h.imp.key_points());
+            let files = h
+                .imp
+                .workbooks
+                .iter()
+                .map(|w| format!("{} (SHA-384 {})", w.file, w.sha384.get(..16).unwrap_or("")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let note = format!(
+                "key and points imported from Remark Office OMR's graded export: {files}; {}by \
+                 {operator}",
+                if h.points_note.is_empty() {
+                    String::new()
+                } else {
+                    format!("points {}; ", h.points_note)
+                }
+            );
+            let versions = h.imp.forms().join(", ");
+            let objectives = h.imp.versions.iter().any(|v| !v.groups.is_empty());
+            let reason = omr_app::review::ReviewReason::with_note("ADJUDICATION", &note);
+            o.p.replace_key_points(forms, points.as_ref(), Some(reason))
+                .map_err(app_err)?;
+            o.remark = None;
+            let v = o.p.session.key.as_ref().map_or(0, |k| k.version);
+            let mut m = format!(
+                "Key version {v} in force from the Remark import (versions {versions}, exact \
+                 points per version): the exam was rescored and the change recorded with the \
+                 workbooks' SHA-384"
+            );
+            if objectives {
+                m.push_str(
+                    ". The learning objectives were not applied: a graded exam's CLO mapping \
+                     cannot be replaced from here yet",
+                );
+            }
+            if let Some(why) = o.p.session.release_blocked() {
+                m.push_str(&format!(". Release is still blocked: {why}"));
+            }
+            Ok(m)
+        })
+    }
+
+    fn compare_remark(
+        &mut self,
+        exam: &ExamId,
+        request: &b::RemarkRequest,
+    ) -> Result<b::ParallelRunView, BackendError> {
+        if self.busy(exam) {
+            return Err(BackendError::Denied(format!(
+                "Scans are being added to {exam}: compare when the Scan screen says the batch is \
+                 complete"
+            )));
+        }
+        let r = self.with(exam, |o| {
+            run_parallel(o, request)
+                .map(|(run, note)| parallel_view(&run, &request.workbooks, &note))
+        });
+        let Some(r) = r else {
+            return Err(match self.failed.borrow().get(exam) {
+                Some(why) => BackendError::Denied(why.clone()),
+                None => BackendError::NotFound(format!(
+                    "Exam {exam} is not open yet: wait for grading to finish, or open its folder \
+                     with --project"
+                )),
+            });
+        };
+        if let Some(o) = self.opened.borrow_mut().get_mut(exam) {
+            o.parallel = r.is_ok().then(|| request.clone());
+        }
+        Ok(r.unwrap_or_else(|refusal| b::ParallelRunView {
+            banner: omr_app::parallel::RESTRICTED_BANNER.to_string(),
+            files: request.workbooks.iter().map(|f| file_label(f)).collect(),
+            refusal: Some(refusal),
+            ..Default::default()
+        }))
+    }
+
+    fn save_parallel_run(&mut self, exam: &ExamId, dir: &Path) -> Result<String, BackendError> {
+        if dir.as_os_str().is_empty() {
+            return Err(BackendError::Invalid(
+                "Type the folder for the Restricted report (inside the university's storage; \
+                 sync folders are refused)"
+                    .into(),
+            ));
+        }
+        self.with_mut(exam, |o| {
+            let req = o.parallel.clone().ok_or_else(|| {
+                BackendError::Invalid(
+                    "Run Compare with Remark export… first: the report is written from it".into(),
+                )
+            })?;
+            // rerun on the exam as it stands, so the report never lags a review decision
+            let (run, _) = run_parallel(o, &req)
+                .map_err(|r| BackendError::Invalid(format!("{}. {}", r.message, r.remedy)))?;
+            let sum = o.p.export_parallel_run(&run, dir).map_err(app_err)?;
+            Ok(format!(
+                "Wrote the Restricted parallel-run report ({} files, signed manifest) to {}; \
+                 its head-to-head figures stay inside the university (Q-08). {}",
+                sum.files.len(),
+                short_path(dir),
+                run.hold_text()
+            ))
+        })
+    }
+
+    fn approve_mappings(&mut self, exam: &ExamId) -> Result<String, BackendError> {
+        let approver = self.operator.clone();
+        self.with_mut(exam, |o| {
+            let n =
+                o.p.approve_mappings(
+                    &approver,
+                    "approved in the desktop app after review in Setup",
+                )
+                .map_err(app_err)?;
+            Ok(format!(
+                "Approved {n} imported CLO mapping row(s) as {approver} (an audited approval): \
+                 the TP-154 tables leave the draft watermark at the next export"
+            ))
+        })
+    }
+
+    fn replace_clos(&mut self, exam: &ExamId, path: &Path) -> Result<String, BackendError> {
+        if path.as_os_str().is_empty() {
+            return Err(BackendError::Invalid(
+                "Type the path of the CLO file (clo,domain,title,plo,questions,weight,note)".into(),
+            ));
+        }
+        let bytes = std::fs::read(path).map_err(|e| {
+            BackendError::Invalid(format!(
+                "{}: {e}; check the path of the CLO file",
+                short_path(path)
+            ))
+        })?;
+        let name = file_label(path);
+        self.with_mut(exam, |o| {
+            let (clos, rows) = o.p.replace_outcomes(&bytes, &name).map_err(app_err)?;
+            Ok(format!(
+                "Replaced the CLO mapping from {name}: {clos} CLO(s), {rows} row(s) (audited); \
+                 the outcomes recompute from the same scores"
+            ))
+        })
+    }
+
+    fn queue_parallel_differences(&mut self, exam: &ExamId) -> Result<String, BackendError> {
+        self.with_mut(exam, |o| {
+            let req = o.parallel.clone().ok_or_else(|| {
+                BackendError::Invalid(
+                    "Run Compare with Remark export… first: the differences are queued from it"
+                        .into(),
+                )
+            })?;
+            // rerun on the exam as it stands, so a decision taken since is never queued again
+            let (mut run, _) = run_parallel(o, &req)
+                .map_err(|r| BackendError::Invalid(format!("{}. {}", r.message, r.remedy)))?;
+            let n = o.p.queue_parallel_differences(&mut run).map_err(app_err)?;
+            Ok(if n == 0 {
+                format!("Nothing new to queue. {}", run.hold_text())
+            } else {
+                format!(
+                    "Queued {n} parallel-run difference(s) in Review (Marks lane): each holds \
+                     release until you decide it; keeping this exam's reading is Enter, \
+                     Remark's or another answer needs a reason"
+                )
+            })
+        })
+    }
+
+    fn parallel_run_dir(&self, exam: &ExamId) -> Option<PathBuf> {
+        self.with(exam, |o| {
+            o.dir.parent().map(|d| d.join("parallel-run-remark"))
+        })
+        .flatten()
+    }
+
     fn release(&mut self, exam: &ExamId) -> Result<String, BackendError> {
         self.with_mut(exam, |o| {
             let out = o.dir.parent().map(Path::to_path_buf).ok_or_else(|| {
@@ -4053,6 +5233,9 @@ mod tests {
                     clo: "CLO1".into(),
                     weight: if q == 12 { "0.5".into() } else { "1".into() },
                     note: String::new(),
+                    form: String::new(),
+                    imported: String::new(),
+                    approved_by: String::new(),
                 })
                 .collect(),
             split: false,

@@ -31,6 +31,7 @@ pub mod key_sheet;
 pub mod l3;
 pub mod l4;
 pub mod num;
+pub mod points;
 pub mod policy;
 pub mod response;
 pub mod run;
@@ -56,6 +57,7 @@ pub use num::{
     Exact, LetterBasis, Points, RoundingPolicy, RoundingStage, RoundingStrategy, decimal_string,
     exact, parse_points, pts, widen,
 };
+pub use points::{Equation, PointsError, exact_from_f64, exact_text, solve_points};
 pub use policy::{
     ChoiceGroup, ChoiceMode, Floors, MultiOnSba, MultiRule, NegativeMarking, PolicyVersion, Section,
 };

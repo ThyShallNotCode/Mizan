@@ -18,6 +18,8 @@
 //! omr release --project DIR [--reason CODE [--note T]]
 //! omr export --project DIR [--out DIR] [--blackboard-column ID]
 //! omr bench <corpus-dir> --template … --questions N [--threads 1,2,4] [--first 30]
+//! omr import remark <graded.xlsx…> --out DIR [--points FILE] [--dry-run]
+//! omr compare remark --project DIR <graded.xlsx…> --out DIR [--points FILE] [--handwritten FILE]
 //! ```
 //!
 //! Exit codes: 0 success; 2 usage or exam definition; 3 input; 4 project store; 5 scoring;
@@ -82,6 +84,26 @@ enum Cmd {
     },
     /// Throughput (A2) and time to first result (A3) on a corpus folder.
     Bench(BenchArgs),
+    /// Imports from the incumbent tools (spec §3.5): Remark Office OMR's graded Excel exports
+    /// become a key file with exact points per version, a CLO file and a version map.
+    Import {
+        #[command(subcommand)]
+        cmd: ImportCmd,
+    },
+    /// CLO mappings of a graded exam (§11.2): approve the imported rows (an audited approval
+    /// that lifts the TP-154 draft watermark) or replace the mapping with a corrected CLO
+    /// file; the outcomes recompute from the same scores, nothing is graded again.
+    Clo {
+        #[command(subcommand)]
+        cmd: CloCmd,
+    },
+    /// Compares a graded exam with the incumbent's results of the same sheets (the parallel
+    /// run, spec §23.7): a Restricted report whose head-to-head figures stay inside the
+    /// university (spec §3.5, Q-08).
+    Compare {
+        #[command(subcommand)]
+        cmd: CompareCmd,
+    },
     /// Releases the results of a graded exam (the instructor's deliberate act, §13.4): refused
     /// while anything blocks release; then the exports are written again with the Blackboard
     /// upload.
@@ -429,6 +451,114 @@ enum KeyCmd {
     },
 }
 
+#[derive(Subcommand)]
+enum ImportCmd {
+    /// Reads Remark Office OMR's graded workbooks (Excel exports of the Advanced Grade
+    /// reports: Student Response Report with the answer key, Student Statistics Report with
+    /// the learning objectives) and, after showing a summary, writes `key.csv` (per-version
+    /// keys, exact points per question, every Remark total reproduced), `clo.csv` (the
+    /// learning objectives as weight-1 CLO mappings flagged "imported, needs review") and
+    /// `version_map.csv`. Several workbooks of one exam (sections, versions) merge into one key
+    /// per version. Key sheets Remark graded as students are reported, never students.
+    /// Remark's .rmx and .aky files are never read.
+    Remark {
+        /// The graded workbooks (.xlsx).
+        #[arg(required = true)]
+        workbooks: Vec<PathBuf>,
+        /// Output folder (created private; not a sync or network folder).
+        #[arg(long, required_unless_present = "dry_run")]
+        out: Option<PathBuf>,
+        /// Points the instructor gives (`question,points` or `question,points_A,points_B`;
+        /// empty cells are derived): needed when the totals do not determine them.
+        #[arg(long)]
+        points: Option<PathBuf>,
+        /// Show the summary only; write nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum CloCmd {
+    /// Approves the imported item → CLO rows (e.g. Remark learning objectives, "imported,
+    /// needs review") after you have reviewed them: recorded with the approver
+    /// (`MappingApproved`); the TP-154 tables leave the draft watermark.
+    Approve {
+        /// Graded output folder or its `project.omrproj`.
+        #[arg(long)]
+        project: PathBuf,
+        /// Who approves (the course coordinator or quality officer), as recorded.
+        #[arg(long)]
+        approver: String,
+        /// What was checked (kept as a salted reference in the audit log).
+        #[arg(long, default_value = "")]
+        note: String,
+        /// Acting principal.
+        #[arg(long, default_value = "principal:coordinator")]
+        operator: String,
+        /// Skip re-exporting the result files.
+        #[arg(long)]
+        no_export: bool,
+    },
+    /// Replaces the CLOs and the item → CLO mapping with a CLO file (`--clo` layout, e.g. the
+    /// imported clo.csv after correcting its domains and rows); imported rows stay proposed
+    /// until approved.
+    Replace {
+        /// Graded output folder or its `project.omrproj`.
+        #[arg(long)]
+        project: PathBuf,
+        /// The CLO file (`clo,domain,title,plo,questions,weight,note[,form,status,source]`).
+        #[arg(long)]
+        clo: PathBuf,
+        /// Acting principal.
+        #[arg(long, default_value = "principal:coordinator")]
+        operator: String,
+        /// Skip re-exporting the result files.
+        #[arg(long)]
+        no_export: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum CompareCmd {
+    /// Compares a graded exam with Remark Office OMR's graded workbooks of the same sheets:
+    /// per question (Remark vs ours vs our status, every difference with its bubble-row crop),
+    /// per student (weighted totals, letter grades), identity differences, and the key sheets
+    /// Remark graded as students with their effect on its statistics. Writes
+    /// `parallel_run.html` and CSV files marked Restricted into --out. The totals are the
+    /// exam's own (its score run: its points, voids and policy). The report alone holds
+    /// nothing; with --queue every settled difference from an auto-accepted answer waits in
+    /// review and holds release until it is decided (spec §23.7).
+    Remark {
+        /// Graded output folder or its `project.omrproj`.
+        #[arg(long)]
+        project: PathBuf,
+        /// The graded workbooks (.xlsx).
+        #[arg(required = true)]
+        workbooks: Vec<PathBuf>,
+        /// Report folder (created private; not a sync or network folder).
+        #[arg(long)]
+        out: PathBuf,
+        /// Points the instructor gives (else derived from the workbooks).
+        #[arg(long)]
+        points: Option<PathBuf>,
+        /// Handwritten student numbers, when known (`file,page,student_id`).
+        #[arg(long)]
+        handwritten: Option<PathBuf>,
+        /// Leave the bubble-row crops out of the report.
+        #[arg(long)]
+        no_crops: bool,
+        /// Queue every settled difference from an answer this exam auto-accepted for review
+        /// (MRK-001 `parallel_run_disagreement`): each holds release until it is decided, and
+        /// each decision is recorded as a field label (spec §23.7).
+        #[arg(long)]
+        queue: bool,
+        /// Acting principal.
+        #[arg(long, default_value = "principal:instructor")]
+        operator: String,
+    },
+}
+
 #[derive(Args)]
 struct BenchArgs {
     /// Corpus folder (or files).
@@ -720,12 +850,9 @@ fn build_def(g: &GradeArgs) -> Result<ExamDefinition, AppError> {
     let key_forms = g.key.as_deref().and_then(key_forms_of);
     let mut d = definition(&g.exam, key_forms)?;
     if let Some(k) = &g.key {
-        let (forms, points) =
-            exam::read_key_file(&read_file(k)?, &d.forms, d.questions, d.options)?;
-        d.key = KeySource::Provided { forms };
-        if let Some(p) = points {
-            d.points = p;
-        }
+        let k = exam::read_key_file_full(&read_file(k)?, &d.forms, d.questions, d.options)?;
+        d.key = KeySource::Provided { forms: k.forms };
+        d.set_key_points(&k.points);
     } else if g.infer_key {
         d.key = KeySource::Inferred;
     }
@@ -1537,9 +1664,19 @@ fn cmd_key(cmd: KeyCmd) -> Result<(), AppError> {
             }
             let key = key.ok_or_else(|| usage("give --key FILE or --from-key-sheets FILE…"))?;
             let def = &p.session.definition;
-            let (forms, points) =
-                exam::read_key_file(&read_file(&key)?, &def.forms, def.questions, def.options)?;
-            p.replace_key(forms, points, reason_of(reason.as_deref(), note.as_deref()))?;
+            let k = exam::read_key_file_full(
+                &read_file(&key)?,
+                &def.forms,
+                def.questions,
+                def.options,
+            )?;
+            let points =
+                (k.points.all.is_some() || !k.points.per_form.is_empty()).then_some(&k.points);
+            p.replace_key_points(
+                k.forms,
+                points,
+                reason_of(reason.as_deref(), note.as_deref()),
+            )?;
             let k = p.session.key.as_ref().map_or(0, |k| k.version);
             println!("key version {k} in force; the exam was rescored");
             if !no_export {
@@ -1701,6 +1838,213 @@ fn cmd_bench(b: BenchArgs) -> Result<(), AppError> {
     Ok(())
 }
 
+fn cmd_import(cmd: ImportCmd) -> Result<(), AppError> {
+    match cmd {
+        ImportCmd::Remark {
+            workbooks,
+            out,
+            points,
+            dry_run,
+        } => {
+            let (_, imp) = omr_app::remark::import_files(&workbooks, points.as_deref())?;
+            print!("{}", imp.summary());
+            if dry_run {
+                println!("dry run: nothing written");
+                return Ok(());
+            }
+            let out = out.ok_or_else(|| usage("give --out DIR (or --dry-run)"))?;
+            let files = imp.write(&out)?;
+            for f in &files {
+                println!("wrote {}", f.display());
+            }
+            let clo = files
+                .iter()
+                .find(|f| f.ends_with("clo.csv"))
+                .map(|f| format!(" --clo {}", shell_arg(f)))
+                .unwrap_or_default();
+            println!(
+                "the key is exam-confidential and the CLO mappings need review; next: omr grade \
+                 <scans> --template iau-ccsit-v1 --questions {} --key {}{clo} --out <exam folder>",
+                imp.questions,
+                shell_arg(&out.join("key.csv"))
+            );
+            Ok(())
+        }
+    }
+}
+
+fn cmd_clo(cmd: CloCmd) -> Result<(), AppError> {
+    match cmd {
+        CloCmd::Approve {
+            project,
+            approver,
+            note,
+            operator,
+            no_export,
+        } => {
+            let dir = project_dir(&project);
+            let mut p = ExamProject::open(&dir, &operator)?;
+            p.set_actor(&operator, "Coordinator");
+            let n = p.approve_mappings(&approver, &note)?;
+            println!(
+                "approved {n} imported CLO mapping row(s) as {approver} (recorded: \
+                 MappingApproved); the TP-154 tables leave the draft watermark"
+            );
+            if !no_export {
+                reexport(&mut p, &dir)?;
+            }
+            p.close()
+        }
+        CloCmd::Replace {
+            project,
+            clo,
+            operator,
+            no_export,
+        } => {
+            let dir = project_dir(&project);
+            let mut p = ExamProject::open(&dir, &operator)?;
+            p.set_actor(&operator, "Coordinator");
+            let name = clo
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let (clos, rows) = p.replace_outcomes(&read_file(&clo)?, &name)?;
+            let waiting = p.session.definition.outcomes.as_ref().map_or(0, |o| {
+                o.mapping
+                    .iter()
+                    .filter(|m| !m.imported.is_empty() && m.approved_by.is_empty())
+                    .count()
+            });
+            println!(
+                "CLO mapping replaced: {clos} CLO(s), {rows} row(s) (recorded: MappingReplaced); \
+                 the outcomes recompute from the same scores"
+            );
+            if waiting > 0 {
+                println!(
+                    "{waiting} imported row(s) wait for approval (the TP-154 tables stay a draft): \
+                     omr clo approve --project {} --approver NAME",
+                    shell_arg(&dir)
+                );
+            }
+            if !no_export {
+                reexport(&mut p, &dir)?;
+            }
+            p.close()
+        }
+    }
+}
+
+fn cmd_compare(cmd: CompareCmd) -> Result<(), AppError> {
+    match cmd {
+        CompareCmd::Remark {
+            project,
+            workbooks,
+            out,
+            points,
+            handwritten,
+            no_crops,
+            queue,
+            operator,
+        } => {
+            let dir = project_dir(&project);
+            let mut p = ExamProject::open(&dir, &operator)?;
+            let wbs = omr_app::remark::read_workbook_files(&workbooks)?;
+            let given = match &points {
+                Some(f) => exam::read_points_file(&read_file(f)?, p.session.definition.questions)?,
+                None => Default::default(),
+            };
+            let handwritten = match &handwritten {
+                Some(f) => omr_app::parallel::read_handwritten_csv(&read_file(f)?)?,
+                None => Vec::new(),
+            };
+            let opts = omr_app::parallel::CompareOptions {
+                given_points: given,
+                handwritten,
+                crops: !no_crops,
+            };
+            let mut run = p.compare_remark(&wbs, &opts)?;
+            if queue {
+                p.queue_parallel_differences(&mut run)?;
+            }
+            let summary = p.export_parallel_run(&run, &out)?;
+            let c = &run.counts;
+            println!("{}", omr_app::parallel::RESTRICTED_BANNER);
+            println!("{}", run.licence);
+            println!(
+                "booklets {}, Remark rows {} ({} in workbooks not scanned here, {} key sheets \
+                 graded as students); paired {} by student ID, {} by student ID completing our \
+                 incomplete read, {} by answers",
+                c.booklets,
+                c.remark_rows,
+                c.out_of_scope_rows,
+                c.key_sheet_rows,
+                c.paired_by_id,
+                c.paired_by_partial_id,
+                c.paired_by_answers
+            );
+            println!(
+                "questions compared {}: equal {} (+{} pending review), different {} (+{} \
+                 pending review)",
+                c.questions, c.agree, c.agree_pending, c.differ, c.differ_pending
+            );
+            println!(
+                "the exam's totals (its score run): {} settled, {} equal to Remark's total and \
+                 total possible; {} provisional, {} equal once their pending questions are \
+                 resolved as Remark read them{}",
+                c.totals_settled,
+                c.totals_settled_equal,
+                c.totals_provisional,
+                c.totals_provisional_equal_if_remark,
+                if c.totals_not_graded > 0 {
+                    format!("; {} not graded by the exam", c.totals_not_graded)
+                } else {
+                    String::new()
+                }
+            );
+            println!(
+                "answers only (Remark's key and points on our answers, a check of the \
+                 readings): {} equal to Remark's total",
+                c.answers_only_equal
+            );
+            for (f, ours, theirs) in &run.maximum_differences {
+                println!(
+                    "warning: version {f}: the exam's maximum is {ours}, Remark's total possible \
+                     {theirs}: the exam is graded with other points, so its totals cannot equal \
+                     Remark's (see Key and points in parallel_run.html)"
+                );
+            }
+            if c.points_differences > 0 {
+                println!(
+                    "questions whose points differ from Remark's: {}",
+                    c.points_differences
+                );
+            }
+            for (k, n) in &c.identity {
+                println!("identity difference {k}: {n}");
+            }
+            if c.key_differences > 0 {
+                println!(
+                    "key entries that differ from Remark's: {}",
+                    c.key_differences
+                );
+            }
+            println!("{}", run.hold_text());
+            if c.held_in_review > 0 {
+                println!(
+                    "next: omr review list --project {} --lane marks",
+                    shell_arg(&dir)
+                );
+            }
+            println!(
+                "wrote {} files to {} (Restricted)",
+                summary.files.len(),
+                out.display()
+            );
+            p.close()
+        }
+    }
+}
+
 fn run(cli: Cli) -> Result<(), AppError> {
     match cli.cmd {
         Cmd::Templates { example_spec } => cmd_templates(example_spec),
@@ -1719,6 +2063,9 @@ fn run(cli: Cli) -> Result<(), AppError> {
         Cmd::Review { cmd } => cmd_review(cmd),
         Cmd::Key { cmd } => cmd_key(cmd),
         Cmd::Bench(b) => cmd_bench(b),
+        Cmd::Import { cmd } => cmd_import(cmd),
+        Cmd::Clo { cmd } => cmd_clo(cmd),
+        Cmd::Compare { cmd } => cmd_compare(cmd),
         Cmd::Release {
             project,
             reason,

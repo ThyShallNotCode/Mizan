@@ -60,6 +60,21 @@ fn join(parts: &[&str], sep: &str) -> String {
         .join(sep)
 }
 
+/// The parallel run's request from the Compare field: Remark's workbooks, and any `.csv`
+/// among them as handwritten student numbers (`file,page,student_id`).
+fn compare_request(typed: &str) -> b::RemarkRequest {
+    let (handwritten, workbooks): (Vec<_>, Vec<_>) = scan_paths(typed).into_iter().partition(|p| {
+        p.extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("csv"))
+    });
+    b::RemarkRequest {
+        workbooks,
+        points: b::RemarkPoints::FromWorkbooks,
+        handwritten,
+    }
+}
+
 /// The scan files or folders typed into the Add scans field: separated by `;` or new lines,
 /// quotes stripped, `~/` for the home folder.
 pub fn scan_paths(text: &str) -> Vec<std::path::PathBuf> {
@@ -75,6 +90,18 @@ pub fn scan_paths(text: &str) -> Vec<std::path::PathBuf> {
 }
 
 /// A blank sheet for a thumbnail whose page image is not available (never an invented scan).
+/// True when 1-based question `q` is in `ranges` (`1-8,11,13-14`).
+fn in_ranges(ranges: &str, q: usize) -> bool {
+    ranges.split(',').any(|r| {
+        let mut ends = r.split('-').map(|x| x.trim().parse::<usize>().ok());
+        match (ends.next().flatten(), ends.next()) {
+            (Some(a), None) => a == q,
+            (Some(a), Some(Some(z))) => (a..=z).contains(&q),
+            _ => false,
+        }
+    })
+}
+
 fn blank_sheet() -> Image {
     let mut px = SharedPixelBuffer::<Rgba8Pixel>::new(1, 1);
     px.make_mut_slice()[0] = Rgba8Pixel {
@@ -309,6 +336,19 @@ struct State {
     /// The exam whose key summary was last shown on its own (a held exam opens Setup on its
     /// key summary once; the instructor may then go back to the matrix).
     ks_seen: Option<ExamId>,
+    /// The Remark import read on the New-exam form (§3.5) and what was asked for it.
+    remark_new: Option<b::RemarkImportView>,
+    remark_new_request: b::RemarkRequest,
+    /// The workbooks the New-exam form uses (after *Use this import*), as the import names them.
+    remark_new_using: Option<String>,
+    /// The Remark import read in Setup for an exam, and what was asked for it.
+    remark_setup: Option<(ExamId, b::RemarkImportView)>,
+    remark_setup_request: b::RemarkRequest,
+    /// The import's version shown.
+    remark_version: usize,
+    /// The parallel run of an exam with Remark (§23.7) and what was asked for it.
+    parallel: Option<(ExamId, b::ParallelRunView)>,
+    parallel_request: b::RemarkRequest,
 }
 
 /// The shell controller: owns the backend handle and keeps the UI globals in sync.
@@ -356,6 +396,14 @@ impl Shell {
                 ks_version: 0,
                 ks_picks: BTreeMap::new(),
                 ks_seen: None,
+                remark_new: None,
+                remark_new_request: b::RemarkRequest::default(),
+                remark_new_using: None,
+                remark_setup: None,
+                remark_setup_request: b::RemarkRequest::default(),
+                remark_version: 0,
+                parallel: None,
+                parallel_request: b::RemarkRequest::default(),
             }),
             timer: RefCell::new(None),
         });
@@ -436,6 +484,7 @@ impl Shell {
     pub fn navigate(&self, page: s::Page) {
         let ui = self.ui();
         ui.global::<s::App>().set_page(page);
+        self.refresh_remark();
         match page {
             s::Page::Review => {
                 if self.st.borrow().item.is_none() {
@@ -467,7 +516,13 @@ impl Shell {
                 st.sel_col = 0;
                 st.ks_version = 0;
                 st.ks_picks.clear();
+                st.remark_version = 0;
                 self.ui().global::<s::SetupVM>().set_ks_open(false);
+                let ui = self.ui();
+                let rm = ui.global::<s::RemarkVM>();
+                rm.set_setup_open(false);
+                rm.set_cmp_open(false);
+                rm.set_cmp_bar(false);
             }
             st.exam = Some(exam.clone());
         }
@@ -483,6 +538,7 @@ impl Shell {
         self.refresh_review();
         self.refresh_results();
         self.refresh_outcomes();
+        self.refresh_remark();
     }
 
     // -------------------------------------------------------------------------- wiring
@@ -565,6 +621,10 @@ impl Shell {
         su.on_set_weight(move |row, c, t| me.set_weight(row as usize, c as usize, &t));
         let me = self.clone();
         su.on_set_note(move |row, c, t| me.set_note(row as usize, c as usize, &t));
+        let me = self.clone();
+        su.on_approve_mappings(move || me.approve_mappings());
+        let me = self.clone();
+        su.on_replace_clos(move |path| me.replace_clos(&path));
         let me = self.clone();
         su.on_select_cell(move |row, c| {
             {
@@ -739,6 +799,52 @@ impl Shell {
         let me = self.clone();
         ui.global::<s::OutcomesVM>()
             .on_export_tp154(move || me.export());
+
+        // Remark migration (§3.5) and the parallel run (§23.7)
+        let rm = ui.global::<s::RemarkVM>();
+        let me = self.clone();
+        rm.on_read(move |books, points| me.read_remark(&books, &points));
+        let me = self.clone();
+        rm.on_use_suggested(move || me.reread_remark(b::RemarkPoints::Suggested));
+        let me = self.clone();
+        rm.on_select_version(move |i| {
+            me.st.borrow_mut().remark_version = i.max(0) as usize;
+            me.refresh_remark();
+        });
+        let me = self.clone();
+        rm.on_apply(move || me.apply_remark());
+        let me = self.clone();
+        rm.on_discard(move || me.discard_remark());
+        let me = self.clone();
+        rm.on_clear_new(move || {
+            me.st.borrow_mut().remark_new_using = None;
+            me.say(
+                "The New-exam form no longer uses the Remark import: give a key file, key sheets \
+                 or no key",
+                s::Tone::Info,
+            );
+            me.refresh_remark();
+        });
+        let me = self.clone();
+        rm.on_compare(move |books| {
+            me.compare_remark(compare_request(&books));
+        });
+        let me = self.clone();
+        rm.on_cmp_use_suggested(move || {
+            let mut req = me.st.borrow().parallel_request.clone();
+            req.points = b::RemarkPoints::Suggested;
+            me.compare_remark(req);
+        });
+        let me = self.clone();
+        rm.on_cmp_use_exam_points(move || {
+            let mut req = me.st.borrow().parallel_request.clone();
+            req.points = b::RemarkPoints::Exam;
+            me.compare_remark(req);
+        });
+        let me = self.clone();
+        rm.on_save(move |dir| me.save_parallel_run(&dir));
+        let me = self.clone();
+        rm.on_queue(move || me.queue_parallel_differences());
     }
 
     fn toggle(&self, f: impl FnOnce(&mut State)) {
@@ -794,6 +900,12 @@ impl Shell {
             roster: ex.get_new_roster().to_string(),
             clo: ex.get_new_clo().to_string(),
             key_sheets: ex.get_new_key_sheets().to_string(),
+            remark: self
+                .st
+                .borrow()
+                .remark_new_using
+                .clone()
+                .unwrap_or_default(),
         };
         let r = self.backend.borrow_mut().create_exam(&form);
         match r {
@@ -810,10 +922,297 @@ impl Shell {
                 ex.set_new_roster(SharedString::new());
                 ex.set_new_clo(SharedString::new());
                 ex.set_new_key_sheets(SharedString::new());
+                {
+                    // the import is used up: the new exam carries its key and objectives
+                    let mut st = self.st.borrow_mut();
+                    st.remark_new = None;
+                    st.remark_new_using = None;
+                }
                 self.select_exam(&exam);
                 self.navigate(s::Page::Scan);
                 self.say(what, s::Tone::Info);
             }
+            Err(e) => self.say(e.to_string(), s::Tone::Warning),
+        }
+    }
+
+    // ------------------------------------------------------------------ Remark (§3.5, §23.7)
+
+    /// The import the screen shown works on: the New-exam form's (Exams) or the current
+    /// exam's (Setup); `None` on other screens.
+    fn remark_target(&self) -> Option<Option<ExamId>> {
+        match self.ui().global::<s::App>().get_page() {
+            s::Page::Exams => Some(None),
+            s::Page::Setup => self.exam().map(Some),
+            _ => None,
+        }
+    }
+
+    /// Reads the typed Remark workbooks (and points file) for the New-exam form or Setup and
+    /// shows the import for review; nothing changes until it is applied.
+    fn read_remark(&self, books: &str, points: &str) {
+        let points = points.trim();
+        let req = b::RemarkRequest {
+            workbooks: scan_paths(books),
+            points: match scan_paths(points).into_iter().next() {
+                Some(p) if !points.is_empty() => b::RemarkPoints::File(p),
+                _ => b::RemarkPoints::FromWorkbooks,
+            },
+            handwritten: Vec::new(),
+        };
+        self.run_remark_import(req);
+    }
+
+    /// Reads the last workbooks again with other points (the suggested ones: the instructor's
+    /// explicit choice).
+    fn reread_remark(&self, points: b::RemarkPoints) {
+        let Some(target) = self.remark_target() else {
+            return;
+        };
+        let mut req = {
+            let st = self.st.borrow();
+            match target {
+                None => st.remark_new_request.clone(),
+                Some(_) => st.remark_setup_request.clone(),
+            }
+        };
+        req.points = points;
+        self.run_remark_import(req);
+    }
+
+    fn run_remark_import(&self, req: b::RemarkRequest) {
+        let Some(target) = self.remark_target() else {
+            return;
+        };
+        let r = self
+            .backend
+            .borrow_mut()
+            .read_remark_import(target.as_ref(), &req);
+        let view = match r {
+            Ok(v) => v,
+            Err(e) => {
+                self.say(e.to_string(), s::Tone::Warning);
+                return;
+            }
+        };
+        let msg = match &view.refusal {
+            Some(r) => (
+                format!("Remark import refused: {}", r.message),
+                s::Tone::Warning,
+            ),
+            None => (
+                format!(
+                    "Read {} Remark workbook(s): {} version(s), {} questions; nothing changes \
+                     until you {}",
+                    view.files.len(),
+                    view.versions.len(),
+                    view.questions,
+                    if target.is_none() {
+                        "use the import"
+                    } else {
+                        "apply it"
+                    }
+                ),
+                s::Tone::Info,
+            ),
+        };
+        {
+            let mut st = self.st.borrow_mut();
+            st.remark_version = 0;
+            match &target {
+                None => {
+                    st.remark_new = Some(view);
+                    st.remark_new_request = req;
+                    // a new reading replaces the one the form used
+                    st.remark_new_using = None;
+                }
+                Some(exam) => {
+                    st.remark_setup = Some((exam.clone(), view));
+                    st.remark_setup_request = req;
+                }
+            }
+        }
+        let ui = self.ui();
+        let rm = ui.global::<s::RemarkVM>();
+        rm.set_show_key(false);
+        if target.is_some() {
+            rm.set_setup_bar(false);
+            rm.set_setup_open(true);
+        }
+        self.say(msg.0, msg.1);
+        self.refresh_remark();
+    }
+
+    /// Applies the import: on the New-exam form it fills the form (graded with the import's key,
+    /// points and learning objectives); in Setup the exam's key and points are replaced.
+    fn apply_remark(&self) {
+        let Some(target) = self.remark_target() else {
+            return;
+        };
+        let ui = self.ui();
+        let rm = ui.global::<s::RemarkVM>();
+        match target {
+            None => {
+                let Some(view) = self
+                    .st
+                    .borrow()
+                    .remark_new
+                    .clone()
+                    .filter(|v| v.refusal.is_none())
+                else {
+                    return;
+                };
+                let ex = ui.global::<s::ExamsVM>();
+                ex.set_new_questions(ss(view.questions.to_string()));
+                ex.set_new_forms(ss(view
+                    .versions
+                    .iter()
+                    .map(|v| v.form.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")));
+                // the import is the key source: a key file or key sheets would be a second one
+                ex.set_new_key(SharedString::new());
+                ex.set_new_key_sheets(SharedString::new());
+                let objectives = view.versions.iter().any(|v| !v.objectives.is_empty());
+                if objectives {
+                    ex.set_new_clo(SharedString::new());
+                }
+                self.st.borrow_mut().remark_new_using = Some(view.files.join("; "));
+                rm.set_new_panel(false);
+                self.say(
+                    format!(
+                        "The form uses the Remark import: {} questions, versions {}; type the \
+                         scans, then Grade exam",
+                        view.questions,
+                        view.versions
+                            .iter()
+                            .map(|v| v.form.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    s::Tone::Info,
+                );
+            }
+            Some(exam) => {
+                let r = self.backend.borrow_mut().apply_remark_import(&exam);
+                match r {
+                    Ok(what) => {
+                        self.st.borrow_mut().remark_setup = None;
+                        rm.set_setup_open(false);
+                        self.say(what, s::Tone::Success);
+                        self.refresh_setup();
+                        self.refresh_results();
+                        self.refresh_dashboard();
+                    }
+                    Err(e) => self.say(e.to_string(), s::Tone::Warning),
+                }
+            }
+        }
+        self.refresh_remark();
+    }
+
+    /// Puts the import aside (nothing was changed).
+    fn discard_remark(&self) {
+        let Some(target) = self.remark_target() else {
+            return;
+        };
+        self.backend
+            .borrow_mut()
+            .discard_remark_import(target.as_ref());
+        {
+            let mut st = self.st.borrow_mut();
+            match target {
+                None => {
+                    st.remark_new = None;
+                    st.remark_new_using = None;
+                }
+                Some(_) => st.remark_setup = None,
+            }
+        }
+        self.ui().global::<s::RemarkVM>().set_setup_open(false);
+        self.say(
+            "Remark import put aside: nothing was changed",
+            s::Tone::Info,
+        );
+        self.refresh_remark();
+    }
+
+    /// Runs the parallel run with Remark's workbooks and shows it in place of the results.
+    fn compare_remark(&self, req: b::RemarkRequest) {
+        let Some(exam) = self.exam() else { return };
+        let r = self.backend.borrow_mut().compare_remark(&exam, &req);
+        match r {
+            Ok(view) => {
+                let msg = match &view.refusal {
+                    Some(r) => (
+                        format!("Parallel run refused: {}", r.message),
+                        s::Tone::Warning,
+                    ),
+                    None => {
+                        let c = &view.counts;
+                        (
+                            format!(
+                                "Parallel run with Remark (Restricted): {} differences and {} \
+                                 pending questions to adjudicate; nothing was written{}",
+                                c.differ + c.differ_pending,
+                                c.agree_pending,
+                                if c.not_queued > 0 {
+                                    "; the comparison holds nothing until you queue its \
+                                     differences for review"
+                                } else {
+                                    ""
+                                }
+                            ),
+                            s::Tone::Info,
+                        )
+                    }
+                };
+                let dir = self.backend.borrow().parallel_run_dir(&exam);
+                {
+                    let mut st = self.st.borrow_mut();
+                    st.parallel = Some((exam, view));
+                    st.parallel_request = req;
+                }
+                let ui = self.ui();
+                let rm = ui.global::<s::RemarkVM>();
+                rm.set_cmp_bar(false);
+                rm.set_cmp_open(true);
+                if rm.get_save_path().is_empty()
+                    && let Some(d) = dir
+                {
+                    rm.set_save_path(ss(d.display().to_string()));
+                }
+                self.say(msg.0, msg.1);
+                self.refresh_remark();
+            }
+            Err(e) => self.say(e.to_string(), s::Tone::Warning),
+        }
+    }
+
+    /// Queues the parallel run's settled differences for review (they then hold release),
+    /// then shows the comparison again as the exam now stands.
+    fn queue_parallel_differences(&self) {
+        let Some(exam) = self.exam() else { return };
+        let r = self.backend.borrow_mut().queue_parallel_differences(&exam);
+        match r {
+            Ok(what) => {
+                let req = self.st.borrow().parallel_request.clone();
+                self.compare_remark(req);
+                self.refresh_dashboard();
+                self.refresh_results();
+                self.say(what, s::Tone::Success);
+            }
+            Err(e) => self.say(e.to_string(), s::Tone::Warning),
+        }
+    }
+
+    /// Writes the Restricted parallel-run report into the typed folder.
+    fn save_parallel_run(&self, dir: &str) {
+        let Some(exam) = self.exam() else { return };
+        let path = scan_paths(dir).into_iter().next().unwrap_or_default();
+        let r = self.backend.borrow_mut().save_parallel_run(&exam, &path);
+        match r {
+            Ok(what) => self.say(what, s::Tone::Success),
             Err(e) => self.say(e.to_string(), s::Tone::Warning),
         }
     }
@@ -1736,6 +2135,36 @@ impl Shell {
         );
     }
 
+    /// Approves the imported CLO mapping rows (an audited approval by the signed-in principal).
+    fn approve_mappings(&self) {
+        let Some(exam) = self.exam() else { return };
+        let r = self.backend.borrow_mut().approve_mappings(&exam);
+        match r {
+            Ok(what) => {
+                self.say(what, s::Tone::Success);
+                self.refresh_setup();
+                self.refresh_outcomes();
+            }
+            Err(e) => self.say(e.to_string(), s::Tone::Warning),
+        }
+    }
+
+    /// Replaces the CLOs and mapping from the typed CLO file.
+    fn replace_clos(&self, path: &str) {
+        let Some(exam) = self.exam() else { return };
+        let path = scan_paths(path).into_iter().next().unwrap_or_default();
+        let r = self.backend.borrow_mut().replace_clos(&exam, &path);
+        match r {
+            Ok(what) => {
+                self.ui().global::<s::SetupVM>().set_clo_path(ss(""));
+                self.say(what, s::Tone::Success);
+                self.refresh_setup();
+                self.refresh_outcomes();
+            }
+            Err(e) => self.say(e.to_string(), s::Tone::Warning),
+        }
+    }
+
     fn set_note(&self, row: usize, clo: usize, text: &str) {
         let Some((exam, setup, q)) = self.setup_row(row) else {
             return;
@@ -2017,6 +2446,7 @@ impl Shell {
             su.set_ks_open(false);
             return;
         };
+        su.set_mappings_proposed(setup.mappings_proposed as i32);
         let t = &setup.template;
         su.set_template_id(ss(&t.id));
         su.set_template_kind(ss(match t.kind {
@@ -3374,6 +3804,576 @@ impl Shell {
 
     // -------------------------------------------------------------------------- refresh: outcomes
 
+    /// Fills `RemarkVM`: the import of the screen shown (the New-exam form's on Exams, the
+    /// current exam's in Setup) and the current exam's parallel run.
+    fn refresh_remark(&self) {
+        let ui = self.ui();
+        let rm = ui.global::<s::RemarkVM>();
+        let exam = self.exam();
+        let page = ui.global::<s::App>().get_page();
+        {
+            let be = self.backend.borrow();
+            rm.set_can_new(be.can_import_remark(None));
+            rm.set_can_setup(exam.as_ref().is_some_and(|e| be.can_import_remark(Some(e))));
+            rm.set_can_compare(exam.is_some() && !be.is_demo());
+        }
+        let st = self.st.borrow();
+        // the New-exam form's use of the import
+        match (&st.remark_new_using, &st.remark_new) {
+            (Some(files), Some(v)) => {
+                let objectives: BTreeSet<&str> = v
+                    .versions
+                    .iter()
+                    .flat_map(|x| x.objectives.iter().map(|o| o.code.as_str()))
+                    .collect();
+                rm.set_new_using(true);
+                rm.set_new_using_text(ss(format!(
+                    "From the Remark import ({files}): the key with exact points of versions {}{} \
+                     · {} key-sheet row(s) excluded",
+                    v.versions
+                        .iter()
+                        .map(|x| x.form.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    if objectives.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            " · {} learning objective(s) as CLO mappings, imported, needs review",
+                            objectives.len()
+                        )
+                    },
+                    v.key_sheets.len()
+                )));
+            }
+            _ => {
+                rm.set_new_using(false);
+                rm.set_new_using_text(SharedString::new());
+            }
+        }
+        let (context, view) = match page {
+            s::Page::Exams => (1, st.remark_new.clone()),
+            s::Page::Setup => (
+                2,
+                st.remark_setup
+                    .as_ref()
+                    .filter(|(e, _)| Some(e) == exam.as_ref())
+                    .map(|(_, v)| v.clone()),
+            ),
+            _ => (0, None),
+        };
+        rm.set_context(context);
+        if context == 2 && view.is_none() {
+            rm.set_setup_open(false);
+        }
+        self.fill_import(&rm, view.as_ref(), st.remark_version, context);
+        let run = st
+            .parallel
+            .as_ref()
+            .filter(|(e, _)| Some(e) == exam.as_ref())
+            .map(|(_, v)| v.clone());
+        drop(st);
+        self.fill_parallel(&rm, run.as_ref());
+    }
+
+    fn fill_import(
+        &self,
+        rm: &s::RemarkVM,
+        view: Option<&b::RemarkImportView>,
+        version: usize,
+        context: i32,
+    ) {
+        let Some(v) = view else {
+            rm.set_has(false);
+            rm.set_refused(false);
+            rm.set_versions(model(Vec::new()));
+            rm.set_rows(model(Vec::new()));
+            rm.set_facts(model(Vec::new()));
+            rm.set_objectives(model(Vec::new()));
+            rm.set_key_sheets(model(Vec::new()));
+            rm.set_workbooks(model(Vec::new()));
+            rm.set_notes(model(Vec::new()));
+            return;
+        };
+        rm.set_apply_label(ss(if context == 1 {
+            "Use this import"
+        } else {
+            "Apply key and points"
+        }));
+        if let Some(r) = &v.refusal {
+            rm.set_has(false);
+            rm.set_refused(true);
+            rm.set_refusal(ss(&r.message));
+            rm.set_remedy(ss(&r.remedy));
+            rm.set_suggestion(ss(&r.suggestion));
+            rm.set_title(ss("Remark import refused"));
+            rm.set_files(ss(v.files.join(" · ")));
+            rm.set_can_apply(false);
+            rm.set_versions(model(Vec::new()));
+            rm.set_rows(model(Vec::new()));
+            rm.set_facts(model(Vec::new()));
+            rm.set_objectives(model(Vec::new()));
+            rm.set_key_sheets(model(Vec::new()));
+            rm.set_workbooks(model(Vec::new()));
+            rm.set_notes(model(Vec::new()));
+            return;
+        }
+        rm.set_has(true);
+        rm.set_refused(false);
+        let vi = version.min(v.versions.len().saturating_sub(1));
+        rm.set_version(vi as i32);
+        rm.set_title(ss(format!(
+            "Remark import · {} workbook(s) · version{} {} · {} questions",
+            v.workbooks.len(),
+            if v.versions.len() == 1 { "" } else { "s" },
+            v.versions
+                .iter()
+                .map(|x| x.form.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            v.questions
+        )));
+        rm.set_files(ss(v.files.join(" · ")));
+        rm.set_versions(model(
+            v.versions
+                .iter()
+                .enumerate()
+                .map(|(i, x)| s::RmVersion {
+                    label: ss(format!("Version {} · {} pts", x.form, x.total)),
+                    selected: i == vi,
+                    a11y: ss(format!(
+                        "Remark import version {}, {} questions, {} points",
+                        x.form, v.questions, x.total
+                    )),
+                })
+                .collect(),
+        ));
+        rm.set_applies(ss(&v.applies));
+        rm.set_can_apply(v.can_apply);
+        let kv = |label: &str, value: String, t: s::Tone| s::KV {
+            label: ss(label),
+            value: ss(value),
+            tone: t,
+        };
+        if let Some(x) = v.versions.get(vi) {
+            let mut facts = vec![
+                kv("Points", x.points_source.clone(), s::Tone::Neutral),
+                kv(
+                    "Total · values",
+                    format!("{} points · {}", x.total, x.distinct),
+                    s::Tone::Neutral,
+                ),
+                kv(
+                    "Remark totals",
+                    format!(
+                        "{} of {} rows reproduced exactly{}",
+                        x.reproduced,
+                        x.rows_checked,
+                        if x.group_points_checked > 0 {
+                            format!(
+                                " · objective points {} of {}",
+                                x.group_points_checked, x.group_points_checked
+                            )
+                        } else {
+                            String::new()
+                        }
+                    ),
+                    if x.reproduced == x.rows_checked {
+                        s::Tone::Success
+                    } else {
+                        s::Tone::Error
+                    },
+                ),
+                kv(
+                    "Rows",
+                    format!(
+                        "{} students · {} key-sheet row(s) excluded",
+                        x.students, x.key_sheet_rows
+                    ),
+                    s::Tone::Neutral,
+                ),
+            ];
+            if !v.points_note.is_empty() {
+                facts.push(kv("Points given", v.points_note.clone(), s::Tone::Accent));
+            }
+            rm.set_facts(model(facts));
+            rm.set_key_counts(ss(&x.key_counts));
+            let objective_of = |q: usize| -> String {
+                x.objectives
+                    .iter()
+                    .find(|o| in_ranges(&o.questions, q))
+                    .map(|o| o.code.clone())
+                    .unwrap_or_default()
+            };
+            rm.set_rows(model(
+                (0..usize::from(v.questions))
+                    .map(|q| s::RmRow {
+                        q: ss(format!("{:02}", q + 1)),
+                        key: ss(x.key.get(q).cloned().unwrap_or_default()),
+                        points: ss(x.points.get(q).cloned().unwrap_or_default()),
+                        objective: ss(objective_of(q + 1)),
+                    })
+                    .collect(),
+            ));
+        }
+        // the learning objectives of every version (one CLO each), with their questions
+        let mut codes: Vec<String> = Vec::new();
+        for x in &v.versions {
+            for o in &x.objectives {
+                if !codes.contains(&o.code) {
+                    codes.push(o.code.clone());
+                }
+            }
+        }
+        rm.set_objectives(model(
+            codes
+                .iter()
+                .map(|code| {
+                    let per: Vec<(&str, &b::RemarkObjective)> = v
+                        .versions
+                        .iter()
+                        .filter_map(|x| {
+                            x.objectives
+                                .iter()
+                                .find(|o| &o.code == code)
+                                .map(|o| (x.form.as_str(), o))
+                        })
+                        .collect();
+                    let same = per.windows(2).all(|w| w[0].1.questions == w[1].1.questions);
+                    let detail = if same {
+                        per.first()
+                            .map(|(_, o)| {
+                                format!("questions {} · {} points", o.questions, o.points)
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        per.iter()
+                            .map(|(f, o)| {
+                                format!(
+                                    "version {f}: questions {} · {} points",
+                                    o.questions, o.points
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    };
+                    s::RmObjective {
+                        code: ss(code),
+                        label: ss(per.first().map(|(_, o)| o.label.as_str()).unwrap_or("")),
+                        detail: ss(format!("{detail} · weight 1")),
+                    }
+                })
+                .collect(),
+        ));
+        rm.set_key_sheets(model(
+            v.key_sheets
+                .iter()
+                .map(|k| s::RmKeySheet {
+                    title: ss(format!("{} row {} · ID {}", k.workbook, k.row, k.masked_id)),
+                    detail: ss(&k.why),
+                })
+                .collect(),
+        ));
+        rm.set_workbooks(model(
+            v.workbooks
+                .iter()
+                .map(|w| s::KV {
+                    label: ss(&w.file),
+                    value: ss(format!(
+                        "{} · {} students · {} key sheet(s)",
+                        w.form, w.students, w.key_sheets
+                    )),
+                    tone: s::Tone::Neutral,
+                })
+                .collect(),
+        ));
+        rm.set_notes(model(v.notes.iter().map(ss).collect()));
+    }
+
+    fn fill_parallel(&self, rm: &s::RemarkVM, run: Option<&b::ParallelRunView>) {
+        let Some(v) = run else {
+            rm.set_cmp_has(false);
+            rm.set_cmp_open(false);
+            rm.set_cmp_refused(false);
+            rm.set_diffs(model(Vec::new()));
+            rm.set_diff_crops(model(Vec::new()));
+            rm.set_identity(model(Vec::new()));
+            rm.set_totals(model(Vec::new()));
+            rm.set_cmp_key_sheets(model(Vec::new()));
+            rm.set_cmp_workbooks(model(Vec::new()));
+            rm.set_cmp_tiles(model(Vec::new()));
+            rm.set_cmp_hold(ss(""));
+            rm.set_cmp_can_queue(false);
+            return;
+        };
+        rm.set_cmp_has(true);
+        rm.set_banner(ss(&v.banner));
+        rm.set_cmp_title(ss(v.files.join(" · ")));
+        rm.set_cmp_points(ss(&v.points));
+        if let Some(r) = &v.refusal {
+            rm.set_cmp_refused(true);
+            rm.set_cmp_refusal(ss(&r.message));
+            rm.set_cmp_remedy(ss(&r.remedy));
+            rm.set_cmp_suggestion(ss(&r.suggestion));
+            rm.set_diffs(model(Vec::new()));
+            rm.set_diff_crops(model(Vec::new()));
+            rm.set_cmp_tiles(model(Vec::new()));
+            rm.set_cmp_hold(ss(""));
+            rm.set_cmp_can_queue(false);
+            return;
+        }
+        rm.set_cmp_refused(false);
+        let c = &v.counts;
+        let paired = c.paired_by_id + c.paired_by_partial_id + c.paired_by_answers;
+        let tile = |label: &str, value: String, caption: String, tone: s::Tone| s::CmpTile {
+            label: ss(label),
+            value: ss(value),
+            caption: ss(caption),
+            tone,
+        };
+        let open = c.differ + c.differ_pending;
+        rm.set_cmp_hold(ss(&v.hold));
+        rm.set_cmp_can_queue(c.not_queued > 0);
+        rm.set_cmp_tiles(model(vec![
+            tile(
+                "BOOKLETS PAIRED",
+                format!("{paired}/{}", c.booklets),
+                format!(
+                    "ID {} · partial {} · answers {}",
+                    c.paired_by_id, c.paired_by_partial_id, c.paired_by_answers
+                ),
+                s::Tone::Neutral,
+            ),
+            tile(
+                "QUESTIONS EQUAL",
+                c.agree.to_string(),
+                format!("of {} · {} pending, same", c.questions, c.agree_pending),
+                s::Tone::Neutral,
+            ),
+            tile(
+                "TO ADJUDICATE",
+                open.to_string(),
+                if c.not_queued > 0 {
+                    format!(
+                        "{} settled · {} pending · {} not in Review",
+                        c.differ, c.differ_pending, c.not_queued
+                    )
+                } else {
+                    format!(
+                        "{} settled · {} pending · {} held in Review",
+                        c.differ, c.differ_pending, c.held_in_review
+                    )
+                },
+                if c.differ > 0 {
+                    s::Tone::Error
+                } else if open > 0 {
+                    s::Tone::Warning
+                } else {
+                    s::Tone::Success
+                },
+            ),
+            tile(
+                "TOTALS EQUAL",
+                format!("{}/{}", c.totals_settled_equal, c.totals_settled),
+                if c.maximum_differences > 0 {
+                    "the exam's maximum is not Remark's: other points".to_string()
+                } else {
+                    format!(
+                        "this exam's grades · provisional {}/{} if resolved",
+                        c.totals_provisional_equal_if_remark, c.totals_provisional
+                    )
+                },
+                if c.totals_settled_equal == c.totals_settled && c.maximum_differences == 0 {
+                    s::Tone::Success
+                } else {
+                    s::Tone::Error
+                },
+            ),
+            tile(
+                "IDENTITY",
+                c.identity.to_string(),
+                "differences to check".into(),
+                if c.identity > 0 {
+                    s::Tone::Warning
+                } else {
+                    s::Tone::Success
+                },
+            ),
+            tile(
+                "KEY SHEETS",
+                c.key_sheet_rows.to_string(),
+                "graded as students".into(),
+                if c.key_sheet_rows > 0 {
+                    s::Tone::Warning
+                } else {
+                    s::Tone::Neutral
+                },
+            ),
+        ]));
+        let mut crops = Vec::new();
+        let diffs: Vec<s::CmpDiff> = v
+            .differences
+            .iter()
+            .map(|d| {
+                let (status, tone) = match d.agreement {
+                    b::ParallelAgreement::Differ => {
+                        (format!("differs · ours {}", d.status), s::Tone::Error)
+                    }
+                    b::ParallelAgreement::DifferPending => (
+                        "differs · ours pending review".to_string(),
+                        s::Tone::Warning,
+                    ),
+                    b::ParallelAgreement::AgreePending => (
+                        "same reading · ours pending review".to_string(),
+                        s::Tone::Info,
+                    ),
+                };
+                crops.push(d.crop.as_ref().map_or_else(blank_sheet, image));
+                s::CmpDiff {
+                    q: ss(format!("Q{:02}", d.question)),
+                    booklet: ss(&d.booklet),
+                    student: ss(&d.student),
+                    remark: ss(&d.remark),
+                    ours: ss(&d.ours),
+                    label: ss(format!(
+                        "Q{} {}: Remark {}, ours {}, {status}",
+                        d.question, d.booklet, d.remark, d.ours
+                    )),
+                    status: ss(status),
+                    tone,
+                    findings: ss(&d.findings),
+                    has_crop: d.crop.is_some(),
+                }
+            })
+            .collect();
+        rm.set_diffs(model(diffs));
+        rm.set_diff_crops(model(crops));
+        let line = |title: String, detail: String, tone: s::Tone| s::CmpLine {
+            title: ss(title),
+            detail: ss(detail),
+            tone,
+        };
+        rm.set_identity(model(
+            v.identity
+                .iter()
+                .map(|i| {
+                    line(
+                        i.kind.clone(),
+                        format!(
+                            "{} · ours {} · Remark {} · {}",
+                            if i.booklet.is_empty() {
+                                "no booklet"
+                            } else {
+                                i.booklet.as_str()
+                            },
+                            i.ours,
+                            i.remark,
+                            i.detail
+                        ),
+                        s::Tone::Warning,
+                    )
+                })
+                .collect(),
+        ));
+        // the points first: totals cannot agree where the exam carries other points
+        let mut totals: Vec<s::CmpLine> = Vec::new();
+        if !v.maximum_differences.is_empty() {
+            totals.push(line(
+                format!("Maximum differs: {}", v.maximum_differences.join("; ")),
+                "this exam is graded with other points than Remark's, so no total can equal \
+                 Remark's; check the key's points (the totals are this exam's own grades)"
+                    .into(),
+                s::Tone::Error,
+            ));
+        }
+        if !v.points_differences.is_empty() {
+            totals.push(line(
+                format!(
+                    "Points differ on {} question(s)",
+                    v.points_differences.len()
+                ),
+                v.points_differences
+                    .iter()
+                    .take(6)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; ")
+                    + if v.points_differences.len() > 6 {
+                        " …"
+                    } else {
+                        ""
+                    },
+                s::Tone::Warning,
+            ));
+        }
+        totals.extend(v.totals.iter().map(|t| {
+            let pending = !t.pending.is_empty();
+            line(
+                format!("{}: ours {}, Remark {}", t.booklet, t.ours, t.remark),
+                if pending {
+                    format!(
+                        "{} · pending Q{}: {} if resolved as Remark read · {}",
+                        t.student, t.pending, t.if_remark, t.grades
+                    )
+                } else {
+                    format!("{} · {}", t.student, t.grades)
+                },
+                if pending {
+                    s::Tone::Info
+                } else {
+                    s::Tone::Error
+                },
+            )
+        }));
+        rm.set_totals(model(totals));
+        rm.set_cmp_key_sheets(model(
+            v.key_sheets
+                .iter()
+                .map(|k| {
+                    line(
+                        format!("{}: {} key-sheet row(s)", k.workbook, k.rows),
+                        format!(
+                            "Remark reported {} · without them {}",
+                            k.reported, k.without
+                        ),
+                        s::Tone::Warning,
+                    )
+                })
+                .collect(),
+        ));
+        let mut books: Vec<s::CmpLine> = v
+            .workbooks
+            .iter()
+            .map(|w| {
+                if w.in_scope {
+                    line(
+                        format!(
+                            "{} · {} · {}/{} paired · {} key sheet(s)",
+                            w.file, w.form, w.paired, w.rows, w.key_sheets
+                        ),
+                        String::new(),
+                        s::Tone::Success,
+                    )
+                } else {
+                    line(
+                        format!("{} · {} · another section, not compared", w.file, w.form),
+                        String::new(),
+                        s::Tone::Neutral,
+                    )
+                }
+            })
+            .collect();
+        for k in &v.key_differences {
+            books.push(line(
+                format!("Remark's key differs: {k}"),
+                "the exam's key and Remark's Answer Key row disagree; check the key".into(),
+                s::Tone::Error,
+            ));
+        }
+
+        rm.set_cmp_workbooks(model(books));
+    }
+
     fn refresh_outcomes(&self) {
         let ui = self.ui();
         let ov = ui.global::<s::OutcomesVM>();
@@ -3563,6 +4563,38 @@ impl Shell {
         ui.global::<s::ResultsVM>().set_export_open(exports);
         ui.global::<s::ExamsVM>()
             .set_new_open(new_exam && self.backend.borrow().can_create_exam());
+    }
+
+    /// Closes the Remark panels, bars and views and clears the status line (screenshots stage
+    /// each screen afresh).
+    pub fn close_remark(&self) {
+        self.say("", s::Tone::Neutral);
+        let ui = self.ui();
+        let rm = ui.global::<s::RemarkVM>();
+        rm.set_new_panel(false);
+        rm.set_setup_bar(false);
+        rm.set_setup_open(false);
+        rm.set_cmp_bar(false);
+        rm.set_cmp_open(false);
+    }
+
+    /// Reads Remark's workbooks (`;` between several) for the screen shown, as *Read export*
+    /// does: the New-exam form's import on Exams (its panel open), Setup's import in Setup.
+    pub fn remark_import(&self, workbooks: &str) {
+        let ui = self.ui();
+        let rm = ui.global::<s::RemarkVM>();
+        rm.set_path(ss(workbooks));
+        if ui.global::<s::App>().get_page() == s::Page::Exams {
+            rm.set_new_panel(true);
+        }
+        self.read_remark(workbooks, "");
+    }
+
+    /// Runs the parallel run with Remark's workbooks, as *Compare* does.
+    pub fn remark_compare(&self, workbooks: &str) {
+        let ui = self.ui();
+        ui.global::<s::RemarkVM>().set_cmp_path(ss(workbooks));
+        self.compare_remark(compare_request(workbooks));
     }
 
     /// Shows (or hides) Setup's key summary of the key read from key sheets.

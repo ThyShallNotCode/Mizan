@@ -298,7 +298,7 @@ pub struct CloDefinition {
 /// One item → CLO mapping cell (§11.2).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CloMapping {
-    /// 1-based question number (printed position on every form).
+    /// 1-based question number (printed position on every form, or on `form` alone).
     pub question: u16,
     /// CLO code.
     pub clo: String,
@@ -307,6 +307,21 @@ pub struct CloMapping {
     /// Free bilingual note.
     #[serde(default)]
     pub note: String,
+    /// The version (form letter) the row applies to; empty: the printed question on every
+    /// version. Versions whose questions evidence different CLOs (e.g. Remark learning
+    /// objectives imported per version, §3.5) map each version's printed questions.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub form: String,
+    /// Where the row came from when it is not the coordinator's own entry (§11.2 `source`):
+    /// e.g. `Remark import`. Such a row is `proposed` ("imported, needs review"): it counts in
+    /// the attainment shown, and the official TP-154 tables carry the draft watermark until
+    /// the coordinator approves the mapping (SCO-032).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub imported: String,
+    /// Who approved an imported row (an audited `MappingApproved` act, §11.2): the row is then
+    /// `approved` with its source kept. Empty: not approved (an imported row stays `proposed`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub approved_by: String,
 }
 
 /// Attainment policy template (§11.4).
@@ -398,6 +413,12 @@ pub struct ExamDefinition {
     /// Points per question (exact decimal strings); empty = 1 each.
     #[serde(default)]
     pub points: Vec<String>,
+    /// Points per question of a version whose printed questions carry other points than
+    /// `points` (form letter → one value per question), e.g. versions that shuffle questions
+    /// of different weights (§3.5 Remark import). Versions not listed take `points`. A key
+    /// whose versions carry different points never shares master items across them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub form_points: BTreeMap<String, Vec<String>>,
     /// Answer keys.
     #[serde(default)]
     pub key: KeySource,
@@ -454,6 +475,7 @@ impl ExamDefinition {
             multi_review: MultiReviewPolicy::default(),
             high_stakes: false,
             points: Vec::new(),
+            form_points: BTreeMap::new(),
             key: KeySource::None,
             roster: None,
             id_scheme,
@@ -631,6 +653,26 @@ impl ExamDefinition {
             omr_scoring::parse_points(p)
                 .map_err(|e| AppError::Definition(format!("points `{p}`: {e}")))?;
         }
+        for (f, pts) in &self.form_points {
+            if !self.forms.contains(f) {
+                return bad(format!(
+                    "points for version `{f}`, which the exam does not declare (forms {})",
+                    self.forms.join(", ")
+                ));
+            }
+            if pts.len() != usize::from(self.questions) {
+                return bad(format!(
+                    "{} point values of version {f} for {} questions",
+                    pts.len(),
+                    self.questions
+                ));
+            }
+            for p in pts {
+                omr_scoring::parse_points(p).map_err(|e| {
+                    AppError::Definition(format!("points `{p}` of version {f}: {e}"))
+                })?;
+            }
+        }
         if let KeySource::Provided { forms } = &self.key {
             if let Some(f) = self
                 .forms
@@ -691,6 +733,15 @@ impl ExamDefinition {
                 if m.question == 0 || m.question > self.questions {
                     return bad(format!("mapping of question {} out of range", m.question));
                 }
+                if !m.form.is_empty() && !self.forms.contains(&m.form) {
+                    return bad(format!(
+                        "mapping of question {} for version `{}`, which the exam does not \
+                         declare (forms {})",
+                        m.question,
+                        m.form,
+                        self.forms.join(", ")
+                    ));
+                }
                 omr_scoring::parse_points(&m.weight)
                     .map_err(|e| AppError::Definition(format!("weight `{}`: {e}", m.weight)))?;
             }
@@ -740,6 +791,50 @@ impl ExamDefinition {
     /// True when the key is inferred from the sheets (never releasable).
     pub fn key_inferred(&self) -> bool {
         matches!(self.key, KeySource::Inferred)
+    }
+
+    /// The points of every version (in `forms` order): `points` (1 each when empty) unless
+    /// `form_points` lists the version.
+    pub fn points_by_form(&self) -> Vec<Vec<String>> {
+        let n = usize::from(self.questions);
+        let base = if self.points.is_empty() {
+            vec!["1".to_string(); n]
+        } else {
+            self.points.clone()
+        };
+        self.forms
+            .iter()
+            .map(|f| {
+                self.form_points
+                    .get(f)
+                    .cloned()
+                    .unwrap_or_else(|| base.clone())
+            })
+            .collect()
+    }
+
+    /// Sets the points read with a key file ([`KeyFilePoints`]): one column for every version
+    /// replaces `points`; columns per version set `form_points` (dropped again when every
+    /// version reads the same).
+    pub fn set_key_points(&mut self, p: &KeyFilePoints) {
+        if let Some(all) = &p.all {
+            self.points = all.clone();
+        }
+        self.form_points = p.per_form.clone();
+        if !self.form_points.is_empty() {
+            let by_form = self.points_by_form();
+            if by_form.iter().all(|x| *x == by_form[0]) {
+                self.points = by_form[0].clone();
+                self.form_points.clear();
+            }
+        }
+    }
+
+    /// True when some item → CLO mapping row applies to one version only.
+    pub fn has_form_mapping(&self) -> bool {
+        self.outcomes
+            .as_ref()
+            .is_some_and(|o| o.mapping.iter().any(|m| !m.form.is_empty()))
     }
 
     /// Option labels of the sheet.
@@ -814,9 +909,11 @@ const VOID_WORDS: &[&str] = &[
 /// Words that leave an entry missing (SCO-003 until filled in).
 const MISSING_WORDS: &[&str] = &["-", "–", "n/a", "na", "none", "?"];
 
-/// Parses a key entry: `"B"`, `"b"`, `"A|C"` (also `A/C`, `A;C`, `A,C`, `A+C`, `A&C`,
+/// Parses a key entry: `"B"`, `"b"`, `"A|C"` (either accepted; also `A/C`, `A;C`, `A,C`,
 /// `A C`, `A or C`, `AC`), `"*"` or `"void"`, `""` (missing). Arabic letters and 1-based digits
-/// (ASCII or Arabic-Indic) are accepted.
+/// (ASCII or Arabic-Indic) are accepted. Remark's AND syntax (`A+C`, `A&C`, `A and C`: all of
+/// these answers required, spec §10.1) is refused with what to write instead: AND keys are not
+/// scored yet, and reading them as "either" would credit half-answered items silently.
 pub fn parse_key_entry(s: &str, options: u8) -> Result<ParsedKey, String> {
     let t = clean_cell(s);
     let t = t.trim();
@@ -827,6 +924,14 @@ pub fn parse_key_entry(s: &str, options: u8) -> Result<ParsedKey, String> {
     if t == "*" || VOID_WORDS.contains(&lower.as_str()) {
         return Ok(ParsedKey::Void);
     }
+    if t.contains(['+', '&']) || format!(" {lower} ").contains(" and ") {
+        return Err(format!(
+            "`{}` is an AND key (Remark's partial-credit syntax: all of these answers \
+             required, spec §10.1), which this version does not score yet; write `A|C` if \
+             either answer earns the question, or `*` to void it",
+            t.to_uppercase()
+        ));
+    }
     let spaced = format!(" {lower} ")
         .replace(" or ", "|")
         .replace(" أو ", "|")
@@ -836,7 +941,7 @@ pub fn parse_key_entry(s: &str, options: u8) -> Result<ParsedKey, String> {
         .collect();
     let mut v = Vec::new();
     for part in spaced
-        .split(['|', '/', ';', ',', '+', '&', ' '])
+        .split(['|', '/', ';', ',', ' '])
         .filter(|p| !p.is_empty())
     {
         let found: Vec<u8> = match parse_option(part, options) {
@@ -1112,13 +1217,94 @@ pub fn read_key_csv(
     read_key_file(bytes, forms, questions, MAX_OPTIONS)
 }
 
-/// [`read_key_csv`] with the exam's option count (entries are checked against it).
+/// The points columns of a key file.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KeyFilePoints {
+    /// A `points` column: one value per question for every version.
+    pub all: Option<Vec<String>>,
+    /// `points_A`, `points_B` … columns (also `points A`, `A points`): one value per question
+    /// of that version (form letter → values).
+    pub per_form: BTreeMap<String, Vec<String>>,
+}
+
+/// A key file as read by [`read_key_file_full`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeyFile {
+    /// One key per form, in the exam's form order.
+    pub forms: Vec<FormKey>,
+    /// Its points columns.
+    pub points: KeyFilePoints,
+}
+
+/// The version a per-version points header names (`points_A`, `points A`, `pts B`,
+/// `A points`), from its normalised text ([`norm_header`]).
+fn points_form(hn: &str) -> Option<String> {
+    let parts: Vec<&str> = hn.split(' ').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let f = if POINTS_HEADERS.contains(&parts[0]) {
+        parts[1..].join(" ")
+    } else if POINTS_HEADERS.contains(&parts[parts.len() - 1]) {
+        parts[..parts.len() - 1].join(" ")
+    } else {
+        return None;
+    };
+    let f = form_label(&f);
+    (!f.is_empty() && f.chars().count() <= 2).then_some(f)
+}
+
+/// [`read_key_csv`] with the exam's option count (entries are checked against it). A file
+/// with points per version (`points_A`, `points_B`) is read here only when every version
+/// carries the same points; [`read_key_file_full`] reads them per version.
 pub fn read_key_file(
     bytes: &[u8],
     forms: &[String],
     questions: u16,
     options: u8,
 ) -> Result<(Vec<FormKey>, Option<Vec<String>>), AppError> {
+    let k = read_key_file_full(bytes, forms, questions, options)?;
+    if k.points.per_form.is_empty() {
+        return Ok((k.forms, k.points.all));
+    }
+    let base = k
+        .points
+        .all
+        .clone()
+        .unwrap_or_else(|| vec!["1".to_string(); usize::from(questions)]);
+    let by_form: Vec<&Vec<String>> = forms
+        .iter()
+        .map(|f| k.points.per_form.get(f).unwrap_or(&base))
+        .collect();
+    let points = match by_form.first() {
+        Some(first) if by_form.iter().all(|p| p == first) => Some((*first).clone()),
+        _ => {
+            return Err(AppError::Input(format!(
+                "key file: the versions carry different points ({}); grade with `omr grade \
+                 --key` or replace the key with `omr key replace --key`, which read points per \
+                 version",
+                k.points
+                    .per_form
+                    .keys()
+                    .map(|f| format!("points_{f}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+    };
+    Ok((k.forms, points))
+}
+
+/// Reads an answer-key file as [`read_key_csv`] does, with points per version: besides a
+/// `points` column (every version), a `points_A`, `points_B` … column gives the points of the
+/// questions of that version (a Remark import writes them when its versions shuffle questions
+/// of different weights).
+pub fn read_key_file_full(
+    bytes: &[u8],
+    forms: &[String],
+    questions: u16,
+    options: u8,
+) -> Result<KeyFile, AppError> {
     let rows = delimited_rows(bytes, "key file")?;
     let Some((_, first)) = rows.first() else {
         return Err(AppError::Input(format!("key file: no rows; {KEY_LAYOUTS}")));
@@ -1129,17 +1315,32 @@ pub fn read_key_file(
         parse_key_entry(v, options).map_err(|m| key_error(line, format!("{col}: {m}")))?;
         Ok(v.to_string())
     };
+    let points_cell = |line: u64, q: usize, what: &str, v: &str| -> Result<String, AppError> {
+        let v = v.replace(',', ".");
+        omr_scoring::parse_points(&v).map_err(|e| {
+            key_error(
+                line,
+                format!("{what}`{v}` of question {q}: {e}; write a number like 1 or 0.5"),
+            )
+        })?;
+        Ok(v)
+    };
     // One row per question.
     let long = |body: &[(u64, Vec<String>)],
                 cols: &[(String, usize)],
                 points_col: Option<usize>,
+                form_points: &[(String, usize)],
                 width: usize|
-     -> Result<(Vec<FormKey>, Option<Vec<String>>), AppError> {
+     -> Result<KeyFile, AppError> {
         let mut keys: Vec<(String, Vec<String>)> = cols
             .iter()
             .map(|(f, _)| (f.clone(), vec![String::new(); n]))
             .collect();
         let mut points = points_col.map(|_| vec!["1".to_string(); n]);
+        let mut per_form: BTreeMap<String, Vec<String>> = form_points
+            .iter()
+            .map(|(f, _)| (f.clone(), vec!["1".to_string(); n]))
+            .collect();
         let mut seen: BTreeMap<usize, (u64, Vec<String>)> = BTreeMap::new();
         for (line, row) in body {
             let q = parse_question_number(&row[0]).ok_or_else(|| {
@@ -1197,14 +1398,14 @@ pub fn read_key_file(
             if let (Some(pc), Some(p)) = (points_col, points.as_mut())
                 && let Some(v) = row.get(pc).filter(|v| !v.is_empty())
             {
-                let v = v.replace(',', ".");
-                omr_scoring::parse_points(&v).map_err(|e| {
-                    key_error(
-                        *line,
-                        format!("points `{v}` of question {q}: {e}; write a number like 1 or 0.5"),
-                    )
-                })?;
-                p[q - 1] = v;
+                p[q - 1] = points_cell(*line, q, "points ", v)?;
+            }
+            for (f, c) in form_points {
+                if let Some(v) = row.get(*c).filter(|v| !v.is_empty())
+                    && let Some(p) = per_form.get_mut(f)
+                {
+                    p[q - 1] = points_cell(*line, q, &format!("points of version {f} "), v)?;
+                }
             }
             seen.insert(q, (*line, cells));
         }
@@ -1212,13 +1413,26 @@ pub fn read_key_file(
             .into_iter()
             .map(|(form, answers)| FormKey { form, answers })
             .collect();
-        Ok((order_keys(out, forms)?, points))
+        if let Some(f) = per_form.keys().find(|f| !forms.contains(f)) {
+            return Err(AppError::Input(format!(
+                "key file: a points_{f} column for version {f}, which the exam does not declare \
+                 (forms {}); rename the column or declare the version (--forms)",
+                forms.join(", ")
+            )));
+        }
+        Ok(KeyFile {
+            forms: order_keys(out, forms)?,
+            points: KeyFilePoints {
+                all: points,
+                per_form,
+            },
+        })
     };
     // One row per version: `labelled` rows start with the form letter.
     let wide = |body: &[(u64, Vec<String>)],
                 header: Option<&[String]>,
                 labelled: bool|
-     -> Result<(Vec<FormKey>, Option<Vec<String>>), AppError> {
+     -> Result<KeyFile, AppError> {
         let skip = usize::from(labelled);
         let qcols: Vec<Option<usize>> = match header {
             Some(h) => h[skip..]
@@ -1269,15 +1483,21 @@ pub fn read_key_file(
             }
             out.push(FormKey { form, answers });
         }
-        Ok((order_keys(out, forms)?, None))
+        Ok(KeyFile {
+            forms: order_keys(out, forms)?,
+            points: KeyFilePoints::default(),
+        })
     };
     if QUESTION_HEADERS.contains(&h0.as_str()) {
         let mut cols: Vec<(String, usize)> = Vec::new();
         let mut points_col = None;
+        let mut form_points: Vec<(String, usize)> = Vec::new();
         for (i, h) in first.iter().enumerate().skip(1) {
             let hn = norm_header(h);
             if POINTS_HEADERS.contains(&hn.as_str()) {
                 points_col = Some(i);
+            } else if let Some(f) = points_form(&hn) {
+                form_points.push((f, i));
             } else if SHARED_KEY_HEADERS.contains(&hn.as_str()) {
                 cols.push(("*".into(), i)); // one key for every form
             } else if !hn.is_empty() {
@@ -1290,7 +1510,7 @@ pub fn read_key_file(
                 first[0]
             )));
         }
-        return long(&rows[1..], &cols, points_col, first.len());
+        return long(&rows[1..], &cols, points_col, &form_points, first.len());
     }
     if FORM_HEADERS.contains(&h0.as_str()) {
         return wide(&rows[1..], Some(&first[..]), true);
@@ -1312,7 +1532,7 @@ pub fn read_key_file(
                 ),
             ));
         };
-        return long(&rows, &cols, None, k + 1);
+        return long(&rows, &cols, None, &[], k + 1);
     }
     if rows.iter().all(|(_, r)| r.len() == 1) {
         // A single column: one answer per question, in order.
@@ -1324,22 +1544,90 @@ pub fn read_key_file(
             .collect::<Result<Vec<_>, _>>()?;
         let mut answers = answers;
         answers.resize(n, String::new());
-        return Ok((
-            order_keys(
+        return Ok(KeyFile {
+            forms: order_keys(
                 vec![FormKey {
                     form: "*".into(),
                     answers,
                 }],
                 forms,
             )?,
-            None,
-        ));
+            points: KeyFilePoints::default(),
+        });
     }
     let labelled = rows.iter().all(|(_, r)| {
         let f = form_label(&r[0]);
         r.len() != n && forms.contains(&f)
     });
     wide(&rows, None, labelled)
+}
+
+/// Points given by the instructor for an import (`omr import remark --points`, §3.5): a CSV
+/// with a `question` column and a `points` column (every version) and/or `points_A`,
+/// `points_B` … columns (one version each); a key file with points (`question,A,B,points`)
+/// works as it is, its answer columns ignored. An empty cell leaves that question's points to
+/// be derived. Returns form letter (`""`: every version) → one optional value per question.
+pub fn read_points_file(
+    bytes: &[u8],
+    questions: u16,
+) -> Result<BTreeMap<String, Vec<Option<String>>>, AppError> {
+    let rows = delimited_rows(bytes, "points file")?;
+    let fix = "write a header `question,points` (every version) or `question,points_A,points_B` \
+               (per version), one row per question";
+    let Some((_, first)) = rows.first() else {
+        return Err(AppError::Input(format!("points file: no rows; {fix}")));
+    };
+    if !QUESTION_HEADERS.contains(&norm_header(&first[0]).as_str()) {
+        return Err(AppError::Input(format!(
+            "points file: the first column is `{}`, not `question`; {fix}",
+            first[0]
+        )));
+    }
+    let mut cols: Vec<(String, usize)> = Vec::new();
+    for (i, h) in first.iter().enumerate().skip(1) {
+        let hn = norm_header(h);
+        if POINTS_HEADERS.contains(&hn.as_str()) {
+            cols.push((String::new(), i));
+        } else if let Some(f) = points_form(&hn) {
+            cols.push((f, i));
+        }
+    }
+    if cols.is_empty() {
+        return Err(AppError::Input(format!(
+            "points file: no points column; {fix}"
+        )));
+    }
+    let n = usize::from(questions);
+    let mut out: BTreeMap<String, Vec<Option<String>>> = cols
+        .iter()
+        .map(|(f, _)| (f.clone(), vec![None; n]))
+        .collect();
+    for (line, row) in &rows[1..] {
+        let q = parse_question_number(&row[0]).ok_or_else(|| {
+            key_error(
+                *line,
+                format!("`{}` is not a question number; {fix}", row[0]),
+            )
+        })? as usize;
+        if q == 0 || q > n {
+            continue;
+        }
+        for (f, c) in &cols {
+            if let Some(v) = row.get(*c).filter(|v| !v.is_empty()) {
+                let v = v.replace(',', ".");
+                omr_scoring::parse_points(&v).map_err(|e| {
+                    key_error(
+                        *line,
+                        format!("points `{v}` of question {q}: {e}; write a number like 0.75"),
+                    )
+                })?;
+                if let Some(p) = out.get_mut(f) {
+                    p[q - 1] = Some(v);
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// The form letters a key file names (`question,A,B`, `form,…` rows, or labelled rows), for
@@ -1354,6 +1642,7 @@ pub fn key_file_forms(bytes: &[u8]) -> Option<Vec<String>> {
             let hn = norm_header(h);
             if !hn.is_empty()
                 && !POINTS_HEADERS.contains(&hn.as_str())
+                && points_form(&hn).is_none()
                 && !SHARED_KEY_HEADERS.contains(&hn.as_str())
             {
                 out.push(form_label(h));
@@ -1556,23 +1845,19 @@ pub fn read_roster_csv(bytes: &[u8]) -> Result<Vec<RosterStudent>, AppError> {
 /// Reads a roster from the first sheet of an XLSX workbook (calamine). Integer-valued numeric
 /// ID cells are written without a decimal part and flagged (§9.2 rule 1).
 pub fn read_roster_xlsx(bytes: &[u8]) -> Result<Vec<RosterStudent>, AppError> {
-    use calamine::{Data, Reader, Xlsx};
+    use calamine::{Data, Reader};
     let fix = "save the roster again as an Excel workbook (.xlsx) or as CSV UTF-8";
-    let mut wb: Xlsx<_> = Xlsx::new(std::io::Cursor::new(bytes.to_vec()))
+    let mut wb = crate::xlsx::open(bytes)
         .map_err(|e| AppError::Input(format!("roster XLSX: {e}; {fix}")))?;
     let name = wb
         .sheet_names()
         .first()
         .cloned()
         .ok_or_else(|| AppError::Input(format!("roster XLSX: no sheet; {fix}")))?;
-    let range = wb
-        .worksheet_range(&name)
-        .map_err(|e| AppError::Input(format!("roster XLSX: {e}; {fix}")))?;
-    let first_row = range.start().map_or(0, |(r, _)| u64::from(r));
-    let rows = range
-        .rows()
-        .enumerate()
-        .map(|(k, r)| {
+    let rows = crate::xlsx::sheet_rows(&mut wb, &name)
+        .map_err(|e| AppError::Input(format!("roster XLSX: {e}; {fix}")))?
+        .into_iter()
+        .map(|(rn, r)| {
             let cells = r
                 .iter()
                 .map(|c| match c {
@@ -1587,7 +1872,7 @@ pub fn read_roster_xlsx(bytes: &[u8]) -> Result<Vec<RosterStudent>, AppError> {
                     other => (other.to_string(), false),
                 })
                 .collect();
-            (first_row + k as u64 + 1, cells)
+            (u64::from(rn), cells)
         })
         .collect();
     roster_from_rows(rows, "roster XLSX")
@@ -1715,8 +2000,12 @@ pub fn parse_question_list(s: &str, questions: u16) -> Result<Vec<u16>, String> 
     Ok(out.into_iter().collect())
 }
 
-/// Reads the CLO file (CSV): header `clo,domain,title[,title_ar][,plo],questions[,weight][,note]`,
-/// one or more rows per CLO; `questions` is a list like `1-5,9`.
+/// Reads the CLO file (CSV): header
+/// `clo,domain,title[,title_ar][,plo],questions[,weight][,note][,form][,status][,source]`, one
+/// or more rows per CLO; `questions` is a list like `1-5,9`. `form` (or `version`) limits a
+/// row to the questions printed on that version; `status` `imported, needs review` (or
+/// `proposed`, `draft`) and `source` (e.g. `Remark import`) mark an imported row, which stays
+/// proposed until the coordinator approves the mapping (§11.2, SCO-032).
 pub fn read_clo_csv(bytes: &[u8], questions: u16) -> Result<OutcomeSetup, AppError> {
     let text = decode_text(bytes);
     let mut r = csv::ReaderBuilder::new()
@@ -1741,6 +2030,9 @@ pub fn read_clo_csv(bytes: &[u8], questions: u16) -> Result<OutcomeSetup, AppErr
         .ok_or_else(|| AppError::Input("CLO CSV: no `questions` column".into()))?;
     let c_w = col(&["weight", "w"]);
     let c_note = col(&["note", "notes"]);
+    let c_form = col(&["form", "version", "model"]);
+    let c_status = col(&["status", "mapping status"]);
+    let c_source = col(&["source", "mapping source"]);
     let mut setup = OutcomeSetup::default();
     for rec in r.records() {
         let rec = rec.map_err(|e| AppError::Input(format!("CLO CSV: {e}")))?;
@@ -1776,12 +2068,48 @@ pub fn read_clo_csv(bytes: &[u8], questions: u16) -> Result<OutcomeSetup, AppErr
         let weight = if w.is_empty() { "1".to_string() } else { w };
         omr_scoring::parse_points(&weight)
             .map_err(|e| AppError::Input(format!("CLO CSV {code}: weight `{weight}`: {e}")))?;
+        let form = {
+            let f = get(c_form);
+            if f.is_empty() { f } else { form_label(&f) }
+        };
+        let status = norm_header(&get(c_status));
+        let source = get(c_source);
+        let imported = match (status.as_str(), source.as_str()) {
+            ("" | "approved", "") => String::new(),
+            ("" | "approved", s) if s.eq_ignore_ascii_case("manual") => String::new(),
+            ("" | "approved", s) => s.to_string(),
+            (st, "")
+                if st.contains("import")
+                    || st.contains("review")
+                    || st == "proposed"
+                    || st == "draft" =>
+            {
+                "import".to_string()
+            }
+            (st, s)
+                if st.contains("import")
+                    || st.contains("review")
+                    || st == "proposed"
+                    || st == "draft" =>
+            {
+                s.to_string()
+            }
+            (st, _) => {
+                return Err(AppError::Input(format!(
+                    "CLO CSV {code}: status `{st}`: write `approved`, or `imported, needs \
+                     review` for a row to approve later"
+                )));
+            }
+        };
         for q in qs {
             setup.mapping.push(CloMapping {
                 question: q,
                 clo: code.clone(),
                 weight: weight.clone(),
                 note: get(c_note),
+                form: form.clone(),
+                imported: imported.clone(),
+                approved_by: String::new(),
             });
         }
     }
@@ -1807,6 +2135,19 @@ mod tests {
         assert_eq!(parse_key_entry("ب", 4), Ok(ParsedKey::Options(vec![1])));
         assert_eq!(parse_key_entry("3", 4), Ok(ParsedKey::Options(vec![2])));
         assert!(parse_key_entry("F", 5).is_err());
+        // Regression (F6): Remark's AND syntax was read as "either answer" (A|C), crediting a
+        // half-answered item; refused with what to write instead.
+        for and in ["A+C", "a & c", "A and C", "A+B+D"] {
+            let e = parse_key_entry(and, 5).unwrap_err();
+            assert!(e.contains("AND key") && e.contains("A|C"), "{and}: {e}");
+        }
+        assert_eq!(
+            parse_key_entry("A or C", 5),
+            Ok(ParsedKey::Options(vec![0, 2]))
+        );
+        assert_eq!(parse_key_entry("AC", 5), Ok(ParsedKey::Options(vec![0, 2])));
+        // Not a word that merely contains the letters.
+        assert!(parse_key_entry("band", 5).is_err());
     }
 
     #[test]

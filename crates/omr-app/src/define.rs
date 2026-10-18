@@ -217,11 +217,9 @@ pub fn define(i: &Inputs) -> Result<(ExamDefinition, Vec<String>), AppError> {
             ));
         }
         (Some(bytes), false) => {
-            let (forms, points) = exam::read_key_file(bytes, &d.forms, d.questions, d.options)?;
-            d.key = KeySource::Provided { forms };
-            if let Some(p) = points {
-                d.points = p;
-            }
+            let k = exam::read_key_file_full(bytes, &d.forms, d.questions, d.options)?;
+            d.key = KeySource::Provided { forms: k.forms };
+            d.set_key_points(&k.points);
         }
         (None, true) => d.key = KeySource::Inferred,
         (None, false) => {}
@@ -266,6 +264,17 @@ pub fn read_key_path(
     def: &ExamDefinition,
 ) -> Result<(Vec<FormKey>, Option<Vec<String>>), AppError> {
     exam::read_key_file(
+        &read(path, "answer key")?,
+        &def.forms,
+        def.questions,
+        def.options,
+    )
+}
+
+/// [`read_key_path`] with every points column the file has: one `points` column and/or one
+/// per version (`points_A`, `points_B`), as `omr key replace` reads them.
+pub fn read_key_path_full(path: &Path, def: &ExamDefinition) -> Result<exam::KeyFile, AppError> {
+    exam::read_key_file_full(
         &read(path, "answer key")?,
         &def.forms,
         def.questions,

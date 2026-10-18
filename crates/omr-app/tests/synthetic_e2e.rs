@@ -141,6 +141,9 @@ fn definition() -> ExamDefinition {
                 },
                 weight: "1".into(),
                 note: String::new(),
+                form: String::new(),
+                imported: String::new(),
+                approved_by: String::new(),
             })
             .collect(),
         split: false,
@@ -656,6 +659,7 @@ fn req_a4_rescoring_is_incremental_and_fast() {
                 .collect(),
         ],
         points: vec!["1".into(); usize::from(n_q)],
+        form_points: Vec::new(),
         shared_items: true,
     };
     let mut session = Session {

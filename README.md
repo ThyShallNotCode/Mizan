@@ -15,8 +15,14 @@ command line and from the desktop app `omr-desktop`, on Linux.
   143) scored exactly as an independent count of its marks against the key; the other 6 wait
   only for their 7 questions in review. The keys read from the instructors' own key sheets
   gave the same results, file for file.
-- **Not proven yet:** identity against a real roster, a side-by-side comparison with Remark
-  Office OMR, and Windows (the app has been built and run on Linux only).
+- A parallel run with Remark Office OMR (spec §23.7) was performed internally on the two real
+  exams with `omr compare remark`, grading them with the points imported from Remark's own
+  graded workbooks. It was a development check by the agents on data the owner supplied: the
+  licence review the spec requires before parallel runs and benchmarking (Q-08, the
+  university's legal affairs, due 2026-12-01) is still open, so its head-to-head figures stay
+  inside the university (spec §3.5).
+- **Not proven yet:** identity against a real roster, and Windows (the app has been built and
+  run on Linux only).
 - What the MVP covers and what it defers: [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md).
   The full design: [`docs/TECHNICAL_DESIGN.md`](docs/TECHNICAL_DESIGN.md).
 
@@ -126,6 +132,63 @@ Key sheets you get after grading join the exam the same audited way:
 `omr key read key-A.pdf key-B.pdf --template iau-ccsit-v1 --questions 30 --out key/` only
 previews them: it writes `key/key.csv` and `key/key_summary.html` and records nothing.
 
+### From Remark Office OMR
+
+Programmes that graded with Remark Office OMR bring its graded Excel exports (the Advanced Grade
+reports exported to `.xlsx`; Remark's own `.rmx` and `.aky` files are never read):
+
+```sh
+omr import remark Sec1_A_Graded.xlsx Sec1_B_Graded.xlsx Sec2_A_Graded.xlsx --out remark-import/
+omr grade scans/ --template iau-ccsit-v1 --questions 28 \
+    --key remark-import/key.csv --clo remark-import/clo.csv --out "$HOME/OMR Exams/final"
+```
+
+The import shows a summary first, then writes the key of each version with its exact points
+per question (from Remark's learning objectives, or solved from the students' totals, and
+checked to reproduce every total Remark reported), the learning objectives as CLO mappings
+marked "imported, needs review", a version map and a signed `manifest.json`. When the totals
+cannot tell some points apart (two questions every student answered right, say, or a learning
+objective whose questions the same students got right: its equal split would be a guess) it
+stops, names them and suggests values: give them with `--points points.csv`
+(`question,points` or `question,points_A,points_B`). Rows Remark graded from the instructor's
+key sheet (student number `0000000000`) are reported, never students. An AND key (`A+C`,
+Remark's partial-credit syntax) is refused: it is not scored yet.
+
+The summary gives each learning objective's points and questions per version and warns when
+they differ between the versions (Remark groups printed positions, so one objective may not
+mean the same items in every version); every CLO is written in domain K (the export has no
+domain). Correct `clo.csv`, then, once the exam is graded, approve the imported mapping (the
+TP-154 tables are a draft until then) or replace it, without grading again:
+
+```sh
+omr clo replace --project "$HOME/OMR Exams/final" --clo remark-import/clo.csv
+omr clo approve --project "$HOME/OMR Exams/final" --approver "Dr. A. Coordinator" \
+    --note "objectives checked against the exam paper"
+```
+
+To check a new exam against Remark before leaving it (spec §23.7), grade the same sheets in
+both and compare:
+
+```sh
+omr compare remark --project "$HOME/OMR Exams/final" Sec1_A_Graded.xlsx Sec1_B_Graded.xlsx \
+    --out "$HOME/OMR Exams/final/parallel-run"
+```
+
+`parallel_run.html` lists every answer where the two differ, with the scanned bubble row to
+decide it, this exam's own total per student (its points and voids: what it will release)
+beside Remark's, any question whose points differ from Remark's (a different maximum is
+warned about: no total can agree then), the student numbers that do not match, the learning
+objectives' subtotals, and the key sheets Remark counted as students. The report alone does
+not hold release; add `--queue` to put every settled difference from an answer this exam
+accepted on its own into Review, where each holds release until you decide it (your decisions
+are recorded as field labels). The report is Restricted: its figures stay inside the
+university. It states the licence review (Q-08) as recorded by the administrator in
+`licence_review.json` in the private key folder (`{"q08": "cleared", "by": "…", "date": "…"}`,
+or `"refused"`, which stops every comparison); none recorded means the review is open. Give it
+the workbooks of the sheets you graded (other sections' workbooks are listed and left out);
+workbooks in which no student's answers match a booklet are refused as another test's, and a
+student number whose answers are another sheet's is paired last and flagged.
+
 ### Later batches and the university's own sheets
 
 - Another section or another day: `omr add more-scans/ --project <exam folder>` grades the
@@ -207,6 +270,14 @@ omr-desktop --demo                            # invented demo data, marked DEMO 
   proposal, Ctrl+Z undoes; F1 lists every key.
 - **Results** shows scores and grades; **Release results…** releases them and writes the
   Blackboard upload. **Outcomes** shows CLO attainment and the TP-154 tables.
+- **From Remark Office OMR:** **Import from Remark export…** on the New exam form (or in Setup,
+  to replace a graded exam's key) reads Remark's graded `.xlsx` exports and shows the import for
+  review before anything changes; a refusal says what to do and can offer the suggested points.
+  In Setup, **Approve imported mappings** approves the imported CLO rows and **Replace CLOs**
+  loads a corrected CLO file. In Results, **Compare with Remark export…** shows the parallel
+  run under the Restricted banner (a `.csv` among the files is read as handwritten student
+  numbers, `file,page,student_id`); **Queue for review** puts its settled differences into
+  Review, where they hold release; **Save report** writes the Restricted report.
 
 On Linux the app needs a desktop session (X11 or Wayland). On a server, use the `omr` command
 line, or render the screens to PNG files with `omr-desktop --screenshot DIR`.
@@ -215,9 +286,10 @@ line, or render the screens to PNG files with `omr-desktop --screenshot DIR`.
 
 | File | Layout |
 |---|---|
-| Answer key | CSV `question,A,B` (one column per version, optional `points` column), or `form,Q1,Q2,…`, or one column of answers. Entries: `B`, `A\|C` (either accepted), `*` (void), empty (missing). UTF-8, UTF-16 or Windows-1256; commas, semicolons or tabs, as Excel saves it. Or a key sheet: an answer sheet filled by the instructor, student number all 0 or all 9 and the version bubbled (§2) |
+| Answer key | CSV `question,A,B` (one column per version, optional `points` column, or `points_A`, `points_B` when the versions carry different points), or `form,Q1,Q2,…`, or one column of answers. Entries: `B`, `A\|C` (either accepted; also `A or C`, `AC`), `*` (void), empty (missing); an AND key (`A+C`, `A&C`, `A and C`: all answers required, Remark's partial credit) is refused, not scored yet. UTF-8, UTF-16 or Windows-1256; commas, semicolons or tabs, as Excel saves it. Or a key sheet: an answer sheet filled by the instructor, student number all 0 or all 9 and the version bubbled (§2) |
 | Roster | CSV or `.xlsx` with a header row: `student_id` (or `ID`, `الرقم الجامعي`), `name`, `name_ar`, `section`. Student numbers that Excel damaged (`2250000001.0`, lost leading zeros) are repaired when nothing was lost; duplicates are refused naming the rows |
-| CLO mapping | CSV `clo,domain,title,plo,questions,weight,note`, with question lists such as `1-8,12` |
+| CLO mapping | CSV `clo,domain,title,plo,questions,weight,note`, with question lists such as `1-8,12`; optional `form` (the row maps one version's questions) and `status`/`source` (`imported, needs review`, `Remark import`) |
+| Remark export | Remark Office OMR's graded workbook (`.xlsx`): Student Response Report with the answer key, Student Statistics Report (learning objectives), Test Statistics Report; `omr import remark`, `omr compare remark` |
 
 Examples: [`docs/examples/`](docs/examples/). More detail: [`crates/omr-cli/README.md`](crates/omr-cli/README.md).
 
@@ -241,6 +313,27 @@ Examples: [`docs/examples/`](docs/examples/). More detail: [`crates/omr-cli/READ
 - The project store is not encrypted at rest; keep exam folders on an encrypted university
   device.
 - Every input file is read into memory for the run; files over 2 GB are refused.
+- **Migration from Remark** (each with its workaround):
+  - Only the graded Excel (`.xlsx`) Advanced Grade export is read; Remark's CSV and SPSS
+    exports, version-mapping and scaled-score tables, and Remark-compatible exports are not
+    built (spec §3.5, §16.3): export the Excel reports from Remark.
+  - Remark's response data cannot become an assessment without the scans (TP-154 needs the
+    exam graded here): scan the sheets.
+  - AND keys (`A+C`) are refused: write `A|C` (either) or void the question.
+  - A learning objective whose questions the students do not tell apart is refused, not split
+    equally: give its points with `--points` (or *Use the suggested points*).
+  - Imported CLOs land in domain K and their versions' objectives may differ: correct
+    `clo.csv`, then `omr clo replace` and `omr clo approve` (or Setup's buttons).
+  - A graded exam's points cannot be changed (its form map is stored once): create the exam
+    from the import instead (`omr grade`, `omr key replace` and the desktop's *Replace key…*
+    all read the key file's `points_A`/`points_B` columns).
+  - The Setup grid's points column shows version A's points; a cell that stands for one
+    version's rows is labelled "version A only".
+  - Booklets are paired with Remark's rows by student number, then by answers (a heuristic
+    whose every pairing is reported as an identity difference); an ID Excel already rounded
+    (`2.2E+09`) cannot be recovered: export it again from Remark with the ID column as text.
+  - The parallel run holds release only when its differences are queued (`--queue`, *Queue for
+    review*); it is an internal check until the licence review (Q-08) is recorded.
 
 The full list, with the evidence for each row: [`docs/EVIDENCE.md`](docs/EVIDENCE.md) §7.
 

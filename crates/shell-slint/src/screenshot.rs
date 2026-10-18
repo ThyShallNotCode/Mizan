@@ -52,6 +52,9 @@ pub struct Shot {
     /// Show the first exam whose key comes from key sheets (§10.1): on Setup its key summary,
     /// on Scan its batch with the key sheets listed as such.
     pub keysheet: bool,
+    /// The Remark migration (§3.5, §23.7) with the workbooks given to [`render_shots_with`]:
+    /// 0 none, 1 the New-exam form's import, 2 Setup's import, 3 the parallel run in Results.
+    pub remark: u8,
 }
 
 /// Every screen, plus the identity and blind-verify review frames.
@@ -65,6 +68,7 @@ pub const SHOTS: &[Shot] = &[
         override_choice: false,
         bar: false,
         keysheet: false,
+        remark: 0,
     },
     Shot {
         name: "setup",
@@ -76,6 +80,7 @@ pub const SHOTS: &[Shot] = &[
         override_choice: false,
         bar: false,
         keysheet: false,
+        remark: 0,
     },
     Shot {
         name: "scan",
@@ -86,6 +91,7 @@ pub const SHOTS: &[Shot] = &[
         override_choice: false,
         bar: false,
         keysheet: false,
+        remark: 0,
     },
     Shot {
         name: "review",
@@ -96,6 +102,7 @@ pub const SHOTS: &[Shot] = &[
         override_choice: false,
         bar: false,
         keysheet: false,
+        remark: 0,
     },
     Shot {
         name: "review-identity",
@@ -106,6 +113,7 @@ pub const SHOTS: &[Shot] = &[
         override_choice: false,
         bar: false,
         keysheet: false,
+        remark: 0,
     },
     Shot {
         name: "review-blind",
@@ -116,6 +124,7 @@ pub const SHOTS: &[Shot] = &[
         override_choice: false,
         bar: false,
         keysheet: false,
+        remark: 0,
     },
     Shot {
         name: "results",
@@ -126,6 +135,7 @@ pub const SHOTS: &[Shot] = &[
         override_choice: false,
         bar: false,
         keysheet: false,
+        remark: 0,
     },
     Shot {
         name: "outcomes",
@@ -136,6 +146,7 @@ pub const SHOTS: &[Shot] = &[
         override_choice: false,
         bar: false,
         keysheet: false,
+        remark: 0,
     },
     Shot {
         name: "settings",
@@ -146,6 +157,7 @@ pub const SHOTS: &[Shot] = &[
         override_choice: false,
         bar: false,
         keysheet: false,
+        remark: 0,
     },
 ];
 
@@ -163,6 +175,7 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
             override_choice: false,
             bar: false,
             keysheet: false,
+            remark: 0,
         },
         Shot {
             name: "setup",
@@ -173,6 +186,7 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
             override_choice: false,
             bar: false,
             keysheet: false,
+            remark: 0,
         },
         Shot {
             name: "scan",
@@ -183,6 +197,7 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
             override_choice: false,
             bar: false,
             keysheet: false,
+            remark: 0,
         },
     ];
     let exam = backend.default_exam();
@@ -211,6 +226,7 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
                 override_choice: false,
                 bar: false,
                 keysheet: false,
+                remark: 0,
             });
         }
     }
@@ -224,6 +240,7 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
             override_choice: true,
             bar: false,
             keysheet: false,
+            remark: 0,
         });
     }
     for (name, page, bar) in [
@@ -243,6 +260,7 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
             override_choice: false,
             bar,
             keysheet: false,
+            remark: 0,
         });
     }
     // an exam graded with its key sheets: the key summary to confirm, and its batch
@@ -260,10 +278,34 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
                 override_choice: false,
                 bar: false,
                 keysheet: true,
+                remark: 0,
             });
         }
     }
     shots
+}
+
+/// The Remark migration's screens (§3.5, §23.7), taken with the workbooks given to
+/// [`render_shots_with`]: the New-exam form's import, Setup's import and the parallel run.
+pub fn remark_shots() -> Vec<Shot> {
+    [
+        ("exams-remark", s::Page::Exams, 1),
+        ("setup-remark", s::Page::Setup, 2),
+        ("results-remark", s::Page::Results, 3),
+    ]
+    .into_iter()
+    .map(|(name, page, remark)| Shot {
+        name,
+        page,
+        exam: None,
+        review: None,
+        cell: None,
+        override_choice: false,
+        bar: remark == 1,
+        keysheet: false,
+        remark,
+    })
+    .collect()
 }
 
 /// The first exam of the dashboard whose key comes from key sheets.
@@ -322,7 +364,89 @@ pub fn write_png(path: &Path, pixels: &[Rgb8Pixel], width: u32, height: u32) -> 
 
 /// Puts the shell into the state of `shot`.
 pub fn stage<B: Backend + ?Sized>(shell: &Shell, backend: &RefCell<B>, shot: &Shot) {
-    let wanted = if shot.keysheet {
+    stage_with(shell, backend, shot, &RemarkFiles::default());
+}
+
+/// Remark's graded workbooks for the Remark shots ([`Shot::remark`]).
+#[derive(Debug, Clone, Default)]
+pub struct RemarkFiles {
+    /// The New-exam form's import and the parallel run (of the default exam).
+    pub workbooks: Vec<PathBuf>,
+    /// Setup's import: shown for the first exam of the dashboard it applies to (else the
+    /// default exam, with why it does not apply); the New-exam workbooks when empty.
+    pub setup: Vec<PathBuf>,
+}
+
+/// [`stage`], with Remark's graded workbooks for the Remark shots ([`Shot::remark`]).
+pub fn stage_with<B: Backend + ?Sized>(
+    shell: &Shell,
+    backend: &RefCell<B>,
+    shot: &Shot,
+    remark: &RemarkFiles,
+) {
+    shell.close_remark();
+    let files = if shot.remark == 2 && !remark.setup.is_empty() {
+        &remark.setup
+    } else {
+        &remark.workbooks
+    };
+    let books = files
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(";");
+    // Setup's import: the first exam it applies to
+    let exam = (shot.remark == 2 && !files.is_empty())
+        .then(|| applicable_exam(backend, files))
+        .flatten();
+    stage_screen(shell, backend, shot, exam);
+    if shot.remark > 0 && !files.is_empty() {
+        match shot.remark {
+            1 | 2 => shell.remark_import(&books),
+            _ => shell.remark_compare(&books),
+        }
+        shell.navigate(shot.page);
+    }
+}
+
+/// The first exam of the dashboard whose key the import of `files` may replace.
+fn applicable_exam<B: Backend + ?Sized>(backend: &RefCell<B>, files: &[PathBuf]) -> Option<ExamId> {
+    let req = crate::backend::RemarkRequest {
+        workbooks: files.to_vec(),
+        points: crate::backend::RemarkPoints::FromWorkbooks,
+        handwritten: Vec::new(),
+    };
+    let exams: Vec<ExamId> = backend
+        .borrow()
+        .dashboard()
+        .exams
+        .into_iter()
+        .map(|e| e.id)
+        .collect();
+    let mut found = None;
+    for id in exams {
+        let mut b = backend.borrow_mut();
+        let fits = b
+            .read_remark_import(Some(&id), &req)
+            .is_ok_and(|v| v.can_apply);
+        b.discard_remark_import(Some(&id));
+        if fits {
+            found = Some(id);
+            break;
+        }
+    }
+    found
+}
+
+fn stage_screen<B: Backend + ?Sized>(
+    shell: &Shell,
+    backend: &RefCell<B>,
+    shot: &Shot,
+    exam: Option<ExamId>,
+) {
+    let wanted = if let Some(e) = exam {
+        Some(e)
+    } else if shot.keysheet {
         let b = backend.borrow();
         b.dashboard()
             .exams
@@ -406,10 +530,31 @@ pub fn render_all_at(
 pub fn render_shots(
     dir: &Path,
     themes: &[bool],
+    size: (u32, u32),
+    backend: Rc<RefCell<dyn Backend>>,
+    shots: &[Shot],
+    only: Option<&[String]>,
+) -> Result<Vec<PathBuf>, String> {
+    render_shots_with(
+        dir,
+        themes,
+        size,
+        backend,
+        shots,
+        only,
+        &RemarkFiles::default(),
+    )
+}
+
+/// [`render_shots`], with Remark's graded workbooks for the [`remark_shots`].
+pub fn render_shots_with(
+    dir: &Path,
+    themes: &[bool],
     (width, height): (u32, u32),
     backend: Rc<RefCell<dyn Backend>>,
     shots: &[Shot],
     only: Option<&[String]>,
+    remark: &RemarkFiles,
 ) -> Result<Vec<PathBuf>, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let window = install_platform()?;
@@ -428,7 +573,7 @@ pub fn render_shots(
     for &dark in themes {
         ui.global::<s::Theme>().set_dark(dark);
         for shot in shots.iter().filter(|s| wanted(s.name)) {
-            stage(&shell, &*backend, shot);
+            stage_with(&shell, &*backend, shot, remark);
             // background analyses (flag stability) report before the capture: a screenshot
             // never catches "computing…"
             if backend.borrow_mut().settle() {

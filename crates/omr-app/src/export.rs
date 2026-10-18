@@ -506,6 +506,27 @@ pub fn blackboard_csv(
 /// export (its `ChainCheckpoint` event is the chain head the manifest cites). A verifier
 /// removes `signature`, re-canonicalises and checks both. Without a project store (in-memory
 /// runs) the manifest is written unsigned.
+/// A manifest written outside a project (an import's files), signed with this computer's
+/// key (§16.3): the canonical JSON with a `signature` member.
+pub fn sign_detached(canonical: &[u8]) -> Result<Vec<u8>, AppError> {
+    use omr_store::CheckpointSigner;
+    let signer = crate::keys::device_signer()?;
+    let sig = signer
+        .sign(canonical)
+        .map_err(|e| AppError::Store(format!("manifest signature: {e}")))?;
+    let mut v: Value = serde_json::from_slice(canonical)
+        .map_err(|e| AppError::Internal(format!("manifest: {e}")))?;
+    v["signature"] = json!({
+        "alg": signer.algorithm(),
+        "key_id": signer.key_id(),
+        "public_key": hex::encode(signer.public_key()),
+        "value": hex::encode(sig),
+    });
+    omr_store::jcs::value_to_jcs(&v)
+        .map(String::into_bytes)
+        .map_err(|e| AppError::Internal(format!("manifest: {e}")))
+}
+
 fn signed_manifest(p: &ExamProject, canonical: &[u8]) -> Result<Vec<u8>, AppError> {
     let Some(st) = p.store() else {
         return Ok(canonical.to_vec());
@@ -556,6 +577,37 @@ pub fn write_crops(p: &ExamProject, dir: &Path, items: &[u64]) -> Result<ExportS
         crate::keys::write_private(&dir.join(&name), &png)?;
         manifest.add(&name, &png);
         names.push(name);
+    }
+    let mbytes = manifest.to_canonical_json();
+    crate::keys::write_private(&dir.join("manifest.json"), &signed_manifest(p, &mbytes)?)?;
+    names.push("manifest.json".into());
+    Ok(ExportSummary {
+        files: names,
+        manifest_sha384: manifest.sha384_hex(),
+        analysis_ms: 0.0,
+        total_ms: t0.elapsed().as_secs_f64() * 1e3,
+    })
+}
+
+/// Writes `files` into `dir` as a Restricted export: a checked destination (SYS-015), private
+/// files and a signed `manifest.json` (label `restricted`, `pii: true`, `purpose`); the caller
+/// records `ExportCreated`.
+pub fn write_signed(
+    p: &ExamProject,
+    dir: &Path,
+    title: &str,
+    purpose: &str,
+    files: &[(String, Vec<u8>)],
+) -> Result<ExportSummary, AppError> {
+    let t0 = std::time::Instant::now();
+    crate::keys::export_dir(dir)?;
+    let m = meta(p, title);
+    let mut manifest = ExportManifest::new(&m, purpose, true);
+    let mut names = Vec::new();
+    for (name, bytes) in files {
+        crate::keys::write_private(&dir.join(name), bytes)?;
+        manifest.add(name, bytes);
+        names.push(name.clone());
     }
     let mbytes = manifest.to_canonical_json();
     crate::keys::write_private(&dir.join("manifest.json"), &signed_manifest(p, &mbytes)?)?;
@@ -775,15 +827,32 @@ pub fn write_all(p: &ExamProject, dir: &Path) -> Result<ExportSummary, AppError>
             out.push(',');
             out.push_str(f);
         }
-        out.push_str(",points\r\n");
+        // Points per version (`points_A` …) when the versions carry different points.
+        let per_form = !k.form_points.is_empty();
+        if per_form {
+            for f in &forms {
+                out.push_str(",points_");
+                out.push_str(f);
+            }
+            out.push_str("\r\n");
+        } else {
+            out.push_str(",points\r\n");
+        }
         for q in 0..usize::from(def.questions) {
             out.push_str(&(q + 1).to_string());
             for (fi, _) in forms.iter().enumerate() {
                 out.push(',');
                 out.push_str(&k.forms[fi][q].text());
             }
-            out.push(',');
-            out.push_str(k.points.get(q).map_or("1", String::as_str));
+            if per_form {
+                for (fi, _) in forms.iter().enumerate() {
+                    out.push(',');
+                    out.push_str(k.points_of(fi).get(q).map_or("1", String::as_str));
+                }
+            } else {
+                out.push(',');
+                out.push_str(k.points.get(q).map_or("1", String::as_str));
+            }
             out.push_str("\r\n");
         }
         files.push((format!("key{sfx}.csv"), out.into_bytes()));

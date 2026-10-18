@@ -1050,6 +1050,7 @@ impl ExamProject {
                     qs.current = new.clone();
                 }
                 let booklet_id = b.booklet_id.clone();
+                let review_seq = self.session.review.history.len() + 1;
                 if let Some(st) = self.store.as_mut() {
                     if new_state == ItemState::Resolved {
                         st.correction(
@@ -1061,6 +1062,30 @@ impl ExamProject {
                             &item.store_exceptions,
                         )?;
                         change.resolved_rows = item.store_exceptions.clone();
+                        // A parallel-run difference decided: a field label (§23.7, §23.2).
+                        if let Some(inc) = &item.incumbent {
+                            let labels = def.option_labels();
+                            let decided = crate::review::suggestion_of(&new);
+                            let text = |d: &Option<Decision>| {
+                                d.as_ref().map(|d| d.text(&labels, &def.forms))
+                            };
+                            st.event(
+                                "FieldLabelRecorded",
+                                "booklet",
+                                &booklet_id,
+                                json!({
+                                    "position": q,
+                                    "source": "parallel_run",
+                                    "incumbent": inc.system,
+                                    "engine_reading": inc.engine.text(&labels, &def.forms),
+                                    "incumbent_reading": inc.text,
+                                    "adjudicated": text(&decided),
+                                    "engine_loss": decided.as_ref() != Some(&inc.engine),
+                                    "incumbent_loss": decided.is_none() || inc.decision != decided,
+                                    "review_seq": review_seq,
+                                }),
+                            )?;
+                        }
                     } else {
                         st.event(
                             "RescanRequested",
@@ -1600,12 +1625,28 @@ impl ExamProject {
         points: Option<Vec<String>>,
         reason: Option<ReviewReason>,
     ) -> Result<(), AppError> {
+        let points = points.map(|p| crate::exam::KeyFilePoints {
+            all: Some(p),
+            per_form: Default::default(),
+        });
+        self.replace_key_points(forms, points.as_ref(), reason)
+    }
+
+    /// [`Self::replace_key`] with the points of a key file as read by
+    /// [`crate::exam::read_key_file_full`]: a `points` column for every version and/or one
+    /// per version (`points_A`, `points_B`). `None` keeps the exam's points.
+    pub fn replace_key_points(
+        &mut self,
+        forms: Vec<crate::exam::FormKey>,
+        points: Option<&crate::exam::KeyFilePoints>,
+        reason: Option<ReviewReason>,
+    ) -> Result<(), AppError> {
         let reason = reason.unwrap_or_else(|| ReviewReason::code("KEY_ERROR"));
         reason.validate().map_err(AppError::Review)?;
         let mut def = self.session.definition.clone();
         def.key = crate::exam::KeySource::Provided { forms };
         if let Some(p) = points {
-            def.points = p;
+            def.set_key_points(p);
         }
         def.validate()?;
         let crate::exam::KeySource::Provided { forms } = &def.key else {
@@ -1622,9 +1663,9 @@ impl ExamProject {
         if let Some(old) = self.session.key.as_ref().filter(|_| !unconfirmed) {
             if old.shared_items && !key.shared_items {
                 return Err(AppError::Scoring(
-                    "the new key gives the forms different answers, but the exam was graded \
-                     with one item set shared by every form; grade the exam again with this \
-                     key (omr grade --key)"
+                    "the new key gives the forms different answers or points, but the exam was \
+                     graded with one item set shared by every form; grade the exam again with \
+                     this key (omr grade --key)"
                         .into(),
                 ));
             }
@@ -1893,7 +1934,7 @@ impl ExamProject {
         let lifted = !ks.pending;
         if lifted {
             if !key.inferred {
-                key.shared_items = key.forms.iter().all(|c| *c == key.forms[0]);
+                key.shared_items = key.can_share_items(&def);
             }
             if let Some(&top) = published.iter().max()
                 && key.version <= top
@@ -2014,6 +2055,7 @@ impl ExamProject {
         clo: usize,
         weight: Option<f64>,
     ) -> Result<(), AppError> {
+        refuse_per_version_mapping_edit(&self.session.definition)?;
         let def = &mut self.session.definition;
         if question == 0 || question > def.questions {
             return Err(AppError::NotFound(format!("question {question}")));
@@ -2049,6 +2091,9 @@ impl ExamProject {
                         clo: code.clone(),
                         weight: text,
                         note: String::new(),
+                        form: String::new(),
+                        imported: String::new(),
+                        approved_by: String::new(),
                     }),
                 }
             }
@@ -2068,6 +2113,154 @@ impl ExamProject {
         self.save()
     }
 
+    /// Approves the imported item → CLO rows (§11.2: an approval act by a coordinator- or
+    /// QA-scoped role; "each approval is an audit event"): every row imported from another
+    /// system (a Remark learning objective, `imported, needs review`) and not yet approved
+    /// becomes `approved` by `approver`, its source kept; a `MappingApproved` event names the
+    /// approver, the rows and the CLOs (the note as a salted reference), and the mapping set is
+    /// published again. The TP-154 tables then leave the draft watermark (SCO-032) without the
+    /// exam being graded again. Refused with what to do when nothing is waiting for approval.
+    /// Returns the rows approved.
+    pub fn approve_mappings(&mut self, approver: &str, note: &str) -> Result<usize, AppError> {
+        self.check_audited()?;
+        let approver = approver.trim();
+        if approver.is_empty() {
+            return Err(AppError::Review(
+                "name the approver (the course coordinator or the quality officer who reviewed \
+                 the mapping), e.g. --approver \"Dr. A. Coordinator\""
+                    .into(),
+            ));
+        }
+        let o = self.session.definition.outcomes.as_mut().ok_or_else(|| {
+            AppError::Review(
+                "the exam has no CLO mapping to approve; give one with omr clo replace --clo FILE"
+                    .into(),
+            )
+        })?;
+        let mut clos: Vec<String> = Vec::new();
+        let mut rows = 0usize;
+        for m in o
+            .mapping
+            .iter_mut()
+            .filter(|m| !m.imported.is_empty() && m.approved_by.is_empty())
+        {
+            m.approved_by = approver.to_string();
+            rows += 1;
+            if !clos.contains(&m.clo) {
+                clos.push(m.clo.clone());
+            }
+        }
+        if rows == 0 {
+            return Err(AppError::Review(
+                "no imported CLO mapping is waiting for approval (every row is approved or the \
+                 coordinator's own)"
+                    .into(),
+            ));
+        }
+        let reason = ReviewReason::with_note("ADJUDICATION", note);
+        let given = self.stored_reason(&reason)?;
+        let exam = self.session.definition.exam_id.to_string();
+        let mapping = self.mapping_set_now();
+        if let Some(st) = self.store.as_mut() {
+            st.event_with_reason(
+                "MappingApproved",
+                "exam",
+                &exam,
+                json!({"approver": approver, "rows": rows, "clos": clos, "status": "approved"}),
+                &given,
+            )?;
+            if let Some(m) = &mapping {
+                st.put_mapping_set(m)?;
+            }
+        }
+        self.save()?;
+        Ok(rows)
+    }
+
+    /// Replaces the exam's CLOs and item → CLO mapping with a CLO file (the `--clo` layout,
+    /// [`crate::exam::read_clo_csv`]), e.g. the imported `clo.csv` once the coordinator has
+    /// corrected it: the outcomes recompute from the same score run, nothing is graded again.
+    /// Its `form` column must name versions of this exam; rows for one version only are
+    /// refused when the versions share one item set (grade the exam again with `--clo`). A
+    /// `MappingReplaced` event names the file's SHA-384 and the counts, and the mapping set is
+    /// published. Imported rows (`imported, needs review`) stay `proposed` until approved
+    /// ([`Self::approve_mappings`]). Returns (CLOs, rows).
+    pub fn replace_outcomes(
+        &mut self,
+        bytes: &[u8],
+        file: &str,
+    ) -> Result<(usize, usize), AppError> {
+        self.check_audited()?;
+        let def = &self.session.definition;
+        let o = crate::exam::read_clo_csv(bytes, def.questions)?;
+        if let Some(m) = o
+            .mapping
+            .iter()
+            .find(|m| !m.form.is_empty() && !def.forms.contains(&m.form))
+        {
+            return Err(AppError::Input(format!(
+                "{file}: question {} maps version {}, and the exam has versions {}: correct the \
+                 form column",
+                m.question,
+                m.form,
+                def.forms.join(", ")
+            )));
+        }
+        if self.session.key.as_ref().is_some_and(|k| k.shared_items)
+            && def.forms.len() > 1
+            && o.mapping.iter().any(|m| !m.form.is_empty())
+        {
+            return Err(AppError::Input(format!(
+                "{file} maps questions of one version only (the form column), and this exam \
+                 scores its versions as one item set: grade the exam again with --clo {file}, \
+                 or map every version alike (leave the form column empty)"
+            )));
+        }
+        let mut d = def.clone();
+        d.outcomes = Some(o.clone());
+        d.validate()?;
+        let (clos, rows) = (o.clos.len(), o.mapping.len());
+        let proposed = o.mapping.iter().filter(|m| !m.imported.is_empty()).count();
+        self.session.definition.outcomes = Some(o);
+        let exam = self.session.definition.exam_id.to_string();
+        let mapping = self.mapping_set_now();
+        if let Some(st) = self.store.as_mut() {
+            st.event(
+                "MappingReplaced",
+                "exam",
+                &exam,
+                json!({
+                    "file": file,
+                    "sha384": omr_store::jcs::sha384_hex(bytes),
+                    "clos": clos,
+                    "rows": rows,
+                    "proposed": proposed,
+                }),
+            )?;
+            if let Some(m) = &mapping {
+                st.put_mapping_set(m)?;
+            }
+        }
+        self.save()?;
+        Ok((clos, rows))
+    }
+
+    /// The current item → CLO mapping set (§11.2), when the exam has CLOs and a score run.
+    fn mapping_set_now(&self) -> Option<omr_outcomes::MappingSet> {
+        let def = &self.session.definition;
+        def.outcomes
+            .as_ref()
+            .zip(self.scoring.as_ref())
+            .map(|(o, sc)| {
+                crate::outcomes::mapping_set(
+                    def,
+                    o,
+                    self.session.key.as_ref(),
+                    sc.forms.items.len(),
+                )
+            })
+    }
+
     /// Sets the note of a mapping cell (the cell must exist).
     pub fn set_mapping_note(
         &mut self,
@@ -2075,6 +2268,7 @@ impl ExamProject {
         clo: usize,
         note: &str,
     ) -> Result<(), AppError> {
+        refuse_per_version_mapping_edit(&self.session.definition)?;
         let o = self
             .session
             .definition
@@ -2584,6 +2778,135 @@ impl ExamProject {
         Ok(())
     }
 
+    /// Queues the settled differences of a parallel run with the incumbent (§23.7: every
+    /// per-question difference from the engine's auto-accepted response is adjudicated by the
+    /// instructor before release). Each question this exam auto-accepted where the incumbent
+    /// read otherwise becomes a Marks-lane MRK-001 `parallel_run_disagreement` (ERROR) item with
+    /// both readings and its bubble row: the answer waits for review, so the booklet's total is
+    /// provisional and release is held until the instructor decides it. Accepting keeps this
+    /// exam's reading; choosing the incumbent's or another answer needs a reason (§13.4); each
+    /// decision is recorded as a field label (`FieldLabelRecorded`: engine loss, incumbent
+    /// loss). A question queued this way once is not queued again. The comparison is an audited
+    /// event (`ParallelRunCompared`). Refused on released results: a correction after release
+    /// is a review decision or a key change, which supersedes the release (§10.8). Returns the
+    /// number of new items, also recorded in `run` for its report.
+    pub fn queue_parallel_differences(
+        &mut self,
+        run: &mut crate::parallel::ParallelRun,
+    ) -> Result<usize, AppError> {
+        use crate::parallel::{Agreement, PARALLEL_SUB};
+        use crate::review::{IncumbentReading, suggestion_of};
+        self.check_audited()?;
+        if self.session.released() {
+            return Err(AppError::Review(
+                "the results are already released: the parallel run's differences stay in its \
+                 report and are not queued; correct an answer with a review decision after \
+                 release, which supersedes the release (§10.8), then release again"
+                    .into(),
+            ));
+        }
+        let def = &self.session.definition;
+        let labels = def.option_labels();
+        let options = def.options;
+        let mut queued: Vec<u64> = Vec::new();
+        let mut touched: Vec<usize> = Vec::new();
+        for d in run
+            .disagreements
+            .iter()
+            .filter(|d| d.agreement == Agreement::Differ && d.status == "auto")
+        {
+            let Some(pair) = run.pairs.get(d.pair) else {
+                continue;
+            };
+            let (bi, q) = (pair.booklet, usize::from(d.question.saturating_sub(1)));
+            let Some(qs) = self
+                .session
+                .booklets
+                .get(bi)
+                .and_then(|b| b.questions.get(q))
+            else {
+                continue;
+            };
+            let already = self.session.review.items.iter().any(|i| {
+                i.kind == ItemKind::Mark
+                    && i.booklet == Some(bi)
+                    && i.question == Some(q as u16)
+                    && (i.is_open() || i.sub_reason.as_deref() == Some(PARALLEL_SUB))
+            });
+            if already || qs.status != ResponseStatus::Auto {
+                continue;
+            }
+            let Some(engine) = suggestion_of(&qs.current) else {
+                continue;
+            };
+            let incumbent = match &d.remark_answer {
+                crate::remark::RemarkAnswer::Option(o) if *o < options => {
+                    Some(Decision::Option(*o))
+                }
+                crate::remark::RemarkAnswer::Blank => Some(Decision::Blank),
+                crate::remark::RemarkAnswer::Multi(v) if v.iter().all(|o| *o < options) => {
+                    Some(Decision::Multi(v.clone()))
+                }
+                _ => None,
+            };
+            let ours = engine.text(&labels, &def.forms);
+            let e = omr_model::Exception::must("MRK-001", Severity::Error, omr_model::Scope::Item)
+                .with_sub_reason(PARALLEL_SUB)
+                .with_detail(format!(
+                    "parallel run (§23.7): Remark Office OMR read {}, this exam auto-accepted \
+                     {ours}; decide from the bubble row: accept keeps {ours}, or choose Remark's \
+                     or another answer with a reason (e.g. AMBIGUOUS_MARK); the decision is \
+                     recorded as a field label",
+                    d.remark
+                ));
+            let mut it = crate::review::mark_item(&self.session, bi, q, &e, &labels);
+            it.id = self.session.review.items.len() as u64 + 1;
+            it.suggestion = Some(engine.clone());
+            it.incumbent = Some(IncumbentReading {
+                system: "Remark Office OMR".into(),
+                text: d.remark.clone(),
+                decision: incumbent,
+                engine,
+                source: d.remark_row.clone(),
+            });
+            queued.push(it.id);
+            self.session.review.items.push(it);
+            self.session.booklets[bi].questions[q].status = ResponseStatus::Pending;
+            touched.push(bi);
+        }
+        touched.sort_unstable();
+        touched.dedup();
+        for &bi in &touched {
+            if let Some(sc) = self.scoring.as_mut() {
+                sc.update_booklet(bi, &self.session.booklets[bi])?;
+            }
+            self.touch(bi);
+        }
+        let exam = self.session.definition.exam_id.to_string();
+        let c = &run.counts;
+        if let Some(st) = self.store.as_mut() {
+            st.event(
+                "ParallelRunCompared",
+                "exam",
+                &exam,
+                json!({
+                    "incumbent": "Remark Office OMR",
+                    "workbooks": run.import.workbooks.iter().map(|w| w.sha384.clone()).collect::<Vec<_>>(),
+                    "booklets": c.booklets,
+                    "questions": c.questions,
+                    "differ": c.differ,
+                    "differ_pending": c.differ_pending,
+                    "queued": queued,
+                }),
+            )?;
+        }
+        run.queued = Some(queued.len());
+        run.counts.not_queued = run.counts.not_queued.saturating_sub(queued.len());
+        run.counts.held_in_review += queued.len();
+        self.save()?;
+        Ok(queued.len())
+    }
+
     /// Writes the review crops of `items` into `dir` as a Restricted export
     /// ([`crate::export::write_crops`]) and records `ExportCreated` (purpose `review-crops`).
     pub fn export_crops(
@@ -2601,6 +2924,20 @@ impl ExamProject {
             )?;
         }
         Ok(summary)
+    }
+
+    /// Records an export of this exam's data written outside the exam folder (`ExportCreated`,
+    /// label `restricted`, PII), e.g. the parallel-run report.
+    pub(crate) fn record_export(
+        &mut self,
+        purpose: &str,
+        destination: &str,
+        manifest_sha384: &str,
+    ) -> Result<(), AppError> {
+        if let Some(st) = self.store.as_mut() {
+            st.record_export(purpose, destination, manifest_sha384)?;
+        }
+        Ok(())
     }
 
     /// Records that personal data was shown unmasked outside the exports (`PersonalDataViewed`:
@@ -2696,4 +3033,21 @@ impl ExamProject {
         }
         Ok(summary)
     }
+}
+
+/// A mapping cell names a printed question and a CLO; when the versions map their printed
+/// questions differently (rows with a `form`, e.g. Remark learning objectives imported per
+/// version, §3.5), one cell stands for several rows and editing it would change one version's
+/// row silently: refused with the way to edit them.
+fn refuse_per_version_mapping_edit(def: &crate::exam::ExamDefinition) -> Result<(), AppError> {
+    if def.has_form_mapping() {
+        return Err(AppError::Review(
+            "this exam's CLO mappings differ between versions (rows per version, e.g. imported \
+             from Remark): a cell of the grid stands for several rows, so it is not edited here; \
+             change the rows in clo.csv (its `form` column names each row's version) and grade \
+             the exam again with it (omr grade … --clo clo.csv)"
+                .into(),
+        ));
+    }
+    Ok(())
 }

@@ -61,7 +61,7 @@ fn c5_key_files_in_every_common_layout_read_the_same_key() {
     // Semicolon (Excel with a decimal comma) and tab separators; quoted multi-keys.
     check("semicolon", b"question;A;B\n1;B;C\n2;\"A,D\";E\n3;*;A\n");
     // UTF-16 (Excel "Unicode text", tab separated) with Arabic headers and Arabic-Indic digits.
-    let text = "السؤال\tنموذج أ\tنموذج ب\r\n١\tب\tج\r\n٢\tأ+د\tهـ\r\n٣\tملغى\tا\r\n";
+    let text = "السؤال\tنموذج أ\tنموذج ب\r\n١\tب\tج\r\n٢\tأ|د\tهـ\r\n٣\tملغى\tا\r\n";
     let mut utf16 = vec![0xFF, 0xFE];
     for u in text.encode_utf16() {
         utf16.extend_from_slice(&u.to_le_bytes());
@@ -76,6 +76,20 @@ fn c5_key_files_in_every_common_layout_read_the_same_key() {
     let (cp1256, _, bad) = encoding_rs::WINDOWS_1256.encode(&comma);
     assert!(!bad);
     check("Windows-1256", &cp1256);
+    // F6: `+` and `&` are Remark's AND syntax (all of these answers), never read as "either":
+    // refused naming the line and what to write.
+    for and in ["A+D", "A&D", "A and D"] {
+        let e = err(read_key_file(
+            format!("question,A,B\n1,B,C\n2,{and},E\n3,*,A\n").as_bytes(),
+            &forms(&two),
+            3,
+            5,
+        ));
+        assert!(
+            e.contains("line 3") && e.contains("AND key") && e.contains("A|C"),
+            "{e}"
+        );
+    }
     // One key for every form; a single column of answers; points; rows beyond the exam.
     let k = keys(
         b"Question,Answer,Points\n1,b,2\n2,c,\n3,d,0.5\n4,e,1\n",

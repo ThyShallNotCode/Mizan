@@ -2,3 +2,4 @@
 
 pub mod a11;
 pub mod synthetic_exam;
+pub mod synthetic_remark;

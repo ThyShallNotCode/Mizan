@@ -1,11 +1,16 @@
 //! Writes the synthetic workspace the real-backend screenshots use (no real data): three IAU
 //! exams on the committed blank form with painted pencil marks, graded through omr-app; the
 //! midterm in two scan batches (the second added to the graded exam), and a final graded with
-//! the instructor's synthetic key sheets (held until the key summary is confirmed).
+//! the instructor's synthetic key sheets (held until the key summary is confirmed). Beside them,
+//! `remark-cs211-midterm-1/` and `remark-cs212-quiz-2/` hold synthetic Remark graded workbooks
+//! of the midterm's and the quiz's sheets (invented rows in the documented export layout, never
+//! a real export) for the Remark import and parallel-run screens.
 //!
 //! ```text
 //! cargo run -p shell-slint --example synthetic_exam -- <workspace-dir>
-//! omr-desktop --workspace <workspace-dir> --screenshot docs/design/screens/real
+//! omr-desktop --workspace <workspace-dir> --screenshot docs/design/screens/real \
+//!     --remark <workspace-dir>/remark-cs211-midterm-1 \
+//!     --remark-setup <workspace-dir>/remark-cs212-quiz-2
 //! cargo run -p shell-slint --example synthetic_exam -- <dir> --bare   # CS 213 only: no roster,
 //!                                                     # no CLOs, an inferred key (edge states)
 //! ```
@@ -13,6 +18,8 @@
 
 #[path = "../tests/support/synthetic_exam.rs"]
 mod synthetic_exam;
+#[path = "../tests/support/synthetic_remark.rs"]
+mod synthetic_remark;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -65,6 +72,25 @@ fn main() -> ExitCode {
             built.project.display(),
             t0.elapsed().as_secs_f64()
         );
+        // synthetic Remark exports: the midterm's with weighted points (the New-exam import,
+        // the parallel run), the quiz's with its own 1-point questions (Setup's import, which
+        // replaces its inferred key)
+        if spec.folder == synthetic_exam::MIDTERM.folder
+            || spec.folder == synthetic_exam::QUIZ.folder
+        {
+            let books = synthetic_remark::write_books_with(
+                spec,
+                &dir.join(format!("remark-{}", spec.folder)),
+                spec.folder == synthetic_exam::QUIZ.folder,
+            );
+            println!(
+                "{} {} · {} synthetic Remark workbooks → {}",
+                spec.course_code,
+                spec.title,
+                books.len(),
+                dir.join(format!("remark-{}", spec.folder)).display()
+            );
+        }
     }
     ExitCode::SUCCESS
 }

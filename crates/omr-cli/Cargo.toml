@@ -31,3 +31,5 @@ omr-recog.workspace = true
 omr-imaging.workspace = true
 image.workspace = true
 miniz_oxide.workspace = true
+# Synthetic Remark workbooks (tests/remark.rs, shared with omr-app's tests/remark_common).
+rust_xlsxwriter.workspace = true

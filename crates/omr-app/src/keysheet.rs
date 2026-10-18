@@ -409,16 +409,16 @@ pub fn overlay(
         return;
     }
     let n = usize::from(def.questions);
-    let k = key.get_or_insert_with(|| EffectiveKey {
-        version: 1,
-        inferred: false,
-        forms: vec![vec![KeyCell::Missing; n]; def.forms.len()],
-        points: if def.points.is_empty() {
-            vec!["1".to_string(); n]
-        } else {
-            def.points.clone()
-        },
-        shared_items: def.forms.len() == 1,
+    let k = key.get_or_insert_with(|| {
+        let (points, form_points) = EffectiveKey::points_from(def);
+        EffectiveKey {
+            version: 1,
+            inferred: false,
+            forms: vec![vec![KeyCell::Missing; n]; def.forms.len()],
+            points,
+            form_points,
+            shared_items: def.forms.len() == 1,
+        }
     });
     for f in forms {
         if let Some(cells) = key_cells(def, ks, f)
@@ -434,7 +434,7 @@ pub fn overlay(
             .retain(|e| !(e.code == "SCO-003" && e.sub_reason.as_deref() == Some("inferred_key")));
     }
     if !k.inferred {
-        k.shared_items = k.forms.iter().all(|c| *c == k.forms[0]);
+        k.shared_items = k.can_share_items(def);
     }
 }
 
@@ -1091,33 +1091,50 @@ pub fn key_csv(s: &Session) -> Option<String> {
         .iter()
         .map(|&f| key_cells(def, ks, f).unwrap_or_default())
         .collect();
+    let by_form = def.points_by_form();
+    let per_form = !def.form_points.is_empty();
     let mut out = String::from("question");
     for &f in &forms {
         out.push(',');
         out.push_str(&def.forms[f]);
     }
-    out.push_str(",points\r\n");
+    if per_form {
+        for &f in &forms {
+            out.push_str(",points_");
+            out.push_str(&def.forms[f]);
+        }
+        out.push_str("\r\n");
+    } else {
+        out.push_str(",points\r\n");
+    }
     for q in 0..usize::from(def.questions) {
         out.push_str(&(q + 1).to_string());
         for c in &cells {
             out.push(',');
             out.push_str(&c.get(q).map(KeyCell::text).unwrap_or_default());
         }
-        out.push(',');
-        out.push_str(def.points.get(q).map_or("1", String::as_str));
+        if per_form {
+            for &f in &forms {
+                out.push(',');
+                out.push_str(by_form[f].get(q).map_or("1", String::as_str));
+            }
+        } else {
+            out.push(',');
+            out.push_str(def.points.get(q).map_or("1", String::as_str));
+        }
         out.push_str("\r\n");
     }
     Some(out)
 }
 
-fn esc(s: &str) -> String {
+pub(crate) fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
 }
 
-fn crop_svg(c: &Crop) -> String {
+pub(crate) fn crop_svg(c: &Crop) -> String {
     let png = crate::crops::png(c).unwrap_or_default();
     let data = data_encoding::BASE64.encode(&png);
     let mut svg = format!(

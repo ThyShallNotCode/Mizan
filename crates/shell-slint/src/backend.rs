@@ -402,6 +402,9 @@ pub struct ExamSetup {
     pub lints: Vec<SetupLint>,
     /// Students on the roster; 0 when the exam has none (identities are then never matched).
     pub roster_students: u32,
+    /// Imported item → CLO rows waiting for approval (`imported, needs review`, §11.2): the
+    /// TP-154 tables stay a draft until they are approved.
+    pub mappings_proposed: u32,
 }
 
 // ------------------------------------------------------------------------------------- scan
@@ -1313,6 +1316,297 @@ pub struct NewExam {
     /// Key-sheet files (the instructor's filled answer sheets), separated by `;` (optional):
     /// graded with the exam as named key sheets, held until confirmed in Setup (§10.1).
     pub key_sheets: String,
+    /// Remark Office OMR's graded workbooks read with *Import from Remark export…* (as
+    /// listed in the import's summary, `;` between several; optional): the key with exact
+    /// points per version and the learning objectives come from that import, held by the
+    /// backend since it was read ([`Backend::read_remark_import`] with no exam).
+    pub remark: String,
+}
+
+// ------------------------------------------------------------------ Remark migration (§3.5)
+
+/// How the points of a Remark import are settled where the workbooks alone leave them open
+/// (spec §3.5: never assumed by the import).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum RemarkPoints {
+    /// From the learning-objective groups, else solved exactly from Remark's totals.
+    #[default]
+    FromWorkbooks,
+    /// The points the import suggests for questions the totals cannot tell apart (another
+    /// version, fully determined, leaves one value for them), given by the instructor's
+    /// explicit choice.
+    Suggested,
+    /// A points file (`question,points` or `question,points_A,points_B`; a question left
+    /// empty is solved from the totals).
+    File(std::path::PathBuf),
+    /// The exam's own points, checked against every Remark total (parallel run only).
+    Exam,
+}
+
+/// What to read: Remark's graded Excel exports (`.xlsx`; its `.rmx`/`.aky` files are never
+/// opened) and how to settle their points.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RemarkRequest {
+    pub workbooks: Vec<std::path::PathBuf>,
+    pub points: RemarkPoints,
+    /// Handwritten student numbers, when known (`file,page,student_id` CSV files; the
+    /// parallel run names a Remark ID equal to one of them, an operator's correction).
+    pub handwritten: Vec<std::path::PathBuf>,
+}
+
+/// Why a Remark import or parallel run was refused, and what to do (R10).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RemarkRefusal {
+    /// The core's reason, naming the files, rows or questions.
+    pub message: String,
+    /// What to do in this window.
+    pub remedy: String,
+    /// The points the import suggests for the questions the totals leave open (e.g.
+    /// "version A: question 6 → 0.75, question 10 → 0.75"); empty when there is none.
+    pub suggestion: String,
+}
+
+/// A learning objective of a Remark workbook, imported as a CLO with weight-1 mappings
+/// flagged "imported, needs review" (§3.5, §11.2: proposed rows, never approved).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemarkObjective {
+    /// The objective as Remark named it (`Q1`): the CLO code.
+    pub code: String,
+    /// Remark's header (`Q1 (1-8)`).
+    pub label: String,
+    /// Its questions (1-based), as ranges: `1-8`.
+    pub questions: String,
+    /// Its possible points (exact).
+    pub points: String,
+}
+
+/// One version of a Remark import.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemarkVersion {
+    /// Form letter.
+    pub form: String,
+    /// `Version1` as Remark wrote it.
+    pub remark_version: String,
+    pub workbooks: Vec<String>,
+    /// Key entries per question (`B`, `A|C`, empty when missing): shown as counts until the
+    /// instructor reveals them (exam-confidential).
+    pub key: Vec<String>,
+    /// The key as counts: "30 entries · 1 with several answers · 0 missing".
+    pub key_counts: String,
+    /// Exact points per question.
+    pub points: Vec<String>,
+    /// Where the points came from.
+    pub points_source: String,
+    /// The Answer Key row's total possible.
+    pub total: String,
+    /// The distinct point values, e.g. "0.75, 1".
+    pub distinct: String,
+    pub students: usize,
+    pub key_sheet_rows: usize,
+    /// Rows whose Remark total the points reproduce exactly, of the rows checked.
+    pub reproduced: usize,
+    pub rows_checked: usize,
+    /// Learning-objective points checked (row × group), all reproduced.
+    pub group_points_checked: usize,
+    pub objectives: Vec<RemarkObjective>,
+}
+
+/// A workbook row taken for the instructor's key sheet graded as a student: reported and
+/// excluded, never a student.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemarkKeySheetRow {
+    pub workbook: String,
+    pub row: u32,
+    /// The ID masked to its last digits.
+    pub masked_id: String,
+    /// Why it is taken for a key sheet.
+    pub why: String,
+}
+
+/// One workbook as read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemarkWorkbook {
+    pub file: String,
+    /// SHA-384, abbreviated.
+    pub digest: String,
+    pub form: String,
+    pub students: usize,
+    pub key_sheets: usize,
+    pub footer_rows: usize,
+    pub objectives: usize,
+}
+
+/// A Remark import as the instructor reviews it before applying it (§3.5, PAR-09): or the
+/// refusal with what to do.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RemarkImportView {
+    /// The workbook files as given (the New-exam form names them).
+    pub files: Vec<String>,
+    /// Refused: why and what to do; nothing else is filled.
+    pub refusal: Option<RemarkRefusal>,
+    pub questions: u16,
+    pub versions: Vec<RemarkVersion>,
+    pub workbooks: Vec<RemarkWorkbook>,
+    pub key_sheets: Vec<RemarkKeySheetRow>,
+    /// The core's findings (no student value, no key letter).
+    pub notes: Vec<String>,
+    /// How the points were settled when the instructor gave some ("" when every value comes
+    /// from the workbooks).
+    pub points_note: String,
+    /// What applying does here (a new exam, or this exam's key version), or why it cannot
+    /// apply here.
+    pub applies: String,
+    /// The import fits (the exam's questions and versions).
+    pub can_apply: bool,
+    /// The learning objectives become CLO mappings when applied (a new exam); `false` with
+    /// the reason in `applies` when they cannot be (a graded exam).
+    pub objectives_applied: bool,
+}
+
+/// How a booklet's question compares with Remark's reading (§23.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParallelAgreement {
+    /// Our settled answer differs from Remark's: adjudicate before release.
+    Differ,
+    /// Ours is pending review and its proposal differs from Remark's.
+    DifferPending,
+    /// Ours is pending review and its proposal is Remark's reading.
+    AgreePending,
+}
+
+/// A question to adjudicate, with its bubble-row crop.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParallelDifference {
+    /// Booklet label, file and page.
+    pub booklet: String,
+    /// The student, masked to the last digits.
+    pub student: String,
+    /// 1-based question.
+    pub question: u32,
+    pub remark: String,
+    /// Ours (`?B`: a proposal pending review).
+    pub ours: String,
+    /// Our status: auto, confirmed, changed, pending.
+    pub status: String,
+    pub agreement: ParallelAgreement,
+    /// Our recognition's findings on the question (codes).
+    pub findings: String,
+    /// The bubble row as scanned with the printed question number, marks outlined.
+    pub crop: Option<CropImage>,
+}
+
+/// An identity difference between the exam and Remark's rows (masked IDs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelIdentity {
+    pub kind: String,
+    pub booklet: String,
+    pub ours: String,
+    pub remark: String,
+    pub detail: String,
+}
+
+/// A booklet whose weighted total is not (yet) Remark's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelTotal {
+    pub booklet: String,
+    pub student: String,
+    /// Ours with the imported points (settled questions only).
+    pub ours: String,
+    pub remark: String,
+    /// Questions pending review here, and what the total becomes resolved as Remark read
+    /// them.
+    pub pending: String,
+    pub if_remark: String,
+    /// Saudi letters: ours, and Remark's total's (with Remark's own `Grade` cell).
+    pub grades: String,
+}
+
+/// Key sheets Remark graded as students in one workbook, and what they did to the
+/// statistics Remark reported.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelKeySheets {
+    pub workbook: String,
+    pub rows: usize,
+    /// "mean 18.4 · SD 3.1 · top 25 (100 %) · KR-20 0.81 · α 0.80" as Remark reported.
+    pub reported: String,
+    /// The same recomputed with the key-sheet rows (as Remark did) and without them.
+    pub with: String,
+    pub without: String,
+}
+
+/// A workbook in the parallel run: compared, or another section's (not scanned here).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelWorkbook {
+    pub file: String,
+    pub form: String,
+    pub rows: usize,
+    pub key_sheets: usize,
+    pub paired: usize,
+    pub in_scope: bool,
+}
+
+/// The head-to-head counts (Restricted: inside the university, spec §3.5 Q-08).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ParallelCounts {
+    pub booklets: usize,
+    pub remark_rows: usize,
+    pub out_of_scope_rows: usize,
+    pub key_sheet_rows: usize,
+    pub paired_by_id: usize,
+    pub paired_by_partial_id: usize,
+    pub paired_by_answers: usize,
+    pub questions: usize,
+    pub agree: usize,
+    pub agree_pending: usize,
+    pub differ: usize,
+    pub differ_pending: usize,
+    pub totals_settled: usize,
+    pub totals_settled_equal: usize,
+    pub totals_provisional: usize,
+    pub totals_provisional_equal_if_remark: usize,
+    /// Paired booklets the exam has not graded (no key or no version).
+    pub totals_not_graded: usize,
+    /// Answers only (Remark's key and points on our answers): totals equal to Remark's.
+    pub answers_only_equal: usize,
+    pub identity: usize,
+    pub key_differences: usize,
+    /// Questions whose points in the exam differ from Remark's.
+    pub points_differences: usize,
+    /// Versions whose maximum in the exam differs from Remark's total possible.
+    pub maximum_differences: usize,
+    /// Settled differences from an auto-accepted answer not in the review queue (the report
+    /// alone does not hold release for them).
+    pub not_queued: usize,
+    /// Parallel-run differences waiting in Review (each holds release).
+    pub held_in_review: usize,
+}
+
+/// The parallel run with Remark (§23.7) as the instructor adjudicates it: every difference
+/// with its crop, identity differences, totals and the key sheets Remark graded as students.
+/// Restricted (student numbers and answers; head-to-head figures stay inside the university).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ParallelRunView {
+    /// The Restricted / Q-08 banner, as the report carries it.
+    pub banner: String,
+    pub files: Vec<String>,
+    pub refusal: Option<RemarkRefusal>,
+    /// Where Remark's points came from (the totals are the exam's own score run).
+    pub points: String,
+    /// What holds release after this comparison (queued review items, or nothing).
+    pub hold: String,
+    /// Questions whose points differ ("version A question 3: 1 here, 0.75 in Remark").
+    pub points_differences: Vec<String>,
+    /// Versions whose maximum differs ("version A: 28 here, 24 in Remark").
+    pub maximum_differences: Vec<String>,
+    pub counts: ParallelCounts,
+    pub differences: Vec<ParallelDifference>,
+    pub identity: Vec<ParallelIdentity>,
+    pub totals: Vec<ParallelTotal>,
+    pub key_sheets: Vec<ParallelKeySheets>,
+    pub workbooks: Vec<ParallelWorkbook>,
+    /// Key entries where Remark's key differs from the exam's ("version A question 12"; no
+    /// letters).
+    pub key_differences: Vec<String>,
 }
 
 /// What the shell needs from the application core. Queries are cheap snapshots; commands
@@ -1466,6 +1760,32 @@ pub trait Backend {
         ))
     }
 
+    /// Approves the imported item → CLO rows as the signed-in principal (§11.2: an audited
+    /// approval; the TP-154 tables leave the draft watermark). Returns what happened. The
+    /// default refuses.
+    fn approve_mappings(&mut self, exam: &ExamId) -> Result<String, BackendError> {
+        let _ = exam;
+        Err(BackendError::Denied(
+            "Approving CLO mappings needs a graded project: open one with --project or \
+             --workspace"
+                .into(),
+        ))
+    }
+
+    /// Replaces the exam's CLOs and item → CLO mapping with a CLO file (the `--clo` layout;
+    /// audited; the outcomes recompute, nothing is graded again). The default refuses.
+    fn replace_clos(
+        &mut self,
+        exam: &ExamId,
+        path: &std::path::Path,
+    ) -> Result<String, BackendError> {
+        let _ = (exam, path);
+        Err(BackendError::Denied(
+            "Replacing the CLOs needs a graded project: open one with --project or --workspace"
+                .into(),
+        ))
+    }
+
     /// The key read from the exam's key sheets, waiting for (or past) the instructor's
     /// confirmation: the key sheets graded with the exam, else key-sheet files read for it with
     /// [`Backend::read_key_sheets`]. `None` when there are none.
@@ -1522,6 +1842,97 @@ pub trait Backend {
         Err(BackendError::Invalid(
             "No key-sheet files were read for this exam".into(),
         ))
+    }
+
+    /// True when a Remark export can be imported: for a new exam (`exam` = `None`, a
+    /// workspace to grade into) or into a graded exam's key (a writable project).
+    fn can_import_remark(&self, exam: Option<&ExamId>) -> bool {
+        let _ = exam;
+        false
+    }
+
+    /// Reads Remark Office OMR's graded workbooks (§3.5, PAR-09) for a new exam (`exam` =
+    /// `None`) or for the exam's Setup: one key per version with exact points (every Remark
+    /// total reproduced), the learning objectives as CLO mappings flagged "imported, needs
+    /// review", the key-sheet rows found and excluded; or the refusal with what to do. The
+    /// import is held for review and changes nothing until it is applied (a new exam created
+    /// with it, or [`Backend::apply_remark_import`]). The default refuses.
+    fn read_remark_import(
+        &mut self,
+        exam: Option<&ExamId>,
+        request: &RemarkRequest,
+    ) -> Result<RemarkImportView, BackendError> {
+        let _ = (exam, request);
+        Err(BackendError::Denied(
+            "Importing from Remark needs an exams folder or a graded project: open one with \
+             --workspace or --project"
+                .into(),
+        ))
+    }
+
+    /// Drops the import held for `exam` (or for the new exam) without applying it.
+    fn discard_remark_import(&mut self, exam: Option<&ExamId>) {
+        let _ = exam;
+    }
+
+    /// Applies the import held for a graded exam: its key and points per version replace the
+    /// exam's (a new key version, the exam rescored, audited). Returns what happened. The
+    /// default refuses.
+    fn apply_remark_import(&mut self, exam: &ExamId) -> Result<String, BackendError> {
+        let _ = exam;
+        Err(BackendError::Denied(
+            "Importing from Remark needs a graded project: open one with --project or \
+             --workspace"
+                .into(),
+        ))
+    }
+
+    /// Runs the parallel run with Remark's graded workbooks of the same sheets (§23.7):
+    /// booklets matched to Remark's rows, every per-question difference with its crop,
+    /// identity differences, weighted totals and the key sheets Remark graded as students; or
+    /// the refusal with what to do. Nothing is written. The default refuses.
+    fn compare_remark(
+        &mut self,
+        exam: &ExamId,
+        request: &RemarkRequest,
+    ) -> Result<ParallelRunView, BackendError> {
+        let _ = (exam, request);
+        Err(BackendError::Denied(
+            "The parallel run needs a graded project: open one with --project or --workspace"
+                .into(),
+        ))
+    }
+
+    /// Queues the settled differences of the last [`Backend::compare_remark`] (rerun on the
+    /// exam as it stands) for review (§23.7): each is a Marks-lane item that holds release
+    /// until it is decided. Returns what happened. The default refuses.
+    fn queue_parallel_differences(&mut self, exam: &ExamId) -> Result<String, BackendError> {
+        let _ = exam;
+        Err(BackendError::Denied(
+            "The parallel run needs a graded project: open one with --project or --workspace"
+                .into(),
+        ))
+    }
+
+    /// Writes the Restricted parallel-run report of the last [`Backend::compare_remark`]
+    /// (rerun on the exam as it stands) into `dir`, with a signed manifest and an audited
+    /// export event. Returns where it went. The default refuses.
+    fn save_parallel_run(
+        &mut self,
+        exam: &ExamId,
+        dir: &std::path::Path,
+    ) -> Result<String, BackendError> {
+        let _ = (exam, dir);
+        Err(BackendError::Denied(
+            "The parallel run needs a graded project: open one with --project or --workspace"
+                .into(),
+        ))
+    }
+
+    /// Where the parallel-run report is written unless the instructor names another folder.
+    fn parallel_run_dir(&self, exam: &ExamId) -> Option<std::path::PathBuf> {
+        let _ = exam;
+        None
     }
 
     /// Releases the exam's results (§13.4): refused while anything blocks release; the

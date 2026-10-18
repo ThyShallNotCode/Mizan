@@ -206,8 +206,38 @@ pub struct EffectiveKey {
     pub forms: Vec<Vec<KeyCell>>,
     /// Points per question (exact decimal strings).
     pub points: Vec<String>,
+    /// Points per question of each form (definition order) when the forms carry different
+    /// points (`ExamDefinition::form_points`); empty: `points` for every form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub form_points: Vec<Vec<String>>,
     /// Master items shared across forms (identical forms) or one set per form.
     pub shared_items: bool,
+}
+
+impl EffectiveKey {
+    /// The points of form `f`'s questions.
+    pub fn points_of(&self, f: usize) -> &[String] {
+        self.form_points.get(f).unwrap_or(&self.points)
+    }
+
+    /// Whether the forms can share one item set: the same answers, the same points and no
+    /// item → CLO row for one version only (§10.3: otherwise each form keeps its own items).
+    pub fn can_share_items(&self, def: &ExamDefinition) -> bool {
+        self.forms.iter().all(|c| *c == self.forms[0])
+            && self.form_points.is_empty()
+            && !def.has_form_mapping()
+    }
+
+    /// The key's points from the definition: `(points, form_points)` with `form_points`
+    /// empty when every form carries the same points.
+    pub fn points_from(def: &ExamDefinition) -> (Vec<String>, Vec<Vec<String>>) {
+        let by_form = def.points_by_form();
+        if by_form.iter().all(|p| *p == by_form[0]) {
+            (by_form[0].clone(), Vec::new())
+        } else {
+            (by_form[0].clone(), by_form)
+        }
+    }
 }
 
 /// One key cell.

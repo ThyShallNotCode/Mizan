@@ -280,6 +280,9 @@ pub fn definition(spec: &Spec) -> ExamDefinition {
             clo: main.into(),
             weight: weight.into(),
             note: note.into(),
+            form: String::new(),
+            imported: String::new(),
+            approved_by: String::new(),
         });
         if q == 15 || q == 24 {
             mapping.push(CloMapping {
@@ -287,6 +290,9 @@ pub fn definition(spec: &Spec) -> ExamDefinition {
                 clo: if q == 15 { "CLO3" } else { "CLO4" }.into(),
                 weight: "0.5".into(),
                 note: String::new(),
+                form: String::new(),
+                imported: String::new(),
+                approved_by: String::new(),
             });
         }
     }
@@ -401,6 +407,60 @@ fn sheet(spec: &Spec, k: usize) -> Sheet {
         faint_digit: (k == faint_id_sheet(spec)).then_some(6),
         marks,
     }
+}
+
+/// What sheet `k` carries as a person reads it (for the synthetic Remark export of the same
+/// sheets, `synthetic_remark.rs`): its form (0 = A), the student number bubbled, and per
+/// question the intended answer (`None`: left blank), whether it is a light fill, and the option
+/// of an erased residue or of a second firm mark beside it.
+#[derive(Clone, Debug)]
+pub struct SheetTruth {
+    pub form: usize,
+    pub version_bubbled: bool,
+    pub id: String,
+    /// The roster student the sheet belongs to (its bubbled number may be another).
+    pub roster_id: String,
+    pub answers: Vec<Option<u8>>,
+    pub light: Vec<bool>,
+    pub residue: Vec<Option<u8>>,
+    pub second: Vec<Option<u8>>,
+}
+
+/// The truth of sheet `k` (see [`SheetTruth`]).
+pub fn sheet_truth(spec: &Spec, k: usize) -> SheetTruth {
+    let s = sheet(spec, k);
+    let n = usize::from(QUESTIONS);
+    let mut t = SheetTruth {
+        form: s.form,
+        version_bubbled: s.version_bubbled,
+        id: s.id.clone(),
+        roster_id: student_id(spec, k),
+        answers: vec![None; n],
+        light: vec![false; n],
+        residue: vec![None; n],
+        second: vec![None; n],
+    };
+    for (q, marks) in &s.marks {
+        let q = usize::from(*q);
+        for &(o, class, _, _) in marks {
+            match class {
+                MarkClass::ErasedResidue => t.residue[q] = Some(o),
+                MarkClass::PartialOrDot => {}
+                MarkClass::LightFill if t.answers[q].is_none() => {
+                    t.answers[q] = Some(o);
+                    t.light[q] = true;
+                }
+                _ if t.answers[q].is_none() => t.answers[q] = Some(o),
+                _ => t.second[q] = Some(o),
+            }
+        }
+    }
+    t
+}
+
+/// The roster student number of roster entry `k` (sheet `k`'s student).
+pub fn roster_id(spec: &Spec, k: usize) -> String {
+    student_id(spec, k)
 }
 
 fn bubble(engine: &LegacyEngine, field: LegacyField, group: u16, option: u8) -> (f64, f64) {

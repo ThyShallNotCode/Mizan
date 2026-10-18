@@ -5,7 +5,8 @@ import {
     SecondaryButton, GhostButton, IconButton, Chip, StatusPill, Tag, ProgressBar, TableRow,
     TableHeaderCell, TableCell, SeverityGlyph,
 } from "../theme.slint";
-import { App, ExamsVM, ExamRow, Page } from "../state.slint";
+import { App, ExamsVM, ExamRow, Page, RemarkVM } from "../state.slint";
+import { RemarkFields, RemarkRefusal, RemarkImportCard, RemarkSideCard } from "remark.slint";
 import {
     Icons, ThemeToggle, Centered, KVLine, SectionLabel, StatusText, SeverityStack, SeverityCount,
     CoverageRing, Avatar, MessageText, TextField,
@@ -524,6 +525,39 @@ component NewExamBar inherits Rectangle {
                     text <=> ExamsVM.new-forms;
                 }
             }
+            // the key, its points and the learning objectives from a Remark import (§3.5)
+            if RemarkVM.new-using: Rectangle {
+                background: Theme.accent-soft;
+                border-radius: Theme.radius-md;
+                accessible-role: AccessibleRole.text;
+                accessible-label: RemarkVM.new-using-text;
+                height: using.preferred-height;
+                using := HorizontalLayout {
+                    padding-left: Theme.space-md;
+                    padding-right: Theme.space-sm;
+                    padding-top: Theme.space-xs;
+                    padding-bottom: Theme.space-xs;
+                    spacing: Theme.space-md;
+                    Text {
+                        horizontal-stretch: 1;
+                        text: RemarkVM.new-using-text;
+                        font-size: Theme.text-xs;
+                        color: Theme.ink;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                        accessible-role: none;
+                    }
+                    Centered {
+                        GhostButton {
+                            text: "Clear the Remark import";
+                            accessible-description: "The form no longer uses the import: give a key file, key sheets or no key";
+                            clicked => {
+                                RemarkVM.clear-new();
+                            }
+                        }
+                    }
+                }
+            }
             HorizontalLayout {
                 spacing: Theme.space-md;
                 FormField {
@@ -556,7 +590,17 @@ component NewExamBar inherits Rectangle {
             }
             HorizontalLayout {
                 spacing: Theme.space-md;
-                alignment: end;
+                SecondaryButton {
+                    text: "Import from Remark export…";
+                    enabled: RemarkVM.can-new;
+                    accessible-description: "Reads Remark's graded Excel exports: the key with exact points per version and the learning objectives, shown for your review before the form uses them";
+                    clicked => {
+                        RemarkVM.new-panel = true;
+                    }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
                 GhostButton {
                     text: "Cancel";
                     clicked => {
@@ -568,6 +612,104 @@ component NewExamBar inherits Rectangle {
                     enabled: root.ready;
                     clicked => {
                         ExamsVM.create-exam();
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Import from Remark export on the New-exam form (§3.5, PAR-09): Remark's graded Excel exports
+// read and shown for review; "Use this import" fills the form, which then grades with the key,
+// its exact points per version and the learning objectives (imported, needs review).
+component RemarkNewPanel inherits Rectangle {
+    background: Theme.surface-raised;
+    border-radius: Theme.radius-lg;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    drop-shadow-blur: Theme.shadow-2-blur;
+    drop-shadow-offset-y: Theme.shadow-2-offset;
+    drop-shadow-color: Theme.shadow-2-color;
+    in property <length> summary-h: 340px;
+    FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                RemarkVM.new-panel = false;
+                return accept;
+            }
+            return reject;
+        }
+        VerticalLayout {
+            padding: Theme.space-lg;
+            spacing: Theme.space-sm;
+            HorizontalLayout {
+                spacing: Theme.space-md;
+                Text {
+                    text: "New exam · Import from Remark export";
+                    font-size: Theme.text-md;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                }
+                Text {
+                    horizontal-stretch: 1;
+                    text: "Remark's graded Excel exports (Advanced Grade reports): the key with exact points per version, the learning objectives and the key sheets Remark graded as students, for your review. Its .rmx and .aky files are never opened (spec §3.5).";
+                    font-size: Theme.text-xs;
+                    color: Theme.ink-2;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+            RemarkFields { }
+            if RemarkVM.context == 1 && RemarkVM.refused: RemarkRefusal {
+                message: RemarkVM.refusal;
+                remedy: RemarkVM.remedy;
+                suggestion: RemarkVM.suggestion;
+                use-suggested => {
+                    RemarkVM.use-suggested();
+                }
+            }
+            if RemarkVM.context == 1 && RemarkVM.has: HorizontalLayout {
+                height: root.summary-h;
+                spacing: Theme.space-md;
+                RemarkImportCard {
+                    horizontal-stretch: 1;
+                    compact: true;
+                    elevated: false;
+                }
+                RemarkSideCard {
+                    width: 360px;
+                    elevated: false;
+                }
+            }
+            if RemarkVM.context == 1 && RemarkVM.has: Text {
+                text: RemarkVM.applies;
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                spacing: Theme.space-md;
+                alignment: end;
+                GhostButton {
+                    text: "Back to the form";
+                    clicked => {
+                        RemarkVM.new-panel = false;
+                    }
+                }
+                if RemarkVM.context == 1 && RemarkVM.has: GhostButton {
+                    text: "Put the import aside";
+                    accessible-description: "Drops the import; the form is unchanged";
+                    clicked => {
+                        RemarkVM.discard();
+                    }
+                }
+                PrimaryButton {
+                    text: "Use this import";
+                    enabled: RemarkVM.context == 1 && RemarkVM.has && RemarkVM.can-apply;
+                    accessible-description: RemarkVM.applies;
+                    clicked => {
+                        RemarkVM.apply();
                     }
                 }
             }
@@ -852,10 +994,17 @@ export component ExamsScreen inherits Rectangle {
     }
     // the form floats over the dashboard, so opening it never pushes the status bar out of a
     // 1280 × 800 window
-    if ExamsVM.new-open: NewExamBar {
+    if ExamsVM.new-open && !RemarkVM.new-panel: NewExamBar {
         x: (root.width - self.width) / 2;
         y: Theme.top-bar-height + Theme.space-sm;
         width: min(root.width - 2 * Theme.space-lg, 960px);
         height: self.preferred-height;
+    }
+    if ExamsVM.new-open && RemarkVM.new-panel: RemarkNewPanel {
+        x: (root.width - self.width) / 2;
+        y: Theme.top-bar-height + Theme.space-sm;
+        width: min(root.width - 2 * Theme.space-lg, 1120px);
+        height: self.preferred-height;
+        summary-h: min(400px, root.height - Theme.top-bar-height - 330px);
     }
 }

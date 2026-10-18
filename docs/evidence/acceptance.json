@@ -1603,6 +1603,108 @@
       ],
       "tests_failed": [],
       "pass": true
+    },
+    "fourth_round": {
+      "what": "Targeted reruns by the verification of the Remark Office OMR import and the parallel run (EVIDENCE §5.1: ten defects fixed, each with a regression test) on the code after its fixes: every gated real-data test of omr-app in release. The parallel run on the real exams (real_iau_remark.rs) passed; its head-to-head figures stay inside the university (spec §3.5, Q-08) and are not recorded here. The A1-A11 rows above were not rerun.",
+      "generated_utc": "2026-10-17T23:43:00Z",
+      "code": {
+        "code_sha256": "5fd2fab7eefdf44bc1f2f7cf9d8043e1f74f4feee4280db6d9b290bf633b7617",
+        "files": 344,
+        "verify": "git ls-tree -r <commit> -- crates Cargo.toml Cargo.lock | grep -v '\\.md$' | sha256sum",
+        "note": "the working tree at the rerun, including the desktop shell work in progress by another agent"
+      },
+      "load_average": "5.8 at the end (another agent building the desktop shell)",
+      "full_pipeline": {
+        "pages": 143,
+        "questions": 4096,
+        "auto_accepted": 4089,
+        "silent_errors": 0,
+        "review": 7,
+        "ar": 0.001708984375,
+        "student_number": {
+          "exact": 138,
+          "flagged": 5,
+          "wrong_unflagged": 0
+        },
+        "form": {
+          "declared_correct": 140,
+          "inferred": 3,
+          "wrong": 0
+        }
+      },
+      "scored_with_real_keys": {
+        "booklets": 143,
+        "scored": 137,
+        "scored_equal_independent": 137,
+        "provisional": 6,
+        "provisional_differ_only_by_pending": 6,
+        "pending_questions": 7,
+        "auto_accepted_differing_from_reference": 0,
+        "forms_checked": 141,
+        "forms_wrong": 0,
+        "key_sheets_decision_files_identical": {
+          "arti503": "7/7",
+          "cs522": "7/7"
+        }
+      },
+      "remark": {
+        "import_keys_equal_verified_keys": true,
+        "every_remark_total_reproduced_by_the_imported_points": true,
+        "binary_formats_opened": false,
+        "head_to_head": "held inside the university (spec §3.5, Q-08)"
+      },
+      "tests": [
+        "omr-app::real_iau_e2e::req_a1_real_iau_full_pipeline",
+        "omr-app::real_iau_scored::req_a8_real_iau_exams_score_with_the_real_keys",
+        "omr-app::real_iau_remark::req_a8_real_exams_graded_with_remark_points_and_compared_with_remark"
+      ],
+      "tests_failed": [],
+      "pass": true
+    },
+    "fifth_round": {
+      "what": "Targeted reruns by the fifth verification (EVIDENCE §5.2: the parallel run compares the exam's own grades and queues its differences for review, undetermined learning-objective points and AND keys refused, imported CLO mappings approved or replaced, the real-exam expectations moved out of the repository) on the code after its fixes: every gated real-data test of omr-app and omr-cli in release. The parallel run on the real exams (real_iau_remark.rs) passed against its restricted expectations (OMR_REMARK_EXPECT); its head-to-head figures stay inside the university (spec §3.5, Q-08: the licence review is open) and are not recorded here. The A1-A11 rows were not rerun.",
+      "generated_utc": "2026-10-18T03:15:22Z",
+      "code": {
+        "code_sha256": "dc5d3bf431b16f0b756cf6f8402c4f21b050663ffa81f2c9c7a22ca08823021e",
+        "files": 344,
+        "verify": "git ls-tree -r <commit> -- crates Cargo.toml Cargo.lock | grep -v '\\.md$' | sha256sum",
+        "note": "the working tree at the rerun"
+      },
+      "load_average": "0.66 at the end",
+      "full_pipeline": {
+        "pages": 143,
+        "questions": 4096,
+        "auto_accepted": 4089,
+        "silent_errors": 0,
+        "review": 7,
+        "ar": 0.001708984375,
+        "student_number": {
+          "exact": 138,
+          "flagged": 5,
+          "wrong_unflagged": 0
+        },
+        "form": {
+          "declared_correct": 140,
+          "inferred": 3,
+          "wrong": 0
+        }
+      },
+      "remark": {
+        "import_keys_equal_verified_keys": true,
+        "every_remark_total_reproduced_by_the_imported_points": true,
+        "exam_graded_with_imported_points_shows_no_points_or_maximum_difference": true,
+        "binary_formats_opened": false,
+        "findings_checked_against": "restricted expectations outside the repository",
+        "head_to_head": "held inside the university (spec §3.5, Q-08)"
+      },
+      "tests": [
+        "omr-app::real_iau_e2e::req_a1_real_iau_full_pipeline",
+        "omr-app::real_iau_remark::req_a8_real_exams_graded_with_remark_points_and_compared_with_remark",
+        "omr-app::real_iau_scored::req_a8_real_iau_exams_score_with_the_real_keys",
+        "omr-cli::real_key_read"
+      ],
+      "tests_failed": [],
+      "pass": true
     }
   }
 }

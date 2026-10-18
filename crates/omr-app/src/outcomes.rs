@@ -8,8 +8,8 @@ use crate::score::{Scoring, master_item};
 use omr_model::StudentKey;
 use omr_outcomes::{
     A1Table, AssessmentEvidence, AttainmentPolicy, AttainmentResult, B1Table, Clo, CloPloMap,
-    CloSet, ItemCloMap, MappingMode, MappingSet, Offering, RosterEntry, SectionInfo, Track,
-    compute_attainment, tp154_a1, tp154_b1,
+    CloSet, ItemCloMap, MappingMode, MappingSet, MappingSource, MappingStatus, Offering,
+    RosterEntry, SectionInfo, Track, compute_attainment, tp154_a1, tp154_b1,
 };
 use omr_scoring::{RosterStatus, exact, parse_points};
 use std::collections::{BTreeMap, BTreeSet};
@@ -48,7 +48,11 @@ pub fn clo_plo(o: &OutcomeSetup) -> Vec<CloPloMap> {
         .collect()
 }
 
-/// The mapping set in master space: question q maps every form's copy of q.
+/// The mapping set in master space: question q maps every form's copy of q, or only the copy
+/// on the row's version (`CloMapping::form`). A row imported from another system (a Remark
+/// learning objective, §3.5) is `proposed` with its source (§11.2: "imported, needs review"):
+/// the TP-154 tables carry the draft watermark until the coordinator approves it (SCO-032,
+/// [`crate::ExamProject::approve_mappings`]); an approved row keeps its source.
 pub fn mapping_set(
     def: &ExamDefinition,
     o: &OutcomeSetup,
@@ -64,7 +68,12 @@ pub fn mapping_set(
     for m in &o.mapping {
         let w = parse_points(&m.weight).unwrap_or_else(|_| omr_scoring::pts(1, 1));
         let q = usize::from(m.question).saturating_sub(1);
+        let only = (!m.form.is_empty()).then(|| def.forms.iter().position(|f| *f == m.form));
         for f in 0..forms {
+            // On a shared item set every form's copy is one item: a version-specific row maps it.
+            if forms > 1 && only.is_some_and(|x| x != Some(f)) {
+                continue;
+            }
             let item = match key {
                 Some(k) => master_item(k, n, f, q),
                 None => q,
@@ -72,7 +81,28 @@ pub fn mapping_set(
             if item < n_items.max(n) {
                 let mut r = ItemCloMap::approved(ASSESSMENT, item, &m.clo, w);
                 r.note = m.note.clone();
-                rows.push(r);
+                if !m.imported.is_empty() {
+                    r.source = if m.imported.to_ascii_lowercase().contains("remark") {
+                        MappingSource::RemarkImport
+                    } else {
+                        MappingSource::Manual
+                    };
+                    if m.approved_by.is_empty() {
+                        r.status = MappingStatus::Proposed;
+                        r.rationale = None;
+                        r.approved_by = None;
+                    } else {
+                        // Approved by an audited act (`MappingApproved`): its source is kept.
+                        r.rationale = Some(format!(
+                            "imported ({}), reviewed and approved by {}",
+                            m.imported, m.approved_by
+                        ));
+                        r.approved_by = Some(m.approved_by.clone());
+                    }
+                }
+                if !rows.contains(&r) {
+                    rows.push(r);
+                }
             }
         }
     }

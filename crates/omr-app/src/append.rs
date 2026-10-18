@@ -78,7 +78,10 @@ pub(crate) fn carry_key(prior: &Session, key: &mut Option<EffectiveKey>) {
     match (&prior.key, key.as_mut()) {
         (Some(old), _) if !old.inferred => *key = Some(old.clone()),
         (Some(old), Some(new)) if new.inferred => {
-            new.version = if new.forms == old.forms && new.points == old.points {
+            new.version = if new.forms == old.forms
+                && new.points == old.points
+                && new.form_points == old.form_points
+            {
                 old.version
             } else {
                 old.version + 1
@@ -290,6 +293,54 @@ pub(crate) fn carry_review(prior: &Session, session: &mut Session) -> (usize, BT
         it.id = session.review.items.len() as u64 + 1;
         ids.insert(o.id, it.id);
         if it.state == ItemState::Resolved && it.resolution.is_some() {
+            carried += 1;
+        }
+        session.review.items.push(it);
+    }
+    // Parallel-run differences (MRK-001 `parallel_run_disagreement`, §23.7) are queued from a
+    // comparison, not built with the queue: an open one stays open (its answer waits for review
+    // again) while the re-run reads the answer as before; a decided one carries over as its
+    // record (the decided answer itself carries over, or is SYS-032, above).
+    let by_page = booklet_by_page(session);
+    let labels = session.definition.option_labels();
+    for o in prior.review.items.iter().filter(|i| {
+        i.code == "MRK-001" && i.sub_reason.as_deref() == Some(crate::parallel::PARALLEL_SUB)
+    }) {
+        let (Some(ob), Some(q)) = (o.booklet.map(|b| &prior.booklets[b]), o.question) else {
+            continue;
+        };
+        let Some(&bi) = by_page.get(&first_page(prior, ob)) else {
+            continue;
+        };
+        let qi = usize::from(q);
+        let (Some(oq), Some(nq)) = (ob.questions.get(qi), session.booklets[bi].questions.get(qi))
+        else {
+            continue;
+        };
+        let taken =
+            session.review.items.iter().any(|i| {
+                i.kind == ItemKind::Mark && i.booklet == Some(bi) && i.question == Some(q)
+            });
+        if taken {
+            continue;
+        }
+        if o.is_open() && !(nq.status == ResponseStatus::Auto && nq.current == oq.current) {
+            continue;
+        }
+        let e = Exception::must("MRK-001", Severity::Error, Scope::Item)
+            .with_sub_reason(crate::parallel::PARALLEL_SUB)
+            .with_detail(o.detail.clone());
+        let mut it = crate::review::mark_item(session, bi, qi, &e, &labels);
+        it.id = session.review.items.len() as u64 + 1;
+        it.suggestion = o.suggestion.clone();
+        it.incumbent = o.incumbent.clone();
+        it.state = o.state;
+        it.resolution = o.resolution.clone();
+        it.deferrals = o.deferrals;
+        ids.insert(o.id, it.id);
+        if o.is_open() {
+            session.booklets[bi].questions[qi].status = ResponseStatus::Pending;
+        } else if it.resolution.is_some() {
             carried += 1;
         }
         session.review.items.push(it);

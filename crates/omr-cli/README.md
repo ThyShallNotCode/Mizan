@@ -30,8 +30,14 @@ cargo run --release -p omr-cli -- --help
 | `omr review resolve --project DIR --undo` | Compensates the latest review event |
 | `omr bench <corpus…> (--template \| --spec) --questions N [--threads 1,2,4] [--first 30] [--repeat R] [--out bench.json]` | A2: pages/s per thread count (recognition only, and the full in-memory pipeline); A3: the first `--first` sheets end to end with store and exports |
 
+| `omr import remark <graded.xlsx…> --out DIR [--points FILE] [--dry-run]` | Remark Office OMR's graded Excel exports (spec §3.5, PAR-09; never its `.rmx`/`.aky` files): shows a summary (workbooks, versions, rows, key-sheet rows with masked IDs, the points' source, every Remark total reproduced; never a name or a key letter), then writes owner-only `key.csv` (per-version keys, exact points: `points`, or `points_A`,`points_B` when the versions differ), `clo.csv` (the learning objectives as weight-1 CLO mappings, `status` "imported, needs review", each row's note naming the objective's points and questions in its version; every CLO in domain K, to correct), `version_map.csv` and a signed `manifest.json` (classification, every file's and source workbook's SHA-384), and prints the `omr grade` to run. Exit 3, with what to do, when the workbooks of a version disagree (naming the files), a total cannot be reproduced (naming the rows), the totals leave points undetermined (naming the questions, with the points another version leaves for them, or a learning objective whose questions the students do not tell apart, with its equal split as a hint) or the Answer Key row holds an AND key (`A+C`): `--points` (`question,points` or `question,points_A,points_B`; empty cells derived) gives them |
+| `omr compare remark --project DIR <graded.xlsx…> --out DIR [--points FILE] [--handwritten FILE] [--no-crops]` | The parallel run (spec §23.7): the graded exam beside Remark's workbooks of the same sheets, written to `--out` (refused in a sync or network folder, SYS-015): `parallel_run.html` (per question Remark vs ours vs our status, every difference with its bubble-row crop; weighted totals and letters per student; identity differences; the key sheets Remark graded as students and their effect on its reported statistics), `parallel_run_{students,questions,identity}.csv`, `parallel_run_summary.json` and a signed `manifest.json`, every file marked Restricted (head-to-head figures stay inside the university, spec §3.5, Q-08); recorded as `ExportCreated`. The totals are the exam's own (its score run, with its points); points and maxima that differ from Remark's are listed and a differing maximum is warned about; "answers only" (Remark's key and points on our answers) is a separate check of the readings. `--handwritten` (`file,page,student_id`) names a Remark ID that is the handwritten number. The report alone holds nothing, and says so: `--queue` puts every settled difference from an auto-accepted answer in review (MRK-001 `parallel_run_disagreement`), where it holds release until decided, each decision a field label. Prints the counts, the licence-review (Q-08) status as recorded (`licence_review.json` in the private key folder; a recorded refusal stops the comparison) and what holds release |
+| `omr clo approve --project DIR --approver NAME [--note TEXT]` | Approves the imported CLO mapping rows (`imported, needs review`, §11.2) after review: an audited `MappingApproved` naming the approver; the TP-154 tables leave the draft watermark; nothing is graded again |
+| `omr clo replace --project DIR --clo FILE` | Replaces the exam's CLOs and item → CLO mapping with a CLO file (e.g. the imported `clo.csv` with its domains corrected): audited (`MappingReplaced`), the outcomes recompute from the same scores; imported rows stay proposed until approved |
+
 **Inputs.** Key file (CSV, semicolon or tab separated; UTF-8 with or without BOM, UTF-16,
-Windows-1256; CRLF or LF) in the long layout `question,A,B[,points]` (one column per form; a
+Windows-1256; CRLF or LF) in the long layout `question,A,B[,points]` (one column per form, and
+`points_A`, `points_B` … when the versions carry different points; a
 single `key`/`answer` column applies to every form; headerless `1,B` or `1,B,C` too), the wide
 layout `form,Q1,Q2,…` (or headerless rows starting with the form letter), or a single column
 of answers; entries `B`/`b`, `A|C`, `A/C`, `AC`, `A or C` (any of), `*`/`void` (void), empty
@@ -41,7 +47,9 @@ refused with its number and the fix (exit 3). Roster CSV/XLSX with a header row
 below title rows; Excel-damaged IDs are repaired when nothing was lost (`2210345601.0`,
 full-precision `E+`, leading zeros under the ID scheme) and refused otherwise (`2.2E+09`);
 duplicate IDs refuse the roster naming the rows (exit 3); warnings go to stderr. CLO CSV
-`clo,domain,title[,title_ar][,plo],questions[,weight][,note]` with question lists like `1-5,9`.
+`clo,domain,title[,title_ar][,plo],questions[,weight][,note][,form][,status][,source]` with
+question lists like `1-5,9` (`form`: the row maps that version's printed questions only;
+`status` "imported, needs review" with `source`: a proposed row, §11.2).
 Without `--forms`, the forms come from the key file, else `A,B` for legacy sheets and the
 spec's forms for own sheets.
 
@@ -79,6 +87,14 @@ and `key set` exit 6, `review list` names the hold), `key confirm` refuses the u
 then `--answer A:3=…` confirms: key version 1, `key.csv` equals the key, results written.
 `tests/real_key_read.rs` (skipped unless `OMR_IAU_PDF_DIR` and `OMR_IAU_KEYS` are set): `key
 read` on the instructors' real key sheets; counts only (§4 of `docs/EVIDENCE.md`).
+
+`tests/remark.rs` (synthetic Remark workbooks in Remark's layout, invented IDs and names; IAU
+sheets on the committed blank form): `import remark --dry-run` prints the summary (no full ID, no
+name) and writes nothing; with `--out` the owner-only key file and its signed manifest
+(classification, file and source SHA-384); two questions every student
+answered right exit 3 naming them, `--points` settles them; an `.aky` file is refused;
+`compare remark` on an exam graded with the imported key prints the Restricted banner and the
+counts and writes the six report files.
 
 `tests/acceptance_perf.rs` (A2, A3; `#[ignore]`d timing runs, executed in release one at a time
 by `scripts/acceptance.sh`): `omr bench` at 1, 2 and 4 threads (best of 3) on 240 own-form

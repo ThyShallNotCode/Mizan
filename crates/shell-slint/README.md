@@ -18,6 +18,8 @@ cargo run -p shell-slint -- --workspace W --screenshot docs/design/screens/real 
 cargo run -p shell-slint -- --workspace W --screenshot D --size 1280x800 --shots review,results
 cargo run -p shell-slint --example synthetic_exam -- W         # the synthetic IAU workspace
 cargo run -p shell-slint -- --workspace W --screenshot D --size 1280x800 --shots setup-keysheet
+cargo run -p shell-slint -- --workspace W --screenshot D --remark W/remark-cs211-midterm-1 \
+    --remark-setup W/remark-cs212-quiz-2                       # + the Remark import and parallel run
 cargo test -p shell-slint                                      # unit + A11 tests (demo and real)
 ```
 
@@ -53,8 +55,11 @@ bar), one review frame per lane with open items (review, review-identity, review
 review-override (an answer that overrides the suggestion, waiting for its reason), results,
 results-export (the Exports bar), outcomes, settings, exams-new (the New-exam form), and, when
 the workspace holds an exam graded with key sheets, setup-keysheet (its key summary to confirm)
-and scan-keysheet (its batch, the key sheets listed as such); there is no blind-verify frame
-because omr-app draws no blind sample yet. With `--grade` the shots are taken once grading has
+and scan-keysheet (its batch, the key sheets listed as such), and with `--remark <workbooks or
+their folder>` the Remark migration: exams-remark (the New-exam form's import for review) and
+results-remark (the parallel run) of the default exam, and setup-remark (Setup's import, of
+`--remark-setup` when given, shown for the first exam it applies to); there is no blind-verify
+frame because omr-app draws no blind sample yet. With `--grade` the shots are taken once grading has
 finished; background analyses (flag stability) report before each capture
 (`Backend::settle`), so no shot catches "computing…".
 
@@ -152,6 +157,74 @@ it is read by the same key-blind recognizer and is **never** accepted on its own
   sheet (`KEY cf13·1 · key sheet version A · named · key waits for your confirmation in Setup`);
   a key-sheet thumbnail opens the summary.
 
+**Remark migration** (spec §3.5, PAR-09; parallel run §23.7). Only Remark Office OMR's
+documented graded Excel export is read, through omr-app (`remark::read_workbook_files`,
+`remark::import`); its `.rmx`/`.aky` files are refused unopened (§3.5: never reverse engineered).
+- *Import from Remark export…* exists on the New-exam form (a panel over the form) and in
+  Setup's top bar (a bar under it). The workbooks (`;` between several) and an optional points
+  file are read and the import is **shown for review, nothing changes**: per version the points'
+  source, total and values, "N of N rows reproduced exactly" (every Remark total, and every
+  learning-objective point, or the import is refused), the key **as counts** ("30 entries · 0
+  with several answers · 0 missing") until *Reveal key*, and per question its exact points and
+  learning objective; the learning objectives (each a CLO with weight-1 mappings tagged
+  "imported, needs review", proposed); the key sheets Remark graded as students, **excluded**
+  (IDs masked); the workbooks. Versions whose objectives differ show their own points (segments
+  "Version A · 25 pts").
+- A **refusal** replaces the summary with the core's reason (its CLI flag named in this window's
+  words) and *What to do* (R10). When the totals leave questions open and a fully determined
+  version leaves one value for them, or a learning objective's questions are not told apart by
+  the students (a small class: its equal split is never assumed, F4), the suggestion is shown
+  and *Use the suggested points* gives it as the instructor's explicit choice
+  (`remark::suggest_points`; the summary then reads "Points given: given by you as
+  suggested…"); every total is checked again.
+- New exam: *Use this import* fills the questions and versions and clears the key file and key
+  sheets (and the CLO file when the export has objectives); a strip says where the key comes
+  from (*Clear the Remark import* undoes it). *Grade exam* applies the held import to the
+  definition as omr-app documents it (`KeySource::Provided` with its keys, `set_key_points` for
+  the exact points per version, `outcome_setup()` for the CLO rows "imported, needs review");
+  a key file, key sheets or a CLO file beside it, another question count or other versions are
+  refused naming the field. The activity log counts the import (no student value).
+- Setup: *Apply key and points* replaces the exam's key (`ExamProject::replace_key_points`,
+  reason `ADJUDICATION` with a note naming the workbooks' SHA-384 prefixes, the points the
+  instructor gave and the operator): a new key version, the exam rescored (an inferred key is no
+  longer INFERRED). A graded exam's points are fixed: its form map (master items with their
+  points) is stored once and omr-store refuses another, so an export whose points differ is shown
+  as **not applicable** with the first differing questions and what to do (create the exam from
+  the import, or compare); the points change only for an exam not scored yet (held for its key
+  sheets). An export of another question count or other versions, or one none of whose student
+  numbers is this exam's (a Remark export carries no exam identity, only its rows: it is another
+  exam's or another section's), is shown with why it does not apply. The learning objectives are
+  listed for review here; a graded exam's CLOs are changed in the CLO card below the matrix:
+  *Approve imported mappings* (shown while imported rows wait: `ExamProject::approve_mappings`
+  with the signed-in principal as approver, an audited `MappingApproved`; the TP-154 tables leave
+  the draft watermark) and *Replace CLOs* with a CLO file (`replace_outcomes`, audited, the
+  outcomes recompute, nothing is graded again). A grid cell that stands for one version's rows
+  only is labelled "version A only: …"; the grid's points column shows version A's points.
+- Results: *Compare with Remark export…* (a floating bar, Restricted note) runs
+  `ExamProject::compare_remark` with crops and shows the parallel run **in place of the results**
+  under the Restricted / Q-08 banner (`parallel::RESTRICTED_BANNER`, warning-soft with a lock
+  glyph): tiles (booklets paired by ID / partial ID / answers, questions equal, to adjudicate,
+  totals equal: **the exam's own grades** against Remark's, with "the exam's maximum is not
+  Remark's" when its points differ, identity differences, key sheets), every difference with its
+  rectified
+  bubble-row crop (settled differences first, with an inline-start bar, then pending ones that
+  differ, then pending ones Remark read the same), identity differences and totals that are not
+  Remark's (student numbers masked on screen), the key sheets' effect on Remark's reported
+  statistics, the workbooks compared or of another section, and *Save report* into a folder
+  (default `<exam folder>/parallel-run-remark`): the comparison is rerun on the exam as it stands
+  and `export_parallel_run` writes the Restricted report (signed manifest, owner-only, sync
+  folders refused, `ExportCreated`). Remark's points come from the workbooks; a refusal offers
+  *Use the suggested points* and *Use this exam's points* (`points_by_form`, checked against
+  every Remark total); points and maxima that differ from the exam's are listed first under
+  TOTALS. The comparison alone holds nothing, and its subtitle says so: *Queue for review*
+  (`ExamProject::queue_parallel_differences`) puts each settled difference from an
+  auto-accepted answer in Review (MRK-001 `parallel_run_disagreement`), where it holds release
+  until decided; the subtitle then names the differences waiting in Review. A `.csv` among the
+  workbooks typed into the Compare field is read as handwritten student numbers
+  (`file,page,student_id`, as `omr compare remark --handwritten`).
+- Head-to-head figures of real exams never enter the repository (§3.5, Q-08): the tests and
+  screenshots use synthetic workbooks only (`tests/support/synthetic_remark.rs`).
+
 **Alignment refusals** (REG-003 ERROR, F1): a page whose alignment with the blank form cannot be
 verified (a bubble lattice can match one row or column away, so nothing on it was read) is
 counted in the reconciliation ("Not read: alignment unverified (REG-003)"), listed in the activity
@@ -209,6 +282,8 @@ command; page thumbnails are decoded once from the stored originals.
 | Results | `results_vm` plus `analytics()` (α, SEM, item flags with codes, rank, keyed option) and the stability job's report; `hold()` for an exam waiting for its key |
 | Setup · key sheets | `key_sheet_summary(true)` of the exam, or of key-sheet files read with `keysheet::read_key_sheets`; `confirm_key_sheets`, `replace_key` |
 | Outcomes | `outcomes()` (μ, π and their CIs, verdict, policy and version) and `outcomes_vm` (TP-154 B.1 cells) |
+| New exam · Setup · Remark import | `remark::read_workbook_files`, `import`, `import_files` (a points file), `suggest_points`; `RemarkImport` (versions, points, groups, key-sheet rows, workbooks, notes); applied with `set_key_points`/`outcome_setup` (new exam) or `replace_key_points` (Setup) |
+| Results · parallel run | `ExamProject::compare_remark` (with crops), `ParallelRun` (counts, disagreements, identity, students, key-sheet effects, workbooks), `export_parallel_run` |
 
 Decisions map one to one: options are `Decision::Option(n)`; on identity items a candidate `n`
 is `Decision::Option(n)` (the n-th listed candidate), N is `NotOnRoster`, a typed student number
@@ -278,6 +353,18 @@ instructor's synthetic key sheets named and no key file (held): version A (stude
 `0000000000`) carries a double mark, an empty row and a faint mark, version B (`9999999999`) is
 clean. No real scan, name, student number or key is used.
 
+`tests/support/synthetic_remark.rs` writes synthetic Remark graded workbooks of the midterm's
+own sheets in the documented export layout (the example puts them in
+`<workspace>/remark-cs211-midterm-1/`): versions A and B with learning-objective groups whose
+exact points differ per version (0.5, 0.75 and 1; 25 points each), the instructor's key sheet
+graded as a student (`0000000000`), a clear mark Remark read as another option (sheet 6), a
+light fill Remark left blank (sheet 9), a booklet with no row (sheet 50), a row whose ID Remark
+could not read (`ERROR …`, a student with several wrong answers, so the run pairs it by
+answers), an Excel-typed ID, the roster number where a sheet bubbles
+another, an absent student's row, and another section's workbook; plus a small two-version
+export whose totals leave two questions' points open (the refusal and its suggestion). Never a
+real export.
+
 | Test | What it proves |
 |---|---|
 | `req_a11_real_backend_review_flow_rescores_results` | the synthetic midterm is graded, opened with `AppBackend` and reviewed through accessible labels: accept a suggestion, choose the keyed answer (an override: the reason chip first), mark a blank, undo it, resolve an identity as not on roster, accept an inferred form; each step's booklet percentage and the class mean move exactly as the core rescored them, the reason is in the audit record, and the results view-model equals a full rebuild from the saved project; every remaining item settled, then *Release results…* and *Release* release the exam (the Blackboard upload is written); the Exports bar writes the Blackboard upload into column 835932 (usernames and scores only, no names) and every export |
@@ -290,6 +377,11 @@ clean. No real scan, name, student number or key is used.
 | `req_a11_real_backend_new_exam_reads_the_named_key_sheets` | *New exam* with the instructor's key sheets in its *Key sheets* field: they are read with the exam as stored key sheets (six students graded, two key sheets), the run held until *Confirm every version* in Setup, then scored; the key version names both key-sheet scans (C7) |
 | `req_a11_real_backend_confirms_the_key_from_key_sheets` | the synthetic final graded with its key sheets: held (no results; Results' empty state leads to Setup); Scan lists both key sheets as key sheets, not students (thumbnail labels, reconciliation, activity); Setup opens on the summary with the three rows of version A highlighted (several marks, no mark, not read clearly) and every row's crop; *Confirm version A* stays disabled until each is decided through its labels (the intended answer, *Void*, the answer); A confirmed alone keeps the hold; *Confirm version B* publishes the key and scores the exam; both confirmations recorded with the operator and the scans; the scores equal grading the same students with the same key as a file |
 | `req_a11_real_backend_reads_a_key_from_answer_sheets_in_setup` | an inferred-key quiz: *Read key from answer sheet…* with a student's sheet gives no key (no marker) and *Put aside* leaves the key unchanged; with the two key sheets the summary is shown and nothing changes until *Confirm every version*, which puts the instructor's key in force (no longer INFERRED, every entry equal to the sheets) |
+| `req_a11_remark_import_on_the_new_exam_form_grades_with_its_key_points_and_objectives` (`req_a11_remark.rs`) | *Import from Remark export…* on the New-exam form with three synthetic workbooks (versions A and B, another section's A): the key hidden (rows carry no letter) until *Reveal key*, every question's exact points (version B's other order: Q01 0.5 points, LO2), four learning objectives "imported, needs review", the key sheet excluded (and a student with every answer right reported for a check), IDs masked; *Use this import* fills 30 questions and versions A,B; a key file beside it refused; graded: keys, points per version and the CLO rows (`Remark import`, per version) equal the workbooks'; the small class leaves learning-objective points open, so the refusal suggests the equal split and *Use the suggested points* gives it; in Setup *Approve imported mappings* records one audited approval and the TP-154 draft watermark goes |
+| `req_a11_remark_import_refusals_name_the_remedy_and_the_suggested_points` | a `.rmx` file refused unopened with the remedy (and nothing to use); a version whose totals leave questions 2 and 3 open refused naming them (no `--points` in the desktop's words) with 0.75 each suggested; *Use the suggested points* imports with "given by you", 6 of 6 totals reproduced |
+| `req_a11_remark_import_in_setup_replaces_the_key` | a quiz graded with an inferred key: Setup's import of an export with other points is shown as not applicable, with why (a graded exam's points are fixed with its stored form map) and what to do, *Apply* disabled; the export with the exam's points is shown (nothing changes), back to the matrix and to the waiting import, *Apply key and points*: key version +1, no longer INFERRED, every entry equal to Remark's Answer Key rows, the message says the objectives were not applied |
+| `req_a11_parallel_run_in_results_shows_the_differences_with_crops` | the synthetic midterm beside its three workbooks: the Restricted / Q-08 banner, tiles equal to omr-app's own comparison, the settled difference Remark read otherwise first with its bubble-row crop, the booklet with no row and the row with no student number (masked), the key sheet, the other section not compared; *Save report* writes every file with the banner and the manifest; the subtitle says the comparison holds nothing, *Queue for review* queues each settled difference (open blocking items rise by as many), the button goes and the subtitle names what waits in Review; *Back to results* |
+| `req_a11_remark_states_fit_the_minimum_window_in_both_themes` | the three states at 1280 × 800, light and dark: every control labelled once and inside the window |
 | `req_a11_demo_data_is_marked_on_every_screen` (demo file) | the DEMO DATA mark on every screen, release refused on demo data, and New exam saying how to open real exams |
 | `req_a11_blind_items_never_show_a_leaked_engine_reading` (demo file) | a backend that sends the engine's reading with blind items: the frame, the sparkline and Enter never show or commit it |
 | `req_a11.rs` (demo) | the review flow, keyboard paths, labels, layouts and screens on the demo backend |

@@ -264,6 +264,26 @@ pub struct ReviewItem {
     /// The probable mis-key an SCO-001 item is about (§12.2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flag: Option<KeyFlagRef>,
+    /// The incumbent's reading of a settled parallel-run difference (MRK-001
+    /// `parallel_run_disagreement`, §23.7): the instructor decides between it and the engine's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incumbent: Option<IncumbentReading>,
+}
+
+/// What the incumbent OMR process read for a question the engine auto-accepted differently
+/// (the parallel run, §23.7).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IncumbentReading {
+    /// The system, e.g. `Remark Office OMR`.
+    pub system: String,
+    /// Its reading as exported (`C`, `BLANK`, `MULTI:AC`, or the cell).
+    pub text: String,
+    /// The same as a decision, when it is one (an option, blank or several marks).
+    pub decision: Option<Decision>,
+    /// The engine's auto-accepted reading when the item was queued.
+    pub engine: Decision,
+    /// Where it comes from (workbook and row).
+    pub source: String,
 }
 
 /// The subject of a probable mis-key item (SCO-001, §12.2): which key entry and which option.
@@ -538,7 +558,8 @@ pub fn group_key(
     h
 }
 
-fn suggestion_of(r: &Response) -> Option<Decision> {
+/// The decision that records response `r` (none for an unreadable one).
+pub(crate) fn suggestion_of(r: &Response) -> Option<Decision> {
     match r {
         Response::Single(o) => Some(Decision::Option(*o)),
         Response::Blank => Some(Decision::Blank),
@@ -678,18 +699,9 @@ fn title(code: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Builds the queue from a session's open subjects (called once after grading).
-pub fn build_queue(
-    session: &Session,
-    option_labels: &[String],
-    id_labels: &[String],
-) -> Vec<ReviewItem> {
-    let mut items: Vec<ReviewItem> = Vec::new();
-    let mut push = |mut it: ReviewItem| {
-        it.id = items.len() as u64 + 1;
-        items.push(it);
-    };
-    let blank_item = |lane, kind, e: &Exception| ReviewItem {
+/// An open item of exception `e`, before its subject is set.
+fn blank_item(lane: Lane, kind: ItemKind, e: &Exception) -> ReviewItem {
+    ReviewItem {
         id: 0,
         lane,
         kind,
@@ -710,6 +722,91 @@ pub fn build_queue(
         store_exceptions: Vec::new(),
         deferrals: 0,
         flag: None,
+        incumbent: None,
+    }
+}
+
+/// The Marks-lane item of question `q` (0-based) of booklet `bi` for exception `e`: its crop
+/// geometry, fills and the engine's proposal (never a key-derived value).
+pub fn mark_item(
+    session: &Session,
+    bi: usize,
+    q: usize,
+    e: &Exception,
+    option_labels: &[String],
+) -> ReviewItem {
+    let qs = &session.booklets[bi].questions[q];
+    let page = session.pages.get(qs.page);
+    let read = page.and_then(|p| p.read.as_ref());
+    let geom = read.and_then(|r| {
+        r.questions
+            .iter()
+            .position(|x| usize::from(x.question) == q)
+            .and_then(|k| r.question_geom.get(k))
+    });
+    let fills: Vec<f32> = geom
+        .map(|g| g.bubbles.iter().map(|b| b.fill).collect())
+        .unwrap_or_default();
+    let (theta, band) = read.map_or((0.2, (0.18, 0.22)), |r| {
+        let t = f32::from(r.theta_sel) / 1024.0;
+        let h = f32::from(r.hysteresis) / 1024.0;
+        (t, (0.08f32.min(t - h), t + h))
+    });
+    // No proposal names an option the exam does not use (MRK-017 option_not_offered).
+    let suggestion = suggestion_of(&qs.recognized.response).filter(|d| match d {
+        Decision::Option(o) => usize::from(*o) < option_labels.len(),
+        Decision::Multi(v) => v.iter().all(|o| usize::from(*o) < option_labels.len()),
+        _ => true,
+    });
+    let top = fills.iter().copied().fold(0.0f32, f32::max);
+    // SYS-032 sits in the lane of the code it contradicts (§13.4).
+    let lane = if e.code == "SYS-032" {
+        Lane::Marks
+    } else {
+        Lane::of(&e.code)
+    };
+    let mut it = blank_item(lane, ItemKind::Mark, e);
+    if e.code.starts_with("REG-")
+        && let Some(r) = remedy_of(e)
+    {
+        it.detail = format!("{}; {r}", it.detail);
+    }
+    it.booklet = Some(bi);
+    it.page = Some(qs.page);
+    it.question = Some(q as u16);
+    it.group_key = group_key(
+        &e.code,
+        e.sub_reason.as_deref(),
+        &format!("q{q}"),
+        suggestion.as_ref(),
+        (top * 10.0) as u8,
+    );
+    it.crop = geom.and_then(|g| {
+        crop_of(
+            qs.page,
+            g,
+            option_labels,
+            Some(&qs.recognized.response),
+            theta,
+            band,
+            0.6,
+        )
+    });
+    it.suggestion = suggestion;
+    it.fills = fills;
+    it
+}
+
+/// Builds the queue from a session's open subjects (called once after grading).
+pub fn build_queue(
+    session: &Session,
+    option_labels: &[String],
+    id_labels: &[String],
+) -> Vec<ReviewItem> {
+    let mut items: Vec<ReviewItem> = Vec::new();
+    let mut push = |mut it: ReviewItem| {
+        it.id = items.len() as u64 + 1;
+        items.push(it);
     };
     // Marks: one item per pending question.
     for (bi, b) in session.booklets.iter().enumerate() {
@@ -723,65 +820,7 @@ pub fn build_queue(
                     omr_model::Exception::must("MRK-001", Severity::Error, omr_model::Scope::Item)
                         .with_detail("not auto-accepted")
                 });
-            let page = session.pages.get(qs.page);
-            let read = page.and_then(|p| p.read.as_ref());
-            let geom = read.and_then(|r| {
-                r.questions
-                    .iter()
-                    .position(|x| usize::from(x.question) == q)
-                    .and_then(|k| r.question_geom.get(k))
-            });
-            let fills: Vec<f32> = geom
-                .map(|g| g.bubbles.iter().map(|b| b.fill).collect())
-                .unwrap_or_default();
-            let (theta, band) = read.map_or((0.2, (0.18, 0.22)), |r| {
-                let t = f32::from(r.theta_sel) / 1024.0;
-                let h = f32::from(r.hysteresis) / 1024.0;
-                (t, (0.08f32.min(t - h), t + h))
-            });
-            // No proposal names an option the exam does not use (MRK-017 option_not_offered).
-            let suggestion = suggestion_of(&qs.recognized.response).filter(|d| match d {
-                Decision::Option(o) => usize::from(*o) < option_labels.len(),
-                Decision::Multi(v) => v.iter().all(|o| usize::from(*o) < option_labels.len()),
-                _ => true,
-            });
-            let top = fills.iter().copied().fold(0.0f32, f32::max);
-            // SYS-032 sits in the lane of the code it contradicts (§13.4).
-            let lane = if e.code == "SYS-032" {
-                Lane::Marks
-            } else {
-                Lane::of(&e.code)
-            };
-            let mut it = blank_item(lane, ItemKind::Mark, &e);
-            if e.code.starts_with("REG-")
-                && let Some(r) = remedy_of(&e)
-            {
-                it.detail = format!("{}; {r}", it.detail);
-            }
-            it.booklet = Some(bi);
-            it.page = Some(qs.page);
-            it.question = Some(q as u16);
-            it.group_key = group_key(
-                &e.code,
-                e.sub_reason.as_deref(),
-                &format!("q{q}"),
-                suggestion.as_ref(),
-                (top * 10.0) as u8,
-            );
-            it.crop = geom.and_then(|g| {
-                crop_of(
-                    qs.page,
-                    g,
-                    option_labels,
-                    Some(&qs.recognized.response),
-                    theta,
-                    band,
-                    0.6,
-                )
-            });
-            it.suggestion = suggestion;
-            it.fills = fills;
-            push(it);
+            push(mark_item(session, bi, q, &e, option_labels));
         }
     }
     // Identity: one item per booklet with an ERROR identity exception.
@@ -1071,6 +1110,7 @@ pub fn sync_flag_items(s: &mut Session, report: Option<&omr_analytics::Analytics
             store_exceptions: Vec::new(),
             deferrals: 0,
             flag: Some(flag),
+            incumbent: None,
         });
         changed = true;
     }

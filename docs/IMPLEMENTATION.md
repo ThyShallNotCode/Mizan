@@ -42,7 +42,16 @@ exports) and reran the real-data rows (EVIDENCE §3.1.1, `acceptance.json` `real
 A third round (EVIDENCE §3.1.2, `real_data.third_round`) made a confident probable mis-key block
 release until the instructor decides it, made flag stability depend on content only, sent
 answers on photographed student sheets to review, gave key sheets read after grading the audited
-path, and re-measured throughput.
+path, and re-measured throughput. A fourth round (EVIDENCE §5.1, `real_data.fourth_round`) verified
+the Remark import and the parallel run: ten defects fixed, each with a regression test (the
+points solver overflowed from about 60 questions, a student whose ID Remark wrote as a word
+ended the rows, one stray far-corner cell aborted the process, ID matches ignored the answers);
+the parallel run on the real exams was performed internally as a development check and its
+figures stay inside the university (spec §3.5, Q-08: the licence review is still open). A fifth
+round (EVIDENCE §5.2) made the parallel run compare the exam's own grades and queue its
+differences so they hold release, refused undetermined learning-objective points and AND keys,
+added the audited approval and replacement of imported CLO mappings, and moved every
+expectation tied to the real exams out of the repository.
 
 | ID | Status | Measured (shared 4-vCPU container) |
 |---|---|---|
@@ -77,6 +86,14 @@ path, and re-measured throughput.
   the key, accepts a second answer, voids the item or keeps the key with a reason and a note.
 - SQLite project store with a SHA-384 hash-chained event log (§14.2–§14.4): the session snapshot bound to the chain (`SnapshotSaved`), projections replayed against their events on open, checkpoints signed with a per-device ECDSA P-384 key and kept outside the project (truncation, re-chained logs and older copies refused with SYS-011), reviewer notes stored by salted reference so they can be erased.
 - Privacy controls of §14.2–§14.4 and §19: project folders and exports owner-only (0700/0600), sync and network folders refused (SYS-015), student numbers masked in CLI output unless revealed, reveals and crop exports recorded in the audit log.
+- Migration from Remark Office OMR (§3.5 item 3, PAR-09), narrowed (see the deferred list):
+  its graded Excel exports become a key file with exact points per version (checked against
+  every total Remark reported, and refused where the export does not determine them), the
+  learning objectives as CLO mappings "imported, needs review" (approved or replaced later by an
+  audited act, `omr clo`), and a version map; the parallel run of §23.7 compares a graded
+  exam's own grades with them in a Restricted report and, on request, queues each settled
+  difference for review, where it holds release and its decision becomes a field label (Q-08:
+  its head-to-head figures stay inside the university). Remark's binary formats are never read.
 - CSV/XLSX/HTML exports (§16.3, §17), listed in a manifest signed with the device key; the release step (§13.4: `ResultsReleased`, superseded by any later change) gates the Blackboard grade-center upload.
 - The end-to-end pipeline in `omr-app` with rayon parallelism.
 - The `omr` CLI.
@@ -97,6 +114,13 @@ path, and re-measured throughput.
 - The DOCX filling of official NCAAA blanks (§11.7): the MVP emits the TP-154 tables as XLSX/CSV/HTML.
 - Encryption at rest and the key hierarchy (§19.2); the MVP uses plain SQLite and owner-only files, with hooks noted.
 - The AI pack (§18).
+- The rest of the Remark migration (§3.5 items 3, 5, 6; §16.3; §23.7): Remark's CSV and SPSS
+  exports (only the graded `.xlsx` Advanced Grade export is read); AND keys and partial credit
+  (`A+C` is refused, not scored); version-mapping and scaled-score tables; Remark's response
+  data as an assessment of its own (TP-154 needs the scans graded here); Remark-compatible
+  exports; in the parallel run, the class learning-objective report (each student's objective
+  subtotals are compared), verify items and two-principal adjudication of its differences
+  (§13.4), and a run in the enclave or on the exam control unit's machines.
 - Phone capture (§7.6) and the phone slice's own calibration (§8.10 step 7): live capture,
   bursts and on-device gates are not built. Photos given as files are read (the CS 522 key
   photos read 58 of 58): a page is a camera capture when its file says so (a colour JPEG placed

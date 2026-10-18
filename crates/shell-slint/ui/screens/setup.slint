@@ -5,7 +5,10 @@ import {
     Theme, Tone, Severity, Card, TopBar, StatusBar, PrimaryButton, SecondaryButton, StatusPill, Tag,
     MeterBar, SeverityGlyph, FocusRing, Breadcrumb, TableRow, TableHeaderCell, GhostButton,
 } from "../theme.slint";
-import { App, SetupVM, MapRow, MapCell, KsRow, KsScan } from "../state.slint";
+import { App, SetupVM, MapRow, MapCell, KsRow, KsScan, RemarkVM } from "../state.slint";
+import {
+    RemarkFields, RemarkRefusal, RemarkImportCard, RemarkSideCard, RemarkApplyCard,
+} from "remark.slint";
 import {
     Icons, ThemeToggle, Centered, SectionLabel, StatusText, KVLine, EditCell, StepIndicator,
     EmptyState, MessageText, TextField, Segment, SegmentGroup,
@@ -212,6 +215,17 @@ component MatrixCard inherits Card {
                     font-size: Theme.text-xs;
                     color: Theme.ink-2;
                     wrap: word-wrap;
+                }
+            }
+            if RemarkVM.context == 2 && (RemarkVM.has || RemarkVM.refused): VerticalLayout {
+                alignment: start;
+                SecondaryButton {
+                    text: RemarkVM.refused ? "Remark import · refused" : "Remark import · review";
+                    accessible-description: "Shows the Remark import read for this exam, waiting for your review";
+                    clicked => {
+                        SetupVM.key-open = false;
+                        RemarkVM.setup-open = true;
+                    }
                 }
             }
             if SetupVM.has-keysheets: VerticalLayout {
@@ -471,7 +485,7 @@ component CellCard inherits Card {
 
 component CloCard inherits Card {
     title: "Course learning outcomes";
-    subtitle: SetupVM.clos.length == 0 ? "No CLOs in this exam (grade with --clo clo.csv)" : "Share of the exam's evidence per CLO";
+    subtitle: SetupVM.clos.length == 0 ? "No CLOs in this exam: load a CLO file below" : "Share of the exam's evidence per CLO";
     vertical-stretch: 1;
     ScrollView {
         vertical-stretch: 1;
@@ -531,6 +545,44 @@ component CloCard inherits Card {
                 accessible-label: c.code + " share of the evidence";
             }
         }
+        }
+    }
+    // imported mappings (§11.2): approved here by an audited act, or replaced from a CLO file
+    if SetupVM.mappings-proposed > 0: VerticalLayout {
+        spacing: Theme.space-xs;
+        Text {
+            text: SetupVM.mappings-proposed + " imported mapping row(s) need review (imported, needs review): the TP-154 tables are a draft until you approve them";
+            font-size: Theme.text-2xs;
+            color: Theme.warning;
+            wrap: word-wrap;
+            accessible-role: AccessibleRole.text;
+        }
+        PrimaryButton {
+            text: "Approve imported mappings";
+            accessible-description: "Records you as the approver of every imported CLO mapping row (an audited approval); the TP-154 tables leave the draft watermark";
+            clicked => {
+                SetupVM.approve-mappings();
+            }
+        }
+    }
+    HorizontalLayout {
+        spacing: Theme.space-sm;
+        TextField {
+            horizontal-stretch: 1;
+            label: "CLO file";
+            placeholder: "clo.csv: the CLOs and item mapping (replaces any in force)";
+            text <=> SetupVM.clo-path;
+            mono: true;
+        }
+        Centered {
+            GhostButton {
+                text: "Replace CLOs";
+                enabled: SetupVM.clo-path != "";
+                accessible-description: "Replaces this exam's CLOs and item to CLO mapping with the file (audited); the outcomes recompute, nothing is graded again";
+                clicked => {
+                    SetupVM.replace-clos(SetupVM.clo-path);
+                }
+            }
         }
     }
 }
@@ -658,6 +710,48 @@ component KeySheetBar inherits Rectangle {
                     text: "Cancel";
                     clicked => {
                         SetupVM.ks-bar-open = false;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Import from Remark export (§3.5, PAR-09): Remark's graded Excel workbooks, read and shown for
+// review; the key and its points per version replace the exam's only when applied.
+component RemarkBar inherits Rectangle {
+    background: Theme.surface-raised;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                RemarkVM.setup-bar = false;
+                return accept;
+            }
+            return reject;
+        }
+        HorizontalLayout {
+            padding-left: Theme.space-xl;
+            padding-right: Theme.space-xl;
+            padding-top: Theme.space-sm;
+            padding-bottom: Theme.space-sm;
+            spacing: Theme.space-md;
+            Text {
+                text: "Import from Remark";
+                font-size: Theme.text-md;
+                font-weight: Theme.weight-semibold;
+                color: Theme.ink;
+                vertical-alignment: center;
+            }
+            RemarkFields {
+                horizontal-stretch: 1;
+            }
+            Centered {
+                GhostButton {
+                    text: "Cancel";
+                    clicked => {
+                        RemarkVM.setup-bar = false;
                     }
                 }
             }
@@ -1057,6 +1151,9 @@ export component SetupScreen inherits VerticalLayout {
     in property <length> win-w: 1440px;
     in property <length> win-h: 900px;
     property <bool> narrow: root.win-w < 1400px;
+    // a long key tag ("Key v1 · from key sheets · NOT CONFIRMED") leaves no room for the step
+    // names beside the top bar's buttons: the stepper then shows numbers only
+    property <bool> compact-bar: root.narrow || SetupVM.key-status.character-count > 24;
     property <length> left-w: root.narrow ? 248px : 284px;
     property <length> right-w: root.narrow ? 264px : 296px;
     // matrix width = window − rail − padding − gutters − side columns; CLO cells share what the
@@ -1072,32 +1169,32 @@ export component SetupScreen inherits VerticalLayout {
             StepIndicator {
                 number: 1;
                 text: "Template";
-                compact: root.narrow;
+                compact: root.compact-bar;
                 state: 1;
             }
             StepIndicator {
                 number: 2;
                 text: "Forms and key";
-                compact: root.narrow;
+                compact: root.compact-bar;
                 state: SetupVM.key-published ? 1 : 2;
             }
             StepIndicator {
                 number: 3;
                 text: "CLO mapping";
-                compact: root.narrow;
+                compact: root.compact-bar;
                 state: SetupVM.lints.length > 0 || SetupVM.clos.length == 0 ? 2 : 1;
             }
             // without a roster no identity is matched: shown as a warning, never as done
             StepIndicator {
                 number: 4;
                 text: "Roster";
-                compact: root.narrow;
+                compact: root.compact-bar;
                 state: SetupVM.has-roster ? 1 : 2;
             }
             StepIndicator {
                 number: 5;
                 text: "Policies";
-                compact: root.narrow;
+                compact: root.compact-bar;
                 state: 1;
             }
         }
@@ -1110,12 +1207,26 @@ export component SetupScreen inherits VerticalLayout {
                 }
             }
             Centered {
+                SecondaryButton {
+                    text: root.compact-bar ? "Remark…" : "Import from Remark…";
+                    enabled: RemarkVM.can-setup;
+                    accessible-label: "Import from Remark export…";
+                    accessible-description: "Reads Remark's graded Excel exports: the key with exact points per version and the learning objectives, shown for your review before anything changes";
+                    clicked => {
+                        SetupVM.key-open = false;
+                        SetupVM.ks-bar-open = false;
+                        RemarkVM.setup-bar = !RemarkVM.setup-bar;
+                    }
+                }
+            }
+            Centered {
                 PrimaryButton {
                     text: "Replace key…";
                     enabled: SetupVM.can-replace-key;
                     accessible-description: "Replaces the whole answer key from a key file: a new key version, rescored and audited";
                     clicked => {
                         SetupVM.ks-bar-open = false;
+                        RemarkVM.setup-bar = false;
                         SetupVM.key-open = !SetupVM.key-open;
                     }
                 }
@@ -1127,12 +1238,60 @@ export component SetupScreen inherits VerticalLayout {
     }
     if SetupVM.available && SetupVM.key-open: KeyBar { }
     if SetupVM.available && SetupVM.ks-bar-open: KeySheetBar { }
+    if SetupVM.available && RemarkVM.setup-bar: RemarkBar { }
     if !SetupVM.available: EmptyState {
         vertical-stretch: 1;
         title: "No setup for this exam yet";
         text: "Choose a template to start.";
     }
-    if SetupVM.available && SetupVM.has-keysheets && SetupVM.ks-open: HorizontalLayout {
+    // the Remark import read here, for review (it replaces the matrix until applied or put aside)
+    if SetupVM.available && RemarkVM.setup-open && RemarkVM.context == 2: HorizontalLayout {
+        vertical-stretch: 1;
+        padding: Theme.space-xl;
+        spacing: Theme.space-lg;
+        if RemarkVM.refused: VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: Theme.space-lg;
+            RemarkRefusal {
+                message: RemarkVM.refusal;
+                remedy: RemarkVM.remedy;
+                suggestion: RemarkVM.suggestion;
+                use-suggested => {
+                    RemarkVM.use-suggested();
+                }
+            }
+            HorizontalLayout {
+                alignment: start;
+                GhostButton {
+                    text: "Key and CLO mapping";
+                    accessible-description: "Back to the answer key and CLO mapping matrix";
+                    clicked => {
+                        RemarkVM.setup-open = false;
+                    }
+                }
+            }
+            Rectangle {
+                vertical-stretch: 1;
+            }
+        }
+        if !RemarkVM.refused: RemarkImportCard {
+            horizontal-stretch: 1;
+        }
+        if !RemarkVM.refused: VerticalLayout {
+            width: root.narrow ? 340px : 380px;
+            spacing: Theme.space-lg;
+            RemarkApplyCard {
+                show-back: true;
+                back => {
+                    RemarkVM.setup-open = false;
+                }
+            }
+            RemarkSideCard {
+                vertical-stretch: 1;
+            }
+        }
+    }
+    if SetupVM.available && !(RemarkVM.setup-open && RemarkVM.context == 2) && SetupVM.has-keysheets && SetupVM.ks-open: HorizontalLayout {
         vertical-stretch: 1;
         padding: Theme.space-xl;
         spacing: Theme.space-lg;
@@ -1147,7 +1306,7 @@ export component SetupScreen inherits VerticalLayout {
             KeySheetScansCard { }
         }
     }
-    if SetupVM.available && !(SetupVM.has-keysheets && SetupVM.ks-open): HorizontalLayout {
+    if SetupVM.available && !(RemarkVM.setup-open && RemarkVM.context == 2) && !(SetupVM.has-keysheets && SetupVM.ks-open): HorizontalLayout {
         vertical-stretch: 1;
         padding: Theme.space-xl;
         spacing: Theme.space-lg;

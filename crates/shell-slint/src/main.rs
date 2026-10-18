@@ -9,6 +9,7 @@
 //!             [--key key.csv | --infer-key] [--roster r.csv|.xlsx] [--clo clo.csv]
 //!             [--out DIR] …                  grades in the background, live on the Scan screen
 //! any of these + --screenshot <dir> [--theme light|dark] [--size WxH] [--shots a,b]
+//!             [--remark <graded.xlsx… | folder>] [--remark-setup <…>]   the Remark screens
 //! ```
 //!
 //! The generated UI code lives in the library (`shell_slint::ui`, the audited R6 exception);
@@ -33,7 +34,7 @@ use std::rc::Rc;
 
 const USAGE: &str = "usage: omr-desktop [--demo | --project <dir> | --workspace <dir> | --grade <scans…> GRADE]
                    [--operator <name>] [--theme light|dark]
-                   [--screenshot <dir> [--size WxH] [--shots name,name]]
+                   [--screenshot <dir> [--size WxH] [--shots name,name] [--remark <xlsx…>]]
   (no source)          the workspace used last time, else ~/OMR Exams (created, private)
   --demo               invented demo data, with a banner (nothing is read or written; the
                        default of --screenshot)
@@ -49,6 +50,9 @@ const USAGE: &str = "usage: omr-desktop [--demo | --project <dir> | --workspace 
   --screenshot <dir>   render every screen headlessly (software renderer, 1440x900) to PNGs
   --size <WxH>         screenshot window size, e.g. 1280x800 (the smallest supported)
   --shots <names>      only these screens, e.g. review,results
+  --remark <xlsx…>     Remark's graded workbooks (files or a folder) for the Remark screens:
+                       exams-remark, setup-remark, results-remark (real exams only)
+  --remark-setup <xlsx…>  other workbooks for setup-remark (the first exam they apply to)
   --theme <t>          light or dark (screenshots: both when omitted)";
 
 #[derive(Default)]
@@ -90,6 +94,11 @@ struct Args {
     theme: Option<bool>,
     size: Option<(u32, u32)>,
     shots: Option<Vec<String>>,
+    /// `--remark`: Remark's graded workbooks (files, or a folder of them) for the Remark
+    /// screenshots (the import on the New-exam form and in Setup, the parallel run).
+    remark: Vec<PathBuf>,
+    /// `--remark-setup`: the workbooks for Setup's import shot (the first exam they apply to).
+    remark_setup: Vec<PathBuf>,
     /// `--workspace` given together with `--grade`: list it beside the new exam.
     workspace: Option<PathBuf>,
 }
@@ -109,6 +118,8 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Args, String> {
         theme: None,
         size: None,
         shots: None,
+        remark: Vec::new(),
+        remark_setup: Vec::new(),
         workspace: None,
     };
     let mut g = Grade::default();
@@ -205,6 +216,21 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Args, String> {
                         .map(|s| s.trim().to_string())
                         .collect(),
                 )
+            }
+            "--remark" | "--remark-setup" => {
+                let list = if a == "--remark" {
+                    &mut out.remark
+                } else {
+                    &mut out.remark_setup
+                };
+                while let Some(p) = args.next_if(|v| !v.starts_with("--")) {
+                    list.push(p.into());
+                }
+                if list.is_empty() {
+                    return Err(format!(
+                        "{a} needs Remark's graded workbooks (.xlsx) or their folder"
+                    ));
+                }
             }
             "-h" | "--help" => return Err(String::new()),
             other => return Err(format!("unknown argument {other:?}")),
@@ -480,16 +506,28 @@ fn screenshots(args: &Args, dir: &Path, built: &Built) -> ExitCode {
                 eprintln!("omr-desktop: grading failed: {e}");
                 return ExitCode::FAILURE;
             }
-            screenshot::real_shots(&*a.borrow())
+            let mut shots = screenshot::real_shots(&*a.borrow());
+            if !args.remark.is_empty() {
+                shots.extend(screenshot::remark_shots());
+            }
+            shots
         }
     };
-    match screenshot::render_shots(
+    let remark = match (workbooks(&args.remark), workbooks(&args.remark_setup)) {
+        (Ok(workbooks), Ok(setup)) => screenshot::RemarkFiles { workbooks, setup },
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("omr-desktop: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match screenshot::render_shots_with(
         dir,
         &themes,
         size,
         built.dynamic(),
         &shots,
         args.shots.as_deref(),
+        &remark,
     ) {
         Ok(paths) => {
             for p in paths {
@@ -502,6 +540,36 @@ fn screenshots(args: &Args, dir: &Path, built: &Built) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// The workbooks of `--remark`: files as given, a folder's `.xlsx` files in name order (the
+/// binary lists the folder, R4).
+fn workbooks(given: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+    let mut out = Vec::new();
+    for p in given {
+        if p.is_dir() {
+            let mut files: Vec<PathBuf> = std::fs::read_dir(p)
+                .map_err(|e| {
+                    format!(
+                        "{}: {e}; give the folder of Remark's workbooks",
+                        p.display()
+                    )
+                })?
+                .filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|f| {
+                    f.extension()
+                        .and_then(|x| x.to_str())
+                        .is_some_and(|x| x.eq_ignore_ascii_case("xlsx"))
+                })
+                .collect();
+            files.sort();
+            out.extend(files);
+        } else {
+            out.push(p.clone());
+        }
+    }
+    Ok(out)
 }
 
 fn run_windowed(

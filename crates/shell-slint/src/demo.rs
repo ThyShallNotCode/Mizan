@@ -2181,6 +2181,7 @@ fn cs211_setup() -> ExamSetup {
     ExamSetup {
         exam: ExamId(CS211.into()),
         roster_students: 120,
+        mappings_proposed: 0,
         template: TemplateInfo {
             id: "iau-ccsit-v1".into(),
             kind: TemplateKind::Legacy,
@@ -2261,6 +2262,7 @@ fn math101_setup() -> ExamSetup {
     ExamSetup {
         exam: ExamId(MATH101.into()),
         roster_students: 120,
+        mappings_proposed: 0,
         template: TemplateInfo {
             id: "gen:a4-mcq-40x4 rev 3".into(),
             kind: TemplateKind::Generated,

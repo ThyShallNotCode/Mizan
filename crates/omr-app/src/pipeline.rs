@@ -1759,12 +1759,7 @@ pub fn provided_key(
     forms: &[crate::exam::FormKey],
     version: u32,
 ) -> Result<EffectiveKey, AppError> {
-    let n = usize::from(def.questions);
-    let points = if def.points.is_empty() {
-        vec!["1".to_string(); n]
-    } else {
-        def.points.clone()
-    };
+    let (points, form_points) = EffectiveKey::points_from(def);
     let mut cells = Vec::new();
     for f in &def.forms {
         let k = forms.iter().find(|k| &k.form == f).ok_or_else(|| {
@@ -1781,12 +1776,15 @@ pub fn provided_key(
                 .collect::<Vec<_>>(),
         );
     }
-    let shared = cells.iter().all(|c| *c == cells[0]);
+    // Forms share master items only when they share the key, the points and the mapping.
+    let shared =
+        cells.iter().all(|c| *c == cells[0]) && form_points.is_empty() && !def.has_form_mapping();
     Ok(EffectiveKey {
         version,
         inferred: false,
         forms: cells,
         points,
+        form_points,
         shared_items: shared,
     })
 }
@@ -1802,11 +1800,7 @@ fn resolve_key(
     key_sheets: &crate::model::KeySheets,
 ) -> Result<Option<EffectiveKey>, AppError> {
     let n = usize::from(def.questions);
-    let points = if def.points.is_empty() {
-        vec!["1".to_string(); n]
-    } else {
-        def.points.clone()
-    };
+    let (points, form_points) = EffectiveKey::points_from(def);
     let key = match &def.key {
         KeySource::None => None,
         KeySource::Provided { forms } => Some(provided_key(def, forms, 1)?),
@@ -1819,6 +1813,7 @@ fn resolve_key(
                 shared_items: def.forms.len() == 1,
                 forms: cells,
                 points,
+                form_points,
             })
         }
     };

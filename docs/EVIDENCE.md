@@ -52,7 +52,13 @@ after the instructors' keys arrived, verified the photo registration fix (F1), t
 flag stability: 6 more defects found and fixed, each with a regression test that fails on the
 code before its fix (§3.1.1). A third round found that a confident mis-key never reached the
 release gate, and eleven more issues (photos, key-sheet provenance, flag stability, remedies,
-documentation); all are fixed, each code fix with a regression test (§3.1.2).
+documentation); all are fixed, each code fix with a regression test (§3.1.2). A fourth round
+verified the Remark import and the parallel run: ten defects fixed, each with a regression
+test (§5.1); the real-data figures of that run stay inside the university (§5). A fifth round
+(§5.2) made the parallel run compare the exam's own grades, queue its differences so they hold
+release, refuse points the export cannot pin down and AND keys read as "either", let imported
+CLO mappings be approved or replaced without grading again, and moved every expectation tied to
+the real exams out of the repository.
 
 Security and code review (§3.2): of 26 findings above "low", 21 are fixed (18 with regression
 tests; CR-05, CR-06 and CR-08 were documentation), 3 in part (SEC-11, CR-09, CR-15: the rest is
@@ -412,8 +418,8 @@ summary to confirm, each row with its printed question number) and scan-keysheet
 
 **Result: pass.** **Caveats:** the app has never run in a real window or on Windows (§7): the
 tests use Slint's testing backend and the screenshots its software renderer. GUI gaps: no
-keymap editor, and the roster and CLO file are chosen when the exam is created (the CLI's
-`omr grade` options), not replaced later from the app.
+keymap editor, and the roster is chosen when the exam is created (the CLI's `omr grade`
+options), not replaced later from the app (the CLO file can be, in Setup, since §5.2).
 
 ## 3. The common cases (C1–C10)
 
@@ -648,22 +654,91 @@ sheets changes nothing. It rests on the agent-adjudicated reference labels (§4)
 verified by agents (by eye, and for ARTI 503 also by the engine); the instructors have not yet
 confirmed them in the app themselves.
 
-## 5. A comparison with Remark Office OMR
+## 5. Remark Office OMR: import and parallel run
 
-The owner reported that Remark Office OMR found some of these sheets hard. A fair comparison
-needs, for the same five PDFs:
-1. **The answer keys** for CS 522 and ARTI 503 (versions A and B), so both systems score
-   against the same key (supplied since: §4.1).
-2. **Remark's output**: the per-question responses it read for every sheet (not only totals),
-   its exception or review list, and the template and settings used (Remark version, bubble
-   thresholds, bitonal or gray processing).
-3. Optionally, Remark's processing time and the number of sheets a person had to look at.
+The owner supplied Remark Office OMR's graded Excel exports of both exams (per section and
+version). Two tools read them, and both are tested on synthetic workbooks laid out as Remark's
+export (invented IDs and names):
+- **`omr import remark`** (`crates/omr-app/src/remark.rs`; spec §3.5 item 3, PAR-09) turns the
+  exports into a key file with exact points per version, the learning objectives as weight-1
+  CLO mappings "imported, needs review", and a version map. Every total Remark reported, and
+  every learning-objective subtotal, is reproduced exactly before anything is written;
+  otherwise the import stops and names the rows, the questions or the files. Tests:
+  `omr-app/tests/remark_import.rs`, `omr-scoring` `points::tests`, `omr-cli/tests/remark.rs`.
+- **`omr compare remark`** (`crates/omr-app/src/parallel.rs`; spec §23.7) sets a graded exam
+  beside the exports: per question, per student with the exam's own totals (its score run)
+  beside Remark's, the points that differ, identity differences, the learning objectives'
+  subtotals, and the key sheets Remark graded as students. With `--queue` (desktop: *Queue for
+  review*) every settled difference from an auto-accepted answer is a review item that holds
+  release, and each decision is recorded as a field label. Its report carries the Restricted
+  banner in every file, the licence-review (Q-08) status, a signed manifest and an
+  `ExportCreated` event. Tests: `omr-app/tests/remark_compare.rs`, `omr-cli/tests/remark.rs`.
 
-With these, every question where the two systems differ would be adjudicated on a 600-dpi
-zoom by two people, and both systems' silent errors and review rates reported side by side.
-Agreement between the two systems is never counted as a label (shared errors are invisible,
-spec §23.1), and publishing figures against Remark outside the university needs the licence
-review the spec names (Q-08).
+A **parallel run** on the two real exams was performed internally with these tools (the
+env-gated `crates/omr-app/tests/real_iau_remark.rs`, `OMR_REMARK_DIR`): a development check by
+the agents on data the owner supplied, not the parallel run of a pilot. The licence review the
+spec requires for parallel runs and benchmarking (Q-08: the university's legal affairs, due
+2026-12-01) is **still open**, and §23.7 asks for the comparison to run in the enclave or on the
+exam control unit's machines with agents receiving counts. Its figures are held inside the
+university and are **not in this repository**: the committed test asserts only what holds for
+any exam, and what the run found is checked against a restricted expectations file kept with
+the other restricted data (`OMR_REMARK_EXPECT`); `omr-archtest` fails the build on a
+hard-coded count or identity-difference kind in a committed Remark test. Remark's binary files
+(`.rmx`, `.aky`) were never opened. Agreement between the two systems is never counted as a
+label (shared errors are invisible, spec §23.1).
+
+### 5.1 Verification of the import and the parallel run
+
+An adversarial verification reran both tools on the real exports (aggregates only, kept inside
+the university), tried to break them, and fixed ten defects, each with a regression test that
+fails on the code before it:
+
+| What was wrong | What happens now | Test |
+|---|---|---|
+| (high) The exact solver eliminated in 128-bit fractions, whose size grows like the minors of the answer matrix: it overflowed from about 60 questions, so an export without learning objectives of a 60–100-question exam could not be imported, and the refusal named no remedy | Elimination modulo the prime 2⁶¹ − 1 (exact, no growth); each question's points are rebuilt as the fraction they reduce from and verified exactly against every total; a refusal is confirmed modulo a second prime and names what to do. A 100-question, 300-student system solves in under a second, and a hand-edited total among its rows is named | `omr-scoring` `points::tests::a_hundred_question_exam_is_solved_exactly_without_overflow`; `remark_import.rs::a_hundred_question_export_is_solved_from_the_totals` |
+| (high) The first row whose student-ID cell had no digit was taken for the footer, and every row below it was skipped: a student whose ID Remark wrote as a word (`ERROR`, `BLANK`, an Excel `#N/A`) silently removed the rest of the class | A row is a footer only with statistics, not answers, in its answer columns (or a known label, or no total), each row judged on its own; a second `Answer Key` row (several tests in one report) is refused | `remark_import.rs::a_student_row_whose_id_remark_could_not_read_does_not_end_the_rows` |
+| (high) Worksheets were read as dense grids: one value at the far corner (`XFD1048576`) of an 8 KB workbook made the reader request 549 GB and the process aborted, the desktop app with it; roster workbooks too | Cells are streamed and kept sparse (`omr-app` `xlsx.rs`); a value beyond 100,000 rows or 2,048 columns is refused naming its cell; a workbook whose parts declare more than 512 MB decompressed is refused before it is opened | `remark_import.rs::a_stray_value_at_the_far_corner_is_refused_not_an_abort`, `…::a_workbook_whose_parts_inflate_beyond_any_export_is_refused` |
+| An ID match was taken whatever the answers: a booklet carrying another section's student's number was paired with that student's row, which put that section in scope and listed all its students as rows with no booklet | An ID match must agree as two readings of one sheet do (half the answers, and half of those where either departs from the key); otherwise both sides go on to answer pairing, and the ID match is paired last and reported ("same student ID, answers of another sheet") | `remark_compare.rs::a_booklet_with_another_students_number_is_paired_with_its_own_row` |
+| Workbooks of another test of the same students (same question count) were compared booklet by booklet | When nothing pairs as a reading of the same sheet, the workbooks are refused | `remark_compare.rs::workbooks_of_another_test_of_the_same_students_are_refused` |
+| A learning-objective header naming a question the export does not have (`Q2 (7-40)` on a 10-question test) was dropped silently, with its CLO | Refused: the two reports are not of one test. Questions in no objective, or in several, are named in the summary | `remark_import.rs::learning_objectives_of_another_test_or_with_gaps_are_named` |
+| A student ID Excel had turned into `2.28E+09` was kept as an ID and, paired by answers, reported as one Remark could not read | The import says how many IDs lost digits and how to export them again; the comparison says the ID lost digits in Excel | `remark_import.rs::an_id_excel_turned_into_scientific_notation_is_said` |
+| A workbook given twice counted every student twice | Refused naming both files | `remark_import.rs::a_workbook_given_twice_is_refused` |
+| Confirming key sheets shared one item set across versions whenever their answers agreed, so a version with its own points (`form_points`, as the import writes them) was scored with version A's points | The confirmation applies the key file's rule: the same answers, the same points and no version-specific CLO row | `key_sheets.rs::confirmed_key_sheets_keep_each_versions_points` |
+| With learning objectives imported per version, a cell of the Setup grid (a printed question and a CLO) stands for several rows; editing its weight or note changed the first matching row only, one version's, silently | Refused with the way to change them (the `form` column of `clo.csv`, then grade again with it) | `remark_compare.rs::a_mapping_cell_that_stands_for_several_versions_rows_is_not_edited_silently` |
+
+### 5.2 Fifth round: the exam's own grades, the hold on release, points and CLOs
+
+A fifth review raised eight findings above "low" (F1–F8, F12) and five low ones (F9–F11, F13).
+Each was reproduced first (F1 and F4 also on the reviewer's own reproductions); each code fix
+has a
+regression test that fails on the code before it, and the gated real-data tests were rerun in
+release on the fixed code (pass or fail only here).
+
+| Finding | What was wrong | What happens now | Tests |
+|---|---|---|---|
+| F1 (high) | The comparison recomputed "our" total from the answers with Remark's imported points and its own single-answer rule: an exam graded at 1 point per question read as "every settled total equal to Remark's", and the report never said that the exam's points differ | The totals are the exam's score run (its points, voids and policy: the figures it releases), compared with Remark's total **and total possible**; the questions whose points differ and each version whose maximum differs are listed and warned about (CLI, HTML, desktop tile, `summary.json`); the recomputation with Remark's key and points is kept as a labelled "answers only" check of the readings | `remark_compare.rs::the_totals_are_the_exams_own_grades_not_a_recomputation_with_remarks_points` |
+| F2 (high) | §23.7: every difference from an auto-accepted answer is adjudicated before release; the comparison held nothing, recorded nothing, while the HTML, the desktop and the CLI said the opposite | `queue_parallel_differences` (`omr compare remark --queue`, desktop *Queue for review*) makes each settled difference from an auto-accepted answer a Marks-lane MRK-001 `parallel_run_disagreement` (ERROR) item with both readings and its bubble row: the answer waits for review, the total is provisional and release is held; accepting keeps the exam's reading, another answer needs a reason; each decision is a `FieldLabelRecorded` event (engine loss, incumbent loss); the comparison is `ParallelRunCompared`; open items survive a later batch; refused on released results. Every text now says whether the report holds release | `remark_compare.rs::settled_differences_queued_for_review_hold_release_and_become_field_labels`, `…::a_queued_parallel_difference_survives_a_later_batch`; `shell-slint/tests/req_a11_remark.rs` |
+| F3 (high) | The committed gated test hard-coded what the parallel run found on the real exams, which with `acceptance.json` recording it as passed disclosed head-to-head facts (Q-08) | The committed test asserts only invariants that hold for any exam; what the run found is checked against `OMR_REMARK_EXPECT`, restricted and outside the repository; its counts go only to the private report folder; a fitness test rejects hard-coded counts and identity-difference kinds in committed Remark tests | `real_iau_remark.rs`; `omr-archtest/tests/rules.rs::head_to_head_figures_of_the_real_exams_stay_out_of_the_repository` |
+| F4 | A learning objective's points were split equally over its questions and only checked against the totals: when two of its questions were answered right by exactly the same students any split fits, and the guess was written as exact | The equal split is taken only when the totals and the group points allow no other; otherwise the import is refused naming the group, its questions and the equal split as a hint (`--points`, or the desktop's *Use the suggested points*). The real ARTI 503 exports still import (their points are determined) | `remark_import.rs::a_learning_objective_split_the_totals_cannot_pin_down_is_refused_not_guessed` |
+| F5 | Imported learning objectives kept TP-154 in draft with no audited way to approve or replace them; versions whose objectives differ, and the domain K default, went unsaid | `omr clo approve` / `omr clo replace` and Setup's *Approve imported mappings* / *Replace CLOs*: an audited `MappingApproved` (the approver named) or `MappingReplaced`, the outcomes recomputed from the same scores; the import notes each objective's points and questions per version, warns when they differ, and says every CLO is in domain K | `remark_compare.rs::imported_learning_objectives_are_approved_or_replaced_without_grading_again`; `req_a11_remark.rs` |
+| F6 | `A+C` and `A&C` were read as "either answer"; the spec's Remark syntax means "all of them" | AND keys (`+`, `&`, `and`) are refused in key files and Remark's Answer Key row with what to write instead; not scored yet | `exam` `tests::key_entries_parse`, `instructor_files` `c5_key_files_in_every_common_layout_read_the_same_key` |
+| F7 | IMPLEMENTATION listed the Remark migration as built while most of §3.5 items 3, 5 and 6 were not | The narrowed parts are listed as deferred with their spec sections; the learning objectives' subtotals (CLO results, §3.5 item 6) are now compared | `remark_compare.rs::the_parallel_run_reports_agreements_differences_and_identities` |
+| F8 | The migration's limits were not in the owner-facing docs | README §2, §5, §8 and §7 below list them with their workarounds; the Setup grid labels a cell that stands for one version's rows; the desktop's *Replace key…* reads `points_A`/`points_B`; a `.csv` in the desktop's Compare field gives handwritten IDs | `remark_compare.rs::a_mapping_cell_that_stands_for_several_versions_rows_is_not_edited_silently` |
+| F9 (low) | `scripts/acceptance.sh` ran neither gated scoring nor Remark test, and a rerun would have dropped the later rounds from `acceptance.json`; the "100-question" test used 70 | Both gated tests run when their data is given (pass or fail recorded, nothing else); the report carries the recorded rounds forward; the test uses 100 questions | `remark_import.rs::a_hundred_question_export_is_solved_from_the_totals` |
+| F10 (low) | A perfect score with no booklet (another section's student) was called a key sheet and removed from the "without key sheets" statistics | Only an ID of one repeated digit is a key sheet; such a row is a *possible key sheet or perfect score*, with the statistics both with and without it | `remark_compare.rs::a_perfect_score_without_a_booklet_is_a_possible_key_sheet_never_counted_as_one` |
+| F11 (low) | Nothing said the Q-08 review is open or let a decision stop a comparison | README and §5 say so; the CLI and the report state the licence review as recorded in `licence_review.json` (private key folder), and a recorded refusal stops the comparison | `remark_compare.rs::the_licence_review_is_stated_and_a_refusal_stops_the_comparison` |
+| F12 | The figures prepared for the owner, outside the repository, were out of date | Their scratch tool was fixed and the figures re-derived from the gated run; they stay outside the repository | — (scratch only) |
+| F13 (low) | `omr import remark` wrote the exam-confidential key with no manifest or label | A signed `manifest.json` lists every file's and every source workbook's SHA-384 under the `restricted` label | `omr-cli/tests/remark.rs` |
+
+Also checked, without a defect: a workbook re-saved by LibreOffice, or rewritten in Strict Open
+XML (as Excel's "Strict Open XML Spreadsheet" saves it), reads like the original; mismatched
+question counts, keys or learning objectives that differ between the workbooks of a version,
+an empty answer cell, a total no points reproduce, IDs typed as numbers (lost leading zeros),
+duplicate IDs across sections and a full-marks row under a real-looking ID behave as described
+in `crates/omr-app/README.md`. Every file of the report carries the Restricted banner (the
+manifest its classification), no student name is read or written, the CLI prints counts and
+masked IDs only, and a scan of every changed repository file finds no student ID, name or key
+from the real exports.
 
 ## 6. Measurement conditions
 
@@ -678,19 +753,24 @@ review the spec names (Q-08).
 Timings on this machine are therefore conservative. The spec's throughput targets are set for
 reference laptops (§21.1), which were not available.
 
-**Reproduce.** `scripts/acceptance.sh` runs everything above and rewrites
-`docs/evidence/acceptance.json`. The real-data rows run only when the data's location is given
-(`OMR_IAU_PDF_DIR`, `OMR_IAU_REFERENCE`, `OMR_IAU_DIR`); their outputs stay on the evaluation
-machine.
+**Reproduce.** `scripts/acceptance.sh` runs the A1–A11 rows, the common cases and the
+adversarial suite, and rewrites `docs/evidence/acceptance.json`, carrying the later
+verification rounds recorded there forward. The real-data rows run only when the data's
+location is given (`OMR_IAU_PDF_DIR`, `OMR_IAU_REFERENCE`, `OMR_IAU_DIR`; `OMR_IAU_KEYS` adds
+the scoring with the real keys, `OMR_REMARK_DIR` the parallel run with Remark, recorded as pass
+or fail only, its expectations in `OMR_REMARK_EXPECT`); their outputs stay on the evaluation
+machine. The targeted reruns of the later rounds were run by hand, as each round says.
 
 ## 7. Known gaps
 
 These limits apply to the MVP as measured here.
 
 **Not proven yet**
-- **Identity against a real roster and a comparison with Remark** are not done (§5). Scoring on
-  the real exams is proven with keys verified by agents (§4.1) and read from the instructors'
-  key sheets, not yet confirmed by the instructors in the app.
+- **Identity against a real roster** is not done. A parallel run with Remark was performed
+  internally as a development check (§5); its figures stay inside the university, and the
+  licence review it needs (Q-08) is still open. Scoring on the real exams is proven
+  with keys verified by agents (§4.1) and read from the instructors' key sheets, not yet
+  confirmed by the instructors in the app.
 - **Platforms.** Built and tested on Linux only; Windows 10/11, the spec's primary platform,
   and macOS have not been built, and there is no installer (spec §24). The desktop app has run
   headless (the testing backend and software-rendered screenshots), never in a real window.
@@ -755,6 +835,26 @@ These limits apply to the MVP as measured here.
   correlation, so its CI is a normal interval of the upper-group proportion difference, and the
   CI ends are applied below N = 1,000 too, which makes small classes conservative.
 
+**Migration from Remark Office OMR** (spec §3.5, §16.3, §23.7), each with its workaround
+- Only Remark's graded Excel (`.xlsx`) Advanced Grade export is read. Its CSV and SPSS exports,
+  version-mapping and scaled-score tables, Remark-compatible exports, and Remark's response
+  data as an assessment of its own (TP-154 without the scans) are not built: export the Excel
+  reports, and grade the scans here.
+- AND keys (`A+C`) are refused, not scored: write `A|C` (either) or void the question.
+- A learning objective whose questions the students do not tell apart is refused, never split
+  equally on a guess: give its points (`--points`, *Use the suggested points*).
+- Imported CLOs are written in domain K, and one objective may cover other items in each
+  version: correct `clo.csv`, then `omr clo replace` and `omr clo approve` (Setup's buttons).
+- A graded exam's points cannot change (its stored form map): create the exam from the import.
+  The Setup grid shows version A's points; a cell that stands for one version's rows says so.
+- Booklets are paired with Remark's rows by student number, then by answers: a heuristic, every
+  pairing by answers reported as an identity difference. An ID Excel already rounded
+  (`2.2E+09`) cannot be recovered: export again with the ID column as text.
+- The parallel run holds release only when its differences are queued (`--queue`, *Queue for
+  review*); verify items and two-principal adjudication (§13.4) are not built, so a decision is
+  the instructor's alone. It compares Remark's per-student objective subtotals, not the class
+  learning-objective report.
+
 **Security and privacy** (spec §14.2–§14.4, §19)
 - **In place, with tests (§3.2):** the snapshot bound to the audit chain and checked against
   the store on open; signed checkpoints kept outside the project (truncation, re-chained logs,
@@ -788,5 +888,5 @@ These limits apply to the MVP as measured here.
   page.
 - Exports: XLSX and HTML cite the audit-chain head, so only the CSV and JSON decision files are
   byte-identical across runs (§2.5).
-- GUI: no keymap editor; the roster and CLO file are chosen when the exam is created and cannot
-  be replaced from the app afterwards.
+- GUI: no keymap editor; the roster is chosen when the exam is created and cannot be replaced
+  from the app afterwards (the CLO file can: Setup's *Replace CLOs*, `omr clo replace`).

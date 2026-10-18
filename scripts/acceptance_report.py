@@ -330,11 +330,15 @@ def main():
         real = {
             "conditions": "143 real IAU CCSIT sheets (restricted personal data, never committed); "
             "reference labels agent-adjudicated (two readers plus the prototype, disagreements "
-            "adjudicated on 600-dpi zooms), not certification-grade; answer keys inferred "
-            "(--infer-key) because the owner has not supplied them yet",
-            "not_proven": "scoring correctness on real exams (no answer keys), identity against "
-            "a real roster (all runs rosterless), and any side-by-side comparison with Remark "
-            "Office OMR",
+            "adjudicated on 600-dpi zooms), not certification-grade; real_iau_e2e grades with "
+            "inferred keys (--infer-key: accuracy against the reference does not depend on the "
+            "key); real_iau_scored grades with the instructors' verified keys and key sheets "
+            "(OMR_IAU_KEYS); real_iau_remark is the internal parallel run with Remark Office OMR "
+            "(OMR_REMARK_DIR), recorded as pass or fail only",
+            "not_proven": "identity against a real roster (all runs rosterless) and the "
+            "instructors' own confirmation of their keys in the app; the parallel run with Remark "
+            "Office OMR is an internal development check whose head-to-head figures are not "
+            "recorded here (spec §3.5, Q-08: the licence review is open)",
             "full_pipeline": pick(e2e or {}, "pages", "questions", "auto_accepted",
                                   "silent_errors", "review", "ar", "student_number", "form",
                                   "blank_pages", "orientation_margin_min", "wall_s",
@@ -407,6 +411,21 @@ def main():
             cpu = next((l.split(":", 1)[1].strip() for l in f if l.startswith("model name")), "")
     except OSError:
         pass
+    # The verification rounds recorded after earlier runs (real_data.*_round) are carried
+    # forward: a rerun of this script must not drop them. Without real-data rows in this run,
+    # the previous real_data section is carried forward whole, and says so.
+    try:
+        with open(a.out, encoding="utf-8") as f:
+            previous = json.load(f).get("real_data") or {}
+    except (OSError, ValueError):
+        previous = {}
+    rounds = {k: v for k, v in previous.items() if k.endswith("_round")}
+    if real is None and previous:
+        real = dict(previous)
+        real["carried_forward"] = ("not rerun by this acceptance run (no real-data location "
+                                   "given): the previous run's real_data section, unchanged")
+    elif real is not None:
+        real.update(rounds)
     report = {
         "generated_utc": a.start,
         "what": "MVP acceptance run (docs/IMPLEMENTATION.md §1): one object per row; aggregates "
@@ -436,7 +455,7 @@ def main():
     bad += [c["id"] for c in common if c["pass"] is False]
     if adversarial is not None and not adversarial["pass"]:
         bad.append("adversarial")
-    if real is not None and not real["pass"]:
+    if real is not None and real.get("pass") is False and "carried_forward" not in real:
         bad.append("real_data")
     print(f"acceptance_report: wrote {a.out}; rows failing: {bad or 'none'}")
     return 3 if bad else 0
