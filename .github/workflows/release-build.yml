@@ -1,0 +1,139 @@
+# Unsigned release builds of `omr` and `omr-desktop` for Linux and Windows, kept as workflow
+# artifacts for 7 days (artifact storage on a private repository is limited). These are CI
+# builds, not production releases: a production release is built from a protected tag on the
+# university's self-hosted runner, signed in the in-Kingdom release enclave and approved by two
+# release approvers, and that build is compared with these (spec §24.2).
+name: Release builds
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  # On pull requests only when the build itself changes, to spare Actions minutes.
+  pull_request:
+    paths:
+      - .github/workflows/release-build.yml
+      - .cargo/**
+      - Cargo.toml
+      - Cargo.lock
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: release build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      # As in ci.yml: rustc needs about 6 GB for the generated desktop UI module.
+      - name: Free disk space and add swap (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo fallocate -l 12G /swapfile-ci
+          sudo chmod 600 /swapfile-ci
+          sudo mkswap /swapfile-ci
+          sudo swapon /swapfile-ci
+          free -h
+
+      - name: Enlarge the pagefile (Windows)
+        if: runner.os == 'Windows'
+        uses: al-cheb/configure-pagefile-action@a3b6ebd6b634da88790d9c58d4b37a7f4a7b8708 # v1.4
+        with:
+          minimum-size: 16GB
+          maximum-size: 24GB
+          disk-root: "C:"
+
+      - name: Show the pagefile and free disk
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_PageFileUsage | Format-List Name,AllocatedBaseSize,CurrentUsage
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name,Used,Free
+
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config libfontconfig1-dev
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+
+      - name: Build
+        shell: bash
+        run: cargo build --release --locked -p omr-cli -p shell-slint
+
+      - name: The executables need no Visual C++ runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "no Visual Studio with the C++ tools" }
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          if (-not $dumpbin) { throw "dumpbin.exe not found under $vs" }
+          foreach ($exe in "target\release\omr.exe", "target\release\omr-desktop.exe") {
+            if (-not (Test-Path $exe)) { throw "$exe was not built" }
+            $deps = & $dumpbin.FullName /nologo /dependents $exe | Out-String
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin failed on $exe" }
+            Write-Output $deps
+            if ($deps -notmatch "(?i)KERNEL32\.dll") { throw "no import table read from $exe" }
+            if ($deps -match "(?i)vcruntime|msvcp") { throw "$exe needs the Visual C++ runtime" }
+          }
+
+      - name: Package
+        shell: bash
+        run: |
+          name="omr-${GITHUB_SHA::7}-${{ matrix.target }}"
+          ext=""
+          if [ "$RUNNER_OS" = Windows ]; then ext=".exe"; fi
+          mkdir -p "dist/$name"
+          cp "target/release/omr$ext" "target/release/omr-desktop$ext" "dist/$name/"
+          if [ "$RUNNER_OS" = Linux ]; then strip --strip-debug "dist/$name/omr" "dist/$name/omr-desktop"; fi
+          # The embedded IBM Plex fonts are under the SIL Open Font License, which travels with them.
+          cp crates/shell-slint/ui/assets/fonts/OFL.txt "dist/$name/OFL.txt"
+          cat > "dist/$name/BUILD.txt" <<EOF
+          OMR Correction ${GITHUB_SHA::7} for ${{ matrix.target }}: unsigned CI build
+          Commit ${GITHUB_SHA}, built by GitHub Actions run ${GITHUB_RUN_ID} with Rust 1.97.0.
+
+          This is a test build, not a production release. Production releases will be built
+          and signed in the university's release enclave (spec 24.2). Windows SmartScreen
+          warns about unsigned programs.
+
+          On Windows, do not grade real exams with this build yet: these Windows protections are
+          not built (docs/IMPLEMENTATION.md):
+          - refusing OneDrive and other sync folders;
+          - owner-only file permissions;
+          - DPAPI-protected keys.
+          EOF
+          (cd "dist/$name" && sha256sum "omr$ext" "omr-desktop$ext" > SHA256SUMS && cat SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: omr-${{ matrix.target }}
+          path: dist/
+          retention-days: 7
+          if-no-files-found: error

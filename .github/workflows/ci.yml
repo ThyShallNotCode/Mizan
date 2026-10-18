@@ -57,3 +57,60 @@ jobs:
 
       - name: Gate
         run: ./scripts/check.sh
+
+  windows:
+    name: check.sh on Windows (MSVC)
+    # Windows is the primary platform (spec §24.1). Same gate, same pinned toolchain.
+    runs-on: windows-2025
+    timeout-minutes: 180
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      # The Windows counterpart of the swap step above: rustc needs about 6 GB for the generated
+      # desktop UI module, more than the 2-core runner's 7 GB of RAM can hold beside a second job.
+      - name: Enlarge the pagefile for the desktop UI compile
+        uses: al-cheb/configure-pagefile-action@a3b6ebd6b634da88790d9c58d4b37a7f4a7b8708 # v1.4
+        with:
+          minimum-size: 16GB
+          maximum-size: 24GB
+          disk-root: "C:"
+
+      - name: Show the pagefile and free disk
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_PageFileUsage | Format-List Name,AllocatedBaseSize,CurrentUsage
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name,Used,Free
+
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Gate
+        shell: bash
+        run: ./scripts/check.sh
+
+      # .cargo/config.toml links the C runtime statically; prove it, since a clean Windows 11 PC
+      # has no VCRUNTIME140.dll.
+      - name: The executables need no Visual C++ runtime
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "no Visual Studio with the C++ tools" }
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          if (-not $dumpbin) { throw "dumpbin.exe not found under $vs" }
+          foreach ($exe in "target\debug\omr.exe", "target\debug\omr-desktop.exe") {
+            if (-not (Test-Path $exe)) { throw "$exe was not built" }
+            $deps = & $dumpbin.FullName /nologo /dependents $exe | Out-String
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin failed on $exe" }
+            Write-Output $deps
+            if ($deps -notmatch "(?i)KERNEL32\.dll") { throw "no import table read from $exe" }
+            if ($deps -match "(?i)vcruntime|msvcp") { throw "$exe needs the Visual C++ runtime" }
+          }

@@ -1,0 +1,9 @@
+# Text files are LF on every OS. Goldens are compared byte for byte and the IAU template's
+# identity hash covers its raw bytes, so a CRLF checkout (Git for Windows' default) would fail
+# the goldens and build a template with another hash.
+* text=auto eol=lf
+
+# Kept byte-exact as committed: the CSV goldens end their lines with CRLF (RFC 4180) and the
+# font licences are upstream copies.
+crates/omr-report/tests/golden/*.csv -text
+**/OFL.txt -text

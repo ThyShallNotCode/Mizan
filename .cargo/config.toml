@@ -1,0 +1,5 @@
+# Windows (MSVC): link the C runtime statically, so omr.exe and omr-desktop.exe start on a
+# clean Windows 11 PC without the Visual C++ redistributable (VCRUNTIME140.dll). The main
+# thread gets 8 MiB of stack, as on Linux (MSVC's link.exe reserves 1 MiB by default).
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/STACK:8388608"]

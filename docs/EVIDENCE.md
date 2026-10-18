@@ -416,7 +416,7 @@ summary to confirm, each row with its printed question number) and scan-keysheet
 [results](design/screens/real/results-light.png) and
 [New exam](design/screens/real/exams-new-light.png).
 
-**Result: pass.** **Caveats:** the app has never run in a real window or on Windows (§7): the
+**Result: pass.** **Caveats:** the app has never run in a real window; on Windows it has run only headless, in CI (§7): the
 tests use Slint's testing backend and the screenshots its software renderer. GUI gaps: no
 keymap editor, and the roster is chosen when the exam is created (the CLI's `omr grade`
 options), not replaced later from the app (the CLO file can be, in Setup, since §5.2).
@@ -536,7 +536,7 @@ multi-page TIFF fix of §3.1 had already landed).
 | CR-05 | The README said "design phase" and explained nothing | A user guide: build, grade with or without a key, review, release, the desktop app | `README.md` |
 | CR-06, CR-08, CR-14, CR-15 | Evidence gaps: open privacy controls not disclosed, A11 not run, A4 measured without the save, real-data scoring shown beside "Pass" rows | This document: §2.4, §2.11, §7, and the real-data row of §1 | — |
 | CR-07 | No release step; the Blackboard upload was written for unreleased results | `omr release` and *Release results…*: refused while anything blocks release; the upload exists only for released results and is removed when a later change supersedes the release | `project_actions.rs::c8_blackboard_grade_center_upload_holds_only_what_it_needs`; `omr-cli/tests/real_world.rs` |
-| CR-09 | Launching the app without a display printed a raw error | The error says what to do (desktop session, `--screenshot`, or the CLI). Windows and a real window remain untested (§7) | — |
+| CR-09 | Launching the app without a display printed a raw error | The error says what to do (desktop session, `--screenshot`, or the CLI). A real window, and this launch error on Windows, remain untested (§7) | — |
 | CR-10 | The section and exam type read from the IAU sheet were discarded | Carried into the exports; a sheet whose section disagrees with the roster is IDN-004 `cross_section` (INFO) | `c13_sheet_section_is_carried_and_checked_against_the_roster` |
 | CR-11 | No teacher-filled key sheet | Built after the acceptance run: key sheets named (`--key-sheet`, `omr key read`) or found in the stack (student number all 0 or all 9; on a two-version exam a key sheet must also show its version, else it is refused with what to do), never graded as students, the run held (SCO-003 BLOCKER) until the instructor confirms the rendered key summary; rows that are not one confident mark block the confirmation, and erased-and-changed rows and rows a key file contradicts are highlighted; a key sheet showing no marker is refused, never read; a correction after confirmation survives a later rescan of the key sheet (§3.1.1, §4.1) | `omr-app/tests/key_sheets.rs` (8 tests), `omr-cli/tests/key_sheets.rs`; real: `real_iau_scored.rs`, `omr-cli/tests/real_key_read.rs`, `omr-recog/tests/real_key_sheets.rs` |
 | CR-13 | A failed grade left a half-made project that every command then refused differently | The folder is removed when grading fails; an unfinished one is named with what to do | `c14_an_unfinished_grading_run_is_named_with_its_remedy` |
@@ -771,9 +771,19 @@ These limits apply to the MVP as measured here.
   licence review it needs (Q-08) is still open. Scoring on the real exams is proven
   with keys verified by agents (§4.1) and read from the instructors' key sheets, not yet
   confirmed by the instructors in the app.
-- **Platforms.** Built and tested on Linux only; Windows 10/11, the spec's primary platform,
-  and macOS have not been built, and there is no installer (spec §24). The desktop app has run
-  headless (the testing backend and software-rendered screenshots), never in a real window.
+- **Platforms.**
+  - **Tested on:** Linux (every row of this document), and Windows Server 2025 in CI (GitHub's
+    `windows-2025` image, `x86_64-pc-windows-msvc`, the C runtime linked statically). On Windows
+    this covers the `scripts/check.sh` gate only: not the acceptance run, the long `#[ignore]`d
+    rows or the real-data rows, and not yet a Windows 10 or 11 PC. Identical decisions across
+    operating systems are not proven yet (§9.4, `docs/IMPLEMENTATION.md`).
+  - **Not built:** macOS. There is no installer (spec §24).
+  - **Not implemented on Windows yet** (`docs/IMPLEMENTATION.md`): the Windows signals of §14.2
+    (mapped network drives, the file-system type, OneDrive and other Cloud Files sync roots; UNC
+    paths and sync-client marker files are refused on every OS), owner-only ACLs, DPAPI key
+    protection and the audit principal from `USERNAME`.
+  - **Desktop app:** has run headless only (the testing backend and software-rendered
+    screenshots), never in a real window.
 
 **Recognition and review**
 - Classical rules only; the learned mark classifier (spec §8.7) is deferred. A light second

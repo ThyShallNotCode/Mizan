@@ -162,11 +162,17 @@ fn req_a10_every_code_in_the_workspace_sources_is_in_appendix_a() {
             .unwrap_or(&path)
             .display()
             .to_string();
+        // By components, not text: Windows displays the path with `\`.
+        let this_file = path.ends_with(
+            std::path::Path::new("omr-model")
+                .join("tests")
+                .join("catalogue.rs"),
+        );
         for (at, code) in code_tokens(&text) {
             tokens += 1;
             let line = text[..at].lines().count().max(1);
             if !known.contains(code) {
-                if code != "MRK-999" || !rel.ends_with("omr-model/tests/catalogue.rs") {
+                if code != "MRK-999" || !this_file {
                     unknown.push(format!("{rel}:{line}: {code}"));
                 }
                 continue;
@@ -180,7 +186,7 @@ fn req_a10_every_code_in_the_workspace_sources_is_in_appendix_a() {
             let Some(implied) = constructor(before.trim_end()) else {
                 continue;
             };
-            if rel.ends_with("omr-model/tests/catalogue.rs") {
+            if this_file {
                 continue; // the deliberate negative cases above
             }
             let rest = &text[at + 8..];
