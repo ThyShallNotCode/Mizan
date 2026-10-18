@@ -1,0 +1,44 @@
+[package]
+name = "omr-app"
+description = "Application services: the end-to-end grading pipeline, scheduler and view-models (spec §4.3)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+omr-model.workspace = true
+omr-imaging.workspace = true
+omr-forms = { workspace = true, features = ["render"] }
+omr-recog.workspace = true
+omr-identity.workspace = true
+omr-pdf.workspace = true
+omr-scoring.workspace = true
+omr-outcomes.workspace = true
+omr-analytics.workspace = true
+omr-store.workspace = true
+omr-report.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+rayon.workspace = true
+walkdir.workspace = true
+uuid.workspace = true
+csv.workspace = true
+calamine.workspace = true
+encoding_rs.workspace = true
+num-traits.workspace = true
+hex.workspace = true
+image.workspace = true
+num-rational.workspace = true
+rand.workspace = true
+data-encoding.workspace = true
+
+[dev-dependencies]
+omr-sim.workspace = true
+miniz_oxide.workspace = true
+rust_xlsxwriter.workspace = true
+tempfile.workspace = true
+p384.workspace = true
+rand_chacha.workspace = true

@@ -1,0 +1,1147 @@
+// Review queue (spec §13.2–13.3, DESIGN §9.4, concept review-queue.png): exception list grouped
+// by code, the scan crop with mark overlays, and the decision panel. Keys are handled by the
+// review canvas focus scope and mapped in Rust (src/keymap.rs: physical positions, Arabic layout).
+
+import {
+    Theme, Tone, Severity, MarkState, Card, TopBar, StatusBar, SearchField, PrimaryButton,
+    SecondaryButton, GhostButton, IconButton, Chip, StatusPill, Tag, ProgressBar, OptionChip,
+    GroupHeader, SeverityGlyph, Keycap, MarkGlyph, FocusRing, Breadcrumb,
+} from "../theme.slint";
+import { App, ReviewVM, Candidate, ContactTile } from "../state.slint";
+import {
+    Icons, ThemeToggle, Centered, SectionLabel, StatusText, QueueRow, ScanPaper, FillBar,
+    ShortcutRow, AgreeGlyph, EmptyState, MessageText, KVLine, TextField,
+} from "../widgets.slint";
+import { ListView } from "std-widgets.slint";
+
+component QueuePane inherits Rectangle {
+    background: Theme.surface;
+    property <length> sel-y: ReviewVM.selected-y;
+    // keep the current item in view (rows are 62 px, headers 32 px), also when the screen is
+    // (re)created with an item already selected deep in the lane
+    function reveal() {
+        if (self.sel-y < -lv.content-y || self.sel-y + 62px > -lv.content-y + lv.visible-height) {
+            lv.content-y = -max(0px, self.sel-y - 2 * 62px);
+        }
+    }
+    changed sel-y => {
+        self.reveal();
+    }
+    // A lane switch (or undo into another lane) changes the rows and the selection together;
+    // the list grows to the new rows only after sel-y changed, so reveal again once it has.
+    property <length> list-h: lv.content-height;
+    changed list-h => {
+        self.reveal();
+    }
+    init => {
+        self.reveal();
+    }
+    VerticalLayout {
+        HorizontalLayout {
+            height: 48px;
+            padding-left: Theme.space-lg;
+            padding-right: Theme.space-sm;
+            spacing: Theme.space-sm;
+            Text {
+                text: "Exception queue";
+                font-size: Theme.text-md;
+                font-weight: Theme.weight-semibold;
+                color: Theme.ink;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            Centered {
+                IconButton {
+                    icon: Icons.filter;
+                    label: "Filter the queue";
+                    clicked => {
+                        App.request("Queue filter");
+                    }
+                }
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.border;
+        }
+        if ReviewVM.queue.length == 0: EmptyState {
+            vertical-stretch: 1;
+            title: "Lane clear";
+            text: "No open items in this lane.";
+        }
+        lv := ListView {
+            vertical-stretch: ReviewVM.queue.length == 0 ? 0 : 1;
+            for e in ReviewVM.queue: Rectangle {
+                height: e.header ? 32px : 62px;
+                if e.header: GroupHeader {
+                    code: e.code;
+                    title: e.title;
+                    count: e.count;
+                    severity: e.severity;
+                    expanded: e.expanded;
+                    toggled => {
+                        ReviewVM.toggle-group(e.code);
+                    }
+                }
+                if !e.header: QueueRow {
+                    label: e.label;
+                    detail: e.detail;
+                    serial: e.serial;
+                    fills: e.fills;
+                    severity: e.severity;
+                    selected: e.selected;
+                    blind: e.blind;
+                    deferred: e.deferred;
+                    a11y: e.a11y;
+                    clicked => {
+                        ReviewVM.select-item(e.id);
+                    }
+                }
+            }
+        }
+    }
+    Rectangle {
+        x: parent.width - 1px;
+        width: 1px;
+        background: Theme.border;
+    }
+}
+
+// "Fill by bubble": one bar per option, warning threshold line and hysteresis band (§13.3).
+component FillChart inherits Rectangle {
+    property <length> plot: 96px;
+    property <length> top: 18px;
+    height: self.plot + 40px;
+    // hysteresis band and threshold line
+    Rectangle {
+        x: 0;
+        y: root.top + root.plot * (1 - ReviewVM.band-hi);
+        width: parent.width;
+        height: root.plot * (ReviewVM.band-hi - ReviewVM.band-lo);
+        background: Theme.warning-soft;
+    }
+    Rectangle {
+        x: 0;
+        y: root.top + root.plot * (1 - ReviewVM.threshold);
+        width: parent.width;
+        height: 1px;
+        background: Theme.warning;
+    }
+    HorizontalLayout {
+        spacing: Theme.space-sm;
+        alignment: start;
+        for b in ReviewVM.fill-bars: FillBar {
+            letter: b.label;
+            fill: b.fill;
+            fill-text: b.fill-text;
+            mark: b.mark;
+            plot: root.plot;
+        }
+    }
+}
+
+component OtherAnswers inherits VerticalLayout {
+    spacing: Theme.space-md;
+    alignment: start;
+    // bars share the card width (10 px wide at most), so they never widen the canvas
+    Rectangle {
+        height: 52px;
+        min-width: 0px;
+        preferred-width: 0px;
+        property <length> step: min(14px, self.width / max(1, ReviewVM.other-fills.length));
+        for f[i] in ReviewVM.other-fills: Rectangle {
+            x: i * parent.step;
+            y: 0;
+            width: max(2px, parent.step * 10 / 14);
+            height: parent.height;
+            background: Theme.track;
+            border-radius: 2px;
+            Rectangle {
+                y: parent.height * (1 - f);
+                height: parent.height * f;
+                border-radius: 2px;
+                background: Theme.ink-3;
+            }
+        }
+    }
+    Rectangle {
+        background: Theme.surface-sunken;
+        border-radius: Theme.radius-md;
+        vertical-stretch: 0;
+        HorizontalLayout {
+            padding-left: Theme.space-md;
+            padding-right: Theme.space-md;
+            padding-top: Theme.space-sm;
+            padding-bottom: Theme.space-sm;
+            Text {
+                text: ReviewVM.summary;
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                vertical-alignment: center;
+                wrap: word-wrap;
+                accessible-role: AccessibleRole.text;
+                accessible-label: "Item summary: " + ReviewVM.summary;
+            }
+        }
+    }
+}
+
+// Contact-sheet tile: a group member's crop; activating it opens that item.
+component ContactThumb inherits Rectangle {
+    in property <ContactTile> t;
+    callback clicked();
+    width: 196px;
+    height: 72px;
+    border-radius: Theme.radius-sm;
+    background: Theme.paper;
+    border-width: root.t.current ? 2px : 1px;
+    border-color: root.t.current ? Theme.primary : Theme.border;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.t.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        clicked => {
+            fs.focus();
+            root.clicked();
+        }
+    }
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    Image {
+        x: 4px;
+        y: 4px;
+        width: parent.width - 8px;
+        height: 48px;
+        source: root.t.image;
+        image-fit: contain;
+        accessible-role: none;
+    }
+    Text {
+        x: 6px;
+        y: 52px;
+        height: 18px;
+        text: root.t.serial;
+        font-family: Theme.font-mono;
+        font-size: Theme.text-2xs;
+        color: #3B4048;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+    FocusRing {
+        active: fs.has-focus;
+        corner: Theme.radius-sm;
+    }
+}
+
+component CanvasPane inherits Rectangle {
+    // hands the keys back to the review canvas (after a typed student number)
+    callback refocus();
+    // 1280 px windows: the fill chart card shrinks to its five bars
+    in property <bool> narrow;
+    background: Theme.scan-backdrop;
+    clip: true;
+    // "3×" is the crop at its native size, shrunk to fit narrow panes (1280 px windows); a
+    // small crop at scan resolution (one answer row at 200 dpi) is enlarged to about 600 × 260
+    // px. The paper box never sets the pane's width, so this cannot loop through the layout
+    property <float> grow: max(1, min(600px / max(1px, ReviewVM.crop-w * 1px), 260px / max(1px, ReviewVM.crop-h * 1px)));
+    property <float> fit: min(root.grow, max(0.25, (paper-box.width - 24px) / max(1px, ReviewVM.crop-w * 1px)));
+    property <float> scale: root.fit * ReviewVM.zoom / 3;
+    VerticalLayout {
+        padding: Theme.space-xl;
+        padding-top: Theme.space-lg;
+        spacing: Theme.space-lg;
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            Chip {
+                text: ReviewVM.registered ? "Registered" : "Original";
+                count: "F2";
+                selected: true;
+                clicked => {
+                    ReviewVM.toggle-registered();
+                }
+            }
+            if ReviewVM.kind != 3: Chip {
+                text: "Overlay";
+                count: "Space";
+                selected: ReviewVM.overlay && ReviewVM.kind != 1;
+                clicked => {
+                    ReviewVM.toggle-overlay();
+                }
+            }
+            if ReviewVM.kind == 0: Chip {
+                text: "All bubbles";
+                selected: ReviewVM.show-all;
+                clicked => {
+                    ReviewVM.toggle-show-all();
+                }
+            }
+            Chip {
+                text: "Zoom " + ReviewVM.zoom + "×";
+                count: "+ / −";
+                // a click cycles 2× → 3× → 4× → 2× (the keys step either way)
+                clicked => {
+                    ReviewVM.zoom-by(ReviewVM.zoom >= 4 ? -2 : 1);
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+        }
+        if ReviewVM.help-open: Rectangle {
+            background: Theme.info-soft;
+            border-radius: Theme.radius-lg;
+            HorizontalLayout {
+                padding: Theme.space-md;
+                spacing: Theme.space-sm;
+                Centered {
+                    Image {
+                        source: Icons.help;
+                        width: 16px;
+                        height: 16px;
+                        colorize: Theme.info;
+                    }
+                }
+                Text {
+                    text: ReviewVM.help-text;
+                    font-size: Theme.text-xs;
+                    color: Theme.ink;
+                    wrap: word-wrap;
+                    horizontal-stretch: 1;
+                }
+            }
+        }
+        paper-box := Rectangle {
+            min-width: 0px;
+            preferred-width: 0px;
+            height: paper.height;
+            paper := ScanPaper {
+                x: (parent.width - self.width) / 2;
+                y: 0;
+                source: ReviewVM.registered || !ReviewVM.has-original ? ReviewVM.crop : ReviewVM.original;
+                crop-w: ReviewVM.crop-w;
+                crop-h: ReviewVM.crop-h;
+                scale: root.scale;
+                bubbles: ReviewVM.bubbles;
+                // blind items show no overlays (§13.4); overlays follow the registered geometry
+                show-overlays: ReviewVM.overlay && ReviewVM.registered && ReviewVM.kind != 1;
+                caption: ReviewVM.caption;
+                image-label: "Scan crop: " + ReviewVM.caption;
+            }
+        }
+        if ReviewVM.kind == 0: HorizontalLayout {
+            spacing: Theme.space-lg;
+            vertical-stretch: 0;
+            Card {
+                title: "Fill by bubble";
+                subtitle: ReviewVM.threshold-text;
+                width: root.narrow ? 284px : 300px;
+                FillChart { }
+            }
+            Card {
+                title: "Student's other answers";
+                subtitle: ReviewVM.other-caption;
+                horizontal-stretch: 1;
+                OtherAnswers { }
+            }
+        }
+        if ReviewVM.kind == 0 && ReviewVM.contact.length > 1: Card {
+            vertical-stretch: 0;
+            title: "Contact sheet · " + ReviewVM.contact.length;
+            subtitle: ReviewVM.contact-caption;
+            Rectangle {
+                height: 72px;
+                min-width: 0px;
+                preferred-width: 0px;
+                property <length> tile-w: min(196px, (self.width - (ReviewVM.contact.length - 1) * Theme.space-sm) / max(1, ReviewVM.contact.length));
+                for t[i] in ReviewVM.contact: ContactThumb {
+                    x: i * (parent.tile-w + Theme.space-sm);
+                    y: 0;
+                    width: parent.tile-w;
+                    t: t;
+                    clicked => {
+                        ReviewVM.select-contact(t.id);
+                    }
+                }
+            }
+        }
+        if ReviewVM.kind == 1: Card {
+            vertical-stretch: 0;
+            title: "Blind verify";
+            subtitle: "The engine's reading is withheld (§13.4): no suggestion, fill bars, threshold or overlays.";
+            Text {
+                text: "Enter what is marked: an option key (A–E, 1–5, or the Arabic letter), Backspace for blank, Ctrl+M for multiple marks, Ctrl+U for unreadable. Then press Enter.";
+                font-size: Theme.text-sm;
+                color: Theme.ink;
+                wrap: word-wrap;
+            }
+        }
+        if ReviewVM.kind == 2: Card {
+            vertical-stretch: 0;
+            title: "What the channels read";
+            subtitle: ReviewVM.hypothesis;
+            HorizontalLayout {
+                spacing: Theme.space-xl;
+                VerticalLayout {
+                    spacing: 2px;
+                    SectionLabel {
+                        text: "ID GRID";
+                    }
+                    Text {
+                        text: ReviewVM.read-id;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.text-lg;
+                        font-weight: Theme.weight-medium;
+                        color: Theme.ink;
+                        letter-spacing: 1px;
+                    }
+                }
+                // channels the core does not read (no handwriting or seat map) are left out
+                if ReviewVM.boxes-read != "": VerticalLayout {
+                    spacing: 2px;
+                    SectionLabel {
+                        text: "WRITE-IN BOXES";
+                    }
+                    Text {
+                        text: ReviewVM.boxes-read;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.text-lg;
+                        font-weight: Theme.weight-medium;
+                        color: Theme.ink;
+                        letter-spacing: 1px;
+                    }
+                }
+                if ReviewVM.neighbours.length > 0: VerticalLayout {
+                    spacing: 2px;
+                    horizontal-stretch: 1;
+                    SectionLabel {
+                        text: "SEAT-MAP NEIGHBOURS";
+                    }
+                    for n in ReviewVM.neighbours: Text {
+                        text: n;
+                        font-size: Theme.text-xs;
+                        color: Theme.ink-2;
+                    }
+                }
+            }
+            // a student who is not listed (or an exam without a roster): the number as written
+            // on the sheet or given by the registrar; it then waits for Accept like a candidate
+            SectionLabel {
+                text: "NOT LISTED? TYPE THE STUDENT NUMBER";
+            }
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                TextField {
+                    width: 240px;
+                    label: "Student number";
+                    placeholder: "Digits as written on the sheet";
+                    text <=> ReviewVM.student-entry;
+                    mono: true;
+                    accepted(v) => {
+                        ReviewVM.use-student(v);
+                        root.refocus();
+                    }
+                }
+                Centered {
+                    SecondaryButton {
+                        text: ReviewVM.typed-student != "" ? "Number set" : "Use number";
+                        enabled: ReviewVM.student-entry != "";
+                        clicked => {
+                            ReviewVM.use-student(ReviewVM.student-entry);
+                            root.refocus();
+                        }
+                    }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+        }
+        if ReviewVM.kind == 3: Card {
+            vertical-stretch: 0;
+            title: ReviewVM.code + " · " + ReviewVM.code-title;
+            subtitle: ReviewVM.notice-headline;
+            for l in ReviewVM.notice-lines: KVLine {
+                label: l.label;
+                value: l.value;
+            }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+        }
+    }
+}
+
+// One reason code for an override: a compact checkable button (two per row). `toggle` makes it
+// the "more / fewer reasons" switch of the list instead.
+component ReasonChip inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    in property <bool> toggle;
+    callback clicked();
+    height: 28px;
+    min-width: 0px;
+    horizontal-stretch: 1;
+    border-radius: Theme.radius-md;
+    background: root.selected ? Theme.primary-soft : ta.has-hover ? Theme.surface-hover : Theme.surface-raised;
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? Theme.primary : Theme.border-strong;
+    accessible-role: AccessibleRole.button;
+    accessible-checkable: !root.toggle;
+    accessible-checked: root.selected;
+    accessible-label: root.toggle ? root.label : "Reason: " + root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+    Text {
+        x: Theme.space-sm;
+        width: parent.width - 2 * Theme.space-sm;
+        height: parent.height;
+        text: root.label;
+        font-size: Theme.text-xs;
+        font-weight: root.selected ? Theme.weight-semibold : Theme.weight-regular;
+        color: root.toggle ? Theme.primary : Theme.ink;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+}
+
+// Identity candidate row (keys 1–3): name, Arabic name, IDs, per-channel evidence.
+component CandidateRow inherits Rectangle {
+    in property <Candidate> c;
+    callback clicked();
+    height: 90px;
+    border-radius: Theme.radius-lg;
+    background: root.c.selected ? Theme.primary-soft : ta.has-hover ? Theme.surface-hover : Theme.surface-raised;
+    border-width: root.c.selected ? 2px : 1px;
+    border-color: root.c.selected ? Theme.primary : root.c.suggested ? Theme.accent : Theme.border-strong;
+    accessible-role: AccessibleRole.button;
+    accessible-checkable: true;
+    accessible-checked: root.c.selected;
+    accessible-label: "Candidate " + root.c.rank + ", " + root.c.name + ", " + root.c.posterior + (root.c.suggested ? ", suggested" : "");
+    accessible-description: root.c.rank;
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        clicked => {
+            fs.focus();
+            root.clicked();
+        }
+    }
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    VerticalLayout {
+        padding: Theme.space-sm + 1px;
+        spacing: 2px;
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+            Centered {
+                Keycap {
+                    text: root.c.rank;
+                }
+            }
+            Text {
+                text: root.c.name;
+                font-size: Theme.text-md;
+                font-weight: Theme.weight-semibold;
+                color: Theme.ink;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+            Text {
+                text: root.c.name-ar;
+                font-family: Theme.font-arabic;
+                font-size: Theme.text-sm;
+                color: Theme.ink-2;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                horizontal-alignment: right;
+                overflow: elide;
+                accessible-role: none;
+            }
+            Text {
+                text: root.c.posterior;
+                font-family: Theme.font-mono;
+                font-size: Theme.text-xs;
+                font-weight: Theme.weight-medium;
+                color: Theme.ink;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+        }
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+            Text {
+                text: root.c.student-id;
+                font-family: Theme.font-mono;
+                font-size: Theme.text-xs;
+                color: Theme.ink;
+                accessible-role: none;
+            }
+            Text {
+                // the core may have no national ID for the candidate: then nothing is shown
+                text: root.c.national-id == "" ? "" : "NID " + root.c.national-id;
+                font-family: Theme.font-mono;
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                accessible-role: none;
+            }
+        }
+        Text {
+            text: root.c.meta;
+            font-size: Theme.text-2xs;
+            color: Theme.ink-2;
+            overflow: elide;
+            accessible-role: none;
+        }
+        HorizontalLayout {
+            spacing: Theme.space-sm + 2px;
+            alignment: start;
+            for ch in root.c.channels: HorizontalLayout {
+                spacing: 3px;
+                Centered {
+                    AgreeGlyph {
+                        agrees: ch.tone == Tone.success;
+                        accessible-role: none;
+                    }
+                }
+                Text {
+                    text: ch.label;
+                    font-size: Theme.text-2xs;
+                    color: Theme.ink-2;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+            }
+        }
+    }
+    if root.c.selected: Rectangle {
+        x: root.width - 12px;
+        y: -6px;
+        width: 18px;
+        height: 18px;
+        border-radius: 9px;
+        background: Theme.surface-raised;
+        border-width: 1px;
+        border-color: Theme.primary;
+        Path {
+            width: 10px;
+            height: 10px;
+            viewbox-width: 12;
+            viewbox-height: 12;
+            commands: "M 2 6.3 L 4.8 9 L 10 3.4";
+            stroke: Theme.primary;
+            stroke-width: 1.8px;
+        }
+    }
+    FocusRing {
+        active: fs.has-focus;
+        corner: Theme.radius-lg;
+    }
+}
+
+component DecisionPane inherits Rectangle {
+    // below 880 px the keyboard legend gives way (the keys stay on every control; Settings
+    // lists the whole map) so the pane fits 800 px windows
+    in property <bool> short;
+    callback refocus();
+    background: Theme.surface;
+    Rectangle {
+        x: 0;
+        width: 1px;
+        background: Theme.border;
+    }
+    if !ReviewVM.has-item: EmptyState {
+        title: "Nothing to decide";
+        text: "Pick an item from the queue.";
+    }
+    if ReviewVM.has-item: VerticalLayout {
+        padding: Theme.space-lg + Theme.space-xs;
+        spacing: Theme.space-sm + 2px;
+        // ---- suggestion
+        // tall enough for source, detail and code tag (the identity card has no display letter)
+        if ReviewVM.has-suggestion && ReviewVM.kind != 3: Rectangle {
+            height: ReviewVM.kind == 2 ? 80px : 84px;
+            border-radius: Theme.radius-lg;
+            background: Theme.primary-soft;
+            accessible-role: AccessibleRole.text;
+            accessible-label: "Suggestion " + ReviewVM.suggestion-word + ", " + ReviewVM.suggestion-source + ". " + ReviewVM.suggestion-detail;
+            HorizontalLayout {
+                padding: Theme.space-lg;
+                padding-top: Theme.space-sm;
+                padding-bottom: Theme.space-sm;
+                spacing: Theme.space-lg;
+                if ReviewVM.kind == 0: Text {
+                    text: ReviewVM.suggestion-letter;
+                    font-size: ReviewVM.suggestion-letter.character-count > 2 ? Theme.text-lg : Theme.text-display;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.primary;
+                    vertical-alignment: center;
+                    min-width: 36px;
+                    accessible-role: none;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: Theme.space-xs;
+                    Text {
+                        text: ReviewVM.suggestion-source;
+                        font-size: Theme.text-xs;
+                        font-weight: Theme.weight-semibold;
+                        color: Theme.ink-2;
+                        accessible-role: none;
+                    }
+                    Text {
+                        text: ReviewVM.suggestion-detail;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.text-xs;
+                        color: Theme.ink;
+                        overflow: elide;
+                        accessible-role: none;
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        Tag {
+                            text: ReviewVM.suggestion-tag;
+                            tone: Tone.warning;
+                        }
+                    }
+                }
+            }
+        }
+        if ReviewVM.kind == 1: HorizontalLayout {
+            spacing: Theme.space-sm;
+            Centered {
+                Tag {
+                    text: "Verify (blind)";
+                    tone: Tone.info;
+                    mono: false;
+                }
+            }
+            Text {
+                text: "No suggestion is shown";
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                vertical-alignment: center;
+            }
+        }
+        // ---- mark context
+        if ReviewVM.kind <= 1: SectionLabel {
+            text: "WHAT IS MARKED?";
+        }
+        if ReviewVM.kind <= 1: HorizontalLayout {
+            spacing: Theme.space-sm;
+            alignment: start;
+            for o[i] in ReviewVM.options: OptionChip {
+                label: o.label;
+                key-hint: o.key;
+                suggested: o.suggested;
+                selected: o.selected;
+                clicked => {
+                    ReviewVM.choose-option(i);
+                    root.refocus();
+                }
+            }
+        }
+        if ReviewVM.kind <= 1: HorizontalLayout {
+            spacing: Theme.space-sm;
+            alignment: start;
+            for o[i] in ReviewVM.specials: OptionChip {
+                label: o.label;
+                key-hint: o.key;
+                suggested: o.suggested;
+                selected: o.selected;
+                special: true;
+                glyph: i == 0 ? MarkState.blank : i == 1 ? MarkState.ambiguous : MarkState.unreadable;
+                clicked => {
+                    ReviewVM.choose-special(i);
+                    root.refocus();
+                }
+            }
+        }
+        // ---- identity context
+        if ReviewVM.kind == 2: SectionLabel {
+            text: "WHO IS THIS?";
+        }
+        if ReviewVM.kind == 2: VerticalLayout {
+            spacing: Theme.space-sm;
+            for c[i] in ReviewVM.candidates: CandidateRow {
+                c: c;
+                clicked => {
+                    ReviewVM.choose-candidate(i);
+                    root.refocus();
+                }
+            }
+        }
+        if ReviewVM.kind == 2: HorizontalLayout {
+            spacing: Theme.space-sm;
+            alignment: start;
+            for o[i] in ReviewVM.specials: OptionChip {
+                label: o.label;
+                key-hint: o.key;
+                suggested: o.suggested;
+                selected: o.selected;
+                special: true;
+                glyph: MarkState.blank;
+                clicked => {
+                    ReviewVM.choose-special(i);
+                    root.refocus();
+                }
+            }
+        }
+        // ---- override reason (§13.4): only when the choice differs from the suggestion
+        if ReviewVM.reason-needed: SectionLabel {
+            text: "WHY OVERRIDE THE SUGGESTION?";
+        }
+        if ReviewVM.reason-needed: GridLayout {
+            spacing: Theme.space-xs;
+            for r[i] in ReviewVM.reasons: ReasonChip {
+                col: mod(i, 2);
+                row: floor(i / 2);
+                label: r.label;
+                selected: r.selected;
+                toggle: r.key == "more";
+                clicked => {
+                    ReviewVM.choose-reason(i);
+                    root.refocus();
+                }
+            }
+        }
+        // ---- notice context
+        if ReviewVM.kind == 3: Rectangle {
+            border-radius: Theme.radius-lg;
+            background: Theme.tone-soft(ReviewVM.severity == Severity.warn ? Tone.warning : Tone.error);
+            VerticalLayout {
+                padding: Theme.space-lg;
+                spacing: Theme.space-sm;
+                HorizontalLayout {
+                    spacing: Theme.space-sm;
+                    Centered {
+                        SeverityGlyph {
+                            severity: ReviewVM.severity;
+                        }
+                    }
+                    Text {
+                        text: ReviewVM.code;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.text-sm;
+                        font-weight: Theme.weight-semibold;
+                        color: Theme.ink;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: ReviewVM.code-title;
+                        font-size: Theme.text-sm;
+                        color: Theme.ink-2;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                }
+                SectionLabel {
+                    text: "ACKNOWLEDGING WILL";
+                }
+                Text {
+                    text: ReviewVM.notice-consequence;
+                    font-size: Theme.text-sm;
+                    color: Theme.ink;
+                    wrap: word-wrap;
+                }
+            }
+        }
+        // ---- commit (a reason that needs a note waits for one)
+        PrimaryButton {
+            property <bool> wants-note: ReviewVM.note-required && ReviewVM.note == "";
+            text: self.wants-note ? "Write why in the note" : ReviewVM.accept-label;
+            key-hint: "Enter";
+            large: true;
+            enabled: ReviewVM.accept-enabled && !self.wants-note;
+            clicked => {
+                ReviewVM.accept();
+                root.refocus();
+            }
+        }
+        if ReviewVM.kind == 0: SecondaryButton {
+            text: ReviewVM.group-label;
+            key-hint: "Shift+Enter";
+            enabled: ReviewVM.group-enabled;
+            accessible-description: ReviewVM.group-enabled ? "Shift+Enter" : ReviewVM.group-reason;
+            clicked => {
+                ReviewVM.apply-group();
+                root.refocus();
+            }
+        }
+        if ReviewVM.kind == 0 && !ReviewVM.group-enabled: Text {
+            text: ReviewVM.group-reason;
+            font-size: Theme.text-2xs;
+            color: Theme.ink-2;
+            wrap: word-wrap;
+        }
+        VerticalLayout {
+            spacing: 0;
+            GhostButton {
+                text: "Defer";
+                key-hint: "Ctrl+D";
+                icon: Icons.defer;
+                clicked => {
+                    ReviewVM.defer();
+                    root.refocus();
+                }
+            }
+            GhostButton {
+                text: "Escalate to instructor";
+                key-hint: "Ctrl+E";
+                icon: Icons.escalate;
+                clicked => {
+                    ReviewVM.escalate();
+                    root.refocus();
+                }
+            }
+            GhostButton {
+                text: "Add to rescan list";
+                key-hint: "Ctrl+R";
+                icon: Icons.rescan;
+                clicked => {
+                    ReviewVM.rescan();
+                    root.refocus();
+                }
+            }
+        }
+        // two-way: the note is in the view-model as it is typed, so Accept never misses it
+        TextField {
+            label: "Reviewer note (personal data, PDPL)";
+            placeholder: ReviewVM.note-required ? "Why? This reason needs a note" : "Note: personal data under PDPL";
+            text <=> ReviewVM.note;
+            arabic: true;
+            border-color: ReviewVM.note-required && ReviewVM.note == "" ? Theme.warning : Theme.border-strong;
+        }
+        Rectangle {
+            vertical-stretch: 1;
+        }
+        if !root.short: Rectangle {
+            height: 1px;
+            background: Theme.border;
+        }
+        if !root.short: HorizontalLayout {
+            SectionLabel {
+                text: "KEYBOARD";
+                horizontal-stretch: 1;
+            }
+            Tag {
+                text: ReviewVM.median;
+                tone: Tone.primary;
+            }
+        }
+        if !root.short: GridLayout {
+            spacing-horizontal: Theme.space-lg;
+            spacing-vertical: Theme.space-sm;
+            Row {
+                ShortcutRow {
+                    keys: "↓ ↑";
+                    action: "Next / previous";
+                }
+                ShortcutRow {
+                    keys: "F1";
+                    action: "Code help";
+                }
+            }
+            Row {
+                ShortcutRow {
+                    keys: "Space";
+                    action: "Overlay";
+                }
+                ShortcutRow {
+                    keys: "F2";
+                    action: "Original";
+                }
+            }
+            Row {
+                ShortcutRow {
+                    keys: "/";
+                    action: "Roster search";
+                }
+                ShortcutRow {
+                    keys: "Ctrl+Z";
+                    action: "Undo";
+                }
+            }
+        }
+    }
+}
+
+export component ReviewScreen inherits VerticalLayout {
+    in property <length> win-w: 1440px;
+    in property <length> win-h: 900px;
+    property <bool> narrow: root.win-w < 1400px;
+    property <bool> short: root.win-h < 880px;
+    property <int> search-request: ReviewVM.search-request;
+    changed search-request => {
+        search.focus();
+    }
+    init => {
+        keys.focus();
+    }
+    TopBar {
+        // narrow windows drop the trailing "Review" (the active nav tab names the page)
+        Breadcrumb {
+            parts: root.narrow ? [App.course, App.assessment] : [App.course, App.assessment, "Review"];
+        }
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+            for l[i] in ReviewVM.lanes: Centered {
+                Chip {
+                    text: l.label;
+                    count: l.count;
+                    selected: l.selected;
+                    clicked => {
+                        ReviewVM.select-lane(i);
+                        keys.focus();
+                    }
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: Theme.space-xs;
+            width: root.narrow ? 150px : 200px;
+            accessible-role: AccessibleRole.progress-indicator;
+            accessible-label: "Review progress";
+            accessible-value: ReviewVM.resolved + " of " + ReviewVM.total + " resolved";
+            HorizontalLayout {
+                Text {
+                    text: ReviewVM.resolved + " of " + ReviewVM.total + " resolved";
+                    font-size: Theme.text-xs;
+                    color: Theme.ink-2;
+                    horizontal-stretch: 1;
+                    accessible-role: none;
+                }
+                Text {
+                    text: (ReviewVM.total > 0 ? round(100 * ReviewVM.resolved / ReviewVM.total) : 0) + "%";
+                    font-family: Theme.font-mono;
+                    font-size: Theme.text-xs;
+                    color: Theme.ink;
+                    accessible-role: none;
+                }
+            }
+            ProgressBar {
+                value: ReviewVM.total > 0 ? ReviewVM.resolved / ReviewVM.total : 0;
+                accessible-role: none;
+            }
+        }
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+            Centered {
+                // a number typed here decides the identity item on screen; the canvas then
+                // takes the keys again, so Enter accepts it
+                search := SearchField {
+                    placeholder: "Roster search";
+                    width: 200px;
+                    accepted(t) => {
+                        ReviewVM.search(t);
+                        keys.focus();
+                    }
+                }
+            }
+            Centered {
+                ThemeToggle { }
+            }
+            Centered {
+                IconButton {
+                    icon: Icons.undo;
+                    label: "Undo last decision (Ctrl+Z)";
+                    clicked => {
+                        ReviewVM.undo();
+                        keys.focus();
+                    }
+                }
+            }
+            Centered {
+                IconButton {
+                    icon: Icons.help;
+                    label: "Help for " + ReviewVM.code + " (F1)";
+                    active: ReviewVM.help-open;
+                    clicked => {
+                        ReviewVM.toggle-help();
+                    }
+                }
+            }
+        }
+    }
+    keys := FocusScope {
+        vertical-stretch: 1;
+        accessible-role: AccessibleRole.none;
+        key-pressed(event) => {
+            if (ReviewVM.key(event.text, event.modifiers.control, event.modifiers.shift, event.modifiers.alt)) {
+                return accept;
+            }
+            return reject;
+        }
+        HorizontalLayout {
+            QueuePane {
+                width: Theme.list-pane-width;
+            }
+            CanvasPane {
+                horizontal-stretch: 1;
+                narrow: root.narrow;
+                refocus => {
+                    keys.focus();
+                }
+            }
+            DecisionPane {
+                width: Theme.decision-pane-width;
+                short: root.short;
+                refocus => {
+                    keys.focus();
+                }
+            }
+        }
+    }
+    StatusBar {
+        Centered {
+            StatusPill {
+                text: "Saved";
+                tone: Tone.success;
+            }
+        }
+        StatusText {
+            text: "audit head " + ReviewVM.audit-head;
+            mono: true;
+        }
+        MessageText {
+            text: App.message;
+            tone: App.message-tone;
+            horizontal-stretch: 1;
+        }
+        StatusText {
+            text: ReviewVM.two-person ? "Two-person rule: on" : "Two-person rule: off";
+        }
+        StatusText {
+            text: App.engine;
+            mono: true;
+        }
+    }
+}

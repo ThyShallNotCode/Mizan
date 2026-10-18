@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <!-- Girih-inspired tile: an 8-point star (two squares at 45 degrees) with
+       connecting strapwork to the tile edges. Single colour (white); apply
+       opacity and colourise at use site. Tiles seamlessly at 48 x 48. -->
+  <g fill="none" stroke="#FFFFFF" stroke-width="1" stroke-linejoin="miter">
+    <rect x="15" y="15" width="18" height="18"/>
+    <rect x="15" y="15" width="18" height="18" transform="rotate(45 24 24)"/>
+    <path d="M24 11.3 L24 0 M24 36.7 L24 48 M11.3 24 L0 24 M36.7 24 L48 24"/>
+    <path d="M0 6 L6 0 M42 0 L48 6 M48 42 L42 48 M6 48 L0 42"/>
+  </g>
+</svg>

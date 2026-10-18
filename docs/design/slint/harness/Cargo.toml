@@ -1,0 +1,16 @@
+# Stand-alone render harness for docs/design/slint/gallery.slint (not a workspace member).
+# Run:  cd docs/design/slint/harness && cargo run -- ../renders/slint
+[package]
+name = "omr-design-gallery"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "renderer-software", "software-renderer-systemfonts"] }
+png = "0.17"
+
+[build-dependencies]
+slint-build = "=1.18.1"

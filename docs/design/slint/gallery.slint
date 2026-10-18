@@ -1,0 +1,636 @@
+// Design-system proof gallery: a Review Queue screen (`Gallery`) and a component
+// sheet (`Sheet`) built only from crates/shell-slint/ui/theme.slint.
+// Rendered headlessly by ./harness (Slint software renderer) into ./renders.
+// Demo-only helpers (PaperBubble, QueueRow, FillBar, ...) belong to the shell, not the theme.
+
+import {
+    Theme, Tone, Severity, MarkState, ButtonKind, FocusRing, SeverityGlyph, Keycap, Button, PrimaryButton,
+    SecondaryButton, GhostButton, DangerButton, IconButton, Chip, StatusPill, Tag, MarkGlyph, OptionChip,
+    Card, StatTile, GirihDivider, NavRail, NavItem, TopBar, StatusBar, Breadcrumb, SearchField,
+    ProgressBar, MeterBar, Gauge, GroupHeader, TableHeaderCell, TableCell, TableRow, BubbleOverlay
+} from "../../../crates/shell-slint/ui/theme.slint";
+
+// ---- demo-only pieces (would live in the shell, not the theme)
+
+component PaperBubble inherits Rectangle {
+    in property <string> letter;
+    in property <float> fill;        // 0..1 pencil darkness
+    in property <bool> overlay;
+    in property <MarkState> mark: MarkState.blank;
+    width: 64px;
+    height: 64px;
+    Rectangle {
+        x: 16px; y: 16px; width: 32px; height: 32px;
+        border-radius: 16px;
+        border-width: 1.5px;
+        border-color: Theme.paper-print;
+        Text { text: root.letter; color: Theme.paper-print; font-size: 15px; horizontal-alignment: center; vertical-alignment: center; }
+        Rectangle {
+            x: 3px; y: 4px; width: 26px; height: 25px;
+            border-radius: 13px;
+            background: Theme.pencil;
+            opacity: root.fill;
+        }
+    }
+    if root.overlay: BubbleOverlay {
+        x: 6px; y: 6px;
+        size: 52px;
+        mark: root.mark;
+        option-label: root.letter;
+    }
+}
+
+component QueueRow inherits Rectangle {
+    in property <string> question;
+    in property <string> form;
+    in property <string> serial;
+    in property <[float]> fills;
+    in property <Severity> severity: Severity.error;
+    in property <bool> selected;
+    height: 62px;
+    background: self.selected ? Theme.primary-soft : transparent;
+    if root.selected: Rectangle { x: 0; width: 3px; background: Theme.primary; }
+    VerticalLayout {
+        padding-left: Theme.space-lg; padding-right: Theme.space-md; padding-top: Theme.space-sm; padding-bottom: Theme.space-sm;
+        spacing: Theme.space-xs;
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+            Text { text: root.question; font-size: Theme.text-md; font-weight: Theme.weight-semibold; color: root.selected ? Theme.primary : Theme.ink; }
+            Text { text: "Form " + root.form; font-size: Theme.text-xs; color: Theme.ink-2; vertical-alignment: center; horizontal-stretch: 1; }
+            VerticalLayout { alignment: center; SeverityGlyph { severity: root.severity; size: 12px; } }
+        }
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+            Text { text: root.serial; font-family: Theme.font-mono; font-size: Theme.text-xs; color: Theme.ink-2; horizontal-stretch: 1; }
+            HorizontalLayout {
+                spacing: 3px;
+                for f in root.fills: Rectangle {
+                    width: 9px; height: 9px; border-radius: 4.5px;
+                    border-width: 1px; border-color: Theme.border-strong;
+                    Rectangle { border-radius: 4.5px; background: Theme.ink; opacity: f; }
+                }
+            }
+        }
+    }
+    Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border; }
+}
+
+component FillBar inherits Rectangle {
+    in property <string> letter;
+    in property <float> fill;
+    in property <MarkState> mark: MarkState.blank;
+    width: 44px;
+    height: 120px;
+    property <length> plot: 84px;
+    Rectangle {
+        x: 12px; y: 6px + root.plot * (1 - root.fill); width: 20px; height: root.plot * root.fill;
+        border-radius: 3px;
+        background: root.mark == MarkState.blank ? Theme.ink-3 : Theme.mark-color(root.mark);
+    }
+    Text { y: 6px + root.plot * (1 - root.fill) - 16px; width: parent.width; text: root.fill < 0.1 ? "0.0" + round(root.fill * 100) : "0." + round(root.fill * 100); font-family: Theme.font-mono; font-size: Theme.text-2xs; color: Theme.ink; horizontal-alignment: center; }
+    Text { y: 96px; width: parent.width; text: root.letter; font-size: Theme.text-xs; font-weight: Theme.weight-semibold; color: Theme.ink-2; horizontal-alignment: center; }
+}
+
+component ShortcutRow inherits HorizontalLayout {
+    in property <string> keys;
+    in property <string> action;
+    spacing: Theme.space-sm;
+    Text { text: root.action; font-size: Theme.text-xs; color: Theme.ink-2; vertical-alignment: center; horizontal-stretch: 1; }
+    Keycap { text: root.keys; }
+}
+
+// ---- Screen: Review queue
+
+export component Gallery inherits Window {
+    width: 1440px;
+    height: 900px;
+    in property <bool> dark;
+    init => { Theme.reduce-motion = true; }
+    changed dark => { Theme.dark = root.dark; }
+    default-font-family: Theme.font-sans;
+    background: Theme.canvas;
+
+    HorizontalLayout {
+        NavRail {
+            Rectangle {
+                height: 52px;
+                Image { width: 36px; height: 36px; source: @image-url("../../../crates/shell-slint/ui/assets/icon.svg"); }
+            }
+            NavItem { icon: @image-url("../../../crates/shell-slint/ui/assets/icons/exams.svg"); label: "Exams"; }
+            NavItem { icon: @image-url("../../../crates/shell-slint/ui/assets/icons/setup.svg"); label: "Setup"; }
+            NavItem { icon: @image-url("../../../crates/shell-slint/ui/assets/icons/scan.svg"); label: "Scan"; }
+            NavItem { icon: @image-url("../../../crates/shell-slint/ui/assets/icons/review.svg"); label: "Review"; active: true; badge: "38"; }
+            NavItem { icon: @image-url("../../../crates/shell-slint/ui/assets/icons/results.svg"); label: "Results"; }
+            NavItem { icon: @image-url("../../../crates/shell-slint/ui/assets/icons/outcomes.svg"); label: "Outcomes"; }
+            NavItem { icon: @image-url("../../../crates/shell-slint/ui/assets/icons/export.svg"); label: "Export"; }
+            Rectangle { vertical-stretch: 1; }
+            NavItem { icon: @image-url("../../../crates/shell-slint/ui/assets/icons/settings.svg"); label: "Settings"; }
+        }
+        VerticalLayout {
+            TopBar {
+                Breadcrumb { parts: ["MATH 101 Calculus I", "Midterm 1", "Term 1448-1"]; }
+                HorizontalLayout {
+                    spacing: Theme.space-sm;
+                    alignment: center;
+                    VerticalLayout { alignment: center; Chip { text: "Marks"; count: "96"; selected: true; } }
+                    VerticalLayout { alignment: center; Chip { text: "Identity"; count: "12"; } }
+                    VerticalLayout { alignment: center; Chip { text: "Capture"; count: "4"; } }
+                    VerticalLayout { alignment: center; Chip { text: "Scoring"; count: "2"; } }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: Theme.space-xs;
+                    width: 200px;
+                    HorizontalLayout {
+                        Text { text: "128 of 412 resolved"; font-size: Theme.text-xs; color: Theme.ink-2; horizontal-stretch: 1; }
+                        Text { text: "31%"; font-family: Theme.font-mono; font-size: Theme.text-xs; color: Theme.ink; }
+                    }
+                    ProgressBar { value: 0.31; tone: Tone.primary; }
+                }
+                HorizontalLayout {
+                    spacing: Theme.space-sm;
+                    VerticalLayout { alignment: center; SearchField { placeholder: "Roster search"; width: 220px; } }
+                    VerticalLayout { alignment: center; IconButton { icon: @image-url("../../../crates/shell-slint/ui/assets/icons/moon.svg"); label: "Dark theme"; } }
+                    VerticalLayout { alignment: center; IconButton { icon: @image-url("../../../crates/shell-slint/ui/assets/icons/help.svg"); label: "Help for MRK-001 (F1)"; } }
+                }
+            }
+            HorizontalLayout {
+                vertical-stretch: 1;
+                // ---- left: queue
+                Rectangle {
+                    width: Theme.list-pane-width;
+                    background: Theme.surface;
+                    VerticalLayout {
+                        HorizontalLayout {
+                            padding-left: Theme.space-lg; padding-right: Theme.space-sm; height: 48px;
+                            Text { text: "Exception queue"; font-size: Theme.text-md; font-weight: Theme.weight-semibold; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 1; }
+                            VerticalLayout { alignment: center; IconButton { icon: @image-url("../../../crates/shell-slint/ui/assets/icons/filter.svg"); label: "Filter"; } }
+                        }
+                        GroupHeader { code: "MRK-001"; title: "Low-confidence mark"; count: "41"; severity: Severity.error; }
+                        QueueRow { question: "Q17"; form: "B"; serial: "2901-8B-0412"; fills: [0.05, 0.9, 0.05, 0.35, 0.05]; selected: true; }
+                        QueueRow { question: "Q17"; form: "B"; serial: "2901-8B-0377"; fills: [0.05, 0.8, 0.05, 0.3, 0.05]; }
+                        QueueRow { question: "Q22"; form: "A"; serial: "2901-8A-0105"; fills: [0.3, 0.05, 0.05, 0.05, 0.05]; }
+                        GroupHeader { code: "MRK-002"; title: "Multiple marks"; count: "17"; severity: Severity.error; }
+                        QueueRow { question: "Q04"; form: "B"; serial: "2901-8B-0288"; fills: [0.9, 0.05, 0.85, 0.05, 0.05]; }
+                        // Marks lane only (spec §13.2), ordered by severity then code; 41+17+30+4+4 = 96.
+                        GroupHeader { code: "MRK-003"; title: "Eraser residue"; count: "30"; severity: Severity.error; expanded: false; }
+                        GroupHeader { code: "REG-003"; title: "High residual (fold, curl)"; count: "4"; severity: Severity.error; expanded: false; }
+                        GroupHeader { code: "CAP-006"; title: "Scanner streaks"; count: "4"; severity: Severity.warn; expanded: false; }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                    Rectangle { x: parent.width - 1px; width: 1px; background: Theme.border; }
+                }
+                // ---- centre: scan canvas
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: Theme.scan-backdrop;
+                    VerticalLayout {
+                        padding: Theme.space-xl;
+                        spacing: Theme.space-lg;
+                        HorizontalLayout {
+                            spacing: Theme.space-sm;
+                            Rectangle { horizontal-stretch: 1; }
+                            Chip { text: "Registered"; count: "F2"; selected: true; }
+                            Chip { text: "Overlay"; count: "Space"; selected: true; }
+                            Chip { text: "Zoom 3x"; }
+                            Chip { text: "Contact sheet (40)"; }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                        HorizontalLayout {
+                            Rectangle { horizontal-stretch: 1; }
+                            Rectangle {
+                                width: 620px;
+                                height: 190px;
+                                background: Theme.paper;
+                                border-radius: 2px;
+                                drop-shadow-blur: 18px;
+                                drop-shadow-offset-y: 6px;
+                                drop-shadow-color: #00000033;
+                                Text { x: 36px; y: 74px; text: "17."; font-size: 18px; font-weight: Theme.weight-semibold; color: #2E3134; }
+                                HorizontalLayout {
+                                    x: 90px; y: 50px; height: 64px;
+                                    spacing: 30px;
+                                    PaperBubble { letter: "A"; fill: 0.04; overlay: true; mark: MarkState.blank; }
+                                    PaperBubble { letter: "B"; fill: 0.86; overlay: true; mark: MarkState.selected; }
+                                    PaperBubble { letter: "C"; fill: 0.03; overlay: true; mark: MarkState.blank; }
+                                    PaperBubble { letter: "D"; fill: 0.32; overlay: true; mark: MarkState.ambiguous; }
+                                    PaperBubble { letter: "E"; fill: 0.03; overlay: true; mark: MarkState.blank; }
+                                }
+                                Text { x: 36px; y: 150px; text: "Question 17 · Form B · booklet 2901-8B-0412 · page 1 · registered, 300 dpi"; font-family: Theme.font-mono; font-size: Theme.text-2xs; color: #5D6672; }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                        HorizontalLayout {
+                            spacing: Theme.space-lg;
+                            vertical-stretch: 0;
+                            Card {
+                                title: "Fill by bubble";
+                                subtitle: "Threshold 0.45 · hysteresis band 0.35–0.55";
+                                width: 340px;
+                                Rectangle {
+                                    height: 120px;
+                                    // hysteresis band and threshold line
+                                    Rectangle { x: 0; y: 6px + 84px * (1 - 0.55); width: parent.width; height: 84px * 0.20; background: Theme.warning-soft; }
+                                    Rectangle { x: 0; y: 6px + 84px * (1 - 0.45); width: parent.width; height: 1px; background: Theme.warning; }
+                                    HorizontalLayout {
+                                        spacing: 16px;
+                                        FillBar { letter: "A"; fill: 0.06; }
+                                        FillBar { letter: "B"; fill: 0.82; mark: MarkState.selected; }
+                                        FillBar { letter: "C"; fill: 0.05; }
+                                        FillBar { letter: "D"; fill: 0.31; mark: MarkState.ambiguous; }
+                                        FillBar { letter: "E"; fill: 0.04; }
+                                    }
+                                }
+                            }
+                            Card {
+                                title: "Student's other answers";
+                                subtitle: "Typical full fill 0.79 · 38 answered";
+                                horizontal-stretch: 1;
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    height: 48px;
+                                    for f in [0.81, 0.77, 0.83, 0.79, 0.74, 0.82, 0.80, 0.78, 0.84, 0.76, 0.79, 0.81, 0.77, 0.80, 0.82, 0.78]: Rectangle {
+                                        width: 12px;
+                                        background: Theme.track;
+                                        border-radius: 2px;
+                                        Rectangle { y: parent.height * (1 - f); height: parent.height * f; border-radius: 2px; background: Theme.ink-3; }
+                                    }
+                                    Rectangle { horizontal-stretch: 1; }
+                                }
+                                Rectangle {
+                                    background: Theme.surface-sunken;
+                                    border-radius: Theme.radius-md;
+                                    height: 36px;
+                                    Text {
+                                        x: Theme.space-md; width: parent.width - 2 * Theme.space-md;
+                                        text: "Question 17, form B. B filled 0.82, D light 0.31. Suggestion B, engine.";
+                                        font-size: Theme.text-xs; color: Theme.ink-2; vertical-alignment: center; overflow: elide;
+                                    }
+                                }
+                            }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+                // ---- right: decision panel
+                Rectangle {
+                    width: Theme.decision-pane-width;
+                    background: Theme.surface;
+                    Rectangle { x: 0; width: 1px; background: Theme.border; }
+                    VerticalLayout {
+                        padding: Theme.space-lg + Theme.space-xs;
+                        spacing: Theme.space-lg;
+                        Rectangle {
+                            height: 84px;
+                            border-radius: Theme.radius-lg;
+                            background: Theme.primary-soft;
+                            HorizontalLayout {
+                                padding: Theme.space-lg;
+                                spacing: Theme.space-lg;
+                                Text { text: "B"; font-size: Theme.text-display; font-weight: Theme.weight-semibold; color: Theme.primary; vertical-alignment: center; }
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: Theme.space-xs;
+                                    Text { text: "Engine suggestion"; font-size: Theme.text-xs; font-weight: Theme.weight-semibold; color: Theme.ink-2; }
+                                    Text { text: "Filled 0.82 · margin 0.51"; font-family: Theme.font-mono; font-size: Theme.text-xs; color: Theme.ink; }
+                                    HorizontalLayout { alignment: start; Tag { text: "MRK-001 · light"; tone: Tone.warning; } }
+                                }
+                            }
+                        }
+                        Text { text: "What is marked?"; font-size: Theme.text-xs; font-weight: Theme.weight-semibold; color: Theme.ink-2; }
+                        HorizontalLayout {
+                            spacing: Theme.space-sm;
+                            OptionChip { label: "A"; key-hint: "A"; }
+                            OptionChip { label: "B"; key-hint: "B"; suggested: true; selected: true; }
+                            OptionChip { label: "C"; key-hint: "C"; }
+                            OptionChip { label: "D"; key-hint: "D"; }
+                            OptionChip { label: "E"; key-hint: "E"; }
+                        }
+                        HorizontalLayout {
+                            spacing: Theme.space-sm;
+                            OptionChip { label: "Blank"; key-hint: "Bksp"; special: true; glyph: MarkState.blank; }
+                            OptionChip { label: "Multi"; key-hint: "Ctrl+M"; special: true; glyph: MarkState.ambiguous; }
+                            OptionChip { label: "Unreadable"; key-hint: "Ctrl+U"; special: true; glyph: MarkState.unreadable; }
+                        }
+                        PrimaryButton { text: "Accept suggestion"; key-hint: "Enter"; large: true; }
+                        SecondaryButton { text: "Apply to group · 40"; key-hint: "Shift+Enter"; }
+                        VerticalLayout {
+                            spacing: 0;
+                            GhostButton { text: "Defer"; key-hint: "Ctrl+D"; icon: @image-url("../../../crates/shell-slint/ui/assets/icons/defer.svg"); }
+                            GhostButton { text: "Escalate to instructor"; key-hint: "Ctrl+E"; icon: @image-url("../../../crates/shell-slint/ui/assets/icons/escalate.svg"); }
+                            GhostButton { text: "Add to rescan list"; key-hint: "Ctrl+R"; icon: @image-url("../../../crates/shell-slint/ui/assets/icons/rescan.svg"); }
+                        }
+                        Rectangle { height: 1px; background: Theme.border; }
+                        HorizontalLayout {
+                            Text { text: "Keyboard"; font-size: Theme.text-xs; font-weight: Theme.weight-semibold; color: Theme.ink-2; horizontal-stretch: 1; }
+                            Tag { text: "median 1.4 s / item"; tone: Tone.primary; }
+                        }
+                        GridLayout {
+                            spacing-horizontal: Theme.space-lg;
+                            spacing-vertical: Theme.space-sm;
+                            Row { ShortcutRow { keys: "↓ ↑"; action: "Next / previous"; } ShortcutRow { keys: "Ctrl+Z"; action: "Undo"; } }
+                            Row { ShortcutRow { keys: "Space"; action: "Overlay"; } ShortcutRow { keys: "F2"; action: "Original"; } }
+                            Row { ShortcutRow { keys: "/"; action: "Roster search"; } ShortcutRow { keys: "F1"; action: "Code help"; } }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+            }
+            StatusBar {
+                VerticalLayout { alignment: center; StatusPill { text: "Saved"; tone: Tone.success; } }
+                Text { text: "audit head 7f3a…b21c"; font-family: Theme.font-mono; font-size: Theme.text-2xs; color: Theme.ink-2; vertical-alignment: center; horizontal-stretch: 1; }
+                Text { text: "Two-person rule: on"; font-size: Theme.text-2xs; color: Theme.ink-2; vertical-alignment: center; }
+                Text { text: "omr 0.1.0"; font-family: Theme.font-mono; font-size: Theme.text-2xs; color: Theme.ink-2; vertical-alignment: center; }
+            }
+        }
+    }
+}
+
+// ---- Component sheet
+
+component SheetLabel inherits Text {
+    font-size: Theme.text-2xs;
+    font-weight: Theme.weight-semibold;
+    letter-spacing: 0.6px;
+    color: Theme.ink-2;
+}
+
+component Swatch inherits VerticalLayout {
+    in property <color> c;
+    in property <string> name;
+    spacing: 2px;
+    Rectangle { width: 64px; height: 28px; border-radius: Theme.radius-sm; background: root.c; border-width: 1px; border-color: Theme.border; }
+    Text { text: root.name; font-family: Theme.font-mono; font-size: 10px; color: Theme.ink-2; }
+}
+
+component GradeBar inherits VerticalLayout {
+    in property <string> latin;
+    in property <string> arabic;
+    in property <int> count;
+    in property <bool> fail;
+    spacing: 2px;
+    alignment: end;
+    Text { text: root.count; font-family: Theme.font-mono; font-size: Theme.text-2xs; color: Theme.ink; horizontal-alignment: center; }
+    Rectangle {
+        width: 30px;
+        height: root.count * 1.25px;
+        border-radius: 3px;
+        background: root.fail ? Theme.error : Theme.series-1;
+    }
+    Text { text: root.latin; font-size: Theme.text-xs; font-weight: Theme.weight-semibold; color: Theme.ink; horizontal-alignment: center; }
+    Text { text: root.arabic; font-family: Theme.font-arabic; font-size: Theme.text-xs; color: Theme.ink-2; horizontal-alignment: center; }
+}
+
+component CloRow inherits HorizontalLayout {
+    in property <string> clo;
+    in property <string> desc;
+    in property <float> avg;
+    in property <float> prop;
+    in property <float> lo;
+    in property <float> hi;
+    in property <bool> attained;
+    spacing: Theme.space-md;
+    VerticalLayout {
+        width: 150px;
+        alignment: center;
+        Text { text: root.clo; font-family: Theme.font-mono; font-size: Theme.text-xs; font-weight: Theme.weight-medium; color: Theme.ink; }
+        Text { text: root.desc; font-size: Theme.text-2xs; color: Theme.ink-2; overflow: elide; }
+    }
+    VerticalLayout {
+        horizontal-stretch: 1;
+        spacing: 2px;
+        MeterBar { value: root.avg; target: 0.70; fill: Theme.series-1; value-text: round(root.avg * 100) + "%"; thickness: 7px; height: 16px; }
+        MeterBar { value: root.prop; target: 0.70; ci-low: root.lo; ci-high: root.hi; fill: Theme.series-2; value-text: round(root.prop * 100) + "%"; thickness: 7px; height: 16px; }
+    }
+    VerticalLayout {
+        width: 110px;
+        alignment: center;
+        spacing: 2px;
+        // Verdict per the policy's class method (here: share >= tau), plus the §11.3 badge
+        // when the 95% CI contains the target; the badge never replaces the verdict.
+        StatusPill { text: root.attained ? "Attained" : "Not attained"; tone: root.attained ? Tone.success : Tone.error; }
+        if root.lo >= 0 && root.lo <= 0.70 && root.hi >= 0.70: Text {
+            text: "± ≈ target (95% CI)";
+            font-size: Theme.text-2xs;
+            color: Theme.warning;
+        }
+    }
+}
+
+export component Sheet inherits Window {
+    width: 1440px;
+    height: 900px;
+    in property <bool> dark;
+    init => { Theme.reduce-motion = true; }
+    changed dark => { Theme.dark = root.dark; }
+    default-font-family: Theme.font-sans;
+    background: Theme.canvas;
+
+    VerticalLayout {
+        padding: Theme.space-xl;
+        spacing: Theme.space-lg;
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            Image { width: 40px; height: 40px; source: @image-url("../../../crates/shell-slint/ui/assets/icon.svg"); }
+            VerticalLayout {
+                Text { text: "OMR Correction · component sheet"; font-size: Theme.text-xl; font-weight: Theme.weight-semibold; color: Theme.ink; }
+                Text { text: "Rendered by Slint 1.18.1 (software renderer) from crates/shell-slint/ui/theme.slint"; font-size: Theme.text-xs; color: Theme.ink-2; }
+            }
+        }
+        GirihDivider { }
+        HorizontalLayout {
+            spacing: Theme.space-xl;
+            // column 1
+            VerticalLayout {
+                spacing: Theme.space-md;
+                width: 430px;
+                alignment: start;
+                SheetLabel { text: "BUTTONS"; }
+                HorizontalLayout { spacing: Theme.space-sm; alignment: start;
+                    PrimaryButton { text: "Release results…"; }
+                    SecondaryButton { text: "What-if preview"; }
+                    GhostButton { text: "Cancel"; }
+                }
+                HorizontalLayout { spacing: Theme.space-sm; alignment: start;
+                    DangerButton { text: "Discard batch"; }
+                    Button { text: "Disabled"; enabled: false; }
+                    PrimaryButton { text: "New exam"; icon: @image-url("../../../crates/shell-slint/ui/assets/icons/plus.svg"); }
+                }
+                SheetLabel { text: "CHIPS · PILLS · TAGS"; }
+                HorizontalLayout { spacing: Theme.space-sm; alignment: start;
+                    Chip { text: "All"; count: "14"; selected: true; }
+                    Chip { text: "Scanning"; count: "3"; }
+                    Chip { text: "In review"; count: "4"; }
+                    Chip { text: "Released"; count: "2"; }
+                }
+                HorizontalLayout { spacing: Theme.space-sm; alignment: start;
+                    StatusPill { text: "Released"; tone: Tone.success; }
+                    StatusPill { text: "In review"; tone: Tone.warning; }
+                    StatusPill { text: "Blocked"; tone: Tone.error; }
+                    StatusPill { text: "Scanning"; tone: Tone.info; }
+                    StatusPill { text: "Setup"; tone: Tone.neutral; }
+                }
+                HorizontalLayout { spacing: Theme.space-sm; alignment: start;
+                    Tag { text: "A"; } Tag { text: "B"; } Tag { text: "C"; } Tag { text: "D"; }
+                    Tag { text: "Key v2"; tone: Tone.primary; }
+                    Tag { text: "SCO-001"; tone: Tone.error; }
+                    Tag { text: "proposed"; tone: Tone.accent; mono: false; }
+                }
+                SheetLabel { text: "SEVERITY (shape + colour)"; }
+                HorizontalLayout { spacing: Theme.space-lg; alignment: start;
+                    for s[i] in [Severity.info, Severity.warn, Severity.error, Severity.blocker]: HorizontalLayout {
+                        spacing: Theme.space-xs;
+                        VerticalLayout { alignment: center; SeverityGlyph { severity: s; size: 14px; } }
+                        Text { text: i == 0 ? "INFO" : i == 1 ? "WARN" : i == 2 ? "ERROR" : "BLOCKER"; font-family: Theme.font-mono; font-size: Theme.text-xs; color: Theme.ink; }
+                    }
+                }
+                SheetLabel { text: "KEYCAPS · SEARCH"; }
+                HorizontalLayout { spacing: Theme.space-sm; alignment: start;
+                    Keycap { text: "Enter"; } Keycap { text: "Shift+Enter"; } Keycap { text: "Ctrl+M"; } Keycap { text: "F2"; } Keycap { text: "/"; }
+                    SearchField { placeholder: "Search exams"; width: 150px; }
+                }
+                SheetLabel { text: "STAT TILES"; }
+                HorizontalLayout { spacing: Theme.space-sm;
+                    StatTile { label: "SHEETS THIS WEEK"; value: "3,812"; caption: "+412 today"; caption-tone: Tone.success; }
+                    StatTile { label: "OPEN EXCEPTIONS"; value: "147"; caption: "38 ERROR"; caption-tone: Tone.error; }
+                }
+                HorizontalLayout { spacing: Theme.space-sm;
+                    StatTile { label: "MEDIAN REVIEW"; value: "1.4"; unit: "s / item"; }
+                    StatTile { label: "CRONBACH α"; value: "0.84"; caption: "end-of-course band"; }
+                }
+            }
+            // column 2
+            VerticalLayout {
+                spacing: Theme.space-md;
+                width: 420px;
+                alignment: start;
+                SheetLabel { text: "MARK OVERLAYS ON PAPER (theme-invariant)"; }
+                Rectangle {
+                    height: 110px;
+                    background: Theme.paper;
+                    border-radius: Theme.radius-sm;
+                    HorizontalLayout {
+                        padding-left: 16px; spacing: 24px; y: 10px; height: 64px;
+                        PaperBubble { letter: "B"; fill: 0.86; overlay: true; mark: MarkState.selected; }
+                        PaperBubble { letter: "D"; fill: 0.32; overlay: true; mark: MarkState.ambiguous; }
+                        PaperBubble { letter: "C"; fill: 0.55; overlay: true; mark: MarkState.unreadable; }
+                        PaperBubble { letter: "E"; fill: 0.03; overlay: true; mark: MarkState.blank; }
+                    }
+                    HorizontalLayout {
+                        padding-left: 16px; spacing: 24px; y: 80px; height: 20px;
+                        for t in ["selected", "ambiguous", "unreadable", "blank"]: Text { width: 64px; text: t; font-size: Theme.text-2xs; color: #3B4048; horizontal-alignment: center; }
+                    }
+                }
+                SheetLabel { text: "OPTION CHIPS (review decision)"; }
+                HorizontalLayout { spacing: Theme.space-sm; alignment: start;
+                    OptionChip { label: "A"; key-hint: "A"; }
+                    OptionChip { label: "B"; key-hint: "B"; suggested: true; }
+                    OptionChip { label: "C"; key-hint: "C"; selected: true; }
+                    OptionChip { label: "Unreadable"; key-hint: "Ctrl+U"; special: true; glyph: MarkState.unreadable; }
+                }
+                SheetLabel { text: "PROGRESS · GAUGE"; }
+                HorizontalLayout {
+                    spacing: Theme.space-lg;
+                    VerticalLayout {
+                        spacing: Theme.space-md;
+                        alignment: center;
+                        horizontal-stretch: 1;
+                        ProgressBar { value: 0.98; tone: Tone.success; }
+                        ProgressBar { value: 0.62; tone: Tone.primary; }
+                        ProgressBar { value: 0.31; tone: Tone.warning; }
+                        ProgressBar { value: 0.12; tone: Tone.error; }
+                    }
+                    Gauge { value: 62; maximum: 120; floor-mark: 40; value-text: "62"; unit: "pages / s"; label: "Throughput"; }
+                }
+                SheetLabel { text: "SERIES 1–6 (adjacent-validated) · STATUS"; }
+                HorizontalLayout { spacing: Theme.space-xs; alignment: start;
+                    Swatch { c: Theme.series-1; name: "series-1"; }
+                    Swatch { c: Theme.series-2; name: "series-2"; }
+                    Swatch { c: Theme.series-3; name: "series-3"; }
+                    Swatch { c: Theme.series-4; name: "series-4"; }
+                    Swatch { c: Theme.series-5; name: "series-5"; }
+                    Swatch { c: Theme.series-6; name: "series-6"; }
+                }
+                HorizontalLayout { spacing: Theme.space-xs; alignment: start;
+                    Swatch { c: Theme.primary; name: "primary"; }
+                    Swatch { c: Theme.accent; name: "accent"; }
+                    Swatch { c: Theme.success; name: "success"; }
+                    Swatch { c: Theme.warning; name: "warning"; }
+                    Swatch { c: Theme.error; name: "error"; }
+                    Swatch { c: Theme.info; name: "info"; }
+                }
+            }
+            // column 3
+            VerticalLayout {
+                spacing: Theme.space-md;
+                horizontal-stretch: 1;
+                alignment: start;
+                Card {
+                    title: "Grade distribution";
+                    subtitle: "Saudi scale (CUA 1444/9/1) · N = 412";
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: center;
+                        height: 150px;
+                        GradeBar { latin: "A+"; arabic: "أ+"; count: 18; }
+                        GradeBar { latin: "A"; arabic: "أ"; count: 31; }
+                        GradeBar { latin: "B+"; arabic: "ب+"; count: 46; }
+                        GradeBar { latin: "B"; arabic: "ب"; count: 62; }
+                        GradeBar { latin: "C+"; arabic: "ج+"; count: 71; }
+                        GradeBar { latin: "C"; arabic: "ج"; count: 64; }
+                        GradeBar { latin: "D+"; arabic: "د+"; count: 42; }
+                        GradeBar { latin: "D"; arabic: "د"; count: 21; }
+                        GradeBar { latin: "F"; arabic: "هـ"; count: 57; fail: true; }
+                    }
+                }
+                Card {
+                    title: "CLO attainment";
+                    subtitle: "Top bar: average μ · bottom bar: share ≥ 60% with Wilson 95% CI · target 70% · verdict on share";
+                    CloRow { clo: "CLO1"; desc: "Evaluate limits"; avg: 0.74; prop: 0.81; lo: 0.77; hi: 0.85; attained: true; }
+                    CloRow { clo: "CLO3"; desc: "Optimisation problems"; avg: 0.71; prop: 0.73; lo: 0.68; hi: 0.77; attained: true; }
+                    CloRow { clo: "CLO4"; desc: "Related rates"; avg: 0.62; prop: 0.58; lo: 0.53; hi: 0.63; attained: false; }
+                }
+                Card {
+                    title: "Item analysis";
+                    inset: 0;
+                    VerticalLayout {
+                        TableRow { header: true;
+                            TableHeaderCell { text: "Q"; width: 48px; }
+                            TableHeaderCell { text: "p"; width: 72px; align: right; }
+                            TableHeaderCell { text: "r_ir"; width: 72px; align: right; }
+                            TableHeaderCell { text: "Flag"; horizontal-stretch: 1; }
+                        }
+                        TableRow { selected: true;
+                            TableCell { text: "Q12"; mono: true; width: 48px; }
+                            TableCell { text: "0.21"; mono: true; width: 72px; align: right; }
+                            TableCell { text: "−0.14"; mono: true; width: 72px; align: right; tint: Theme.error; }
+                            HorizontalLayout { horizontal-stretch: 1; padding-left: Theme.space-md; alignment: start; VerticalLayout { alignment: center; StatusPill { text: "Probable mis-key: D"; tone: Tone.error; } } }
+                        }
+                        TableRow {
+                            TableCell { text: "Q07"; mono: true; width: 48px; }
+                            TableCell { text: "0.48"; mono: true; width: 72px; align: right; }
+                            TableCell { text: "0.08"; mono: true; width: 72px; align: right; }
+                            HorizontalLayout { horizontal-stretch: 1; padding-left: Theme.space-md; alignment: start; VerticalLayout { alignment: center; StatusPill { text: "Top group prefers C"; tone: Tone.warning; } } }
+                        }
+                        TableRow {
+                            TableCell { text: "Q03"; mono: true; width: 48px; }
+                            TableCell { text: "0.95"; mono: true; width: 72px; align: right; }
+                            TableCell { text: "0.31"; mono: true; width: 72px; align: right; }
+                            HorizontalLayout { horizontal-stretch: 1; padding-left: Theme.space-md; alignment: start; VerticalLayout { alignment: center; StatusPill { text: "Too easy"; tone: Tone.info; } } }
+                        }
+                    }
+                }
+                Card {
+                    inset: 0;
+                    VerticalLayout {
+                        TableRow { selected: false;
+                            TableCell { text: "MATH 101  Calculus I"; secondary: "حساب التفاضل والتكامل ١"; arabic-secondary: true; strong: true; horizontal-stretch: 1; }
+                            TableCell { text: "2026-10-12"; secondary: "1448/04/20 AH"; mono: true; width: 120px; }
+                            HorizontalLayout { width: 120px; alignment: start; VerticalLayout { alignment: center; StatusPill { text: "In review"; tone: Tone.warning; } } }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

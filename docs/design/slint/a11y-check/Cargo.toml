@@ -1,0 +1,20 @@
+# Stand-alone accessibility check for crates/shell-slint/ui/theme.slint (not a workspace member).
+# Drives the theme components headlessly through Slint's testing backend, the way the A11
+# review-flow test will: find each control by its accessible label, read its state, invoke it.
+# Run:  cd docs/design/slint/a11y-check && cargo test --offline
+[package]
+name = "omr-theme-a11y-check"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+slint = "=1.18.1"
+# No features: with `internal`, the crates.io 1.18.1 package fails to build (it include_bytes!
+# test fonts from Slint's repository). The search API used here needs no feature.
+i-slint-backend-testing = "=1.18.1"
+
+[build-dependencies]
+slint-build = "=1.18.1"

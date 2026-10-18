@@ -1,0 +1,825 @@
+// View-model globals of the shell. Rust (src/bind.rs) fills them from a `Backend` and handles
+// every callback; the .slint files only lay the data out (spec §4.7: shells contain no logic).
+
+import { Tone, Severity, MarkState } from "theme.slint";
+
+export enum Page { exams, setup, scan, review, results, outcomes, settings }
+
+// ------------------------------------------------------------------------------- app chrome
+
+export global App {
+    in-out property <Page> page: Page.exams;
+    // exam context for breadcrumbs
+    in property <string> course: "CS 211 Data Structures";
+    in property <string> assessment: "Midterm 1";
+    in property <string> term: "1448 H, 1st term";
+    in property <string> term-gregorian: "Fall 2026";
+    in property <int> review-open;
+    in property <string> user-name;
+    in property <string> user-role;
+    in property <string> user-initials;
+    in property <string> engine: "omr 0.1.0";
+    in property <string> workspace;
+    // invented demo data (`--demo`): a banner on every screen says so
+    in property <bool> demo;
+    // where the data comes from (Settings · About)
+    in property <string> data-note;
+    // last command result, e.g. "Recorded Q17: B" or a validation error
+    in property <string> message;
+    in property <Tone> message-tone: Tone.neutral;
+    // settings
+    in-out property <bool> single-key: true;
+    in-out property <bool> show-all-default: false;
+    callback navigate(Page);
+    callback set-dark(bool);
+    callback set-reduce-motion(bool);
+    callback set-single-key(bool);
+    // a command the shell forwards but the demo backend does not model (e.g. "New exam")
+    callback request(string);
+    // global keys (Ctrl+1..6, Ctrl+0/Ctrl+comma, Escape); returns true when handled
+    callback key(string, bool, bool, bool) -> bool;
+}
+
+// ------------------------------------------------------------------------------- exams
+
+export struct ExamRow {
+    id: string,
+    code: string,
+    title: string,
+    title-ar: string,
+    assessment: string,
+    date: string,
+    date-hijri: string,
+    term: string,
+    forms: [string],
+    scanned: string,
+    expected: string,
+    progress: float,
+    progress-tone: Tone,
+    info: int,
+    warn: int,
+    error: int,
+    blocker: int,
+    status: string,
+    status-tone: Tone,
+    // accessible row label
+    label: string,
+}
+
+export struct FilterChip {
+    label: string,
+    count: int,
+}
+
+export struct ExamDrawer {
+    code: string,
+    title: string,
+    title-ar: string,
+    assessment: string,
+    status: string,
+    status-tone: Tone,
+    callout-title: string,
+    callout-text: string,
+    callout-tone: Tone,
+    review-label: string,
+    can-review: bool,
+    key-status: string,
+    mapped: int,
+    mapped-word: string,
+    total: int,
+    roster: string,
+    sections: string,
+    last-scan: string,
+    batch-id: string,
+    term: string,
+    term-ar: string,
+}
+
+export global ExamsVM {
+    in property <[ExamRow]> rows;
+    in property <[FilterChip]> filters;
+    in property <int> filter;
+    in property <int> selected: -1;
+    in property <bool> drawer-open;
+    in property <ExamDrawer> drawer;
+    in property <string> sheets-week;
+    in property <string> sheets-today;
+    in property <string> open-exceptions;
+    in property <string> open-errors;
+    in property <string> median-review;
+    in property <string> median-caption;
+    in property <string> throughput;
+    in property <string> term-label;
+    // incremented by Rust on Ctrl+K: the dashboard focuses its search field
+    in property <int> search-request;
+    // select row n and open the drawer (click, Enter)
+    callback select(int);
+    // move the selection by n rows, keeping the drawer as it is (↑ / ↓)
+    callback move(int);
+    callback set-filter(int);
+    // open the selected exam on a page
+    callback open(Page);
+    callback close-drawer();
+    // the New-exam form (CR-04): what the instructor types; Rust validates and grades it
+    in-out property <bool> new-open;
+    in property <bool> can-create;
+    in property <string> new-note;
+    in-out property <string> new-title;
+    in-out property <string> new-course;
+    in-out property <string> new-scans;
+    in-out property <string> new-sheet: "iau-ccsit-v1";
+    in-out property <string> new-questions;
+    in-out property <string> new-options;
+    in-out property <string> new-forms;
+    in-out property <string> new-key;
+    in-out property <string> new-roster;
+    in-out property <string> new-clo;
+    in-out property <string> new-key-sheets;
+    callback create-exam();
+}
+
+// ------------------------------------------------------------------------------- setup
+
+export struct MapCell {
+    text: string,
+    weight: float,
+    mapped: bool,
+    has-note: bool,
+    selected: bool,
+    label: string,
+}
+
+export struct MapRow {
+    q: int,
+    label: string,
+    keys: [string],
+    points: string,
+    cells: [MapCell],
+    sum: string,
+    sum-ok: bool,
+    status: string,
+    status-tone: Tone,
+}
+
+export struct CloHead {
+    code: string,
+    domain: string,
+    title: string,
+    title-ar: string,
+    plo: string,
+    share: float,
+    share-text: string,
+    items: int,
+}
+
+export struct LintRow {
+    code: string,
+    severity: Severity,
+    message: string,
+}
+
+export struct KV {
+    label: string,
+    value: string,
+    tone: Tone,
+}
+
+// One version chip of the key read from key sheets.
+export struct KsVersion {
+    label: string,
+    open: int,
+    confirmed: bool,
+    selected: bool,
+    a11y: string,
+}
+
+// One question of a version's key read from key sheets (§10.1). `choices` are the option
+// letters offered on a row that waits for the instructor; `pick` is the decision taken here and
+// not confirmed yet ("" none, "B", "A|C", "*").
+export struct KsRow {
+    q: string,
+    read: string,
+    answer: string,
+    status: string,
+    status-tone: Tone,
+    open: bool,
+    highlight: bool,
+    pick: string,
+    // the options marked on a several-marks row, offered as "Accept A|C" ("" none)
+    marked: string,
+    detail: string,
+    // the exam's key entry now, when it differs from the sheet ("" when equal or none)
+    key-now: string,
+    has-crop: bool,
+    label: string,
+}
+
+// One key-sheet scan (file and page) with what the recognizer saw on it.
+export struct KsScan {
+    label: string,
+    origin: string,
+    id-read: string,
+    version: string,
+    registration: string,
+    refusal: string,
+}
+
+export global SetupVM {
+    in property <bool> available;
+    in property <bool> has-roster: true;
+    in property <[KV]> template;
+    in property <string> template-id;
+    in property <string> template-kind;
+    in property <[string]> versions;
+    in property <[string]> options;
+    in property <string> key-status;
+    in property <bool> key-published;
+    in property <string> mapping-mode;
+    in property <[CloHead]> clos;
+    in property <[MapRow]> rows;
+    in property <[LintRow]> lints;
+    in property <int> sel-row;
+    in property <int> sel-col;
+    in property <string> sel-title;
+    in property <string> sel-clo;
+    in property <string> sel-weight;
+    in property <string> sel-note;
+    in property <string> error;
+    // replace the whole key from a key file (CSV, TSV, any layout `omr grade` reads)
+    in-out property <bool> key-open;
+    in-out property <string> key-path;
+    in property <bool> can-replace-key;
+    callback replace-key(string);
+    // the key read from the instructor's filled answer sheets (§10.1): never auto-accepted,
+    // confirmed here
+    in property <bool> can-read-keysheets;
+    in-out property <bool> ks-bar-open;
+    in-out property <string> ks-path;
+    in property <bool> has-keysheets;
+    in-out property <bool> ks-open;
+    in property <string> ks-source;
+    in property <bool> ks-preview;
+    in property <bool> ks-pending;
+    in property <[KsVersion]> ks-versions;
+    in property <int> ks-version;
+    in property <string> ks-version-letter;
+    in property <string> ks-version-title;
+    in property <string> ks-version-status;
+    in property <[KsRow]> ks-rows;
+    in property <[image]> ks-crops;
+    in property <[string]> ks-option-labels;
+    in property <[KsScan]> ks-scans;
+    in property <[string]> ks-notes;
+    in property <string> ks-consequence;
+    in property <string> ks-confirm-label;
+    in property <bool> ks-can-confirm;
+    in property <bool> ks-can-confirm-all;
+    in property <bool> ks-confirmed;
+    callback ks-read(string);
+    callback ks-select-version(int);
+    // row, option (0-based); -1 void, -2 accept every marked option
+    callback ks-choose(int, int);
+    callback ks-confirm(bool);
+    callback ks-discard();
+    callback cycle-key(int, int);
+    callback set-key(int, int, string);
+    callback set-weight(int, int, string);
+    callback set-note(int, int, string);
+    // imported item → CLO rows waiting for approval (§11.2), and a CLO file to replace them
+    in property <int> mappings-proposed;
+    in-out property <string> clo-path;
+    callback approve-mappings();
+    callback replace-clos(string);
+    callback select-cell(int, int);
+}
+
+// ------------------------------------------------------------------- Remark migration
+
+// One version of a Remark import (segment label and its facts).
+export struct RmVersion {
+    label: string,
+    selected: bool,
+    a11y: string,
+}
+
+// One question of the version shown: the key entry (hidden until revealed), its exact points
+// and its learning objective.
+export struct RmRow {
+    q: string,
+    key: string,
+    points: string,
+    objective: string,
+}
+
+// A learning objective imported as a CLO with weight-1 mappings, "imported, needs review".
+export struct RmObjective {
+    code: string,
+    label: string,
+    detail: string,
+}
+
+// A workbook row Remark graded as a student that is the instructor's key sheet: excluded.
+export struct RmKeySheet {
+    title: string,
+    detail: string,
+}
+
+// A question to adjudicate in the parallel run, with its bubble-row crop.
+export struct CmpDiff {
+    q: string,
+    booklet: string,
+    student: string,
+    remark: string,
+    ours: string,
+    status: string,
+    tone: Tone,
+    findings: string,
+    has-crop: bool,
+    label: string,
+}
+
+// A line of a parallel-run card (identity difference, total, key-sheet effect, workbook).
+export struct CmpLine {
+    title: string,
+    detail: string,
+    tone: Tone,
+}
+
+export struct CmpTile {
+    label: string,
+    value: string,
+    caption: string,
+    tone: Tone,
+}
+
+// The Remark migration (spec §3.5, PAR-09; §23.7): the import read on the New-exam form or in
+// Setup (shown for review, applied by the instructor), and the parallel run in Results.
+export global RemarkVM {
+    // which import the fields show: 0 none, 1 the New-exam form's, 2 the current exam's (Setup)
+    in property <int> context;
+    in property <bool> can-new;
+    in property <bool> can-setup;
+    // the import panel inside the New-exam form, the Setup bar and its summary
+    in-out property <bool> new-panel;
+    in-out property <bool> setup-bar;
+    in-out property <bool> setup-open;
+    in-out property <string> path;
+    in-out property <string> points-path;
+    in property <bool> has;
+    in property <bool> refused;
+    in property <string> refusal;
+    in property <string> remedy;
+    in property <string> suggestion;
+    in property <string> title;
+    in property <string> files;
+    in property <[RmVersion]> versions;
+    in property <int> version;
+    in property <[KV]> facts;
+    in property <string> key-counts;
+    in property <[RmRow]> rows;
+    in property <[RmObjective]> objectives;
+    in property <[RmKeySheet]> key-sheets;
+    in property <[KV]> workbooks;
+    in property <[string]> notes;
+    in property <string> applies;
+    in property <bool> can-apply;
+    in property <string> apply-label;
+    in-out property <bool> show-key;
+    // the New-exam form uses the import (its key, points and learning objectives)
+    in property <bool> new-using;
+    in property <string> new-using-text;
+    callback read(string, string);
+    callback use-suggested();
+    callback select-version(int);
+    callback apply();
+    callback discard();
+    callback clear-new();
+    // the parallel run in Results (Restricted; head-to-head figures stay inside the university)
+    in property <bool> can-compare;
+    in-out property <bool> cmp-bar;
+    in-out property <bool> cmp-open;
+    in-out property <string> cmp-path;
+    in property <bool> cmp-has;
+    in property <string> banner;
+    in property <bool> cmp-refused;
+    in property <string> cmp-refusal;
+    in property <string> cmp-remedy;
+    in property <string> cmp-suggestion;
+    in property <string> cmp-title;
+    in property <string> cmp-points;
+    in property <[CmpTile]> cmp-tiles;
+    in property <[CmpDiff]> diffs;
+    in property <[image]> diff-crops;
+    in property <[CmpLine]> identity;
+    in property <[CmpLine]> totals;
+    in property <[CmpLine]> cmp-key-sheets;
+    in property <[CmpLine]> cmp-workbooks;
+    // what holds release: the differences queued in Review, or nothing (the report alone)
+    in property <string> cmp-hold;
+    in property <bool> cmp-can-queue;
+    in-out property <string> save-path;
+    callback compare(string);
+    callback cmp-use-suggested();
+    callback cmp-use-exam-points();
+    callback save(string);
+    callback queue();
+}
+
+// ------------------------------------------------------------------------------- scan
+
+export struct Thumb {
+    serial: string,
+    // 0 auto, 1 review, 2 rejected, 3 reading, 4 queued, 5 key sheet (never a student),
+    // 6 key sheet that gives no key
+    state: int,
+    code: string,
+    severity: Severity,
+    variant: int,
+    label: string,
+}
+
+export struct CodeBar {
+    code: string,
+    title: string,
+    severity: Severity,
+    count: int,
+    frac: float,
+}
+
+export global ScanVM {
+    in property <bool> available;
+    in property <string> batch-label;
+    in property <string> source;
+    in property <string> device;
+    in property <bool> running;
+    in property <float> pps;
+    in property <float> pps-max: 120;
+    in property <float> pps-floor: 40;
+    in property <string> pps-text;
+    in property <string> pages-value;
+    in property <string> pages-caption;
+    in property <string> auto-value;
+    in property <string> auto-caption;
+    in property <string> first-value;
+    in property <string> first-caption;
+    in property <string> remaining-value;
+    in property <string> remaining-caption;
+    in property <float> done-frac;
+    in property <float> flight-frac;
+    in property <[KV]> stages;
+    // the worst codes (at most 7 rows fit the column at 1280 × 800); the rest are counted
+    in property <[CodeBar]> codes;
+    in property <int> codes-more;
+    in property <[Thumb]> thumbs;
+    in property <[image]> thumb-images;
+    in property <string> auto-count;
+    in property <string> review-count;
+    in property <string> rejected-count;
+    in property <int> key-sheet-count;
+    in property <[KV]> recon;
+    in property <string> recon-code;
+    in property <Severity> recon-severity;
+    in property <[string]> activity;
+    in property <string> engine;
+    in property <int> workers;
+    in property <int> review-open;
+    // a capture agent runs the batch (Pause and Stop); file imports cannot be paused
+    in property <bool> pausable: true;
+    // adding a later batch (another section, another day) to this exam, §8.1
+    in property <bool> can-add;
+    in property <string> add-note;
+    in-out property <bool> add-open;
+    in-out property <string> add-path;
+    callback add-scans(string);
+    callback toggle-pause();
+    callback open-review();
+    callback open-code(string);
+    // a thumbnail: its serial and worst open code ("" when none)
+    callback open-sheet(string, string);
+}
+
+// ------------------------------------------------------------------------------- review
+
+export struct LaneChip {
+    label: string,
+    count: int,
+    selected: bool,
+}
+
+export struct QueueEntry {
+    header: bool,
+    code: string,
+    title: string,
+    severity: Severity,
+    count: int,
+    expanded: bool,
+    // row handle: index into the shell's item list (never a raw item id)
+    id: int,
+    label: string,
+    detail: string,
+    serial: string,
+    fills: [float],
+    selected: bool,
+    blind: bool,
+    deferred: bool,
+    a11y: string,
+}
+
+export struct BubbleVM {
+    label: string,
+    x: float,
+    y: float,
+    r: float,
+    fill: float,
+    fill-text: string,
+    mark: MarkState,
+    overlay: bool,
+}
+
+export struct ChipVM {
+    label: string,
+    key: string,
+    suggested: bool,
+    selected: bool,
+}
+
+export struct ContactTile {
+    image: image,
+    // index of the tile (the shell maps it back to the item)
+    id: int,
+    serial: string,
+    current: bool,
+    label: string,
+}
+
+export struct Candidate {
+    rank: int,
+    name: string,
+    name-ar: string,
+    student-id: string,
+    national-id: string,
+    meta: string,
+    posterior: string,
+    channels: [KV],
+    suggested: bool,
+    selected: bool,
+}
+
+export global ReviewVM {
+    in property <[LaneChip]> lanes;
+    in property <int> resolved;
+    in property <int> total;
+    in property <[QueueEntry]> queue;
+    in property <length> selected-y;
+    in property <bool> has-item;
+    // item: 0 mark, 1 blind verify, 2 identity, 3 notice
+    in property <int> kind;
+    in property <string> code;
+    in property <string> code-title;
+    in property <string> sub-reason;
+    in property <Severity> severity;
+    in property <string> caption;
+    in property <string> question-label;
+    in property <image> crop;
+    in property <image> original;
+    in property <bool> has-original;
+    in property <float> crop-w: 640;
+    in property <float> crop-h: 168;
+    in property <[BubbleVM]> bubbles;
+    in property <[BubbleVM]> fill-bars;
+    in property <float> threshold: 0.45;
+    in property <float> band-lo: 0.35;
+    in property <float> band-hi: 0.55;
+    in property <bool> has-suggestion;
+    in property <string> suggestion-letter;
+    in property <string> suggestion-word;
+    in property <string> suggestion-source;
+    in property <string> suggestion-detail;
+    in property <string> suggestion-tag;
+    in property <[ChipVM]> options;
+    in property <[ChipVM]> specials;
+    // the decision overrides the suggestion: a reason code is required (§13.4)
+    in property <bool> reason-needed;
+    in property <[ChipVM]> reasons;
+    // the chosen reason needs a note saying why (OTHER, SOLO_SELF_APPROVAL, §14.4)
+    in property <bool> note-required;
+    // identity items: a student number typed by the reviewer (pending until Accept)
+    in-out property <string> student-entry;
+    in property <string> typed-student;
+    callback use-student(string);
+    in property <[Candidate]> candidates;
+    in property <[ContactTile]> contact;
+    in property <string> contact-caption;
+    in property <string> read-id;
+    in property <string> boxes-read;
+    in property <string> hypothesis;
+    in property <[string]> neighbours;
+    in property <string> notice-headline;
+    in property <[KV]> notice-lines;
+    in property <string> notice-consequence;
+    in property <[float]> other-fills;
+    in property <string> other-caption;
+    in property <string> summary;
+    in property <string> accept-label;
+    in property <bool> accept-enabled;
+    in property <string> accept-hint;
+    in property <string> group-label;
+    in property <bool> group-enabled;
+    in property <string> group-reason;
+    in property <bool> overlay: true;
+    in property <bool> show-all;
+    in property <bool> registered: true;
+    in property <int> zoom: 3;
+    in-out property <string> note;
+    in property <string> median;
+    // "Threshold 0.45 · hysteresis band 0.35–0.55"
+    in property <string> threshold-text;
+    in property <string> audit-head;
+    in property <bool> two-person;
+    in property <string> help-text;
+    in property <bool> help-open;
+    in property <string> empty-text;
+    // incremented by Rust on "/" or Ctrl+F: the review screen focuses the roster search
+    in property <int> search-request;
+    callback select-lane(int);
+    // a queue row (by its handle) and a contact-sheet tile (by its index)
+    callback select-item(int);
+    callback select-contact(int);
+    callback toggle-group(string);
+    callback choose-option(int);
+    callback choose-special(int);
+    callback choose-reason(int);
+    callback choose-candidate(int);
+    callback accept();
+    callback apply-group();
+    callback defer();
+    callback escalate();
+    callback rescan();
+    callback undo();
+    callback toggle-overlay();
+    callback toggle-show-all();
+    callback toggle-registered();
+    callback zoom-by(int);
+    callback toggle-help();
+    callback search(string);
+    callback key(string, bool, bool, bool) -> bool;
+}
+
+// ------------------------------------------------------------------------------- results
+
+export struct GradeBar {
+    letter: string,
+    letter-ar: string,
+    band: string,
+    count: int,
+    frac: float,
+    fail: bool,
+}
+
+export struct StatusBarVM {
+    code: string,
+    label: string,
+    label-ar: string,
+    count: int,
+}
+
+export struct ItemRow {
+    q: string,
+    p: string,
+    r: string,
+    r-ci: string,
+    r-negative: bool,
+    steps: int,
+    band: string,
+    shares: [float],
+    keyed: int,
+    flag: string,
+    flag-tone: Tone,
+    has-flag: bool,
+    // flag stability (§12.2): "98 %" high, "31 % · proposed" low, "computing…", "" none
+    stability: string,
+    stability-tone: Tone,
+    // 0 none, 1 high, 2 low (proposed), 3 computing
+    stability-kind: int,
+    selected: bool,
+    label: string,
+}
+
+export struct CheckRow {
+    tone: Tone,
+    text: string,
+    action: string,
+}
+
+export global ResultsVM {
+    in property <bool> available;
+    // why there are no results yet (e.g. a key from key sheets waits for its confirmation)
+    in property <string> empty-title: "No results yet";
+    in property <string> empty-text: "Results appear once every sheet of the exam is recognised and scored.";
+    in property <bool> empty-to-setup;
+    in property <string> key-label;
+    in property <string> students;
+    in property <string> students-caption;
+    in property <string> mean;
+    in property <string> mean-caption;
+    in property <string> pass-rate;
+    in property <string> pass-caption;
+    in property <string> alpha;
+    in property <string> alpha-caption;
+    in property <string> sem;
+    in property <string> sem-caption;
+    in property <string> open-errors;
+    in property <string> open-caption;
+    in property <[GradeBar]> grades;
+    in property <[StatusBarVM]> statuses;
+    in property <string> scale-label;
+    in property <[float]> histogram;
+    in property <[int]> histogram-counts;
+    in property <float> pass-mark: 60;
+    in property <float> mean-pct;
+    in property <float> sem-pct;
+    in property <string> histogram-caption;
+    in property <[ItemRow]> items;
+    in property <[string]> option-labels;
+    in property <[CheckRow]> readiness;
+    in property <bool> release-blocked;
+    in property <string> release-reason;
+    // exports (§16.3): every file next to the project, and the Blackboard grade-center upload
+    in property <bool> can-export;
+    in property <bool> blackboard-ready;
+    in property <string> blackboard-note;
+    in-out property <bool> export-open;
+    // the release confirmation (§13.4): opened by "Release results…", confirmed by Release
+    in-out property <bool> release-open;
+    in property <string> release-note;
+    in-out property <string> blackboard-column;
+    callback export-all();
+    callback export-blackboard(string);
+    in-out property <bool> show-key;
+    in-out property <bool> grade-table;
+    in property <int> selected-item: -1;
+    callback select-item(int);
+    callback release();
+    callback what-if();
+    callback check-action(int);
+}
+
+// ------------------------------------------------------------------------------- outcomes
+
+export struct CloRow {
+    code: string,
+    domain: string,
+    title: string,
+    title-ar: string,
+    target: float,
+    average: float,
+    average-text: string,
+    average-lo: float,
+    average-hi: float,
+    proportion: float,
+    proportion-text: string,
+    proportion-lo: float,
+    proportion-hi: float,
+    // 95 % CI of each statistic, printed on its own bar's line
+    average-ci-text: string,
+    proportion-ci-text: string,
+    // which statistic the policy decides on: 0 average μ, 1 threshold-proportion π, -1 neither
+    deciding: int,
+    n: string,
+    verdict: string,
+    verdict-tone: Tone,
+    badge: bool,
+    note: string,
+    label: string,
+}
+
+export struct B1Row {
+    header: bool,
+    domain-title: string,
+    domain-title-ar: string,
+    number: string,
+    clo: string,
+    plo: string,
+    methods: string,
+    targeted: string,
+    actual: string,
+    comment: string,
+    comment-tone: Tone,
+    // text lines the tallest cell wraps to (1–4); sets the row height
+    lines: int,
+}
+
+export global OutcomesVM {
+    in property <bool> available;
+    in property <string> policy;
+    in property <string> policy-version;
+    in property <string> method-label;
+    in property <float> target: 0.7;
+    in property <[CloRow]> clos;
+    in property <[B1Row]> b1;
+    in property <string> classification;
+    in property <string> attained-summary;
+    // TP-154 footnote: the deciding method, τ and T (§11.4, actual_level_display = both)
+    in property <string> footnote;
+    callback export-tp154();
+}

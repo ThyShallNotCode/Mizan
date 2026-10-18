@@ -1,0 +1,39 @@
+// Test window for ../src/main.rs: one instance of each interactive theme component,
+// wired to counters so the test can observe accessible actions.
+import { Theme, Tone, Severity, MarkState, Button, PrimaryButton, IconButton, Chip, StatusPill, OptionChip,
+    StatTile, NavRail, NavItem, SearchField, GroupHeader, TableRow, TableCell, BubbleOverlay, Breadcrumb,
+    MeterBar, Gauge, Card, ProgressBar } from "theme.slint";
+export { Theme }
+
+export component Check inherits Window {
+    width: 1000px;
+    height: 700px;
+    in-out property <int> icon-clicks;
+    in-out property <int> button-clicks;
+    in-out property <int> row-clicks;
+    in-out property <bool> group-expanded: false;
+    in-out property <string> search-edited;
+    HorizontalLayout {
+        NavRail {
+            NavItem { label: "Exams"; }
+            NavItem { label: "Review"; badge: "38"; active: true; }
+        }
+        VerticalLayout {
+            spacing: 8px;
+            Breadcrumb { parts: ["MATH 101", "Midterm 1"]; }
+            SearchField { placeholder: "Roster search"; edited(t) => { root.search-edited = t; } }
+            IconButton { label: "Filter"; enabled: false; clicked => { root.icon-clicks += 1; } }
+            Button { text: "Apply to group"; key-hint: "Shift+Enter"; enabled: false; clicked => { root.button-clicks += 1; } }
+            PrimaryButton { text: "Accept suggestion"; key-hint: "Enter"; clicked => { root.button-clicks += 10; } }
+            GroupHeader { code: "MRK-001"; title: "Low-confidence mark"; count: "41"; expanded: root.group-expanded; toggled => { root.group-expanded = !root.group-expanded; } }
+            TableRow { selected: true; accessible-label: "Q17 form B"; clicked => { root.row-clicks += 1; } TableCell { text: "Q17"; } }
+            StatTile { label: "Open exceptions"; value: "147"; caption: "38 ERROR"; }
+            StatusPill { text: "In review"; tone: Tone.warning; }
+            OptionChip { label: "B"; key-hint: "B"; suggested: true; }
+            BubbleOverlay { mark: MarkState.ambiguous; option-label: "D"; }
+            MeterBar { value: 0.72; target: 0.7; ci-low: 0.67; ci-high: 0.76; value-text: "72%"; }
+            Gauge { value: 62; maximum: 120; floor-mark: 40; value-text: "62"; unit: "pages / s"; label: "Throughput"; }
+            ProgressBar { value: 0.31; }
+        }
+    }
+}

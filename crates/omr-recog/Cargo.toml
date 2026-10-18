@@ -1,0 +1,35 @@
+[package]
+name = "omr-recog"
+description = "Recognition engine: page identification, registration, features, classification and per-question decisions (spec §8)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+omr-model.workspace = true
+omr-imaging.workspace = true
+omr-forms.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+kornia-apriltag.workspace = true
+kornia-image.workspace = true
+rxing = { workspace = true, features = ["decoders", "qrcode", "encoding_rs"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+omr-sim.workspace = true
+omr-pdf.workspace = true
+omr-forms = { workspace = true, features = ["render"] }
+image.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+rayon.workspace = true
+uuid.workspace = true
+
+[[example]]
+name = "eval_iau"
+
+[[example]]
+name = "eval_ownform"

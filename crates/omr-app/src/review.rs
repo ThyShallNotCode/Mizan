@@ -1,0 +1,1228 @@
+//! The review queue (§13.1–§13.2): one item per open ERROR/BLOCKER subject, in lanes, grouped
+//! by `group_key = H(code, sub_reason, item/field, suggested value, feature bucket)` and ordered
+//! by severity, code, item, group and top-bubble darkness. Every item carries its crop geometry
+//! (page, rectangle, bubble overlays with fills) so a UI can render it without recognition.
+
+use crate::engine::{BubbleGeom, GroupGeom};
+use crate::model::{PageStatus, ResponseStatus, Session};
+use omr_model::{Exception, Response, Severity};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+/// Review lane (§13.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Lane {
+    /// MRK (except MRK-012), CAP-005/006/009, REG-003/004.
+    Marks,
+    /// IDN-004/005/006/007, COL-004.
+    Identity,
+    /// CAP-001/002/003/004/…, REG-001/002/005, COL-*, IDN-001/002.
+    Capture,
+    /// SCO, MRK-012, IDN-003.
+    Scoring,
+}
+
+impl Lane {
+    /// All lanes in display order.
+    pub const ALL: [Lane; 4] = [Lane::Marks, Lane::Identity, Lane::Capture, Lane::Scoring];
+
+    /// The lane of an Appendix A code (§13.2 table).
+    pub fn of(code: &str) -> Lane {
+        match code {
+            "MRK-012" | "IDN-003" => Lane::Scoring,
+            "COL-004" => Lane::Identity,
+            "CAP-005" | "CAP-006" | "CAP-009" | "REG-003" | "REG-004" => Lane::Marks,
+            c if c.starts_with("MRK") => Lane::Marks,
+            c if c.starts_with("SCO") => Lane::Scoring,
+            "IDN-004" | "IDN-005" | "IDN-006" | "IDN-007" => Lane::Identity,
+            _ => Lane::Capture,
+        }
+    }
+
+    /// Label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Lane::Marks => "Marks",
+            Lane::Identity => "Identity",
+            Lane::Capture => "Capture",
+            Lane::Scoring => "Scoring",
+        }
+    }
+
+    /// Parses a lane name.
+    pub fn parse(s: &str) -> Option<Lane> {
+        Lane::ALL
+            .into_iter()
+            .find(|l| l.label().eq_ignore_ascii_case(s.trim()))
+    }
+}
+
+/// What kind of frame an item needs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ItemKind {
+    /// A question's marks.
+    Mark,
+    /// A booklet's identity.
+    Identity,
+    /// A booklet's form (version).
+    Form,
+    /// A page-, batch- or exam-level exception.
+    Notice,
+}
+
+/// Queue state of an item (§13.1, desktop subset).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ItemState {
+    /// Open.
+    Open,
+    /// Deferred to the end of the queue.
+    Deferred,
+    /// Escalated to the instructor.
+    Escalated,
+    /// On the rescan pull list (still blocking).
+    Rescan,
+    /// Resolved.
+    Resolved,
+}
+
+/// A reviewer decision.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Decision {
+    /// One option (0-based printed position).
+    Option(u8),
+    /// Nothing marked.
+    Blank,
+    /// Several marks (invalid response on a single-answer item).
+    Multi(Vec<u8>),
+    /// Cannot be read: rescan (never blank).
+    Unreadable,
+    /// The booklet belongs to this student.
+    Student(String),
+    /// Not on the roster.
+    NotOnRoster,
+    /// The booklet's form (index into the definition's forms).
+    Form(u8),
+    /// Seen; accept the core's handling. On a probable mis-key (SCO-001): keep the key, with a
+    /// reason and a note.
+    Acknowledge,
+    /// Void the item (a probable mis-key, SCO-001; §10.5 drop by default): its key entry
+    /// becomes `*` in a new key version.
+    Void,
+}
+
+impl Decision {
+    /// Display text.
+    pub fn text(&self, labels: &[String], forms: &[String]) -> String {
+        let lab = |o: u8| {
+            labels
+                .get(usize::from(o))
+                .cloned()
+                .unwrap_or_else(|| (o + 1).to_string())
+        };
+        match self {
+            Decision::Option(o) => lab(*o),
+            Decision::Blank => "blank".into(),
+            Decision::Multi(v) => format!(
+                "multi {}",
+                v.iter().map(|&o| lab(o)).collect::<Vec<_>>().join("+")
+            ),
+            Decision::Unreadable => "unreadable".into(),
+            Decision::Student(s) => format!("student {s}"),
+            Decision::NotOnRoster => "not on roster".into(),
+            Decision::Form(f) => format!(
+                "form {}",
+                forms.get(usize::from(*f)).cloned().unwrap_or_default()
+            ),
+            Decision::Acknowledge => "acknowledged".into(),
+            Decision::Void => "void the item".into(),
+        }
+    }
+
+    /// Parses CLI text: `A`…, `1`…, `blank`, `multi:A+C`, `unreadable`, `student:ID`,
+    /// `not-on-roster`, `form:B`, `ack`, `void`.
+    pub fn parse(s: &str, options: u8, forms: &[String]) -> Option<Decision> {
+        let t = s.trim();
+        let lower = t.to_ascii_lowercase();
+        match lower.as_str() {
+            "blank" | "empty" | "none" => return Some(Decision::Blank),
+            "unreadable" | "rescan" => return Some(Decision::Unreadable),
+            "not-on-roster" | "notonroster" | "n" => return Some(Decision::NotOnRoster),
+            "ack" | "acknowledge" | "keep" => return Some(Decision::Acknowledge),
+            "void" | "*" => return Some(Decision::Void),
+            "multi" => return Some(Decision::Multi(Vec::new())),
+            _ => {}
+        }
+        if let Some(rest) = lower.strip_prefix("multi:") {
+            let mut v: Vec<u8> = rest
+                .split(['+', ',', '|'])
+                .map(|p| crate::exam::parse_option(p, options))
+                .collect::<Option<_>>()?;
+            v.sort_unstable();
+            v.dedup();
+            return (v.len() >= 2).then_some(Decision::Multi(v));
+        }
+        if let Some(rest) = t.strip_prefix("student:") {
+            return Some(Decision::Student(rest.trim().to_string()));
+        }
+        if let Some(rest) = lower.strip_prefix("form:") {
+            let up = rest.trim().to_ascii_uppercase();
+            return forms
+                .iter()
+                .position(|f| *f == up)
+                .map(|i| Decision::Form(i as u8));
+        }
+        crate::exam::parse_option(t, options).map(Decision::Option)
+    }
+}
+
+/// Bubble state drawn over the crop (DESIGN §4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OverlayState {
+    /// Selected.
+    Filled,
+    /// In the review band or a multi candidate.
+    Ambiguous,
+    /// Unreadable (never empty).
+    Unreadable,
+    /// Blank.
+    Blank,
+}
+
+/// One bubble in crop coordinates.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OverlayBubble {
+    /// Printed label.
+    pub label: String,
+    /// Centre x (crop px).
+    pub cx: f32,
+    /// Centre y (crop px).
+    pub cy: f32,
+    /// Radius (crop px).
+    pub r: f32,
+    /// δ fill 0..1.
+    pub fill: f32,
+    /// State.
+    pub state: OverlayState,
+}
+
+/// Where the crop comes from and what to draw on it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CropGeom {
+    /// Page index (into `Session::pages`).
+    pub page: usize,
+    /// Rectangle in working-image pixels: x, y, width, height (may extend past the image).
+    pub rect: [i32; 4],
+    /// Bubbles.
+    pub bubbles: Vec<OverlayBubble>,
+    /// Selection threshold and hysteresis band on the fill scale.
+    pub threshold: f32,
+    /// Band `(θ − h, θ + h)`.
+    pub band: (f32, f32),
+}
+
+/// A review item.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ReviewItem {
+    /// Stable ID (1-based, canonical order).
+    pub id: u64,
+    /// Lane.
+    pub lane: Lane,
+    /// Kind.
+    pub kind: ItemKind,
+    /// Appendix A code.
+    pub code: String,
+    /// Sub-reason.
+    pub sub_reason: Option<String>,
+    /// Severity.
+    pub severity: Severity,
+    /// Catalogue title.
+    pub title: String,
+    /// Detail (engine wording).
+    pub detail: String,
+    /// Booklet.
+    pub booklet: Option<usize>,
+    /// Page.
+    pub page: Option<usize>,
+    /// Question (0-based).
+    pub question: Option<u16>,
+    /// The engine's proposal (never a key-derived value).
+    pub suggestion: Option<Decision>,
+    /// Per-option fills (δ), for the sparkline.
+    pub fills: Vec<f32>,
+    /// Group key (§13.2).
+    pub group_key: u64,
+    /// Crop geometry.
+    pub crop: Option<CropGeom>,
+    /// State.
+    pub state: ItemState,
+    /// Recorded decision.
+    pub resolution: Option<Decision>,
+    /// Exception rows in the project store that this item resolves.
+    pub store_exceptions: Vec<i64>,
+    /// Number of times deferred (orders deferred items last).
+    pub deferrals: u32,
+    /// The probable mis-key an SCO-001 item is about (§12.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flag: Option<KeyFlagRef>,
+    /// The incumbent's reading of a settled parallel-run difference (MRK-001
+    /// `parallel_run_disagreement`, §23.7): the instructor decides between it and the engine's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incumbent: Option<IncumbentReading>,
+}
+
+/// What the incumbent OMR process read for a question the engine auto-accepted differently
+/// (the parallel run, §23.7).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IncumbentReading {
+    /// The system, e.g. `Remark Office OMR`.
+    pub system: String,
+    /// Its reading as exported (`C`, `BLANK`, `MULTI:AC`, or the cell).
+    pub text: String,
+    /// The same as a decision, when it is one (an option, blank or several marks).
+    pub decision: Option<Decision>,
+    /// The engine's auto-accepted reading when the item was queued.
+    pub engine: Decision,
+    /// Where it comes from (workbook and row).
+    pub source: String,
+}
+
+/// The subject of a probable mis-key item (SCO-001, §12.2): which key entry and which option.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyFlagRef {
+    /// Master item of the score run.
+    pub master: usize,
+    /// The form whose key entry it is (0-based); `None` when every form shares the item.
+    pub form: Option<usize>,
+    /// Printed question (0-based).
+    pub question: u16,
+    /// The option d the flag names (0-based).
+    pub option: u8,
+}
+
+impl ReviewItem {
+    /// True while the item blocks (open, deferred, escalated, rescan).
+    pub fn is_open(&self) -> bool {
+        self.state != ItemState::Resolved
+    }
+
+    /// Top fill (similarity order inside a group).
+    pub fn top_fill(&self) -> f32 {
+        self.fills.iter().copied().fold(0.0, f32::max)
+    }
+}
+
+/// A review action (§13.3).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Action {
+    /// Record a decision.
+    Resolve {
+        /// Decision.
+        decision: Decision,
+        /// The reviewer pressed "accept suggestion".
+        accepted_suggestion: bool,
+        /// Note.
+        note: String,
+    },
+    /// Apply the decision to every open member of the item's group.
+    ApplyToGroup {
+        /// Decision.
+        decision: Decision,
+    },
+    /// Move to the end of the queue.
+    Defer,
+    /// Escalate to the instructor.
+    Escalate,
+    /// Add the sheet to the rescan pull list.
+    AddToRescan,
+}
+
+/// A reviewer's reason for a resolution or a key change (§13.4, §14.4): a code from the
+/// canonical list ([`reason_codes`]) and an optional note. Overriding the engine's proposal
+/// needs one; `OTHER` and `SOLO_SELF_APPROVAL` need a note too.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewReason {
+    /// Canonical reason code, e.g. `TEMPLATE_MISALIGN`.
+    pub code: String,
+    /// Free note (kept in the session; the audit event carries only its hash, §14.4).
+    #[serde(default)]
+    pub note: String,
+}
+
+impl ReviewReason {
+    /// A reason without a note.
+    pub fn code(code: &str) -> Self {
+        Self {
+            code: code.trim().to_ascii_uppercase(),
+            note: String::new(),
+        }
+    }
+
+    /// A reason with a note.
+    pub fn with_note(code: &str, note: &str) -> Self {
+        Self {
+            code: code.trim().to_ascii_uppercase(),
+            note: note.trim().to_string(),
+        }
+    }
+
+    /// Checks the code against the canonical list and the note rule (R10 wording).
+    pub fn validate(&self) -> Result<(), String> {
+        if !reason_codes().contains(&self.code.as_str()) {
+            return Err(format!(
+                "`{}` is not a reason code; use one of {}",
+                self.code,
+                reason_codes().join(", ")
+            ));
+        }
+        if omr_store::events::NOTE_REQUIRED.contains(&self.code.as_str()) && self.note.is_empty() {
+            return Err(format!("reason {} needs a note saying why", self.code));
+        }
+        Ok(())
+    }
+}
+
+/// The canonical reason codes (§14.4), in the specification's family order.
+pub fn reason_codes() -> &'static [&'static str] {
+    omr_store::events::REASON_CODES
+}
+
+/// The reason codes offered for an item, its family first (§14.4 families: marks; identity
+/// and collation; scoring), then the QA and governance codes (`ADJUDICATION`, `OTHER` …).
+pub fn reasons_for(kind: ItemKind, lane: Lane) -> Vec<&'static str> {
+    let family: &[&str] = match (kind, lane) {
+        (ItemKind::Mark, _) => &[
+            "AMBIGUOUS_MARK",
+            "ERASURE_RESIDUE",
+            "STRAY_MARK",
+            "MULTI_MARK_INTENT_NOTE",
+            "SCANNER_ARTIFACT",
+            "TEMPLATE_MISALIGN",
+            "ROW_SHIFT_CORRECTION",
+            "ACCOMMODATION_TRANSCRIPTION",
+        ],
+        (ItemKind::Identity, _) | (ItemKind::Notice, Lane::Capture | Lane::Identity) => &[
+            "ID_CORRECTION",
+            "NOT_ON_ROSTER",
+            "DUPLICATE_RESOLVED",
+            "ROSTER_DIFF_ACCEPTED",
+            "PROVISIONAL_STUDENT_ADDED",
+            "RESCAN_REPLACED",
+            "PAGE_ATTACHED",
+            "NOT_EXAM_MATERIAL",
+            "MISSING_PAGE_EXCUSED",
+        ],
+        _ => &[
+            "KEY_ERROR",
+            "KEY_CHALLENGE_UPHELD",
+            "ITEM_VOIDED_FLAWED",
+            "BONUS_AWARDED",
+            "CLERICAL_CORRECTION",
+            "SPECIAL_CONSIDERATION",
+            "POLICY_CORRECTION",
+        ],
+    };
+    let mut v: Vec<&'static str> = family.to_vec();
+    v.extend(["ADJUDICATION", "SOLO_SELF_APPROVAL", "OTHER"]);
+    v
+}
+
+/// What an action changed (for undo).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Change {
+    /// Item.
+    pub item: u64,
+    /// Item state before.
+    pub state_before: ItemState,
+    /// Resolution before.
+    pub resolution_before: Option<Decision>,
+    /// Deferrals before.
+    pub deferrals_before: u32,
+    /// Booklet data before (response / status), when changed.
+    pub response_before: Option<(Response, ResponseStatus)>,
+    /// Identity before (student, confirmed), when changed.
+    pub identity_before: Option<(Option<String>, bool)>,
+    /// Form before (form, source), when changed.
+    pub form_before: Option<(Option<usize>, crate::model::FormSource)>,
+    /// Booklet score hold before (MRK-015 acknowledged), when changed.
+    #[serde(default)]
+    pub hold_before: Option<Option<String>>,
+    /// Store exception rows resolved by this change.
+    pub resolved_rows: Vec<i64>,
+}
+
+/// One recorded review event (newest last).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ReviewRecord {
+    /// Sequence (1-based).
+    pub seq: u64,
+    /// Item acted on.
+    pub item: u64,
+    /// Action.
+    pub action: Action,
+    /// Changes (one per affected item).
+    pub changes: Vec<Change>,
+    /// Actor.
+    pub actor: String,
+    /// True once compensated by an undo.
+    pub undone: bool,
+    /// The reviewer's reason (§13.4), when one was given.
+    #[serde(default)]
+    pub reason: Option<ReviewReason>,
+}
+
+/// Queue and history.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+pub struct ReviewState {
+    /// Items by ID − 1.
+    pub items: Vec<ReviewItem>,
+    /// Events.
+    pub history: Vec<ReviewRecord>,
+    /// History records before this index belong to an earlier grading run (a batch was
+    /// appended since): their resolutions were carried over and they cannot be undone.
+    #[serde(default)]
+    pub sealed: usize,
+}
+
+impl ReviewState {
+    /// Item by ID.
+    pub fn item(&self, id: u64) -> Option<&ReviewItem> {
+        id.checked_sub(1)
+            .and_then(|i| self.items.get(i as usize))
+            .filter(|it| it.id == id)
+    }
+
+    /// Mutable item by ID.
+    pub fn item_mut(&mut self, id: u64) -> Option<&mut ReviewItem> {
+        id.checked_sub(1)
+            .and_then(|i| self.items.get_mut(i as usize))
+            .filter(|it| it.id == id)
+    }
+
+    /// Open items of a lane (all lanes for `None`) in queue order (§13.2).
+    pub fn queue(&self, lane: Option<Lane>) -> Vec<&ReviewItem> {
+        let mut v: Vec<&ReviewItem> = self
+            .items
+            .iter()
+            .filter(|i| i.is_open() && lane.is_none_or(|l| i.lane == l))
+            .collect();
+        v.sort_by(|a, b| queue_order(a, b));
+        v
+    }
+
+    /// Open members of `item`'s group, in queue order.
+    pub fn group_members(&self, item: &ReviewItem) -> Vec<&ReviewItem> {
+        self.queue(Some(item.lane))
+            .into_iter()
+            .filter(|i| i.group_key == item.group_key && i.code == item.code)
+            .collect()
+    }
+}
+
+/// §13.2 order: deferred last; severity (highest first); code; item or field; group;
+/// similarity (top-bubble darkness); booklet; ID.
+pub fn queue_order(a: &ReviewItem, b: &ReviewItem) -> std::cmp::Ordering {
+    (a.state == ItemState::Deferred)
+        .cmp(&(b.state == ItemState::Deferred))
+        .then(a.deferrals.cmp(&b.deferrals))
+        .then(b.severity.cmp(&a.severity))
+        .then(a.code.cmp(&b.code))
+        .then(a.question.cmp(&b.question))
+        .then(a.group_key.cmp(&b.group_key))
+        .then(((a.top_fill() * 1024.0) as i32).cmp(&((b.top_fill() * 1024.0) as i32)))
+        .then(a.booklet.cmp(&b.booklet))
+        .then(a.id.cmp(&b.id))
+}
+
+/// FNV-1a 64 over the group-key fields (stable across runs and machines).
+pub fn group_key(
+    code: &str,
+    sub: Option<&str>,
+    field: &str,
+    suggestion: Option<&Decision>,
+    bucket: u8,
+) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut eat = |bytes: &[u8]| {
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        h ^= 0xff;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    };
+    eat(code.as_bytes());
+    eat(sub.unwrap_or("").as_bytes());
+    eat(field.as_bytes());
+    eat(format!("{suggestion:?}").as_bytes());
+    eat(&[bucket]);
+    h
+}
+
+/// The decision that records response `r` (none for an unreadable one).
+pub(crate) fn suggestion_of(r: &Response) -> Option<Decision> {
+    match r {
+        Response::Single(o) => Some(Decision::Option(*o)),
+        Response::Blank => Some(Decision::Blank),
+        Response::Multi(v) | Response::Set(v) => Some(Decision::Multi(v.clone())),
+        Response::Unreadable { .. } => None,
+    }
+}
+
+/// Crop geometry of one bubble group: a padded rectangle around the bubbles; states from the
+/// response, the threshold and the band.
+pub fn crop_of(
+    page: usize,
+    g: &GroupGeom,
+    labels: &[String],
+    response: Option<&Response>,
+    theta: f32,
+    band: (f32, f32),
+    pad_r: f32,
+) -> Option<CropGeom> {
+    if g.bubbles.is_empty() {
+        return None;
+    }
+    let r = g
+        .bubbles
+        .iter()
+        .map(|b| b.r)
+        .fold(0.0f32, f32::max)
+        .max(4.0);
+    let pad = r * pad_r;
+    let x0 = g.bubbles.iter().map(|b| b.cx).fold(f32::MAX, f32::min) - r - pad;
+    let y0 = g.bubbles.iter().map(|b| b.cy).fold(f32::MAX, f32::min) - r - pad;
+    let x1 = g.bubbles.iter().map(|b| b.cx).fold(f32::MIN, f32::max) + r + pad;
+    let y1 = g.bubbles.iter().map(|b| b.cy).fold(f32::MIN, f32::max) + r + pad;
+    let rect = [
+        x0.floor() as i32,
+        y0.floor() as i32,
+        (x1 - x0).ceil().max(1.0) as i32,
+        (y1 - y0).ceil().max(1.0) as i32,
+    ];
+    let marked: Vec<u8> = match response {
+        Some(Response::Single(o)) => vec![*o],
+        Some(Response::Multi(v)) | Some(Response::Set(v)) => v.clone(),
+        _ => Vec::new(),
+    };
+    let bubbles = g
+        .bubbles
+        .iter()
+        .map(|b: &BubbleGeom| OverlayBubble {
+            label: labels
+                .get(usize::from(b.option))
+                .cloned()
+                .unwrap_or_else(|| b.option.to_string()),
+            cx: b.cx - rect[0] as f32,
+            cy: b.cy - rect[1] as f32,
+            r: b.r,
+            fill: b.fill,
+            state: if b.unreadable {
+                OverlayState::Unreadable
+            } else if marked.contains(&b.option) && b.fill >= band.1 {
+                OverlayState::Filled
+            } else if b.fill >= band.0 || marked.contains(&b.option) {
+                OverlayState::Ambiguous
+            } else {
+                OverlayState::Blank
+            },
+        })
+        .collect();
+    Some(CropGeom {
+        page,
+        rect,
+        bubbles,
+        threshold: theta,
+        band,
+    })
+}
+
+/// The most severe blocking exception of a list (ties: lowest code).
+fn worst(ex: &[Exception]) -> Option<&Exception> {
+    ex.iter()
+        .filter(|e| e.severity >= Severity::Error)
+        .min_by(|a, b| b.severity.cmp(&a.severity).then(a.code.cmp(&b.code)))
+}
+
+/// What an operator does about a page-level problem (R10): the next step for each capture,
+/// registration and collation code that holds a page out of grading.
+pub fn remedy(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "CAP-001" => crate::ingest::REMEDY_FILE,
+        "CAP-002" => "rescan the sheet at 200–300 dpi and add the new scan",
+        "CAP-004" => "scan the sheets again with JBIG2/MRC (\"compact PDF\") compression off",
+        "REG-001" => {
+            "check that the page is this exam's answer sheet; rescan it flat and upright, or \
+             acknowledge it as not exam material"
+        }
+        // The page's alignment with the blank form was not verified (one lattice pitch
+        // ambiguous, part of the page moved, too few bubbles matched): nothing on it is read.
+        "REG-003" => {
+            "rescan the sheet flat on the scanner glass (a phone photo: the whole sheet in view, \
+             taken from straight above, evenly lit) and add the new scan; never key its answers \
+             from this page"
+        }
+        "REG-004" => {
+            "check that the sheet is this exam's form printed at 100 % (no \"fit to page\", not \
+             a photocopy) and rescan it flat and straight, or grade it with its own template; \
+             never key its answers from this page"
+        }
+        "IDN-001" | "IDN-002" => {
+            "grade the sheet in the exam it belongs to (or rescan it if the page code is \
+             damaged), or acknowledge it as not exam material"
+        }
+        "COL-004" => {
+            "check which copy is right: acknowledge the held copy as not exam material, or \
+             regrade without the wrong copy"
+        }
+        _ => return None,
+    })
+}
+
+/// What to do about an item-level (region or row) REG-003: a row whose printed rings are not
+/// where the alignment puts them (covered, cut or folded away) is unreadable (R10).
+pub const REG_ROW_REMEDY: &str = "rescan the sheet flat (unfolded, nothing covering the \
+     bubbles) and add the new scan, or decide the answer from the paper sheet itself; never from \
+     a crop that does not show the row's printed question number";
+
+/// [`remedy`] for an exception at its scope: a region- or item-level REG-003 gets the row
+/// remedy, everything else the page-level one.
+pub fn remedy_of(e: &Exception) -> Option<&'static str> {
+    match (e.code.as_str(), e.scope) {
+        ("REG-003", omr_model::Scope::Region | omr_model::Scope::Item) => Some(REG_ROW_REMEDY),
+        (c, _) => remedy(c),
+    }
+}
+
+fn title(code: &str) -> String {
+    omr_model::exceptions::lookup(code)
+        .map(|d| d.title.to_string())
+        .unwrap_or_default()
+}
+
+/// An open item of exception `e`, before its subject is set.
+fn blank_item(lane: Lane, kind: ItemKind, e: &Exception) -> ReviewItem {
+    ReviewItem {
+        id: 0,
+        lane,
+        kind,
+        code: e.code.clone(),
+        sub_reason: e.sub_reason.clone(),
+        severity: e.severity,
+        title: title(&e.code),
+        detail: e.detail.clone(),
+        booklet: None,
+        page: None,
+        question: None,
+        suggestion: None,
+        fills: Vec::new(),
+        group_key: 0,
+        crop: None,
+        state: ItemState::Open,
+        resolution: None,
+        store_exceptions: Vec::new(),
+        deferrals: 0,
+        flag: None,
+        incumbent: None,
+    }
+}
+
+/// The Marks-lane item of question `q` (0-based) of booklet `bi` for exception `e`: its crop
+/// geometry, fills and the engine's proposal (never a key-derived value).
+pub fn mark_item(
+    session: &Session,
+    bi: usize,
+    q: usize,
+    e: &Exception,
+    option_labels: &[String],
+) -> ReviewItem {
+    let qs = &session.booklets[bi].questions[q];
+    let page = session.pages.get(qs.page);
+    let read = page.and_then(|p| p.read.as_ref());
+    let geom = read.and_then(|r| {
+        r.questions
+            .iter()
+            .position(|x| usize::from(x.question) == q)
+            .and_then(|k| r.question_geom.get(k))
+    });
+    let fills: Vec<f32> = geom
+        .map(|g| g.bubbles.iter().map(|b| b.fill).collect())
+        .unwrap_or_default();
+    let (theta, band) = read.map_or((0.2, (0.18, 0.22)), |r| {
+        let t = f32::from(r.theta_sel) / 1024.0;
+        let h = f32::from(r.hysteresis) / 1024.0;
+        (t, (0.08f32.min(t - h), t + h))
+    });
+    // No proposal names an option the exam does not use (MRK-017 option_not_offered).
+    let suggestion = suggestion_of(&qs.recognized.response).filter(|d| match d {
+        Decision::Option(o) => usize::from(*o) < option_labels.len(),
+        Decision::Multi(v) => v.iter().all(|o| usize::from(*o) < option_labels.len()),
+        _ => true,
+    });
+    let top = fills.iter().copied().fold(0.0f32, f32::max);
+    // SYS-032 sits in the lane of the code it contradicts (§13.4).
+    let lane = if e.code == "SYS-032" {
+        Lane::Marks
+    } else {
+        Lane::of(&e.code)
+    };
+    let mut it = blank_item(lane, ItemKind::Mark, e);
+    if e.code.starts_with("REG-")
+        && let Some(r) = remedy_of(e)
+    {
+        it.detail = format!("{}; {r}", it.detail);
+    }
+    it.booklet = Some(bi);
+    it.page = Some(qs.page);
+    it.question = Some(q as u16);
+    it.group_key = group_key(
+        &e.code,
+        e.sub_reason.as_deref(),
+        &format!("q{q}"),
+        suggestion.as_ref(),
+        (top * 10.0) as u8,
+    );
+    it.crop = geom.and_then(|g| {
+        crop_of(
+            qs.page,
+            g,
+            option_labels,
+            Some(&qs.recognized.response),
+            theta,
+            band,
+            0.6,
+        )
+    });
+    it.suggestion = suggestion;
+    it.fills = fills;
+    it
+}
+
+/// Builds the queue from a session's open subjects (called once after grading).
+pub fn build_queue(
+    session: &Session,
+    option_labels: &[String],
+    id_labels: &[String],
+) -> Vec<ReviewItem> {
+    let mut items: Vec<ReviewItem> = Vec::new();
+    let mut push = |mut it: ReviewItem| {
+        it.id = items.len() as u64 + 1;
+        items.push(it);
+    };
+    // Marks: one item per pending question.
+    for (bi, b) in session.booklets.iter().enumerate() {
+        for (q, qs) in b.questions.iter().enumerate() {
+            if qs.status != ResponseStatus::Pending {
+                continue;
+            }
+            let e = worst(&qs.recognized.exceptions)
+                .cloned()
+                .unwrap_or_else(|| {
+                    omr_model::Exception::must("MRK-001", Severity::Error, omr_model::Scope::Item)
+                        .with_detail("not auto-accepted")
+                });
+            push(mark_item(session, bi, q, &e, option_labels));
+        }
+    }
+    // Identity: one item per booklet with an ERROR identity exception.
+    let held: BTreeMap<&str, usize> = session
+        .booklets
+        .iter()
+        .enumerate()
+        .filter_map(|(bi, b)| b.identity.student.as_deref().map(|s| (s, bi)))
+        .collect();
+    for (bi, b) in session.booklets.iter().enumerate() {
+        if let Some(e) = worst(&b.identity.exceptions) {
+            let lane = if e.code == "SYS-032" {
+                Lane::Identity
+            } else {
+                Lane::of(&e.code)
+            };
+            let mut it = blank_item(lane, ItemKind::Identity, e);
+            it.booklet = Some(bi);
+            it.page = b.pages.first().copied();
+            // The engine's student, else (not on the roster, nothing assigned) the best roster
+            // candidate, e.g. the writer-error neighbour of a mis-bubbled ID (§9.5), unless
+            // another booklet already holds that student (accepting it would be refused with
+            // IDN-005: a dead end, CR-17); it stays a listed candidate.
+            it.suggestion = b
+                .identity
+                .student
+                .clone()
+                .or_else(|| {
+                    b.identity
+                        .candidates
+                        .first()
+                        .filter(|c| held.get(c.0.as_str()).is_none_or(|&o| o == bi))
+                        .map(|c| c.0.clone())
+                })
+                .map(Decision::Student);
+            it.group_key = group_key(&e.code, e.sub_reason.as_deref(), "id", None, 0);
+            if let Some(&p) = b.pages.first()
+                && let Some(r) = session.pages[p].read.as_ref()
+                && !r.id_geom.is_empty()
+            {
+                let all = GroupGeom {
+                    bubbles: r.id_geom.iter().flat_map(|g| g.bubbles.clone()).collect(),
+                };
+                let t = f32::from(r.theta_sel) / 1024.0;
+                it.crop = crop_of(p, &all, id_labels, None, t, (0.08, t), 0.4);
+            }
+            push(it);
+        }
+        // Form: IDN-003 / SCO-005 `inferred`.
+        for e in b
+            .exceptions
+            .iter()
+            .filter(|e| e.code == "IDN-003" || e.code == "SCO-005")
+        {
+            let mut it = blank_item(Lane::Scoring, ItemKind::Form, e);
+            it.booklet = Some(bi);
+            it.page = b.pages.first().copied();
+            it.suggestion = b.inference.as_ref().map(|i| Decision::Form(i.argmax as u8));
+            let bucket = b
+                .inference
+                .as_ref()
+                .map_or(0, |i| u8::from(i.margin_milli >= 10_000));
+            it.group_key = group_key(
+                &e.code,
+                e.sub_reason.as_deref(),
+                "form",
+                it.suggestion.as_ref(),
+                bucket,
+            );
+            if let Some(&p) = b.pages.first()
+                && let Some(r) = session.pages[p].read.as_ref()
+                && let Some(g) = &r.form_geom
+            {
+                let t = f32::from(r.theta_sel) / 1024.0;
+                it.crop = crop_of(p, g, &session.definition.forms, None, t, (0.08, t), 0.6);
+            }
+            push(it);
+        }
+        // Booklet notices (MRK-015 blank booklet …).
+        for e in b
+            .exceptions
+            .iter()
+            .filter(|e| e.code != "IDN-003" && e.code != "SCO-005" && e.severity >= Severity::Error)
+        {
+            let mut it = blank_item(Lane::of(&e.code), ItemKind::Notice, e);
+            it.booklet = Some(bi);
+            it.page = b.pages.first().copied();
+            it.suggestion = Some(Decision::Acknowledge);
+            it.group_key = group_key(&e.code, e.sub_reason.as_deref(), "booklet", None, 0);
+            push(it);
+        }
+    }
+    // Pages: refusals, unattributed pages, page-level ERRORs on read pages.
+    for (pi, p) in session.pages.iter().enumerate() {
+        let mut ex: Vec<&Exception> = Vec::new();
+        match p.status {
+            PageStatus::Refused => ex.extend(p.refusal.iter()),
+            // Key sheets are confirmed through the key summary, never in the review queue.
+            PageStatus::Duplicate | PageStatus::Blank | PageStatus::KeySheet => {}
+            PageStatus::Read | PageStatus::Unattributed => {
+                if let Some(r) = &p.read {
+                    ex.extend(r.exceptions.iter().filter(|e| {
+                        e.severity >= Severity::Error
+                            && e.code != "MRK-015"
+                            && e.scope != omr_model::Scope::Batch
+                    }));
+                }
+            }
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for e in ex {
+            if !seen.insert((e.code.clone(), e.sub_reason.clone())) {
+                continue;
+            }
+            let mut it = blank_item(Lane::of(&e.code), ItemKind::Notice, e);
+            // Which file and page, and what to do (R10).
+            let name = session
+                .sources
+                .get(p.source)
+                .map(|s| {
+                    s.name
+                        .split(" (unreadable: ")
+                        .next()
+                        .unwrap_or("")
+                        .to_string()
+                })
+                .unwrap_or_default();
+            if !name.is_empty() && !it.detail.starts_with(&name) {
+                it.detail = format!("{name} page {}: {}", p.index + 1, it.detail);
+            }
+            let has_fix = ["rescan", "remove", "acknowledge", "again"]
+                .iter()
+                .any(|w| it.detail.contains(w));
+            if let Some(r) = remedy_of(e)
+                && !has_fix
+            {
+                it.detail = format!("{}; {r}", it.detail);
+            }
+            it.page = Some(pi);
+            it.booklet = p.booklet;
+            it.suggestion = Some(Decision::Acknowledge);
+            it.group_key = group_key(&e.code, e.sub_reason.as_deref(), "page", None, 0);
+            push(it);
+        }
+    }
+    // Exam scope: the inferred key and other exam-level blockers.
+    // The key-sheet hold (SCO-003 `key_sheet_unconfirmed`) is lifted only by the instructor's
+    // confirmation of the key summary (`omr key confirm`), never by acknowledging an item.
+    for e in session.exam_exceptions.iter().filter(|e| {
+        e.severity >= Severity::Error && e.sub_reason.as_deref() != Some(crate::keysheet::HOLD)
+    }) {
+        let mut it = blank_item(Lane::of(&e.code), ItemKind::Notice, e);
+        it.suggestion = Some(Decision::Acknowledge);
+        it.group_key = group_key(&e.code, e.sub_reason.as_deref(), "exam", None, 0);
+        push(it);
+    }
+    items
+}
+
+/// The resolutions of a probable mis-key (§12.2 one-click resolutions), for its detail. The
+/// key's own letter is never named (the queue is printed on terminals).
+fn miskey_actions(d: &str) -> String {
+    format!(
+        "decide it: change the key to {d} (decision {d}), accept either the key or {d} \
+         (decision multi), void the item (decision void), or keep the key with a reason code and \
+         a note (decision ack --reason … --note …); flags never re-key on their own, and a key \
+         change is an audited key version"
+    )
+}
+
+/// Keeps the queue's probable mis-key items (SCO-001, §12.2) in step with the item analysis
+/// of the current score run (`report`, with its flag stability merged; `None` when there is
+/// nothing to judge: no key, an inferred or unconfirmed key). Every rank-1 flag at normal
+/// confidence ([`omr_analytics::ItemFlag::is_confident_miskey`]) has a Scoring-lane item
+/// (ERROR, Exam scope, sub-reason `<item>:<option>`): a new one is queued open; one withdrawn
+/// earlier is re-opened; a decided one stays decided. An open item whose flag no longer fires
+/// with confidence (the key or the responses changed) is withdrawn (resolved without a
+/// decision). Low-confidence flags are never queued: they stay the non-blocking SCO-002
+/// `proposed_miskey` of the item analysis. Returns true when the queue changed.
+pub fn sync_flag_items(s: &mut Session, report: Option<&omr_analytics::AnalyticsReport>) -> bool {
+    let n = usize::from(s.definition.questions);
+    let options = s.definition.option_labels();
+    let letter = |o: u8| {
+        options
+            .get(usize::from(o))
+            .cloned()
+            .unwrap_or_else(|| char::from(b'A' + o.min(25)).to_string())
+    };
+    // (sub-reason, subject, detail) of every confident probable mis-key.
+    let mut want: Vec<(String, KeyFlagRef, String)> = Vec::new();
+    if let (Some(rep), Some(key)) = (report, s.key.as_ref()) {
+        for f in rep.flags.iter().filter(|f| f.is_confident_miskey()) {
+            let Some(d) = f.option else {
+                continue;
+            };
+            let (form, q) = if key.shared_items {
+                (None, f.master)
+            } else {
+                (Some(f.master / n.max(1)), f.master % n.max(1))
+            };
+            let stability = rep
+                .stability
+                .as_ref()
+                .and_then(|st| {
+                    st.flags
+                        .iter()
+                        .find(|x| x.item == f.item && x.rule == f.rule && x.option == f.option)
+                        .map(|x| format!(" ({})", x.describe(st.resamples)))
+                })
+                .unwrap_or_default();
+            want.push((
+                format!("{}:{}", f.label, letter(d)),
+                KeyFlagRef {
+                    master: f.master,
+                    form,
+                    question: q as u16,
+                    option: d,
+                },
+                format!(
+                    "{}: {}{stability}; {}",
+                    f.label,
+                    f.rule.message(Some(d)),
+                    miskey_actions(&letter(d))
+                ),
+            ));
+        }
+    }
+    let mut changed = false;
+    for it in s
+        .review
+        .items
+        .iter_mut()
+        .filter(|i| i.code == "SCO-001" && i.flag.is_some())
+    {
+        match want
+            .iter()
+            .position(|w| it.sub_reason.as_deref() == Some(w.0.as_str()))
+        {
+            Some(k) => {
+                let (_, flag, detail) = want.remove(k);
+                let withdrawn = it.state == ItemState::Resolved && it.resolution.is_none();
+                if withdrawn {
+                    it.state = ItemState::Open;
+                    changed = true;
+                }
+                if it.is_open() && (it.detail != detail || it.flag.as_ref() != Some(&flag)) {
+                    it.detail = detail;
+                    it.flag = Some(flag);
+                    changed = true;
+                }
+            }
+            None if it.is_open() => {
+                it.state = ItemState::Resolved;
+                it.resolution = None;
+                it.detail = format!(
+                    "{} (withdrawn: no longer a probable mis-key with confidence in the current \
+                     results)",
+                    it.detail.split(" (withdrawn:").next().unwrap_or_default()
+                );
+                changed = true;
+            }
+            None => {}
+        }
+    }
+    for (sub, flag, detail) in want {
+        let id = s.review.items.len() as u64 + 1;
+        let e = Exception::must("SCO-001", Severity::Error, omr_model::Scope::Exam)
+            .with_sub_reason(sub.clone());
+        s.review.items.push(ReviewItem {
+            id,
+            lane: Lane::Scoring,
+            kind: ItemKind::Notice,
+            code: e.code.clone(),
+            sub_reason: Some(sub.clone()),
+            severity: e.severity,
+            title: title("SCO-001"),
+            detail,
+            booklet: None,
+            page: None,
+            question: Some(flag.question),
+            suggestion: None,
+            fills: Vec::new(),
+            group_key: group_key("SCO-001", Some(&sub), "exam", None, 0),
+            crop: None,
+            state: ItemState::Open,
+            resolution: None,
+            store_exceptions: Vec::new(),
+            deferrals: 0,
+            flag: Some(flag),
+            incumbent: None,
+        });
+        changed = true;
+    }
+    changed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lanes_follow_the_spec_table() {
+        assert_eq!(Lane::of("MRK-001"), Lane::Marks);
+        assert_eq!(Lane::of("MRK-012"), Lane::Scoring);
+        assert_eq!(Lane::of("IDN-003"), Lane::Scoring);
+        assert_eq!(Lane::of("IDN-004"), Lane::Identity);
+        assert_eq!(Lane::of("COL-004"), Lane::Identity);
+        assert_eq!(Lane::of("CAP-001"), Lane::Capture);
+        assert_eq!(Lane::of("CAP-009"), Lane::Marks);
+        assert_eq!(Lane::of("REG-001"), Lane::Capture);
+        assert_eq!(Lane::of("REG-003"), Lane::Marks);
+        assert_eq!(Lane::of("SCO-005"), Lane::Scoring);
+    }
+
+    /// The codes a source file raises at ERROR or BLOCKER: each `"XXX-NNN"` literal followed,
+    /// within the same constructor call, by `Severity::Error` or `Severity::Blocker`.
+    fn blocking_codes(src: &str, prefix: &str) -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        let pat = format!("\"{prefix}");
+        let mut from = 0;
+        while let Some(i) = src[from..].find(&pat) {
+            let at = from + i + 1;
+            let code = &src[at..(at + 7).min(src.len())];
+            let tail: String = src[at..].chars().take(120).collect();
+            let call = tail.split(')').next().unwrap_or("");
+            if code.len() == 7
+                && (call.contains("Severity::Error") || call.contains("Severity::Blocker"))
+            {
+                out.insert(code.to_string());
+            }
+            from = at;
+        }
+        out
+    }
+
+    #[test]
+    fn every_blocking_registration_code_has_a_remedy() {
+        // C6 (R10): what an operator does about every page or row that legacy registration
+        // refuses or makes unreadable; the desktop shell takes the same text from here.
+        let mut codes = blocking_codes(include_str!("../../omr-recog/src/register.rs"), "REG-");
+        codes.extend(blocking_codes(
+            include_str!("../../omr-recog/src/legacy.rs"),
+            "REG-",
+        ));
+        assert!(
+            codes.contains("REG-001") && codes.contains("REG-003") && codes.contains("REG-004"),
+            "{codes:?}"
+        );
+        for c in &codes {
+            let r = remedy(c).unwrap_or_else(|| panic!("{c} has no remedy"));
+            assert!(
+                r.contains("rescan") || r.contains("acknowledge"),
+                "{c}: {r}"
+            );
+            let def = omr_model::exceptions::lookup(c).unwrap();
+            for &scope in def.scopes {
+                let sev = *def.severities.last().unwrap();
+                let e = omr_model::Exception::must(c, sev, scope);
+                assert!(remedy_of(&e).is_some(), "{c} at {scope:?}");
+            }
+        }
+        assert!(remedy("REG-003").unwrap().contains("never key"));
+        let row = omr_model::Exception::must("REG-003", Severity::Error, omr_model::Scope::Region);
+        assert_eq!(remedy_of(&row), Some(REG_ROW_REMEDY));
+    }
+
+    #[test]
+    fn decisions_parse() {
+        let forms = vec!["A".to_string(), "B".to_string()];
+        assert_eq!(Decision::parse("C", 5, &forms), Some(Decision::Option(2)));
+        assert_eq!(Decision::parse("blank", 5, &forms), Some(Decision::Blank));
+        assert_eq!(
+            Decision::parse("multi:A+D", 5, &forms),
+            Some(Decision::Multi(vec![0, 3]))
+        );
+        assert_eq!(
+            Decision::parse("form:b", 5, &forms),
+            Some(Decision::Form(1))
+        );
+        assert_eq!(
+            Decision::parse("student:2210000001", 5, &forms),
+            Some(Decision::Student("2210000001".into()))
+        );
+        assert_eq!(Decision::parse("Z", 5, &forms), None);
+        let k1 = group_key(
+            "MRK-001",
+            Some("weak_mark"),
+            "q3",
+            Some(&Decision::Option(1)),
+            4,
+        );
+        let k2 = group_key(
+            "MRK-001",
+            Some("weak_mark"),
+            "q3",
+            Some(&Decision::Option(1)),
+            4,
+        );
+        assert_eq!(k1, k2);
+        assert_ne!(
+            k1,
+            group_key("MRK-001", None, "q3", Some(&Decision::Option(1)), 4)
+        );
+    }
+}

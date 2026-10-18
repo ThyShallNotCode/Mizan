@@ -1,0 +1,687 @@
+// Scan and recognise, live batch (DESIGN §9.3, concept scan-live.png).
+
+import {
+    Theme, Tone, Severity, Card, StatTile, TopBar, StatusBar, PrimaryButton, SecondaryButton,
+    GhostButton, StatusPill, Tag, Gauge, SeverityGlyph, Breadcrumb, FocusRing, Keycap,
+} from "../theme.slint";
+import { App, ScanVM, Thumb } from "../state.slint";
+import { Icons, ThemeToggle, Centered, StatusText, KVLine, EmptyState, MessageText, TextField } from "../widgets.slint";
+
+// Adding a later batch (another section, another day, §8.1): the scan folders or files, then
+// the exam is graded again with them in the background. Opens with the focus in the field.
+component AddScansBar inherits Rectangle {
+    background: Theme.surface-raised;
+    border-radius: Theme.radius-lg;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    drop-shadow-blur: Theme.shadow-2-blur;
+    drop-shadow-offset-y: Theme.shadow-2-offset;
+    drop-shadow-color: Theme.shadow-2-color;
+    init => {
+        field.focus();
+    }
+    // Escape closes the bar from anywhere inside it
+    FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                ScanVM.add-open = false;
+                return accept;
+            }
+            return reject;
+        }
+        VerticalLayout {
+            padding-left: Theme.space-lg;
+            padding-right: Theme.space-lg;
+            padding-top: Theme.space-md;
+            padding-bottom: Theme.space-md;
+            spacing: Theme.space-xs;
+            HorizontalLayout {
+                spacing: Theme.space-md;
+                Text {
+                    text: "Add scans";
+                    font-size: Theme.text-md;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                }
+                field := TextField {
+                    horizontal-stretch: 1;
+                    label: "Scan files or folders to add";
+                    placeholder: "A folder or files of scans; separate several with ;";
+                    text <=> ScanVM.add-path;
+                    mono: true;
+                    enabled: ScanVM.can-add;
+                    accepted(v) => {
+                        if (ScanVM.can-add && v != "") {
+                            ScanVM.add-scans(v);
+                        }
+                    }
+                }
+                Centered {
+                    PrimaryButton {
+                        text: "Add and regrade";
+                        key-hint: "Enter";
+                        enabled: ScanVM.can-add && ScanVM.add-path != "";
+                        clicked => {
+                            ScanVM.add-scans(ScanVM.add-path);
+                        }
+                    }
+                }
+                Centered {
+                    GhostButton {
+                        text: "Cancel";
+                        clicked => {
+                            ScanVM.add-open = false;
+                        }
+                    }
+                }
+            }
+            Text {
+                text: ScanVM.add-note;
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+component ThumbTile inherits Rectangle {
+    in property <Thumb> t;
+    in property <image> img;
+    callback clicked();
+    height: self.width * 1.12 + 22px;
+    border-radius: Theme.radius-sm;
+    background: Theme.surface-raised;
+    // the instructor's key sheet (5) is framed in gold and marked KEY: never a student
+    border-width: root.t.state == 5 || root.t.state == 6 ? 2px : 1px;
+    border-color: root.t.state == 1 || root.t.state == 2 || root.t.state == 6 ? Theme.tone-fg(root.t.severity == Severity.warn ? Tone.warning : Tone.error) : root.t.state == 5 ? Theme.accent : Theme.border;
+    opacity: root.t.state == 4 ? 0.45 : 1;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.t.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        clicked => {
+            fs.focus();
+            root.clicked();
+        }
+    }
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    Image {
+        x: 3px;
+        y: 3px;
+        width: parent.width - 6px;
+        height: parent.width * 1.12 - 3px;
+        source: root.img;
+        // a landscape page (the legacy IAU form) is letterboxed, never stretched
+        image-fit: root.img.width > root.img.height ? ImageFit.contain : ImageFit.fill;
+        accessible-role: none;
+    }
+    // rejected: desaturated veil; reading: static scan line (no motion when reduce-motion)
+    if root.t.state == 2 || root.t.state == 6: Rectangle {
+        x: 3px;
+        y: 3px;
+        width: parent.width - 6px;
+        height: parent.width * 1.12 - 3px;
+        background: Theme.surface-sunken.with-alpha(0.62);
+    }
+    if root.t.state == 3: Rectangle {
+        x: 3px;
+        y: (parent.width * 1.12) * 0.55;
+        width: parent.width - 6px;
+        height: 2px;
+        background: Theme.info.with-alpha(0.7);
+    }
+    HorizontalLayout {
+        y: parent.height - 21px;
+        height: 20px;
+        padding-left: Theme.space-xs + 1px;
+        padding-right: Theme.space-xs;
+        spacing: 4px;
+        Centered {
+            if root.t.state == 0: Path {
+                width: 10px;
+                height: 10px;
+                viewbox-width: 12;
+                viewbox-height: 12;
+                stroke: Theme.success;
+                stroke-width: 1.5px;
+                commands: "M 1.2 6 A 4.8 4.8 0 1 1 10.8 6 A 4.8 4.8 0 1 1 1.2 6 Z M 3.6 6.2 L 5.3 7.9 L 8.5 4.4";
+            }
+            if root.t.state == 1 || root.t.state == 2 || root.t.state == 6: SeverityGlyph {
+                severity: root.t.severity;
+                size: 9px;
+                accessible-role: none;
+            }
+            if root.t.state == 3 || root.t.state == 4: SeverityGlyph {
+                severity: Severity.info;
+                size: 9px;
+                accessible-role: none;
+            }
+            // a key: ring and bit (shape as well as the gold frame)
+            if root.t.state == 5: Path {
+                width: 11px;
+                height: 10px;
+                viewbox-width: 13;
+                viewbox-height: 12;
+                stroke: Theme.accent-ink;
+                stroke-width: 1.5px;
+                commands: "M 1 6 A 2.6 2.6 0 1 1 6.2 6 A 2.6 2.6 0 1 1 1 6 Z M 6.2 6 L 12.2 6 L 12.2 8.6 M 9.8 6 L 9.8 8";
+                accessible-role: none;
+            }
+        }
+        Text {
+            text: root.t.state == 0 ? root.t.serial : root.t.state == 3 ? "reading" : root.t.state == 4 ? "queued" : root.t.code;
+            font-family: Theme.font-mono;
+            font-size: Theme.text-2xs;
+            font-weight: Theme.weight-medium;
+            color: Theme.ink;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+            accessible-role: none;
+        }
+    }
+    FocusRing {
+        active: fs.has-focus;
+        corner: Theme.radius-sm;
+    }
+}
+
+component CodeBarRow inherits Rectangle {
+    in property <string> code;
+    in property <string> title;
+    in property <Severity> severity;
+    in property <int> count;
+    in property <float> frac;
+    in property <bool> compact;
+    callback clicked();
+    height: root.compact ? 24px : 30px;
+    background: ta.has-hover ? Theme.surface-hover : transparent;
+    border-radius: Theme.radius-sm;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.code + " " + root.title + ", " + root.count + " open";
+    accessible-description: "Open the review queue filtered to this code";
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        clicked => {
+            fs.focus();
+            root.clicked();
+        }
+    }
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    HorizontalLayout {
+        padding-left: Theme.space-xs;
+        padding-right: Theme.space-xs;
+        spacing: Theme.space-sm;
+        Centered {
+            SeverityGlyph {
+                severity: root.severity;
+                size: 10px;
+                accessible-role: none;
+            }
+        }
+        Text {
+            width: 64px;
+            text: root.code;
+            font-family: Theme.font-mono;
+            font-size: Theme.text-xs;
+            font-weight: Theme.weight-medium;
+            color: Theme.ink;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+        Centered {
+            horizontal-stretch: 1;
+            Rectangle {
+                height: 6px;
+                border-radius: 3px;
+                background: Theme.track;
+                Rectangle {
+                    x: 0;
+                    width: parent.width * root.frac;
+                    border-radius: 3px;
+                    background: Theme.ink-3;
+                }
+            }
+        }
+        Text {
+            width: 32px;
+            text: root.count;
+            font-family: Theme.font-mono;
+            font-size: Theme.text-xs;
+            color: Theme.ink;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+    FocusRing {
+        active: fs.has-focus;
+        corner: Theme.radius-sm;
+    }
+}
+
+export component ScanScreen inherits Rectangle {
+    in property <length> win-w: 1440px;
+    in property <length> win-h: 900px;
+    property <bool> narrow: root.win-w < 1400px;
+    // below 880 px the right column tightens, so the activity log keeps a few readable lines
+    property <bool> short: root.win-h < 880px;
+    // focus returns to the button that opened the bar, however the bar closes
+    property <bool> bar-open: ScanVM.add-open;
+    changed bar-open => {
+        if (!self.bar-open) {
+            add-button.focus();
+        }
+    }
+    VerticalLayout {
+        TopBar {
+            HorizontalLayout {
+                spacing: Theme.space-md;
+                Breadcrumb {
+                    parts: [App.course, App.assessment, ScanVM.batch-label];
+                }
+                if ScanVM.available: Centered {
+                    Tag {
+                        text: ScanVM.source;
+                        tone: Tone.primary;
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: Theme.space-md;
+                if ScanVM.available: Centered {
+                    StatusPill {
+                        text: ScanVM.device;
+                        tone: Tone.info;
+                    }
+                }
+                // a capture agent's batch pauses and stops; a file import grades to the end
+                if ScanVM.pausable: Centered {
+                    SecondaryButton {
+                        text: ScanVM.running ? "Pause" : "Resume";
+                        icon: ScanVM.running ? Icons.pause : Icons.play;
+                        key-hint: "Ctrl+Space";
+                        enabled: ScanVM.available && ScanVM.done-frac < 1;
+                        clicked => {
+                            ScanVM.toggle-pause();
+                        }
+                    }
+                }
+                if ScanVM.pausable: Centered {
+                    GhostButton {
+                        text: "Stop";
+                        enabled: ScanVM.running;
+                        clicked => {
+                            App.request("Stop the batch");
+                        }
+                    }
+                }
+                // a backend that cannot add scans (the demo) leaves the capture agent's room: the
+                // button is folded away (not removed, so the bar can hand focus back to it)
+                Centered {
+                    property <bool> shown: !ScanVM.pausable || ScanVM.can-add;
+                    visible: self.shown;
+                    max-width: self.shown ? 400px : 0px;
+                    add-button := SecondaryButton {
+                        text: "Add scans…";
+                        icon: Icons.plus;
+                        enabled: ScanVM.available && parent.shown;
+                        accessible-description: ScanVM.add-note;
+                        clicked => {
+                            ScanVM.add-open = !ScanVM.add-open;
+                        }
+                    }
+                }
+                Centered {
+                    PrimaryButton {
+                        text: "Open review · " + ScanVM.review-open;
+                        key-hint: "Ctrl+4";
+                        clicked => {
+                            ScanVM.open-review();
+                        }
+                    }
+                }
+                Centered {
+                    ThemeToggle { }
+                }
+            }
+        }
+        if !ScanVM.available: EmptyState {
+            vertical-stretch: 1;
+            title: "No batch for this exam";
+            text: "Start a scan or import files to see the live batch.";
+        }
+        if ScanVM.available: HorizontalLayout {
+            vertical-stretch: 1;
+            padding: Theme.space-xl;
+            spacing: Theme.space-lg;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Theme.space-lg;
+                HorizontalLayout {
+                    spacing: Theme.space-md;
+                    height: 148px;
+                    Card {
+                        width: root.narrow ? 212px : 236px;
+                        inset: 0;
+                        VerticalLayout {
+                            padding: Theme.space-md;
+                            padding-left: Theme.space-lg;
+                            spacing: 0;
+                            Text {
+                                text: "THROUGHPUT";
+                                font-size: Theme.text-2xs;
+                                font-weight: Theme.weight-semibold;
+                                letter-spacing: 0.6px;
+                                color: Theme.ink-2;
+                            }
+                            HorizontalLayout {
+                                alignment: center;
+                                Gauge {
+                                    value: ScanVM.pps;
+                                    maximum: ScanVM.pps-max;
+                                    floor-mark: ScanVM.pps-floor;
+                                    value-text: ScanVM.pps-text;
+                                    unit: "pages / s · floor 40";
+                                    label: "Throughput";
+                                }
+                            }
+                        }
+                    }
+                    StatTile {
+                        horizontal-stretch: 1;
+                        min-width: root.narrow ? 128px : 160px;
+                        label: "PAGES";
+                        value: ScanVM.pages-value;
+                        caption: ScanVM.pages-caption;
+                    }
+                    StatTile {
+                        horizontal-stretch: 1;
+                        min-width: root.narrow ? 128px : 160px;
+                        label: "AUTO-ACCEPTED";
+                        value: ScanVM.auto-value;
+                        unit: "%";
+                        caption: ScanVM.auto-caption;
+                    }
+                    StatTile {
+                        horizontal-stretch: 1;
+                        min-width: root.narrow ? 128px : 160px;
+                        label: "FIRST RESULT";
+                        value: ScanVM.first-value;
+                        unit: "s";
+                        caption: ScanVM.first-caption;
+                        caption-tone: Tone.success;
+                    }
+                    StatTile {
+                        horizontal-stretch: 1;
+                        min-width: root.narrow ? 128px : 160px;
+                        label: "REMAINING";
+                        value: ScanVM.remaining-value;
+                        caption: ScanVM.remaining-caption;
+                    }
+                }
+                Card {
+                    title: "Pipeline";
+                    subtitle: "Progress is announced politely, at most every 5 s (WCAG 4.1.3)";
+                    vertical-stretch: 0;
+                    VerticalLayout {
+                        spacing: Theme.space-md;
+                        Rectangle {
+                            height: 8px;
+                            border-radius: 4px;
+                            background: Theme.track;
+                            accessible-role: AccessibleRole.progress-indicator;
+                            accessible-label: "Pages recognised";
+                            accessible-value: ScanVM.pages-caption;
+                            Rectangle {
+                                x: 0;
+                                width: parent.width * ScanVM.done-frac;
+                                border-radius: 4px;
+                                background: Theme.primary;
+                            }
+                            Rectangle {
+                                x: parent.width * ScanVM.done-frac + 2px;
+                                width: max(0px, parent.width * ScanVM.flight-frac - 2px);
+                                border-radius: 4px;
+                                background: Theme.accent;
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: Theme.space-xl;
+                            alignment: start;
+                            for s in ScanVM.stages: HorizontalLayout {
+                                spacing: Theme.space-xs + 2px;
+                                Text {
+                                    text: s.label;
+                                    font-size: Theme.text-xs;
+                                    color: Theme.ink-2;
+                                }
+                                Text {
+                                    text: s.value;
+                                    font-family: Theme.font-mono;
+                                    font-size: Theme.text-xs;
+                                    font-weight: Theme.weight-medium;
+                                    color: s.tone == Tone.neutral ? Theme.ink : Theme.tone-fg(s.tone);
+                                }
+                            }
+                        }
+                    }
+                }
+                Card {
+                    vertical-stretch: 1;
+                    inset: 0;
+                    VerticalLayout {
+                        HorizontalLayout {
+                            padding: Theme.space-lg;
+                            padding-bottom: Theme.space-md;
+                            spacing: Theme.space-sm;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: Theme.space-2xs;
+                                Text {
+                                    text: "Sheets";
+                                    font-size: Theme.text-lg;
+                                    font-weight: Theme.weight-semibold;
+                                    color: Theme.ink;
+                                }
+                                Text {
+                                    text: "Latest 30 · arrows move, Enter opens the sheet";
+                                    font-size: Theme.text-xs;
+                                    color: Theme.ink-2;
+                                }
+                            }
+                            Centered {
+                                StatusPill {
+                                    text: "Auto " + ScanVM.auto-count;
+                                    tone: Tone.success;
+                                }
+                            }
+                            Centered {
+                                StatusPill {
+                                    text: "Review " + ScanVM.review-count;
+                                    tone: Tone.warning;
+                                }
+                            }
+                            Centered {
+                                StatusPill {
+                                    text: "Rejected " + ScanVM.rejected-count;
+                                    tone: Tone.error;
+                                }
+                            }
+                            if ScanVM.key-sheet-count > 0: Centered {
+                                StatusPill {
+                                    text: "Key sheets " + ScanVM.key-sheet-count;
+                                    tone: Tone.accent;
+                                }
+                            }
+                        }
+                        // Whole rows only: rows that do not fit the card are left out (and so are
+                        // their AT nodes), so the grid never spills over the status bar.
+                        Rectangle {
+                            vertical-stretch: 1;
+                            clip: true;
+                            property <length> gap: 6px;
+                            property <length> tile-w: (self.width - 2 * Theme.space-lg - 9 * self.gap) / 10;
+                            property <length> row-h: self.tile-w * 1.12 + 22px + self.gap;
+                            property <int> rows: max(1, floor((self.height - Theme.space-md + self.gap) / self.row-h));
+                            for t[i] in ScanVM.thumbs: ThumbTile {
+                                x: Theme.space-lg + mod(i, 10) * (parent.tile-w + parent.gap);
+                                y: floor(i / 10) * parent.row-h;
+                                width: parent.tile-w;
+                                visible: floor(i / 10) < parent.rows;
+                                t: t;
+                                img: ScanVM.thumb-images[t.variant];
+                                clicked => {
+                                    ScanVM.open-sheet(t.serial, t.code);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            VerticalLayout {
+                width: root.narrow ? 300px : 340px;
+                spacing: Theme.space-lg;
+                Card {
+                    title: "Exceptions by code";
+                    subtitle: "This batch · Enter opens the filtered queue";
+                    vertical-stretch: 0;
+                    VerticalLayout {
+                        spacing: 2px;
+                        for c in ScanVM.codes: CodeBarRow {
+                            compact: root.short;
+                            code: c.code;
+                            title: c.title;
+                            severity: c.severity;
+                            count: c.count;
+                            frac: c.frac;
+                            clicked => {
+                                ScanVM.open-code(c.code);
+                            }
+                        }
+                        if ScanVM.codes-more > 0: HorizontalLayout {
+                            alignment: start;
+                            GhostButton {
+                                text: ScanVM.codes-more + " more codes in the review queue";
+                                clicked => {
+                                    ScanVM.open-review();
+                                }
+                            }
+                        }
+                    }
+                }
+                Card {
+                    title: "Batch reconciliation";
+                    vertical-stretch: 0;
+                    VerticalLayout {
+                        spacing: root.short ? 2px : Theme.space-sm;
+                        if ScanVM.recon-code != "": HorizontalLayout {
+                            alignment: start;
+                            StatusPill {
+                                text: ScanVM.recon-code;
+                                tone: ScanVM.recon-severity == Severity.warn ? Tone.warning : Tone.error;
+                            }
+                        }
+                        for kv in ScanVM.recon: KVLine {
+                            label: kv.label;
+                            value: kv.value;
+                            tone: kv.tone;
+                            mono: true;
+                        }
+                        HorizontalLayout {
+                            alignment: start;
+                            SecondaryButton {
+                                text: "Rescan pull list";
+                                key-hint: "Ctrl+R";
+                                clicked => {
+                                    App.request("Rescan pull list");
+                                }
+                            }
+                        }
+                    }
+                }
+                Card {
+                    title: "Activity";
+                    vertical-stretch: 1;
+                    // The log takes the height left over and clips its oldest lines: its line count
+                    // must never set the column's minimum height (that pushed the status bar off).
+                    Rectangle {
+                        background: Theme.surface-sunken;
+                        border-radius: Theme.radius-md;
+                        vertical-stretch: 1;
+                        min-height: 0px;
+                        preferred-height: 0px;
+                        clip: true;
+                        VerticalLayout {
+                            padding: Theme.space-md;
+                            spacing: Theme.space-xs;
+                            alignment: start;
+                            // long lines (a saved path, a refused batch) wrap, never cut
+                            for a in ScanVM.activity: Text {
+                                text: a;
+                                font-family: Theme.font-mono;
+                                font-size: Theme.text-2xs;
+                                color: Theme.ink;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        StatusBar {
+            Centered {
+                StatusPill {
+                    text: ScanVM.running ? "Recognising" : "Idle";
+                    tone: ScanVM.running ? Tone.info : Tone.neutral;
+                }
+            }
+            StatusText {
+                text: ScanVM.engine + " · " + ScanVM.workers + " workers";
+                mono: true;
+            }
+            MessageText {
+                text: App.message;
+                tone: App.message-tone;
+                horizontal-stretch: 1;
+            }
+            StatusText {
+                text: "Deterministic: decisions are identical at any thread count (A5)";
+            }
+            StatusText {
+                text: App.engine;
+                mono: true;
+            }
+        }
+    }
+    // the bar floats over the screen, so opening it never pushes the status bar out of a
+    // 1280 × 800 window
+    if ScanVM.available && ScanVM.add-open: AddScansBar {
+        x: Theme.space-lg;
+        y: Theme.top-bar-height + Theme.space-sm;
+        width: root.width - 2 * Theme.space-lg;
+        height: self.preferred-height;
+    }
+}

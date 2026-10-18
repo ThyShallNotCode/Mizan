@@ -1,0 +1,50 @@
+[package]
+name = "shell-slint"
+description = "Slint desktop shell: widget binding and pixel blitting only (spec §5.2, ADR-001)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "shell_slint"
+path = "src/lib.rs"
+
+[[bin]]
+name = "omr-desktop"
+path = "src/main.rs"
+
+[dependencies]
+omr-app.workspace = true
+# Types of the view-models omr-app hands over (severity, cancel mode, catalogue titles, item
+# flags, attainment policy); the shell decides nothing with them.
+omr-model.workspace = true
+omr-analytics.workspace = true
+omr-outcomes.workspace = true
+# Exact points of a Remark import as text (`exact_text`), as omr-app hands them over.
+omr-scoring.workspace = true
+# `omr-desktop --grade --spec spec.json` reads the own-form spec (as `omr grade` does).
+serde_json.workspace = true
+slint.workspace = true
+# Synthetic review crops (bubble rows drawn at first use) and PNG encoding of headless screenshots.
+tiny-skia.workspace = true
+
+[dev-dependencies]
+# R8: test-only. No features: with `internal`, the crates.io 1.18.1 package fails to build.
+i-slint-backend-testing.workspace = true
+# The synthetic exam (tests/support, examples/synthetic_exam.rs): the committed blank IAU form,
+# omr-sim's pencil-mark painter and JPEG encoder. R8: dev-only.
+omr-sim.workspace = true
+omr-recog.workspace = true
+omr-forms.workspace = true
+image.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+tempfile.workspace = true
+# Synthetic Remark Office OMR graded workbooks (tests/support/synthetic_remark.rs): invented
+# rows in the documented export layout, never a real export. R8: dev-only.
+rust_xlsxwriter.workspace = true
+
+[build-dependencies]
+slint-build.workspace = true

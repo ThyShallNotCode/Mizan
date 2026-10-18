@@ -1,0 +1,14 @@
+[package]
+name = "omr-imaging"
+description = "Image decode, normalisation, sampling and registration primitives (spec §4.3, §8.2, §8.4, §8.5)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+omr-model.workspace = true
+image.workspace = true
+thiserror.workspace = true
+serde.workspace = true
