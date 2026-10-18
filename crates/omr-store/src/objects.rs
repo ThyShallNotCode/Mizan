@@ -116,7 +116,7 @@ pub struct ObjectStore {
     spool: PathBuf,
 }
 
-fn sync_dir(dir: &Path) -> io::Result<()> {
+pub(crate) fn sync_dir(dir: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         File::open(dir)?.sync_all()

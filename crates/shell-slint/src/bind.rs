@@ -76,13 +76,19 @@ fn compare_request(typed: &str) -> b::RemarkRequest {
 }
 
 /// The scan files or folders typed into the Add scans field: separated by `;` or new lines,
-/// quotes stripped, `~/` for the home folder.
+/// quotes stripped, `~/` (or `~\` on Windows) for the home folder.
 pub fn scan_paths(text: &str) -> Vec<std::path::PathBuf> {
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let home = std::env::home_dir();
     text.split([';', '\n'])
         .map(|p| p.trim().trim_matches(|c| c == '"' || c == '\''))
         .filter(|p| !p.is_empty())
-        .map(|p| match (p.strip_prefix("~/"), &home) {
+        .map(|p| {
+            let rest = p
+                .strip_prefix('~')
+                .and_then(|r| r.strip_prefix(std::path::is_separator));
+            (p, rest)
+        })
+        .map(|(p, rest)| match (rest, &home) {
             (Some(rest), Some(h)) => h.join(rest),
             _ => std::path::PathBuf::from(p),
         })
@@ -4651,13 +4657,15 @@ mod tests {
 
     #[test]
     fn scan_paths_split_and_expand_home() {
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = std::env::home_dir();
         let p = scan_paths(" day2/ ; \"b c.pdf\";;~/scans\n");
         assert_eq!(p.len(), 3);
         assert_eq!(p[0], std::path::PathBuf::from("day2/"));
         assert_eq!(p[1], std::path::PathBuf::from("b c.pdf"));
-        if !home.is_empty() {
-            assert_eq!(p[2], std::path::Path::new(&home).join("scans"));
+        if let Some(home) = &home {
+            assert_eq!(p[2], home.join("scans"));
+            let native = format!("~{}scans", std::path::MAIN_SEPARATOR);
+            assert_eq!(scan_paths(&native), vec![home.join("scans")]);
         }
         assert!(scan_paths(" ; ").is_empty());
     }

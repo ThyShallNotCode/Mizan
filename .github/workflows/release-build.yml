@@ -54,11 +54,18 @@ jobs:
 
       - name: Enlarge the pagefile (Windows)
         if: runner.os == 'Windows'
-        uses: al-cheb/configure-pagefile-action@v1.4
+        uses: al-cheb/configure-pagefile-action@a3b6ebd6b634da88790d9c58d4b37a7f4a7b8708 # v1.4
         with:
           minimum-size: 16GB
           maximum-size: 24GB
           disk-root: "C:"
+
+      - name: Show the pagefile and free disk
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_PageFileUsage | Format-List Name,AllocatedBaseSize,CurrentUsage
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name,Used,Free
 
       - uses: actions/checkout@v4
 
@@ -84,11 +91,16 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "no Visual Studio with the C++ tools" }
           $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          if (-not $dumpbin) { throw "dumpbin.exe not found under $vs" }
           foreach ($exe in "target\release\omr.exe", "target\release\omr-desktop.exe") {
-            $deps = & $dumpbin.FullName /dependents $exe | Out-String
+            if (-not (Test-Path $exe)) { throw "$exe was not built" }
+            $deps = & $dumpbin.FullName /nologo /dependents $exe | Out-String
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin failed on $exe" }
             Write-Output $deps
+            if ($deps -notmatch "(?i)KERNEL32\.dll") { throw "no import table read from $exe" }
             if ($deps -match "(?i)vcruntime|msvcp") { throw "$exe needs the Visual C++ runtime" }
           }
 

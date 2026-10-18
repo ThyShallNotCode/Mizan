@@ -483,6 +483,7 @@ impl Project {
             f.sync_all()?;
         }
         fs::rename(&tmp, &p.paths.marker)?;
+        crate::objects::sync_dir(&p.paths.root)?;
         p.touch_lease()?;
         Ok(p)
     }

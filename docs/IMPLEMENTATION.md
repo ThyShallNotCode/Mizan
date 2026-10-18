@@ -65,7 +65,7 @@ expectation tied to the real exams out of the repository.
 | A8 | Pass | 17 scoring oracle tests |
 | A9 | Pass | 12 outcome oracle tests |
 | A10 | Pass | 0 unknown exception codes in 241 source files; UNREADABLE never EMPTY through scoring; 15 adversarial tests give each hostile input its Appendix A code (11 defects fixed) |
-| A11 | Pass | `crates/shell-slint/tests/req_a11.rs` (13 tests, demo data) and `req_a11_real.rs` (10 tests over omr-app: review and release, New exam (also with key sheets), key replacement, key sheets read in Setup and confirmed through the audited path, flag stability in Results, live grading, added batches, a tampered project); screenshots in `docs/design/screens/` and `docs/design/screens/real/` (the key-sheet screens `setup-keysheet`, `scan-keysheet` included). Headless only: never run in a real window or on Windows |
+| A11 | Pass | `crates/shell-slint/tests/req_a11.rs` (13 tests, demo data) and `req_a11_real.rs` (10 tests over omr-app: review and release, New exam (also with key sheets), key replacement, key sheets read in Setup and confirmed through the audited path, flag stability in Results, live grading, added batches, a tampered project); screenshots in `docs/design/screens/` and `docs/design/screens/real/` (the key-sheet screens `setup-keysheet`, `scan-keysheet` included). Headless only (Linux, and in CI on Windows Server 2025): never run in a real window |
 
 ## 2. Scope
 
@@ -106,13 +106,15 @@ expectation tied to the real exams out of the repository.
 - TWAIN/eSCL capture agents (§7.1) and hot-folder watching; the MVP imports files and folders (`omr grade`, `omr add`, the desktop's New exam and Add scans).
 - SVG and PNG sheet output (§6.2); `omr sheet render` writes PDF.
 - Packaging, installers and the macOS build (§24). The desktop app has run headless (testing backend and software-rendered screenshots), never in a real window.
-- The Windows platform layer. Windows is built and tested in CI (MSVC, static C runtime), but these are deferred:
+- The Windows platform layer. Windows is built and tested in CI on Windows Server 2025 (MSVC), but these are deferred:
   - the §14.2 Windows signals (`GetDriveTypeW`, the file-system type, Cloud Files sync roots, which include OneDrive Known Folder Move);
   - owner-only ACLs (§19.3);
   - keys protected with DPAPI in the local, not roaming, profile (§19.2);
   - the audit principal from `USERNAME`;
   - a GUI-subsystem desktop app with a native error dialog;
-  - cross-OS decision identity through a pure-Rust `libm` (§9.4).
+  - cross-OS decision identity through a pure-Rust `libm` (§9.4);
+  - path identity by canonical path (the exam registry compares `std::path::absolute` forms, so another case or an 8.3 short name of the same folder counts as another project).
+- The C runtime: the executables link it statically (`.cargo/config.toml`, `+crt-static`) instead of the app-local MSVC runtime of §24.1 and §22.6 row 15; the MSI work (§24.1) settles which one ships.
 - Streaming ingest (§7.4) and the per-run decode budget and per-page watchdog (§22.3–§22.4): files are size-checked before they are read and images by their header before they are decoded, but each input file is read whole into memory.
 - The read-access log (§19.5 `access_log`): reveals of student numbers and crop exports are audit events; views in the desktop app are not logged.
 - Licence enforcement (§5.4: `cargo-deny`, the notices file, Slint's AboutSlint widget).

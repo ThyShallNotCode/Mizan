@@ -3032,6 +3032,12 @@ fn short_path(p: &Path) -> String {
         }
         tail = next;
     }
+    if tail.is_empty() {
+        // One last component longer than the budget: keep its end.
+        let last = parts.last().copied().unwrap_or("");
+        let n = last.chars().count();
+        tail = last.chars().skip(n.saturating_sub(43)).collect();
+    }
     format!("…{sep}{tail}")
 }
 
@@ -5086,6 +5092,12 @@ mod tests {
         assert!(s.chars().count() <= 46, "{s}");
         let short: PathBuf = ["exams", "midterm.csv"].iter().collect();
         assert_eq!(short_path(&short), short.display().to_string());
+        let one_long: PathBuf = ["x".repeat(60)].iter().collect();
+        let s = short_path(&one_long);
+        assert!(
+            s.ends_with(&"x".repeat(43)) && s.chars().count() <= 46,
+            "{s}"
+        );
     }
 
     #[test]

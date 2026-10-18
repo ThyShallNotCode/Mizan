@@ -22,7 +22,8 @@ command line and from the desktop app `omr-desktop`, on Linux.
   university's legal affairs, due 2026-12-01) is still open, so its head-to-head figures stay
   inside the university (spec §3.5).
 - **Windows:** CI runs the same gate (formatting, clippy, every workspace test, the
-  architecture rules) on Windows (MSVC) as on Linux. Still to build for Windows:
+  architecture rules) on Windows Server 2025 (MSVC) as on Linux; the Unix file-mode checks are
+  skipped there. Still to build for Windows:
   - refusal of OneDrive and other sync folders;
   - owner-only file permissions;
   - DPAPI-protected keys;
@@ -35,7 +36,8 @@ command line and from the desktop app `omr-desktop`, on Linux.
 
 Scans of real exams are restricted personal data (PDPL). Keep the exam folders on university
 devices, never in a synced cloud folder: the program refuses sync folders such as OneDrive,
-Dropbox, Nextcloud and iCloud, and network shares (SYS-015).
+Dropbox, Nextcloud and iCloud, and network shares (SYS-015). On Windows, so far only network
+(UNC) paths and the Dropbox-style marker files are refused (see Status).
 
 ## 1. Build
 
@@ -44,7 +46,10 @@ You need:
 - **Linux:** a C compiler, `pkg-config` and the fontconfig headers to build the desktop app,
   and libxkbcommon-x11 to open its window. On Debian or Ubuntu:
   `sudo apt install build-essential pkg-config libfontconfig1-dev libxkbcommon-x11-0`.
-- **Windows 10/11 and macOS:** not built or tested yet (see §8).
+- **Windows:** the same `cargo build` works with Visual Studio Build Tools (the "Desktop
+  development with C++" workload, for the MSVC linker and the bundled SQLite). CI builds and
+  tests it on Windows Server 2025. Read §8 before grading real exams on Windows.
+- **macOS:** not built or tested yet.
 
 ```sh
 git clone <this repository> omr-correction
@@ -312,7 +317,8 @@ Examples: [`docs/examples/`](docs/examples/). More detail: [`crates/omr-cli/READ
 
 ## 8. Known limits
 
-- Windows and macOS are not built or tested, and there is no installer yet.
+- macOS is not built or tested. Windows is built and tested in CI only, without its platform
+  layer (sync-folder refusal, owner-only permissions, DPAPI keys), and there is no installer yet.
 - The scanner's hot folder is not watched (grade the folder when scanning ends), and
   `omr sheet render` writes PDF only.
 - Phone photos: key sheets can be photographed (the instructor confirms them), but every answer
