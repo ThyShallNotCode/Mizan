@@ -215,16 +215,17 @@ jobs:
 
           | File | For |
           |---|---|
-          | \`$windows.zip\` | 64-bit Windows 10 or 11 (tested in CI on Windows Server 2025 only) |
-          | \`$linux.tar.gz\` | 64-bit Linux with glibc ${glibc#GLIBC_} or newer (built on Ubuntu 24.04) |
+          | \`$windows.zip\` | x86-64 Windows 10 or 11 (CI runs on Windows Server 2025 only) |
+          | \`$linux.tar.gz\` | x86-64 Linux with glibc ${glibc#GLIBC_} or newer (built on Ubuntu 24.04) |
 
           Each archive holds \`omr\` (the command line) and \`omr-desktop\` (the desktop app), with \`BUILD.txt\`, the font licence \`OFL.txt\` and a \`SHA256SUMS\` of the two programs. The \`SHA256SUMS\` attached here covers the two archives.
 
           ## Before you use it
 
-          - **Windows:** do not grade real exams with this build yet. These protections are not built: refusing OneDrive and other sync folders, owner-only file permissions and DPAPI-protected keys. The Windows build passes the full test suite in CI, but the desktop app has not yet been opened in a real window on Windows.
-          - **Linux:** the desktop app needs fontconfig and libxkbcommon-x11 (on Debian or Ubuntu: \`sudo apt install libfontconfig1 libxkbcommon-x11-0\`).
-          - Keep exam folders on university devices, never in a synced cloud folder (README, section 8).
+          - **Windows:** do not grade real exams with this build yet. These protections are not built: refusing OneDrive and other sync folders, owner-only file permissions and DPAPI-protected keys. On Windows, CI runs the \`scripts/check.sh\` gate (formatting, clippy and the workspace tests, without the Unix-only checks); the acceptance run, the long ignored tests and the real-data tests run on Linux only.
+          - **Linux:** the desktop app expects fontconfig and libxkbcommon-x11 (on Debian or Ubuntu: \`sudo apt install libfontconfig1 libxkbcommon-x11-0\`).
+          - **Both:** the tests ran on separate builds of the same code, not on these binaries. The desktop app has only run headless (Slint's testing backend and software-rendered screenshots), never in a real window, on Linux or Windows.
+          - Keep exam folders on university devices, never in a synced cloud folder (see the README).
           EOF
           cat notes.md
 
