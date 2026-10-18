@@ -44,7 +44,7 @@ use std::time::Instant;
 #[command(
     name = "omr",
     version,
-    about = "OMR Correction: sheets, grading, review and benchmarks"
+    about = "Mizan: sheets, grading, review and benchmarks"
 )]
 struct Cli {
     #[command(subcommand)]

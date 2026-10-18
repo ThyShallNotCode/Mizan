@@ -1,4 +1,9 @@
-# OMR Correction
+# Mizan (ميزان)
+
+Exam correction and outcome evidence. Mizan was called OMR Correction while it was being
+designed; the code keeps that working name in its identifiers (the `omr` command, the `omr-*`
+crates, `.omr`/`.omrproj` projects and the `OMR_*` settings), so existing projects and scripts
+keep working.
 
 A native, local-first program that grades multiple-choice answer sheets from scans, built for
 Imam Abdulrahman Bin Faisal University (IAU) and developed by AI agents. It reads the IAU CCSIT

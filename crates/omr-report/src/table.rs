@@ -229,7 +229,7 @@ fn snapshot_datetime(meta: &ReportMeta) -> Result<ExcelDateTime, ReportError> {
 fn properties(meta: &ReportMeta) -> Result<DocProperties, ReportError> {
     let mut p = DocProperties::new()
         .set_title(meta.title.clone())
-        .set_author("OMR Correction")
+        .set_author("Mizan")
         .set_comment(meta.footer_line())
         .set_keywords(format!("classification: {}", meta.classification.label()))
         .set_custom_property("Classification", meta.classification.label().as_str())

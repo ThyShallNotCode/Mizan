@@ -116,7 +116,7 @@ jobs:
           # The embedded IBM Plex fonts are under the SIL Open Font License, which travels with them.
           cp crates/shell-slint/ui/assets/fonts/OFL.txt "dist/$name/OFL.txt"
           cat > "dist/$name/BUILD.txt" <<EOF
-          OMR Correction ${GITHUB_SHA::7} for ${{ matrix.target }}: unsigned CI build
+          Mizan ${GITHUB_SHA::7} for ${{ matrix.target }}: unsigned CI build
           Commit ${GITHUB_SHA}, built by GitHub Actions run ${GITHUB_RUN_ID} with Rust 1.97.0.
 
           This is a test build, not a production release. Production releases will be built

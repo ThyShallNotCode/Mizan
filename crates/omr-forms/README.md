@@ -1,6 +1,6 @@
 # omr-forms
 
-Template model, sheet geometry, page code and sheet rendering for the OMR Correction app
+Template model, sheet geometry, page code and sheet rendering for the Mizan app
 (spec §6.1–§6.5, §6.8, §6.9 lint basics). Engine crate: no file or network I/O, no threads
 (R4), key-blind (R2). Rendering lives behind the `render` feature.
 
