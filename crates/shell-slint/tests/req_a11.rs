@@ -19,7 +19,9 @@ use slint::{ComponentHandle, Model};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use support::a11::{by_label, chord, key, one, selected_queue_row, special, tab, with_prefix};
+use support::a11::{
+    by_label, chord, click, key, one, selected_queue_row, special, tab, with_prefix,
+};
 
 struct Harness {
     ui: AppWindow,
@@ -180,6 +182,40 @@ fn req_a11_review_flow_through_accessible_labels() {
         assert!(!b.overlay);
     }
     assert_eq!(ui.global::<ReviewVM>().get_other_fills().row_count(), 0);
+}
+
+#[test]
+fn req_a11_one_mouse_click_activates_each_tab_and_button() {
+    // Mouse users, not just the accessibility actions above: a keyboard FocusScope declared
+    // over a TouchArea took the first press to gain focus, so every tab and button needed two
+    // clicks. One press-and-release must switch the page.
+    let h = harness();
+    let ui = &h.ui;
+    let tabs = [
+        ("Setup", Page::Setup),
+        ("Scan", Page::Scan),
+        ("Review", Page::Review),
+        ("Results", Page::Results),
+        ("Outcomes", Page::Outcomes),
+        ("Settings", Page::Settings),
+        ("Exams", Page::Exams),
+    ];
+    for (label, page) in tabs {
+        let e = with_prefix(ui, label)
+            .into_iter()
+            .map(|(_, e)| e)
+            .find(|e| e.accessible_role() == Some(AccessibleRole::Tab))
+            .unwrap_or_else(|| panic!("a tab labelled {label:?}"));
+        click(ui, &e);
+        assert_eq!(
+            ui.global::<App>().get_page(),
+            page,
+            "one click on {label:?}"
+        );
+    }
+    // a Button (the exam drawer's), not only the rail
+    click(ui, &one(ui, "Open results"));
+    assert_eq!(ui.global::<App>().get_page(), Page::Results);
 }
 
 #[test]

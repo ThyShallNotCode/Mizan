@@ -5,7 +5,7 @@
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use shell_slint::ui::AppWindow;
 use slint::ComponentHandle;
-use slint::platform::{Key, WindowEvent};
+use slint::platform::{Key, PointerEventButton, WindowEvent};
 use std::collections::BTreeMap;
 
 /// Distinct elements with exactly this accessible label. `find_all` reports an element once per
@@ -93,4 +93,22 @@ pub fn chord(ui: &AppWindow, modifier: Key, text: &str) {
     key(ui, text);
     ui.window()
         .dispatch_event(WindowEvent::KeyReleased { text: m.into() });
+}
+
+/// One left click at the centre of `e`, through the window's pointer events (move, press,
+/// release) as a mouse delivers it, not through the accessibility action.
+pub fn click(ui: &AppWindow, e: &ElementHandle) {
+    let p = e.absolute_position();
+    let s = e.size();
+    let position = slint::LogicalPosition::new(p.x + s.width / 2.0, p.y + s.height / 2.0);
+    let w = ui.window();
+    w.dispatch_event(WindowEvent::PointerMoved { position });
+    w.dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Left,
+    });
+    w.dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: PointerEventButton::Left,
+    });
 }

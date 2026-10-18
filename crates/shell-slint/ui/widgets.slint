@@ -117,6 +117,8 @@ export component Switch inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
                 root.checked = !root.checked;
@@ -203,6 +205,8 @@ export component Segment inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
                 root.clicked();

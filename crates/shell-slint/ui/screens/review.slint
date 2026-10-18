@@ -208,6 +208,8 @@ component ContactThumb inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {
                 root.clicked();
@@ -547,6 +549,8 @@ component CandidateRow inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
                 root.clicked();

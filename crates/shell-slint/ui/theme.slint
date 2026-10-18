@@ -382,6 +382,8 @@ export component Button inherits Rectangle {
     }
 
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         enabled: root.enabled;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
@@ -476,6 +478,8 @@ export component IconButton inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         enabled: root.enabled;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
@@ -525,6 +529,8 @@ export component Chip inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
                 root.clicked();
@@ -690,6 +696,8 @@ export component OptionChip inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
                 root.clicked();
@@ -941,6 +949,8 @@ export component NavItem inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
                 root.clicked();
@@ -1353,6 +1363,8 @@ export component GroupHeader inherits Rectangle {
     }
     // Keyboard operable like every other interactive component (WCAG 2.1.1).
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
                 root.toggled();

@@ -109,6 +109,8 @@ component ThumbTile inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Return) {
                 root.clicked();
@@ -222,6 +224,8 @@ component CodeBarRow inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {
                 root.clicked();
