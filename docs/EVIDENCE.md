@@ -1,7 +1,7 @@
-# Evidence: the OMR Correction MVP against its acceptance rows
+# Evidence: the Mizan MVP against its acceptance rows
 
 This document is for Imam Abdulrahman Bin Faisal University (IAU): the people who decide
-whether OMR Correction can grade the university's multiple-choice exams, and the quality
+whether Mizan can grade the university's multiple-choice exams, and the quality
 reviewers who rely on its results for NCAAA and ABET reports. It reports what was measured
 against the MVP's acceptance rows (`docs/IMPLEMENTATION.md` §1), how each number was
 obtained, whether the row passes, and what each number does **not** show.

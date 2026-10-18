@@ -1,4 +1,9 @@
-# OMR Correction
+# Mizan (ميزان)
+
+Exam correction and outcome evidence. Mizan was called OMR Correction while it was being
+designed; the code keeps that working name in its identifiers (the `omr` command, the `omr-*`
+crates, `.omr`/`.omrproj` projects and the `OMR_*` settings), so existing projects and scripts
+keep working.
 
 A native, local-first program that grades multiple-choice answer sheets from scans, built for
 Imam Abdulrahman Bin Faisal University (IAU) and developed by AI agents. It reads the IAU CCSIT
@@ -60,6 +65,13 @@ cargo build --release -p omr-cli -p shell-slint
 This makes two programs: `target/release/omr` (the command line) and
 `target/release/omr-desktop` (the desktop app). Copy them to a folder on your `PATH`, or call
 them by their full path. `omr --help` and `omr <command> --help` list every option.
+
+**Test builds.** The repository's Releases page has unsigned pre-releases (`v0.1.0-preview.1`
+and later) for x86-64 Windows (a zip) and Linux (a tar.gz), each with both programs. They are
+test builds, not production releases, which will be built and signed in the university's
+release enclave (spec §24.2). Windows SmartScreen warns about unsigned programs; read §8 before
+grading real exams on Windows. To publish the next one, run the *Release builds* workflow on
+main with a new tag; `scripts/release-tag.sh` checks it.
 
 ## 2. Grade a folder of scans
 

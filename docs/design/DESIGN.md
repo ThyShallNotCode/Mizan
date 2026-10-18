@@ -1,6 +1,6 @@
-# OMR Correction design system
+# Mizan design system
 
-This is the visual and interaction system for the OMR Correction desktop app (Rust + Slint 1.18). It turns the design concepts in `concepts/` into one set of tokens and component rules. `crates/shell-slint/ui/theme.slint` implements them.
+This is the visual and interaction system for the Mizan desktop app (Rust + Slint 1.18). It turns the design concepts in `concepts/` into one set of tokens and component rules. `crates/shell-slint/ui/theme.slint` implements them.
 
 - **Spec sections served.** §5.2 (ADR-001 shell), §13.3 (review UI), §20.2 (RTL and Arabic), §20.3 (app accessibility), §10.6 (Saudi grade scale), §11.3 (CLO attainment display), §12.1–12.2 (item analysis flags) and Appendix A (severity, exception codes).
 - **Plan of record.** A11 in `docs/IMPLEMENTATION.md` (screens render headlessly; review flow driven through accessible labels).
@@ -357,7 +357,7 @@ Nav order: **Exams, Setup, Scan, Review, Results, Outcomes, Export**, then Setti
 ### 9.1 Exams dashboard (concept: `exams-dashboard.png`)
 
 - **Top bar.**
-  - Left: wordmark "OMR Correction" and the term selector ("Term 1448-1 (Fall 2026)").
+  - Left: wordmark "Mizan" and the term selector ("Term 1448-1 (Fall 2026)").
   - Right: global search (`Ctrl+K`), primary **New exam**, theme toggle and user (name · role).
 - **Page header.** "Exams" (20/600), with a `GirihDivider` under it and filter `Chip`s with counts: All, Setup, Scanning, In review, Ready to release, Released. A view toggle (table / cards) sits on the right.
 - **Stat row.** Four `StatTile`s:

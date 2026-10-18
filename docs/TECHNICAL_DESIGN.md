@@ -1,4 +1,4 @@
-# OMR Correction — Technical Design Description
+# Mizan (ميزان) — Technical Design Description
 
 | | |
 |---|---|
@@ -6,7 +6,7 @@
 | **Version / status** | Draft v0.2, for review: revision of 2026-10-16 for a Saudi university owner (own use; NCAAA and ABET; development solely by AI agents) |
 | **Facts verified as of** | 2026-10-15 for crate, model and standard versions (crates.io, Hugging Face, project documentation, standards bodies); 2026-10-16 for Saudi regulatory, accreditation, deployment and agent-development facts (NCA, SDAIA, CST, DGA, ETEC, ABET and primary provider sources) |
 | **Audience** | The university's product owner and the named institutional roles (§25.5), and the AI agents that build the platform from per-section specification files derived from this document (§25.3) |
-| **Working name** | "OMR Correction" (codename). Rust crates use the `omr-` prefix. Projects are `*.omrproj/` packages and `*.omrx` archives. |
+| **Name** | Mizan (ميزان), formerly the codename "OMR Correction". Rust crates keep the `omr-` prefix. Projects are `*.omrproj/` packages and `*.omrx` archives. |
 
 **How to read this document**
 
@@ -241,7 +241,7 @@
 
 ### 1.1 What we are building
 
-OMR Correction is an exam-correction and outcome-analytics platform that a Saudi university (public assumed, Q-25) builds for its own colleges, campuses and branches, male and female sections included; it is not sold. It is a native Rust desktop application, with no Electron, for Windows (primary), macOS (if Q-29 finds Mac users) and Linux; an in-Kingdom institution server and a phone companion follow in P3. It turns paper assessments into three things:
+Mizan is an exam-correction and outcome-analytics platform that a Saudi university (public assumed, Q-25) builds for its own colleges, campuses and branches, male and female sections included; it is not sold. It is a native Rust desktop application, with no Electron, for Windows (primary), macOS (if Q-29 finds Mac users) and Linux; an in-Kingdom institution server and a phone companion follow in P3. It turns paper assessments into three things:
 
 1. **Grades**, under a measured accuracy contract.
 2. **Reconciled student identities**, against the SIS roster.
@@ -300,7 +300,7 @@ The real competition is: **never silently wrong** (calibrated abstention, fast r
 
 Measured per §2.4 and reported internally, with a parallel run against the incumbent (§23.7).
 
-| Dimension | Remark Office OMR 12.4 | OMR Correction | Available |
+| Dimension | Remark Office OMR 12.4 | Mizan | Available |
 |---|---|---|---|
 | Platforms and licensing | Windows only; per-PC activation, re-activation on every VM launch | Windows (primary), macOS per Q-29, Linux; signed builds deployed through MDM (MSI/ADMX) or internal feeds; no licence enforcement, every installation has every feature (§24.1, §24.3) | GA; mirrored Arabic UI P3 (phone companion P3) |
 | Forms | Designed in Word; templates dragged over a scanned blank | Generator and linter; unlimited variants, per-student shuffles, personalized booklets, fillable PDF, pre-print simulation (§6) | GA |

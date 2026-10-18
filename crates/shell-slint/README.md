@@ -1,4 +1,4 @@
-# shell-slint: the OMR Correction desktop shell
+# shell-slint: the Mizan desktop shell
 
 Rust + Slint 1.18.1 (spec §5.2, ADR-001). The shell renders and binds; it decides nothing. Every
 value on screen comes from a `Backend` as plain-Rust view-models, and every user decision goes

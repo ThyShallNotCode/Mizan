@@ -1,4 +1,4 @@
-// OMR Correction desktop shell: frame, navigation rail and screen switch (DESIGN §9).
+// Mizan desktop shell: frame, navigation rail and screen switch (DESIGN §9).
 // Screens are instantiated only while visible, so accessible labels stay unique per screen.
 // Every screen gets the window size: it fits 1440 × 900 nominal and 1280 × 800 minimum (DESIGN
 // §9). The size reaches the screens as a copy written when the platform resizes the window, not
@@ -20,7 +20,7 @@ import { Palette } from "std-widgets.slint";
 export { Theme, App, ExamsVM, SetupVM, ScanVM, ReviewVM, ResultsVM, OutcomesVM, RemarkVM, Page }
 
 export component AppWindow inherits Window {
-    title: "OMR Correction";
+    title: "Mizan";
     icon: @image-url("assets/icon.png");
     preferred-width: 1440px;
     preferred-height: 900px;
@@ -79,7 +79,7 @@ export component AppWindow inherits Window {
                         height: 36px;
                         source: Icons.logo;
                         accessible-role: AccessibleRole.image;
-                        accessible-label: "OMR Correction";
+                        accessible-label: "Mizan";
                     }
                 }
                 NavItem {
