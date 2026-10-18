@@ -1,7 +1,8 @@
 # Unsigned release builds of `omr` and `omr-desktop` for Linux and Windows, kept as workflow
-# artifacts. These are CI builds, not production releases: a production release is built from a
-# protected tag on the university's self-hosted runner, signed in the in-Kingdom release enclave
-# and approved by two release approvers, and that build is compared with these (spec §24.2).
+# artifacts for 7 days (artifact storage on a private repository is limited). These are CI
+# builds, not production releases: a production release is built from a protected tag on the
+# university's self-hosted runner, signed in the in-Kingdom release enclave and approved by two
+# release approvers, and that build is compared with these (spec §24.2).
 name: Release builds
 
 on:
@@ -106,9 +107,9 @@ jobs:
           OMR Correction ${GITHUB_SHA::7} for ${{ matrix.target }}: unsigned CI build
           Commit ${GITHUB_SHA}, built by GitHub Actions run ${GITHUB_RUN_ID} with Rust 1.97.0.
 
-          This is a test build, not a production release. Production releases are built and
-          signed in the university's release enclave (spec 24.2). Windows SmartScreen warns
-          about unsigned programs.
+          This is a test build, not a production release. Production releases will be built
+          and signed in the university's release enclave (spec 24.2). Windows SmartScreen
+          warns about unsigned programs.
 
           On Windows, do not grade real exams with this build yet: these Windows protections are
           not built (docs/IMPLEMENTATION.md):
@@ -122,5 +123,5 @@ jobs:
         with:
           name: omr-${{ matrix.target }}
           path: dist/
-          retention-days: 14
+          retention-days: 7
           if-no-files-found: error
