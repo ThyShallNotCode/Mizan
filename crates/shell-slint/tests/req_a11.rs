@@ -449,6 +449,61 @@ fn req_a11_identity_lane_and_candidates_by_label() {
 }
 
 #[test]
+fn req_a11_a_clicked_weight_cell_keeps_what_is_typed() {
+    // Focusing a cell selected it by rebuilding every matrix row, which destroyed the text
+    // input that had just taken the focus: what was typed next went nowhere.
+    let h = harness();
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Setup"));
+    assert_eq!(ui.global::<App>().get_page(), Page::Setup);
+    click(ui, &one(ui, "Q02 CLO1 weight"));
+    chord(ui, Key::Control, "a");
+    type_text(ui, "0.5");
+    special(ui, Key::Return);
+    let weight =
+        |h: &Harness| h.demo.borrow().exam_setup(&cs211()).unwrap().mapping[1].cells[0].weight;
+    assert_eq!(weight(&h), Some(0.5));
+    assert_eq!(ui.global::<App>().get_message(), "Weight Q02 × CLO1: 0.5");
+    assert_eq!(ui.global::<SetupVM>().get_sel_title(), "Q02 × CLO1");
+    // the save refreshed the matrix, and the cell still has the focus
+    chord(ui, Key::Control, "a");
+    type_text(ui, "1");
+    special(ui, Key::Return);
+    assert_eq!(weight(&h), Some(1.0));
+}
+
+#[test]
+fn req_a11_queue_rows_outlive_a_refresh() {
+    // A refresh replaced the queue's model, so Slint rebuilt every row: hover, a press in
+    // progress and the elements themselves were gone after each click.
+    let h = harness();
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Review, 30 open"));
+    let queue = ui.global::<ReviewVM>().get_queue();
+    let rows: Vec<String> = (0..queue.row_count())
+        .filter_map(|i| queue.row_data(i))
+        .filter(|e| !e.header)
+        .map(|e| e.a11y.to_string())
+        .collect();
+    assert!(rows.len() >= 3, "a queue of several items");
+    let other = one(ui, &rows[2]);
+    // the same data again (looking the row up brings the list up to date)
+    h.shell.navigate(Page::Review);
+    one(ui, &rows[2]);
+    assert!(
+        other.is_valid(),
+        "a refresh with unchanged data keeps the row"
+    );
+    // a click selects its row: only the two rows whose selection changed are updated
+    let row = one(ui, &rows[1]);
+    click(ui, &row);
+    assert!(row.is_valid(), "the clicked row stays");
+    assert_eq!(row.accessible_item_selected(), Some(true));
+    assert!(other.is_valid());
+    assert_eq!(selected_queue_row(ui), rows[1]);
+}
+
+#[test]
 fn req_a11_setup_matrix_edits_through_accessible_values() {
     let h = harness();
     let ui = &h.ui;

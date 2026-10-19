@@ -19,6 +19,48 @@ fn model<T: Clone + 'static>(v: Vec<T>) -> ModelRc<T> {
     ModelRc::new(VecModel::from(v))
 }
 
+/// The model to set on a list property for `rows`. Slint destroys and rebuilds every element of
+/// a repeater whose model is replaced, and focus, hover and a press in progress go with them; so
+/// a property that already holds a `VecModel` keeps it, with only the changed rows set and the
+/// tail pushed or removed. Anything else (the empty default) gets a new `VecModel` once.
+fn sync<T: Clone + PartialEq + 'static>(current: ModelRc<T>, rows: Vec<T>) -> ModelRc<T> {
+    sync_with(current, rows, |_, _| {})
+}
+
+/// [`sync`] for rows that hold lists of their own: `adopt(old, new)` gives the new row the old
+/// row's inner models (see [`adopt`]), so an unchanged row compares equal (models compare by
+/// identity) and the elements inside it stay as well.
+fn sync_with<T: Clone + PartialEq + 'static>(
+    current: ModelRc<T>,
+    rows: Vec<T>,
+    adopt: impl Fn(&T, &mut T),
+) -> ModelRc<T> {
+    let Some(vm) = current.as_any().downcast_ref::<VecModel<T>>() else {
+        return model(rows);
+    };
+    let n = rows.len();
+    for (i, mut row) in rows.into_iter().enumerate() {
+        match vm.row_data(i) {
+            Some(old) => {
+                adopt(&old, &mut row);
+                if old != row {
+                    vm.set_row_data(i, row);
+                }
+            }
+            None => vm.push(row),
+        }
+    }
+    while vm.row_count() > n {
+        vm.remove(vm.row_count() - 1);
+    }
+    current
+}
+
+/// Syncs a new row's inner list into the old row's model and puts that model in the new row.
+fn adopt<T: Clone + PartialEq + 'static>(old: &ModelRc<T>, new: &mut ModelRc<T>) {
+    *new = sync(old.clone(), new.iter().collect());
+}
+
 fn ss(s: impl AsRef<str>) -> SharedString {
     SharedString::from(s.as_ref())
 }
@@ -178,6 +220,19 @@ pub fn image(c: &b::CropImage) -> Image {
     Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
         &c.rgba, c.width, c.height,
     ))
+}
+
+/// The matrix selection and the selected cell's editor (title, CLO, weight, note).
+fn show_selected_cell(su: &s::SetupVM, setup: &b::ExamSetup, row: usize, col: usize) {
+    su.set_sel_row(row as i32);
+    su.set_sel_col(col as i32);
+    if let (Some(r), Some(c)) = (setup.mapping.get(row), setup.clos.get(col)) {
+        let cell = r.cells.get(col);
+        su.set_sel_title(ss(format!("Q{:02} × {}", r.question, c.code)));
+        su.set_sel_clo(ss(&c.title));
+        su.set_sel_weight(ss(fmt_weight(cell.and_then(|c| c.weight))));
+        su.set_sel_note(ss(cell.map_or("", |c| c.note.as_str())));
+    }
 }
 
 /// Parses a weight typed by the user: "" clears; "0.5", "0,5", "٠٫٥" and "½" are accepted.
@@ -632,14 +687,7 @@ impl Shell {
         let me = self.clone();
         su.on_replace_clos(move |path| me.replace_clos(&path));
         let me = self.clone();
-        su.on_select_cell(move |row, c| {
-            {
-                let mut st = me.st.borrow_mut();
-                st.sel_row = row.max(0) as usize;
-                st.sel_col = c.max(0) as usize;
-            }
-            me.refresh_setup();
-        });
+        su.on_select_cell(move |row, c| me.select_cell(row.max(0) as usize, c.max(0) as usize));
 
         // scan
         let sc = ui.global::<s::ScanVM>();
@@ -2257,7 +2305,8 @@ impl Shell {
             ("Ready to release", Some(b::ExamStatus::Ready)),
             ("Released", Some(b::ExamStatus::Released)),
         ];
-        ex.set_filters(model(
+        ex.set_filters(sync(
+            ex.get_filters(),
             statuses
                 .iter()
                 .map(|(label, st)| s::FilterChip {
@@ -2334,7 +2383,9 @@ impl Shell {
             .and_then(|id| shown.iter().position(|e| &e.id == id))
             .map_or(-1, |i| i as i32);
         self.st.borrow_mut().exam_rows = shown.iter().map(|e| e.id.clone()).collect();
-        ex.set_rows(model(rows));
+        ex.set_rows(sync_with(ex.get_rows(), rows, |o, n| {
+            adopt(&o.forms, &mut n.forms)
+        }));
         ex.set_selected(selected);
 
         let cur = current
@@ -2469,27 +2520,36 @@ impl Shell {
             value: ss(v),
             tone: s::Tone::Neutral,
         };
-        su.set_template(model(vec![
-            kv(
-                "Questions",
-                format!("{} of {} printed", t.questions, t.capacity),
-            ),
-            kv(
-                "Options",
-                format!(
-                    "{}–{} · {labels}",
-                    t.option_labels.first().cloned().unwrap_or_default(),
-                    t.option_labels.last().cloned().unwrap_or_default()
+        su.set_template(sync(
+            su.get_template(),
+            vec![
+                kv(
+                    "Questions",
+                    format!("{} of {} printed", t.questions, t.capacity),
                 ),
-            ),
-            kv("Versions", t.versions.join(", ")),
-            kv("Cancel mode", t.cancel_mode.label().into()),
-            kv("Resolution", format!("{} dpi", t.dpi)),
-            kv("Page identity", t.page_identity.clone()),
-            kv("Digest", t.digest.clone()),
-        ]));
-        su.set_versions(model(setup.keys.iter().map(|k| ss(&k.version)).collect()));
-        su.set_options(model(t.option_labels.iter().map(ss).collect()));
+                kv(
+                    "Options",
+                    format!(
+                        "{}–{} · {labels}",
+                        t.option_labels.first().cloned().unwrap_or_default(),
+                        t.option_labels.last().cloned().unwrap_or_default()
+                    ),
+                ),
+                kv("Versions", t.versions.join(", ")),
+                kv("Cancel mode", t.cancel_mode.label().into()),
+                kv("Resolution", format!("{} dpi", t.dpi)),
+                kv("Page identity", t.page_identity.clone()),
+                kv("Digest", t.digest.clone()),
+            ],
+        ));
+        su.set_versions(sync(
+            su.get_versions(),
+            setup.keys.iter().map(|k| ss(&k.version)).collect(),
+        ));
+        su.set_options(sync(
+            su.get_options(),
+            t.option_labels.iter().map(ss).collect(),
+        ));
         su.set_has_roster(setup.roster_students > 0);
         su.set_key_status(ss(&setup.key_status));
         su.set_key_published(setup.key_published);
@@ -2504,7 +2564,8 @@ impl Shell {
             .map(|r| r.points)
             .sum::<f64>()
             .max(1e-9);
-        su.set_clos(model(
+        su.set_clos(sync(
+            su.get_clos(),
             setup
                 .clos
                 .iter()
@@ -2598,8 +2659,12 @@ impl Shell {
                 }
             })
             .collect();
-        su.set_rows(model(rows));
-        su.set_lints(model(
+        su.set_rows(sync_with(su.get_rows(), rows, |o, n| {
+            adopt(&o.keys, &mut n.keys);
+            adopt(&o.cells, &mut n.cells);
+        }));
+        su.set_lints(sync(
+            su.get_lints(),
             setup
                 .lints
                 .iter()
@@ -2610,17 +2675,47 @@ impl Shell {
                 })
                 .collect(),
         ));
-        su.set_sel_row(sel_row as i32);
-        su.set_sel_col(sel_col as i32);
-        if let (Some(r), Some(c)) = (setup.mapping.get(sel_row), setup.clos.get(sel_col)) {
-            let cell = r.cells.get(sel_col);
-            su.set_sel_title(ss(format!("Q{:02} × {}", r.question, c.code)));
-            su.set_sel_clo(ss(&c.title));
-            su.set_sel_weight(ss(fmt_weight(cell.and_then(|c| c.weight))));
-            su.set_sel_note(ss(cell.map_or("", |c| c.note.as_str())));
-        }
-        su.set_ks_option_labels(model(t.option_labels.iter().map(ss).collect()));
+        show_selected_cell(&su, &setup, sel_row, sel_col);
+        su.set_ks_option_labels(sync(
+            su.get_ks_option_labels(),
+            t.option_labels.iter().map(ss).collect(),
+        ));
         self.refresh_keysheets();
+    }
+
+    /// Moves the matrix selection to the cell (`row`, `col`). A cell that takes focus calls this,
+    /// so only the two cells' marks and the cell editor change: rebuilding the rows would destroy
+    /// the text input that has just taken the focus.
+    pub fn select_cell(&self, row: usize, col: usize) {
+        let before = {
+            let mut st = self.st.borrow_mut();
+            let before = (st.sel_row, st.sel_col);
+            st.sel_row = row;
+            st.sel_col = col;
+            before
+        };
+        let ui = self.ui();
+        let su = ui.global::<s::SetupVM>();
+        let rows = su.get_rows();
+        let mark = |(r, c): (usize, usize), on: bool| {
+            let Some(cells) = rows.row_data(r).map(|x| x.cells) else {
+                return;
+            };
+            if let Some(mut cell) = cells.row_data(c)
+                && cell.selected != on
+            {
+                cell.selected = on;
+                cells.set_row_data(c, cell);
+            }
+        };
+        mark(before, false);
+        mark((row, col), true);
+        let setup = self
+            .exam()
+            .and_then(|e| self.backend.borrow().exam_setup(&e));
+        if let Some(setup) = setup {
+            show_selected_cell(&su, &setup, row, col);
+        }
     }
 
     /// The key read from key sheets (§10.1), as the instructor checks and confirms it: one
@@ -2664,7 +2759,8 @@ impl Shell {
                 .filter(|r| r.status.open() && !picks.contains_key(&(v.form, r.question)))
                 .count()
         };
-        su.set_ks_versions(model(
+        su.set_ks_versions(sync(
+            su.get_ks_versions(),
             sum.versions
                 .iter()
                 .enumerate()
@@ -2699,7 +2795,7 @@ impl Shell {
             })
             .collect();
         notes.extend(sum.notes.iter().map(ss));
-        su.set_ks_notes(model(notes));
+        su.set_ks_notes(sync(su.get_ks_notes(), notes));
         let scan_row = |k: &b::KeySheetScan| s::KsScan {
             label: ss(&k.label),
             origin: ss(&k.origin),
@@ -2715,9 +2811,12 @@ impl Shell {
                 "No key sheet gives a key: see why beside each sheet, rescan it, or replace the \
                  key from a key file",
             ));
-            su.set_ks_rows(model(Vec::new()));
-            su.set_ks_crops(model(Vec::new()));
-            su.set_ks_scans(model(sum.unusable.iter().map(scan_row).collect()));
+            su.set_ks_rows(sync(su.get_ks_rows(), Vec::new()));
+            su.set_ks_crops(sync(su.get_ks_crops(), Vec::new()));
+            su.set_ks_scans(sync(
+                su.get_ks_scans(),
+                sum.unusable.iter().map(scan_row).collect(),
+            ));
             su.set_ks_confirm_label(ss("Confirm"));
             su.set_ks_can_confirm(false);
             su.set_ks_can_confirm_all(false);
@@ -2725,7 +2824,8 @@ impl Shell {
             return;
         };
         su.set_ks_version_letter(ss(&v.version));
-        su.set_ks_scans(model(
+        su.set_ks_scans(sync(
+            su.get_ks_scans(),
             v.sheets
                 .iter()
                 .chain(sum.unusable.iter())
@@ -2779,7 +2879,8 @@ impl Shell {
                 .cloned()
                 .unwrap_or_else(|| char::from(b'A' + o).to_string())
         };
-        su.set_ks_rows(model(
+        su.set_ks_rows(sync(
+            su.get_ks_rows(),
             v.rows
                 .iter()
                 .map(|r| {
@@ -2844,7 +2945,8 @@ impl Shell {
                 .collect(),
         ));
         let blank = blank_sheet();
-        su.set_ks_crops(model(
+        su.set_ks_crops(sync(
+            su.get_ks_crops(),
             v.rows
                 .iter()
                 .map(|r| r.crop.as_ref().map_or_else(|| blank.clone(), image))
@@ -2897,7 +2999,8 @@ impl Shell {
         }));
         sc.set_done_frac(p.pages_done as f32 / total as f32);
         sc.set_flight_frac(p.in_flight as f32 / total as f32);
-        sc.set_stages(model(
+        sc.set_stages(sync(
+            sc.get_stages(),
             p.stages
                 .iter()
                 .map(|st| s::KV {
@@ -2927,7 +3030,8 @@ impl Shell {
             p.exceptions.len()
         };
         sc.set_codes_more((p.exceptions.len() - shown) as i32);
-        sc.set_codes(model(
+        sc.set_codes(sync(
+            sc.get_codes(),
             p.exceptions
                 .iter()
                 .take(shown)
@@ -3011,9 +3115,10 @@ impl Shell {
                 }
             })
             .collect();
-        sc.set_thumbs(model(thumbs));
+        sc.set_thumbs(sync(sc.get_thumbs(), thumbs));
         let blank = blank_sheet();
-        sc.set_thumb_images(model(
+        sc.set_thumb_images(sync(
+            sc.get_thumb_images(),
             p.thumbnails
                 .iter()
                 .map(|t| t.image.as_ref().map_or_else(|| blank.clone(), image))
@@ -3027,7 +3132,8 @@ impl Shell {
         sc.set_pausable(p.pausable);
         sc.set_can_add(p.append.allowed && !p.running);
         sc.set_add_note(ss(&p.append.note));
-        sc.set_recon(model(
+        sc.set_recon(sync(
+            sc.get_recon(),
             p.reconciliation
                 .iter()
                 .map(|r| s::KV {
@@ -3044,7 +3150,7 @@ impl Shell {
             }
             None => sc.set_recon_code(SharedString::new()),
         }
-        sc.set_activity(model(p.activity.iter().map(ss).collect()));
+        sc.set_activity(sync(sc.get_activity(), p.activity.iter().map(ss).collect()));
         sc.set_engine(ss(&p.engine));
         sc.set_workers(p.workers as i32);
     }
@@ -3061,7 +3167,8 @@ impl Shell {
         let lane = self.st.borrow().lane;
         let q = self.backend.borrow().review_queue(&exam, lane);
         self.st.borrow_mut().lanes = q.lanes.iter().map(|l| l.lane).collect();
-        rv.set_lanes(model(
+        rv.set_lanes(sync(
+            rv.get_lanes(),
             q.lanes
                 .iter()
                 .map(|l| s::LaneChip {
@@ -3150,7 +3257,9 @@ impl Shell {
                 y += 62.0;
             }
         }
-        rv.set_queue(model(entries));
+        rv.set_queue(sync_with(rv.get_queue(), entries, |o, n| {
+            adopt(&o.fills, &mut n.fills)
+        }));
         rv.set_selected_y(selected_y);
         rv.set_empty_text(ss(q
             .unavailable
@@ -3256,8 +3365,12 @@ impl Shell {
                 overlay: !blind && (state != b::MarkState::Blank || st.show_all),
             }
         };
-        rv.set_bubbles(model(c.bubbles.iter().map(bubble).collect()));
-        rv.set_fill_bars(model(
+        rv.set_bubbles(sync(
+            rv.get_bubbles(),
+            c.bubbles.iter().map(bubble).collect(),
+        ));
+        rv.set_fill_bars(sync(
+            rv.get_fill_bars(),
             if matches!(c.kind, ReviewKind::Mark | ReviewKind::Form) {
                 c.bubbles.iter().map(bubble).collect()
             } else {
@@ -3305,7 +3418,8 @@ impl Shell {
             rv.set_suggestion_tag(ss(join(&[&c.code, &c.sub_reason.replace('_', " ")], " · ")));
         }
         let pending = st.pending;
-        rv.set_options(model(
+        rv.set_options(sync(
+            rv.get_options(),
             labels
                 .iter()
                 .enumerate()
@@ -3330,7 +3444,8 @@ impl Shell {
                 (Decision::Unreadable, "Unreadable", "Ctrl+U"),
             ],
         };
-        rv.set_specials(model(
+        rv.set_specials(sync(
+            rv.get_specials(),
             specials
                 .iter()
                 .map(|&(d, l, k)| s::ChipVM {
@@ -3345,8 +3460,12 @@ impl Shell {
             rv.set_read_id(ss(&ev.read_id));
             rv.set_boxes_read(ss(&ev.boxes_read));
             rv.set_hypothesis(ss(&ev.hypothesis));
-            rv.set_neighbours(model(ev.neighbours.iter().map(ss).collect()));
-            rv.set_candidates(model(
+            rv.set_neighbours(sync(
+                rv.get_neighbours(),
+                ev.neighbours.iter().map(ss).collect(),
+            ));
+            rv.set_candidates(sync_with(
+                rv.get_candidates(),
                 ev.candidates
                     .iter()
                     .take(3)
@@ -3393,13 +3512,15 @@ impl Shell {
                         selected: pending == Some(Decision::Candidate(i as u8)),
                     })
                     .collect(),
+                |o, n| adopt(&o.channels, &mut n.channels),
             ));
         } else {
-            rv.set_candidates(model(Vec::new()));
+            rv.set_candidates(sync(rv.get_candidates(), Vec::new()));
         }
         if let Some(n) = &c.notice {
             rv.set_notice_headline(ss(&n.headline));
-            rv.set_notice_lines(model(
+            rv.set_notice_lines(sync(
+                rv.get_notice_lines(),
                 n.lines
                     .iter()
                     .map(|(l, v)| s::KV {
@@ -3411,11 +3532,14 @@ impl Shell {
             ));
             rv.set_notice_consequence(ss(&n.consequence));
         }
-        rv.set_other_fills(model(if blind {
-            Vec::new()
-        } else {
-            c.other_fills.clone()
-        }));
+        rv.set_other_fills(sync(
+            rv.get_other_fills(),
+            if blind {
+                Vec::new()
+            } else {
+                c.other_fills.clone()
+            },
+        ));
         rv.set_other_caption(ss(format!(
             "Typical full fill {:.2} · {} answered",
             c.typical_full_fill, c.answered
@@ -3451,7 +3575,8 @@ impl Shell {
             codes.push(MORE_REASONS.into());
         }
         rv.set_reason_needed(needs && !c.reasons.is_empty());
-        rv.set_reasons(model(
+        rv.set_reasons(sync(
+            rv.get_reasons(),
             codes
                 .iter()
                 .map(|code| {
@@ -3539,7 +3664,7 @@ impl Shell {
             "{} open items share this group (code, question, suggestion, fill bucket)",
             c.group.members.len()
         )));
-        rv.set_contact(model(tiles));
+        rv.set_contact(sync(rv.get_contact(), tiles));
         drop(st);
         let mut st = self.st.borrow_mut();
         st.contact_ids = contact_ids;
@@ -3618,7 +3743,8 @@ impl Shell {
             "none open"
         }));
         let max = r.grades.iter().map(|g| g.count).max().unwrap_or(1).max(1);
-        rs.set_grades(model(
+        rs.set_grades(sync(
+            rs.get_grades(),
             r.grades
                 .iter()
                 .map(|g| s::GradeBar {
@@ -3635,7 +3761,8 @@ impl Shell {
                 })
                 .collect(),
         ));
-        rs.set_statuses(model(
+        rs.set_statuses(sync(
+            rs.get_statuses(),
             r.statuses
                 .iter()
                 .map(|x| s::StatusBarVM {
@@ -3648,14 +3775,16 @@ impl Shell {
         ));
         rs.set_scale_label(ss(&r.scale_label));
         let hmax = r.histogram.counts.iter().copied().max().unwrap_or(1).max(1);
-        rs.set_histogram(model(
+        rs.set_histogram(sync(
+            rs.get_histogram(),
             r.histogram
                 .counts
                 .iter()
                 .map(|&c| c as f32 / hmax as f32)
                 .collect(),
         ));
-        rs.set_histogram_counts(model(
+        rs.set_histogram_counts(sync(
+            rs.get_histogram_counts(),
             r.histogram.counts.iter().map(|&c| c as i32).collect(),
         ));
         rs.set_pass_mark(r.histogram.pass_mark as f32);
@@ -3686,7 +3815,8 @@ impl Shell {
         };
         let mut items: Vec<&b::ItemStats> = r.items.iter().collect();
         items.sort_by_key(|it| (flag_rank(it), it.question));
-        rs.set_items(model(
+        rs.set_items(sync_with(
+            rs.get_items(),
             items
                 .into_iter()
                 .map(|it| {
@@ -3784,9 +3914,14 @@ impl Shell {
                     }
                 })
                 .collect(),
+            |o, n| adopt(&o.shares, &mut n.shares),
         ));
-        rs.set_option_labels(model(r.option_labels.iter().map(ss).collect()));
-        rs.set_readiness(model(
+        rs.set_option_labels(sync(
+            rs.get_option_labels(),
+            r.option_labels.iter().map(ss).collect(),
+        ));
+        rs.set_readiness(sync(
+            rs.get_readiness(),
             r.readiness
                 .iter()
                 .map(|c| s::CheckRow {
@@ -3892,13 +4027,13 @@ impl Shell {
         let Some(v) = view else {
             rm.set_has(false);
             rm.set_refused(false);
-            rm.set_versions(model(Vec::new()));
-            rm.set_rows(model(Vec::new()));
-            rm.set_facts(model(Vec::new()));
-            rm.set_objectives(model(Vec::new()));
-            rm.set_key_sheets(model(Vec::new()));
-            rm.set_workbooks(model(Vec::new()));
-            rm.set_notes(model(Vec::new()));
+            rm.set_versions(sync(rm.get_versions(), Vec::new()));
+            rm.set_rows(sync(rm.get_rows(), Vec::new()));
+            rm.set_facts(sync(rm.get_facts(), Vec::new()));
+            rm.set_objectives(sync(rm.get_objectives(), Vec::new()));
+            rm.set_key_sheets(sync(rm.get_key_sheets(), Vec::new()));
+            rm.set_workbooks(sync(rm.get_workbooks(), Vec::new()));
+            rm.set_notes(sync(rm.get_notes(), Vec::new()));
             return;
         };
         rm.set_apply_label(ss(if context == 1 {
@@ -3915,13 +4050,13 @@ impl Shell {
             rm.set_title(ss("Remark import refused"));
             rm.set_files(ss(v.files.join(" · ")));
             rm.set_can_apply(false);
-            rm.set_versions(model(Vec::new()));
-            rm.set_rows(model(Vec::new()));
-            rm.set_facts(model(Vec::new()));
-            rm.set_objectives(model(Vec::new()));
-            rm.set_key_sheets(model(Vec::new()));
-            rm.set_workbooks(model(Vec::new()));
-            rm.set_notes(model(Vec::new()));
+            rm.set_versions(sync(rm.get_versions(), Vec::new()));
+            rm.set_rows(sync(rm.get_rows(), Vec::new()));
+            rm.set_facts(sync(rm.get_facts(), Vec::new()));
+            rm.set_objectives(sync(rm.get_objectives(), Vec::new()));
+            rm.set_key_sheets(sync(rm.get_key_sheets(), Vec::new()));
+            rm.set_workbooks(sync(rm.get_workbooks(), Vec::new()));
+            rm.set_notes(sync(rm.get_notes(), Vec::new()));
             return;
         }
         rm.set_has(true);
@@ -3940,7 +4075,8 @@ impl Shell {
             v.questions
         )));
         rm.set_files(ss(v.files.join(" · ")));
-        rm.set_versions(model(
+        rm.set_versions(sync(
+            rm.get_versions(),
             v.versions
                 .iter()
                 .enumerate()
@@ -4002,7 +4138,7 @@ impl Shell {
             if !v.points_note.is_empty() {
                 facts.push(kv("Points given", v.points_note.clone(), s::Tone::Accent));
             }
-            rm.set_facts(model(facts));
+            rm.set_facts(sync(rm.get_facts(), facts));
             rm.set_key_counts(ss(&x.key_counts));
             let objective_of = |q: usize| -> String {
                 x.objectives
@@ -4011,7 +4147,8 @@ impl Shell {
                     .map(|o| o.code.clone())
                     .unwrap_or_default()
             };
-            rm.set_rows(model(
+            rm.set_rows(sync(
+                rm.get_rows(),
                 (0..usize::from(v.questions))
                     .map(|q| s::RmRow {
                         q: ss(format!("{:02}", q + 1)),
@@ -4031,7 +4168,8 @@ impl Shell {
                 }
             }
         }
-        rm.set_objectives(model(
+        rm.set_objectives(sync(
+            rm.get_objectives(),
             codes
                 .iter()
                 .map(|code| {
@@ -4071,7 +4209,8 @@ impl Shell {
                 })
                 .collect(),
         ));
-        rm.set_key_sheets(model(
+        rm.set_key_sheets(sync(
+            rm.get_key_sheets(),
             v.key_sheets
                 .iter()
                 .map(|k| s::RmKeySheet {
@@ -4080,7 +4219,8 @@ impl Shell {
                 })
                 .collect(),
         ));
-        rm.set_workbooks(model(
+        rm.set_workbooks(sync(
+            rm.get_workbooks(),
             v.workbooks
                 .iter()
                 .map(|w| s::KV {
@@ -4093,7 +4233,7 @@ impl Shell {
                 })
                 .collect(),
         ));
-        rm.set_notes(model(v.notes.iter().map(ss).collect()));
+        rm.set_notes(sync(rm.get_notes(), v.notes.iter().map(ss).collect()));
     }
 
     fn fill_parallel(&self, rm: &s::RemarkVM, run: Option<&b::ParallelRunView>) {
@@ -4101,13 +4241,13 @@ impl Shell {
             rm.set_cmp_has(false);
             rm.set_cmp_open(false);
             rm.set_cmp_refused(false);
-            rm.set_diffs(model(Vec::new()));
-            rm.set_diff_crops(model(Vec::new()));
-            rm.set_identity(model(Vec::new()));
-            rm.set_totals(model(Vec::new()));
-            rm.set_cmp_key_sheets(model(Vec::new()));
-            rm.set_cmp_workbooks(model(Vec::new()));
-            rm.set_cmp_tiles(model(Vec::new()));
+            rm.set_diffs(sync(rm.get_diffs(), Vec::new()));
+            rm.set_diff_crops(sync(rm.get_diff_crops(), Vec::new()));
+            rm.set_identity(sync(rm.get_identity(), Vec::new()));
+            rm.set_totals(sync(rm.get_totals(), Vec::new()));
+            rm.set_cmp_key_sheets(sync(rm.get_cmp_key_sheets(), Vec::new()));
+            rm.set_cmp_workbooks(sync(rm.get_cmp_workbooks(), Vec::new()));
+            rm.set_cmp_tiles(sync(rm.get_cmp_tiles(), Vec::new()));
             rm.set_cmp_hold(ss(""));
             rm.set_cmp_can_queue(false);
             return;
@@ -4121,9 +4261,9 @@ impl Shell {
             rm.set_cmp_refusal(ss(&r.message));
             rm.set_cmp_remedy(ss(&r.remedy));
             rm.set_cmp_suggestion(ss(&r.suggestion));
-            rm.set_diffs(model(Vec::new()));
-            rm.set_diff_crops(model(Vec::new()));
-            rm.set_cmp_tiles(model(Vec::new()));
+            rm.set_diffs(sync(rm.get_diffs(), Vec::new()));
+            rm.set_diff_crops(sync(rm.get_diff_crops(), Vec::new()));
+            rm.set_cmp_tiles(sync(rm.get_cmp_tiles(), Vec::new()));
             rm.set_cmp_hold(ss(""));
             rm.set_cmp_can_queue(false);
             return;
@@ -4140,82 +4280,85 @@ impl Shell {
         let open = c.differ + c.differ_pending;
         rm.set_cmp_hold(ss(&v.hold));
         rm.set_cmp_can_queue(c.not_queued > 0);
-        rm.set_cmp_tiles(model(vec![
-            tile(
-                "BOOKLETS PAIRED",
-                format!("{paired}/{}", c.booklets),
-                format!(
-                    "ID {} · partial {} · answers {}",
-                    c.paired_by_id, c.paired_by_partial_id, c.paired_by_answers
+        rm.set_cmp_tiles(sync(
+            rm.get_cmp_tiles(),
+            vec![
+                tile(
+                    "BOOKLETS PAIRED",
+                    format!("{paired}/{}", c.booklets),
+                    format!(
+                        "ID {} · partial {} · answers {}",
+                        c.paired_by_id, c.paired_by_partial_id, c.paired_by_answers
+                    ),
+                    s::Tone::Neutral,
                 ),
-                s::Tone::Neutral,
-            ),
-            tile(
-                "QUESTIONS EQUAL",
-                c.agree.to_string(),
-                format!("of {} · {} pending, same", c.questions, c.agree_pending),
-                s::Tone::Neutral,
-            ),
-            tile(
-                "TO ADJUDICATE",
-                open.to_string(),
-                if c.not_queued > 0 {
-                    format!(
-                        "{} settled · {} pending · {} not in Review",
-                        c.differ, c.differ_pending, c.not_queued
-                    )
-                } else {
-                    format!(
-                        "{} settled · {} pending · {} held in Review",
-                        c.differ, c.differ_pending, c.held_in_review
-                    )
-                },
-                if c.differ > 0 {
-                    s::Tone::Error
-                } else if open > 0 {
-                    s::Tone::Warning
-                } else {
-                    s::Tone::Success
-                },
-            ),
-            tile(
-                "TOTALS EQUAL",
-                format!("{}/{}", c.totals_settled_equal, c.totals_settled),
-                if c.maximum_differences > 0 {
-                    "the exam's maximum is not Remark's: other points".to_string()
-                } else {
-                    format!(
-                        "this exam's grades · provisional {}/{} if resolved",
-                        c.totals_provisional_equal_if_remark, c.totals_provisional
-                    )
-                },
-                if c.totals_settled_equal == c.totals_settled && c.maximum_differences == 0 {
-                    s::Tone::Success
-                } else {
-                    s::Tone::Error
-                },
-            ),
-            tile(
-                "IDENTITY",
-                c.identity.to_string(),
-                "differences to check".into(),
-                if c.identity > 0 {
-                    s::Tone::Warning
-                } else {
-                    s::Tone::Success
-                },
-            ),
-            tile(
-                "KEY SHEETS",
-                c.key_sheet_rows.to_string(),
-                "graded as students".into(),
-                if c.key_sheet_rows > 0 {
-                    s::Tone::Warning
-                } else {
-                    s::Tone::Neutral
-                },
-            ),
-        ]));
+                tile(
+                    "QUESTIONS EQUAL",
+                    c.agree.to_string(),
+                    format!("of {} · {} pending, same", c.questions, c.agree_pending),
+                    s::Tone::Neutral,
+                ),
+                tile(
+                    "TO ADJUDICATE",
+                    open.to_string(),
+                    if c.not_queued > 0 {
+                        format!(
+                            "{} settled · {} pending · {} not in Review",
+                            c.differ, c.differ_pending, c.not_queued
+                        )
+                    } else {
+                        format!(
+                            "{} settled · {} pending · {} held in Review",
+                            c.differ, c.differ_pending, c.held_in_review
+                        )
+                    },
+                    if c.differ > 0 {
+                        s::Tone::Error
+                    } else if open > 0 {
+                        s::Tone::Warning
+                    } else {
+                        s::Tone::Success
+                    },
+                ),
+                tile(
+                    "TOTALS EQUAL",
+                    format!("{}/{}", c.totals_settled_equal, c.totals_settled),
+                    if c.maximum_differences > 0 {
+                        "the exam's maximum is not Remark's: other points".to_string()
+                    } else {
+                        format!(
+                            "this exam's grades · provisional {}/{} if resolved",
+                            c.totals_provisional_equal_if_remark, c.totals_provisional
+                        )
+                    },
+                    if c.totals_settled_equal == c.totals_settled && c.maximum_differences == 0 {
+                        s::Tone::Success
+                    } else {
+                        s::Tone::Error
+                    },
+                ),
+                tile(
+                    "IDENTITY",
+                    c.identity.to_string(),
+                    "differences to check".into(),
+                    if c.identity > 0 {
+                        s::Tone::Warning
+                    } else {
+                        s::Tone::Success
+                    },
+                ),
+                tile(
+                    "KEY SHEETS",
+                    c.key_sheet_rows.to_string(),
+                    "graded as students".into(),
+                    if c.key_sheet_rows > 0 {
+                        s::Tone::Warning
+                    } else {
+                        s::Tone::Neutral
+                    },
+                ),
+            ],
+        ));
         let mut crops = Vec::new();
         let diffs: Vec<s::CmpDiff> = v
             .differences
@@ -4252,14 +4395,15 @@ impl Shell {
                 }
             })
             .collect();
-        rm.set_diffs(model(diffs));
-        rm.set_diff_crops(model(crops));
+        rm.set_diffs(sync(rm.get_diffs(), diffs));
+        rm.set_diff_crops(sync(rm.get_diff_crops(), crops));
         let line = |title: String, detail: String, tone: s::Tone| s::CmpLine {
             title: ss(title),
             detail: ss(detail),
             tone,
         };
-        rm.set_identity(model(
+        rm.set_identity(sync(
+            rm.get_identity(),
             v.identity
                 .iter()
                 .map(|i| {
@@ -4331,8 +4475,9 @@ impl Shell {
                 },
             )
         }));
-        rm.set_totals(model(totals));
-        rm.set_cmp_key_sheets(model(
+        rm.set_totals(sync(rm.get_totals(), totals));
+        rm.set_cmp_key_sheets(sync(
+            rm.get_cmp_key_sheets(),
             v.key_sheets
                 .iter()
                 .map(|k| {
@@ -4377,7 +4522,7 @@ impl Shell {
             ));
         }
 
-        rm.set_cmp_workbooks(model(books));
+        rm.set_cmp_workbooks(sync(rm.get_cmp_workbooks(), books));
     }
 
     fn refresh_outcomes(&self) {
@@ -4493,7 +4638,7 @@ impl Shell {
                 )
             }
         )));
-        ov.set_clos(model(rows));
+        ov.set_clos(sync(ov.get_clos(), rows));
         // §11.4: the TP-154 Actual level prints μ and π; the footnote names the deciding method,
         // τ and T (and the policy version the result is bound to)
         ov.set_footnote(ss(format!(
@@ -4552,7 +4697,7 @@ impl Shell {
                 ..Default::default()
             });
         }
-        ov.set_b1(model(b1));
+        ov.set_b1(sync(ov.get_b1(), b1));
     }
 }
 
@@ -4608,15 +4753,6 @@ impl Shell {
         let ui = self.ui();
         let su = ui.global::<s::SetupVM>();
         su.set_ks_open(open && su.get_has_keysheets());
-    }
-
-    pub fn select_cell(&self, row: usize, col: usize) {
-        {
-            let mut st = self.st.borrow_mut();
-            st.sel_row = row;
-            st.sel_col = col;
-        }
-        self.refresh_setup();
     }
 
     pub fn set_lane(&self, lane: Lane) {
