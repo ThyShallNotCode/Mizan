@@ -79,6 +79,25 @@ Scan each exam into one folder: PDF or TIFF straight from the scanner (600-dpi b
 or 200–300-dpi gray), or JPEG/PNG files. Blank backs from duplex scanning are dropped, turned
 pages are read upright, and a file added twice is ignored.
 
+### Check the scans first
+
+```sh
+omr survey scans/cs211-midterm/ --key key.csv
+```
+
+`omr survey` reads the scans once, in memory (nothing is written), and proposes the exam's
+definition, each value with where it came from: the versions (from the key file's columns, or
+the version bubbles the students filled), the number of questions (the key's last answered
+question, the key sheets' last marked row, or how far the students answered), the key sheets
+in the stack, the title from the sheets' exam-type bubble and the course from the folder name.
+It keeps counts only, never a student number. When the evidence disagrees (six sheets bubble
+version C but the key has A and B; the key answers questions 1–40 but `--questions 30` was
+given; there is no key at all) it asks, prints the answers each question takes
+(`--answer hold:C`, `--answer keep-questions:30`, `--answer provisional-key`, …) and exits 2;
+run it again with your answer. `--json` prints the survey's counts and the proposal for
+scripts. `omr grade` keeps its own defaults (versions A, B unless the key names them; the
+survey proposes, it does not grade): give it the values `omr survey` proposed.
+
 ### With the answer key
 
 ```sh
