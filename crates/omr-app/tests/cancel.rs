@@ -1,8 +1,9 @@
 //! G-3 D7: the operator cancels a grading run or a survey (synthetic IAU sheets only). The run
 //! checks the token before the project package is created, before each page and between
-//! stages, never once the store stage has begun: a cancelled run stores nothing (a new exam's
-//! package and the folder made for it are removed), a cancel during the store stage is too
-//! late and the exam is written whole, and a token nobody cancels never stops a run.
+//! stages, never once the store stage has begun: a cancelled new exam stores nothing (its
+//! package and the folder made for it are removed), a cancelled append keeps its spool and the
+//! same scans add again, a cancel during the store stage is too late and the exam is written
+//! whole, and a token nobody cancels never stops a run.
 
 mod common;
 
@@ -21,8 +22,13 @@ fn key(q: u16) -> u8 {
 }
 
 fn sheets(dir: &Path) -> PathBuf {
+    sheets_of(dir, 0..SHEETS)
+}
+
+/// The sheets `ks` (students `22103458kk`) in `dir`.
+fn sheets_of(dir: &Path, ks: std::ops::Range<u16>) -> PathBuf {
     let e = iau();
-    for k in 0..SHEETS {
+    for k in ks {
         let answers: Vec<Option<u8>> = (0..N).map(|q| Some((key(q) + (k % 2) as u8) % 5)).collect();
         let m = Marks::new(&answers, &format!("22103458{k:02}"), Some(0));
         write(
@@ -196,6 +202,58 @@ fn a_cancel_once_the_store_stage_has_begun_is_too_late() {
     let p = ExamProject::open(&out.join("project.omrproj"), "principal:test").unwrap();
     p.check_audited().unwrap();
     p.store().unwrap().verify().unwrap();
+}
+
+#[test]
+fn a_cancelled_append_keeps_its_spool_and_the_same_scans_add_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let scans = sheets(&dir.path().join("scans"));
+    let more = sheets_of(&dir.path().join("more"), SHEETS..SHEETS + 2);
+    let out = dir.path().join("out");
+    ExamProject::grade(&definition(), &[scans], &options(&out, 2), &|_| {})
+        .unwrap()
+        .close()
+        .unwrap();
+    let pkg = out.join("project.omrproj");
+    let mut p = ExamProject::open(&pkg, "principal:test").unwrap();
+    // Cancelled while the first new page is read: the batch and its pages are spooled by now.
+    let opts = options(&out, 2);
+    let token = opts.cancel.clone();
+    let progress = |e: &Progress| {
+        if matches!(e, Progress::Page { .. }) {
+            token.cancel();
+        }
+    };
+    let e = p
+        .add_scans(std::slice::from_ref(&more), &opts, &progress)
+        .expect_err("cancelled");
+    assert!(is_cancelled(&e), "{e}");
+    assert_eq!(p.session.booklets.len(), usize::from(SHEETS), "unchanged");
+    // The operator adds the same files again: their pages are added once, never refused.
+    let r = p
+        .add_scans(std::slice::from_ref(&more), &options(&out, 2), &|_| {})
+        .unwrap();
+    assert_eq!((r.files, r.new_pages, r.duplicates), (2, 2, 0));
+    assert_eq!(
+        (r.booklets_before, r.booklets_after),
+        (usize::from(SHEETS), usize::from(SHEETS) + 2)
+    );
+    p.close().unwrap();
+    let p = ExamProject::open(&pkg, "principal:test").unwrap();
+    assert_eq!(p.session.booklets.len(), usize::from(SHEETS) + 2);
+    p.check_audited().unwrap();
+    p.store().unwrap().verify().unwrap();
+    // The cancelled batch stays open in the log; the retry's batch is closed.
+    let ev: Vec<String> = p
+        .store()
+        .unwrap()
+        .events()
+        .unwrap()
+        .into_iter()
+        .map(|e| e.event_type)
+        .collect();
+    let count = |t: &str| ev.iter().filter(|e| *e == t).count();
+    assert_eq!((count("BatchOpened"), count("BatchClosed")), (3, 2));
 }
 
 #[test]

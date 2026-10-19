@@ -562,10 +562,10 @@ alone.
 
 ### 3.1.6 Cancelling a run (G-3)
 
-`omr_app::Cancel` is the operator's cancel of a new exam's grading or of a survey: the run
-checks it before the project package is created, before each page is decoded and between
-stages, never once the store stage has begun (synthetic IAU sheets;
-`omr-app/tests/cancel.rs`). The desktop's *Cancel grading* is the shell's part of G-3.
+`omr_app::Cancel` is the operator's cancel of a new exam's grading, of scans added to a graded
+exam, or of a survey: the run checks it before the project package is created, before each
+page is decoded and between stages, never once the store stage has begun (synthetic IAU
+sheets; `omr-app/tests/cancel.rs`). The desktop's *Cancel grading* is the shell's part of G-3.
 
 | Case | What happens | Test (`cancel.rs::…`) |
 |---|---|---|
@@ -573,6 +573,7 @@ stages, never once the store stage has begun (synthetic IAU sheets;
 | Cancelled while the first page is read | No further page is decoded and no stage runs; the package (its originals already spooled) and the exam folder the run made are removed; the same folder then grades from scratch. **Was:** an empty exam folder stayed behind after a failed run | `a_cancel_during_the_page_stage_removes_the_package_and_its_new_folder` |
 | Cancelled at the batch, identity or scoring stage | Stops before the next stage; nothing stored | `a_cancel_between_stages_stops_before_the_next_one` |
 | Cancelled once the store stage has begun | Too late: the exam is written whole, opens and passes the audit checks | `a_cancel_once_the_store_stage_has_begun_is_too_late` |
+| Scans added to a graded exam, cancelled while the first new page is read | The exam's results stay as they were; the run's spool stays (its scan batch left open, the new originals and page rows); adding the same files again adds their 2 pages and 2 booklets, and the exam reopens and passes the audit checks. **Was:** adding them again failed for good (`UNIQUE constraint failed: page.page_id`), opening another batch each time | `a_cancelled_append_keeps_its_spool_and_the_same_scans_add_again` |
 | A survey cancelled while it reads | Stops with `Cancelled`; a survey with a fresh token runs to its end | `a_survey_honours_the_cancel` |
 
 ### 3.1.7 A roster after grading (G-3)

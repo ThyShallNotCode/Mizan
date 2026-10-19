@@ -2544,7 +2544,10 @@ impl ExamProject {
     /// was already imported is CAP-011 (byte-identical) and adds nothing. Earlier review events
     /// stay in the history but can no longer be undone. `opts.threads` and
     /// `opts.snapshot_utc` apply (the exam's snapshot time by default); the package is this
-    /// project's.
+    /// project's. A run that fails or is cancelled (`opts.cancel`) after its spool leaves the
+    /// exam's results as they were but keeps the spool: its batch stays open in the log, and the
+    /// originals and page rows it stored stay; adding the same files again adds their pages
+    /// once (they keep that batch's ID).
     pub fn add_scans(
         &mut self,
         inputs: &[PathBuf],
@@ -2751,7 +2754,8 @@ impl ExamProject {
     /// identity mode it was created with; the roster in force is the latest identity run's.
     /// Refused while the key read from key sheets waits for confirmation; a refused roster, or
     /// a run that fails or is cancelled, leaves the exam and its definition as they were and
-    /// records no roster.
+    /// records no roster (a run stopped after its spool leaves the scan batch it opened open
+    /// in the log; it spools no page).
     pub fn set_roster(
         &mut self,
         rows: Vec<crate::exam::RosterStudent>,

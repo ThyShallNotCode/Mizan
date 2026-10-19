@@ -512,7 +512,9 @@ impl StoreWriter {
     }
 
     /// Page rows for every page (bulk lane, ≤ 50 pages per transaction); duplicates and
-    /// unreadable files become CAP-011 / CAP-001 exceptions.
+    /// unreadable files become CAP-011 / CAP-001 exceptions. A page whose row the store holds
+    /// already keeps it, also one spooled by an append that failed or was cancelled after its
+    /// spool: page IDs derive from the content, so adding the same file again adds no row.
     pub fn spool_pages(
         &mut self,
         pages: &[(String, usize, u32, Option<usize>)],
@@ -522,9 +524,21 @@ impl StoreWriter {
         let staged = self.staged.clone();
         let engine = Actor::engine("ingest");
         let batch = self.batch_id.clone();
-        // Pages already spooled by an earlier batch keep their rows.
-        let pages: Vec<&(String, usize, u32, Option<usize>)> =
-            pages.iter().filter(|p| !known.contains(&p.0)).collect();
+        // Pages already spooled keep their rows: an earlier batch's (`known`), and those of a
+        // run that stopped after its spool (they keep that run's batch).
+        let mut spooled = std::collections::BTreeSet::new();
+        for s in staged.iter().flatten() {
+            spooled.extend(
+                self.project
+                    .reader()
+                    .pages_for_object(&s.blake3)
+                    .map_err(store_err)?,
+            );
+        }
+        let pages: Vec<&(String, usize, u32, Option<usize>)> = pages
+            .iter()
+            .filter(|p| !known.contains(&p.0) && !spooled.contains(&p.0))
+            .collect();
         // Objects first.
         self.project
             .bulk(|tx| {

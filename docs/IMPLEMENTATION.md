@@ -163,9 +163,11 @@ expectation tied to the real exams out of the repository.
   or a survey before anything is stored):
   - a cancelled run keeps nothing and cannot be resumed (§22.4 keeps the completed pages and
     the job resumable): the operator grades the scans again;
-  - cancelling an appended batch: its store opens the run (a new scan batch, the originals
-    spooled) before the pages are read, so a cancel there ends as a failed append does, with
-    that batch left open in the log;
+  - cancelling an appended batch (or a roster given after grading): its store opens the run
+    (a new scan batch, the new originals and their page rows spooled) before the pages are
+    read, so a cancel there ends as a failed append does: the exam's results stay as they were,
+    that batch stays open in the log and the spooled originals and page rows stay; adding the
+    same files again adds each page once (it keeps the stopped batch's ID), never refuses it;
   - `omr` sets no cancel on Ctrl+C: its exit code 130 is reserved for `AppError::Cancelled`,
     which only a caller holding the token raises (the desktop's *Cancel grading*, the shell
     step of G-3 D7).

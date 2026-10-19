@@ -34,9 +34,12 @@ use std::time::Instant;
 
 /// The operator's cancel of a grading run or a survey (G-3): a shared flag the shell sets from
 /// another thread. The run checks it before the project package is created, before each
-/// page's decoding and between stages, never once the store stage has begun: a cancelled run
-/// stores nothing ([`AppError::Cancelled`]; a new exam's package is removed). Clones share the
-/// flag; a token nobody cancels (the default) never stops a run.
+/// page's decoding and between stages, never once the store stage has begun: a cancelled new
+/// exam stores nothing ([`AppError::Cancelled`]; its package is removed). A cancelled run of a
+/// graded exam (scans added, a roster given) leaves its results as they were but keeps what its
+/// spool stored: a new scan batch, left open, with the originals and page rows of the scans
+/// added; adding the same files again adds each page once. Clones share the flag; a token
+/// nobody cancels (the default) never stops a run.
 #[derive(Clone, Debug, Default)]
 pub struct Cancel(Arc<AtomicBool>);
 
