@@ -96,6 +96,12 @@ expectation tied to the real exams out of the repository.
   its head-to-head figures stay inside the university). Remark's binary formats are never read.
 - CSV/XLSX/HTML exports (§16.3, §17), listed in a manifest signed with the device key; the release step (§13.4: `ResultsReleased`, superseded by any later change) gates the Blackboard grade-center upload.
 - The end-to-end pipeline in `omr-app` with rayon parallelism.
+- The New-exam proposal (G-3): a survey of the scans before the exam is defined (one
+  recognition pass in memory under a definition that reads every printed row, version and key
+  sheet; counts only, no student number; `omr_app::survey`) and a proposal of every value of
+  the definition from the evidence, each with its source, that asks when the evidence
+  disagrees and gives `define` inputs only when nothing is left to ask (`omr_app::propose`,
+  `omr survey`). Its thresholds are untuned (one `Thresholds` struct).
 - The `omr` CLI.
 - The Slint desktop shell (§5.2): an exams folder by default (demo data only with `--demo`, marked on every screen), a New-exam form that grades a folder of scans, setup with key replacement, live import and added batches, the review queue, results with release and exports, and outcomes.
 
@@ -146,7 +152,14 @@ expectation tied to the real exams out of the repository.
   - a batch MRK-018 for confident marks below the last question on many sheets (Fable E5);
   - reusing the survey's page measurements for the grade (each pass reads the pages);
   - `omr grade` keeps its defaults (`--cancel-mode erase_only`, versions A,B without a key
-    file that names them): the desktop takes an own sheet's cancel mode from its spec;
+    file that names them) and does not take them from the proposal (`omr survey` prints them):
+    the desktop takes an own sheet's cancel mode from its spec;
+  - the desktop's New exam does not show the proposal yet (the shell step of G-3, design-flow
+    §4): it still builds its inputs from the form, and a blank key field still infers the key;
+  - a survey cannot be cancelled: an abandoned one runs to its end (the cancel token of G-3 D7
+    is not built yet);
+  - the setup's provenance (each value with its source, `ExamDefinition::provenance`) is
+    recorded only for exams defined from a proposal; the survey's own counts are not stored;
   - the IAU student-ID scheme accepts intake years up to 2030 only (§9.2).
 
 ## 3. Crates and ownership

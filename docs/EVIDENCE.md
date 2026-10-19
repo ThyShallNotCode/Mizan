@@ -527,6 +527,39 @@ version rows apply to exams created since the backstops (definitions with
 | An own sheet whose spec prints `cross_cancels` or `fill_cancels_check`, defined from the desktop's New exam | The definition takes the spec's marking convention (a typed one must agree); a spec without one is refused naming the file and the field. The key-sheet rule (markers, detection in the stack) reaches the New-exam definition as it reaches `omr grade`. **Was:** the definition took `erase_only` and every such spec was refused at validation | `instructor_files.rs::an_own_sheets_cancel_mode_comes_from_its_spec_and_the_key_sheet_rule_from_the_inputs` |
 | *Apply to group* on version (Form) items | Refused when an item's margin is under 10 nats or it bubbles an undeclared version; nothing changes. **Was:** a tied group (margin 0) was confirmed in one keystroke | `version_routing.rs::versions_are_confirmed_as_a_group_only_by_a_10_nat_margin` |
 
+### 3.1.5 The New-exam proposal and its survey (G-3)
+
+Before an exam is defined, `omr_app::survey` reads the scans once in memory (every printed row,
+version and key sheet; counts only) and `omr_app::propose` proposes every value of the
+definition with its source, asking when the evidence disagrees; `omr survey` prints it. Each
+proposal that gives inputs is graded with them in the test (synthetic IAU sheets, `omr-sim` own
+sheets, synthetic Remark workbooks; `omr-app/tests/exam_proposal.rs`).
+
+| Case | What the proposal does | Test (`exam_proposal.rs::…`) |
+|---|---|---|
+| Counts: versions bubbled, rows answered, key sheets in the stack, student numbers that fit the scheme | Counted (24 students: A 8, B 8, C 6, blank 2; rows 1–40 on every sheet; 3 key sheets named by page); nothing written; no student number in the survey, the proposal or its JSON | `the_survey_counts_versions_rows_and_key_sheets_and_keeps_no_student_number` |
+| Stray marks on row 77 (2 of 40 sheets), blank backs, bleed-through, a foreign page named by a student number | The extent stays 30 (high); blank pages counted apart; the foreign page named by file and page, masked | `stray_marks_far_below_the_questions_do_not_move_the_extent`, `pages_that_are_not_the_sheet_are_counted_and_named` |
+| The same files in another order, at 1 or 4 threads | Identical survey (fingerprint included) and proposal | `the_survey_and_the_proposal_do_not_depend_on_input_order_or_threads` |
+| One version and a one-column key; two or four versions named by the key | Versions A / A, B / A–D, the count from the key; grading: no version review, two inferred blanks, every sheet scored under its own key (hand count) | `p1_…`, `p2_…`, `p3_…` |
+| Six sheets bubble C on an A, B key; one bubbles D | C asked ([choose another key] [hold the 6 sheets], and [read key version B as C] when B has no sheets); D a note; after the answer both held, never scored | `p4_p5_a_version_the_key_lacks_is_asked_and_a_stray_one_noted_then_held` |
+| One answer column while A and B are bubbled on many sheets | Asked; [the same key for every version] gives A, B with the shared key: blank bubbles scored under it, no SCO-005 queued | `p6_one_answer_column_with_two_bubbled_versions_asks_then_shares_the_key` |
+| The count: the key's last answered question (empty template rows ignored); typed lower (asked: use 40 / keep 30); typed higher or a gap in a version (asked: nothing is scored until filled); a question beyond the sheet; option E with 4 typed | As listed; typed values are never replaced | `p7_p9_the_count_and_the_gaps_come_from_the_key_file` |
+| Numbered versions (`Version 1`), unlabelled key columns, headerless rows starting with their version | Asked, then read as the letters answered; labelled rows read with a note | `numbered_and_unlabelled_key_versions_are_asked_and_read_as_answered` |
+| Students answer rows 31–40, the key covers 30; key sheets mark 35, the students 30; a stack with a short exam inside | Asked; the count from the key sheets with a note; asked ("may hold two exams") | `p8_…`, `p10_…`, `p14_…` |
+| No key | Asked, never inferred by default; after [provisional key] the version with ≥ 10 sheets gets an inferred key and the 2-sheet version is held | `p11_no_key_is_asked_and_a_provisional_key_is_only_chosen` |
+| A Remark import | Its versions and count; a version it lacks, a typed count or a key file beside it asked; its keys and points in the definition | `p12_a_remark_import_gives_the_versions_and_the_count` |
+| Labels and typed values | Title from the exam-type bubble (5 of 6), course from the folder name, term from the last exam of the exams folder (within 120 days); typed ones stay, a contradicted one is asked | `p15_p16_labels_come_from_the_evidence_and_typed_values_stay` |
+| A survey of other files (or a scan replaced since) | Ignored; the scans are to be surveyed again | `p17_a_survey_of_other_inputs_is_ignored` |
+| Own sheets | Versions from the verified page codes; `cross_cancels` from the spec, graded with nothing typed; a spec without one asked | `s6_p13_own_sheets_are_surveyed_by_their_page_codes_with_the_specs_cancel_mode` |
+| The setup | Each value with its source and evidence recorded with the exam (`ExamDefinition::provenance`, in the setup event and the snapshot), counts only | `the_setup_records_where_each_value_came_from` |
+| `omr survey` | Exit 2 while a question is open (each with its `--answer`), 0 once answered; `--json`; nothing written | `omr-cli/tests/survey.rs` |
+
+Survey cost on these stacks, one test at a time (test profile, `opt-level = 1`, 200-dpi PNG
+IAU sheets, Linux container): 10 pages in 1.30 s at 1 thread and 0.50 s at 4; 27 pages in
+1.03 s at 4 threads; 40 pages in 2.58 s at 2 threads; 7–14 pages in 0.6–1.1 s at 2 threads.
+Release figures are not measured yet; the survey is one more recognition pass than grading
+alone.
+
 ### 3.2 Security and code review: what was fixed
 
 A security review and a code review of the MVP raised 26 findings above "low" (SEC-01…SEC-11,
@@ -857,6 +890,16 @@ These limits apply to the MVP as measured here.
   exam declares `--forms A`. While key sheets wait for confirmation, a blank version bubble is
   inferred and queued even under identical keys (the confirmation may still make them
   differ).
+- **The New-exam proposal** (§3.1.5): its thresholds (5 % and 3 sheets for a version, the
+  50/70/30/5 % extent rule, 10 % and 3 sheets beyond the count, 10 sheets to infer a key, 60 %
+  for a title) are set on synthetic stacks only, not tuned on real ones. A one-column key whose
+  B students left the version blank is proposed as one version and those sheets are scored
+  against A's key without a flag (no letter is substantial to ask about; SCO-005 `near_chance`
+  is not queued). Headerless key rows that start with a bare letter are read as labelled rows;
+  when the letter is each row's first answer instead, only a survey shows it (the rows past
+  the count are asked). The survey reads every printed row where grading reads the exam's, so
+  its counts are evidence, not the graded reads. The desktop does not show the proposal yet,
+  and `omr grade` does not take its defaults from it (`docs/IMPLEMENTATION.md`).
 - No hot-folder watching and no SVG/PNG sheet output (CR-19). Key sheets (CR-11, §4.1) are
   confirmed with `omr key confirm` or in the desktop app's Setup screen (read, rendered summary,
   confirmation; covered by `shell-slint/tests/req_a11_real.rs` on synthetic key sheets); the
