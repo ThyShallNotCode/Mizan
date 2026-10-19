@@ -953,7 +953,7 @@ export component ExamsScreen inherits Rectangle {
                                     return accept;
                                 }
                                 if ((event.text == Key.Return || event.text == " ") && ExamsVM.selected >= 0) {
-                                    ExamsVM.select(ExamsVM.selected);
+                                    ExamsVM.select(ExamsVM.rows[ExamsVM.selected].id);
                                     return accept;
                                 }
                                 return reject;
@@ -965,9 +965,10 @@ export component ExamsScreen inherits Rectangle {
                                         width: parent.width;
                                         height: parent.height;
                                         data: row;
+                                        key: row.id;
                                         selected: i == ExamsVM.selected;
-                                        clicked => {
-                                            ExamsVM.select(i);
+                                        picked(id) => {
+                                            ExamsVM.select(id);
                                             table-keys.focus();
                                         }
                                     }

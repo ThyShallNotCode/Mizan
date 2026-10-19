@@ -21,8 +21,8 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use support::a11::{
-    by_label, chord, click, click_at, key, one, selected_queue_row, special, tab, type_text,
-    with_prefix,
+    by_label, chord, click, click_at, key, one, press_at, release_at, selected_queue_row, special,
+    tab, type_text, with_prefix,
 };
 
 struct Harness {
@@ -301,7 +301,7 @@ fn req_a11_a_click_between_the_new_exam_buttons_reaches_nothing_behind() {
         .find(|r| r.0 != behind)
         .expect("a second exam")
         .0;
-    ex.invoke_select(other as i32);
+    ex.invoke_select(ex.get_rows().row_data(other).expect("row").id);
     ex.set_new_open(true);
     slint::platform::update_timers_and_animations();
     assert_eq!(ex.get_selected(), other as i32);
@@ -1315,7 +1315,7 @@ fn req_a11_opening_an_exam_does_the_work_of_the_screen_on_show_only() {
     let other = (0..ex.get_rows().row_count())
         .find(|&i| i as i32 != ex.get_selected())
         .expect("a second exam");
-    ex.invoke_select(other as i32);
+    ex.invoke_select(ex.get_rows().row_data(other).expect("row").id);
     assert_eq!(calls(), (0, 0, 0), "nor does opening another exam from it");
     // each screen reads its part when it is shown
     click(&ui, &tab(&ui, "Scan"));
@@ -1333,13 +1333,17 @@ fn req_a11_opening_an_exam_does_the_work_of_the_screen_on_show_only() {
 }
 
 /// The demo backend with what a test changes behind the shell: key sheets for one exam
-/// (confirmed or pending), the CLO approval (none yet) and file.
+/// (confirmed or pending), the CLO approval (none yet) and file, and a background job whose every `pump`
+/// reverses the exams table and the Scan screen's tiles and codes (an exam whose batch ends
+/// moves to the top).
 #[derive(Default)]
 struct Hooked {
     demo: DemoBackend,
     key_sheets: Option<(ExamId, bool)>,
     approved: bool,
     clos_replaced: bool,
+    reorders: bool,
+    reversed: bool,
 }
 
 impl Backend for Hooked {
@@ -1350,6 +1354,9 @@ impl Backend for Hooked {
             if self.clos_replaced {
                 e.mapped_items = 0;
             }
+        }
+        if self.reversed {
+            d.exams.reverse();
         }
         d
     }
@@ -1387,7 +1394,12 @@ impl Backend for Hooked {
         self.demo.set_mapping_note(exam, question, clo, note)
     }
     fn batch_progress(&self, exam: &ExamId) -> Option<shell_slint::backend::BatchProgress> {
-        self.demo.batch_progress(exam)
+        let mut p = self.demo.batch_progress(exam)?;
+        if self.reversed {
+            p.thumbnails.reverse();
+            p.exceptions.reverse();
+        }
+        Some(p)
     }
     fn review_queue(&self, exam: &ExamId, lane: Lane) -> shell_slint::backend::ReviewQueue {
         self.demo.review_queue(exam, lane)
@@ -1450,6 +1462,12 @@ impl Backend for Hooked {
     ) -> Result<String, shell_slint::backend::BackendError> {
         self.clos_replaced = true;
         Ok("CLOs replaced".into())
+    }
+    fn pump(&mut self) -> bool {
+        if self.reorders {
+            self.reversed = !self.reversed;
+        }
+        self.reorders
     }
 }
 
@@ -1543,4 +1561,90 @@ fn req_a11_showing_the_exams_screen_reads_the_dashboard() {
     b.borrow_mut().clos_replaced = false;
     click(&ui, &tab(&ui, "Exams"));
     assert!(drawer().mapped > 0);
+}
+
+/// A point inside `e`, near its left end (clear of the drawer that may lie over a row's right).
+fn left_of(e: &ElementHandle) -> (f32, f32) {
+    let (p, s) = (e.absolute_position(), e.size());
+    (p.x + 24.0, p.y + s.height / 2.0)
+}
+
+#[test]
+fn req_a11_an_exam_row_pressed_during_a_refresh_opens_the_exam_pressed() {
+    // Rows were resolved by their index at the release: a refresh between press and release
+    // that reorders the table (a finished batch moves its exam to the top) opened the exam
+    // that had moved under the pointer.
+    let (ui, b, shell) = hooked(Hooked::default());
+    let ex = ui.global::<ExamsVM>();
+    let rows = ex.get_rows();
+    let n = rows.row_count();
+    let i = (0..n)
+        .find(|&i| i as i32 != ex.get_selected() && n - 1 - i != i)
+        .expect("a row that a reversal moves");
+    let pressed = rows.row_data(i).expect("row");
+    let (x, y) = left_of(&one(&ui, &pressed.label));
+    b.borrow_mut().reorders = true;
+    press_at(&ui, x, y);
+    assert!(shell.pump(), "the job reorders the table");
+    assert_ne!(
+        ex.get_rows().row_data(i).expect("row").id,
+        pressed.id,
+        "another exam is in the row pressed"
+    );
+    release_at(&ui, x, y);
+    let selected = ex.get_rows().row_data(ex.get_selected() as usize);
+    assert_eq!(selected.expect("a selection").id, pressed.id);
+    assert!(ex.get_drawer_open());
+}
+
+#[test]
+fn req_a11_a_tile_pressed_during_a_refresh_opens_the_sheet_pressed() {
+    // The Scan screen refreshes twice a second during a run; a tile read its sheet at the
+    // release, so a sheet that moved under the pointer was opened instead.
+    let (ui, b, shell) = hooked(Hooked::default());
+    click(&ui, &tab(&ui, "Scan"));
+    let sc = ui.global::<ScanVM>();
+    // a tile of the first row (always shown), with no review code
+    let thumbs = sc.get_thumbs();
+    let n = thumbs.row_count();
+    let t = (0..10)
+        .filter_map(|i| thumbs.row_data(i).map(|t| (i, t)))
+        .find(|(i, t)| t.code.is_empty() && n - 1 - i != *i)
+        .map(|(_, t)| t)
+        .expect("a tile without a code");
+    let (x, y) = left_of(&one(&ui, &t.label));
+    b.borrow_mut().reorders = true;
+    press_at(&ui, x, y);
+    assert!(shell.pump());
+    release_at(&ui, x, y);
+    assert_eq!(ui.global::<App>().get_page(), Page::Scan);
+    let msg = ui.global::<App>().get_message().to_string();
+    assert!(msg.starts_with(&format!("Sheet {}:", t.serial)), "{msg}");
+}
+
+#[test]
+fn req_a11_a_code_pressed_during_a_refresh_opens_the_code_pressed() {
+    // The same for the exceptions by code beside the tiles.
+    let (ui, b, shell) = hooked(Hooked::default());
+    click(&ui, &tab(&ui, "Scan"));
+    let sc = ui.global::<ScanVM>();
+    let first = sc.get_codes().row_data(0).expect("a code");
+    let row = one(
+        &ui,
+        &format!("{} {}, {} open", first.code, first.title, first.count),
+    );
+    let (x, y) = left_of(&row);
+    b.borrow_mut().reorders = true;
+    press_at(&ui, x, y);
+    assert!(shell.pump());
+    assert_ne!(
+        sc.get_codes().row_data(0).expect("a code").code,
+        first.code,
+        "another code is in the row pressed"
+    );
+    release_at(&ui, x, y);
+    assert_eq!(ui.global::<App>().get_page(), Page::Review);
+    let item = shell.current_item().expect("an item of the code");
+    let code = b.borrow().review_item(&cs211(), item).expect("item").code;
+    assert_eq!(code, first.code.as_str());
 }

@@ -1493,6 +1493,11 @@ export component TableRow inherits Rectangle {
     in property <bool> header;
     in property <length> row-height: Theme.row-height + 8px;
     callback clicked();
+    // The item the row shows (an exam ID), for `picked`: a refresh during a press may fill the
+    // row with another item by the release, and `picked` names the item that was pressed.
+    in property <string> key;
+    callback picked(string);
+    property <string> pressed-key;
     min-height: self.header ? Theme.row-height-compact + 4px : self.row-height;
     background: self.header ? Theme.surface-sunken : self.selected ? Theme.primary-soft : ta.has-hover ? Theme.surface-hover : transparent;
     // Slint requires a constant accessible-role (a `header ? none : list-item` binding fails to
@@ -1505,12 +1510,19 @@ export component TableRow inherits Rectangle {
     accessible-action-default => {
         if (!root.header) {
             root.clicked();
+            root.picked(root.key);
         }
     }
     ta := TouchArea {
         enabled: !root.header;
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                root.pressed-key = root.key;
+            }
+        }
         clicked => {
             root.clicked();
+            root.picked(root.pressed-key);
         }
     }
     HorizontalLayout {

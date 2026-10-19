@@ -686,8 +686,15 @@ impl Shell {
         // exams
         let ex = ui.global::<s::ExamsVM>();
         let me = self.clone();
-        ex.on_select(move |row| {
-            let id = me.st.borrow().exam_rows.get(row as usize).cloned();
+        ex.on_select(move |id| {
+            // by ID: the exam pressed, wherever a refresh has moved it since
+            let id = me
+                .st
+                .borrow()
+                .exam_rows
+                .iter()
+                .find(|e| e.0 == id.as_str())
+                .cloned();
             if let Some(id) = id {
                 me.st.borrow_mut().drawer_open = true;
                 me.select_exam(&id);

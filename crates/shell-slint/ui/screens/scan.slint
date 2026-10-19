@@ -97,7 +97,10 @@ component AddScansBar inherits Rectangle {
 component ThumbTile inherits Rectangle {
     in property <Thumb> t;
     in property <image> img;
-    callback clicked();
+    // the sheet opened: the one the press began on (a refresh twice a second during a run may
+    // show another sheet in this tile by the release)
+    callback clicked(Thumb);
+    property <Thumb> pressed;
     height: self.width * 1.12 + 22px;
     border-radius: Theme.radius-sm;
     background: Theme.surface-raised;
@@ -108,12 +111,17 @@ component ThumbTile inherits Rectangle {
     accessible-role: AccessibleRole.button;
     accessible-label: root.t.label;
     accessible-action-default => {
-        root.clicked();
+        root.clicked(root.t);
     }
     ta := TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                root.pressed = root.t;
+            }
+        }
         clicked => {
             fs.focus();
-            root.clicked();
+            root.clicked(root.pressed);
         }
     }
     fs := FocusScope {
@@ -121,7 +129,7 @@ component ThumbTile inherits Rectangle {
         focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Return) {
-                root.clicked();
+                root.clicked(root.t);
                 return accept;
             }
             return reject;
@@ -215,7 +223,10 @@ component CodeBarRow inherits Rectangle {
     in property <int> count;
     in property <float> frac;
     in property <bool> compact;
-    callback clicked();
+    // the code opened: the one the press began on (a refresh during the press may show another
+    // code in this row by the release)
+    callback clicked(string);
+    property <string> pressed-code;
     height: root.compact ? 24px : 30px;
     background: ta.has-hover ? Theme.surface-hover : transparent;
     border-radius: Theme.radius-sm;
@@ -223,12 +234,17 @@ component CodeBarRow inherits Rectangle {
     accessible-label: root.code + " " + root.title + ", " + root.count + " open";
     accessible-description: "Open the review queue filtered to this code";
     accessible-action-default => {
-        root.clicked();
+        root.clicked(root.code);
     }
     ta := TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                root.pressed-code = root.code;
+            }
+        }
         clicked => {
             fs.focus();
-            root.clicked();
+            root.clicked(root.pressed-code);
         }
     }
     fs := FocusScope {
@@ -236,7 +252,7 @@ component CodeBarRow inherits Rectangle {
         focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {
-                root.clicked();
+                root.clicked(root.code);
                 return accept;
             }
             return reject;
@@ -565,8 +581,8 @@ export component ScanScreen inherits Rectangle {
                                 visible: floor(i / 10) < parent.rows;
                                 t: t;
                                 img: ScanVM.thumb-images[t.variant];
-                                clicked => {
-                                    ScanVM.open-sheet(t.serial, t.code);
+                                clicked(p) => {
+                                    ScanVM.open-sheet(p.serial, p.code);
                                 }
                             }
                         }
@@ -589,8 +605,8 @@ export component ScanScreen inherits Rectangle {
                             severity: c.severity;
                             count: c.count;
                             frac: c.frac;
-                            clicked => {
-                                ScanVM.open-code(c.code);
+                            clicked(code) => {
+                                ScanVM.open-code(code);
                             }
                         }
                         if ScanVM.codes-more > 0: HorizontalLayout {

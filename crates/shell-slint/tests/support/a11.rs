@@ -106,6 +106,13 @@ pub fn click(ui: &AppWindow, e: &ElementHandle) {
 /// One left click at a window position (for a spot that is no control, such as an overlay's
 /// background).
 pub fn click_at(ui: &AppWindow, x: f32, y: f32) {
+    press_at(ui, x, y);
+    release_at(ui, x, y);
+}
+
+/// The first half of a click at a window position: the pointer moves there and presses (a
+/// test may let the shell refresh before [`release_at`]).
+pub fn press_at(ui: &AppWindow, x: f32, y: f32) {
     let position = slint::LogicalPosition::new(x, y);
     let w = ui.window();
     w.dispatch_event(WindowEvent::PointerMoved { position });
@@ -113,8 +120,12 @@ pub fn click_at(ui: &AppWindow, x: f32, y: f32) {
         position,
         button: PointerEventButton::Left,
     });
-    w.dispatch_event(WindowEvent::PointerReleased {
-        position,
+}
+
+/// The second half of a click: the left button released at a window position.
+pub fn release_at(ui: &AppWindow, x: f32, y: f32) {
+    ui.window().dispatch_event(WindowEvent::PointerReleased {
+        position: slint::LogicalPosition::new(x, y),
         button: PointerEventButton::Left,
     });
 }

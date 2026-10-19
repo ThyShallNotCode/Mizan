@@ -112,8 +112,9 @@ export global ExamsVM {
     in property <string> term-label;
     // incremented by Rust on Ctrl+K: the dashboard focuses its search field
     in property <int> search-request;
-    // select row n and open the drawer (click, Enter)
-    callback select(int);
+    // select the exam with this ID and open the drawer (click, Enter); an ID, not a row: a
+    // refresh during a press may move another exam into the row pressed
+    callback select(string);
     // move the selection by n rows, keeping the drawer as it is (↑ / ↓)
     callback move(int);
     callback set-filter(int);
