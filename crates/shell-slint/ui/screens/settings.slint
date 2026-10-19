@@ -67,7 +67,7 @@ export component SettingsScreen inherits VerticalLayout {
             Card {
                 title: "Appearance";
                 vertical-stretch: 0;
-                subtitle: "Overlay colours on the scan never change with the theme (DESIGN §4)";
+                subtitle: "Overlay colours on the scan never change with the theme";
                 HorizontalLayout {
                     spacing: Theme.space-md;
                     Text {
@@ -111,7 +111,7 @@ export component SettingsScreen inherits VerticalLayout {
                 vertical-stretch: 0;
                 Switch {
                     label: "Single-key shortcuts";
-                    description: "Option letters, digits, / and +/− act only while the review canvas has focus; turn off to use Ctrl chords and arrows only (WCAG 2.1.4)";
+                    description: "Option letters, digits, / and +/− act only while the review canvas has focus; turn off to use Ctrl chords and arrows only";
                     checked: App.single-key;
                     toggled(v) => {
                         App.set-single-key(v);
@@ -153,13 +153,13 @@ export component SettingsScreen inherits VerticalLayout {
         Card {
             horizontal-stretch: 1;
             title: "Review keymap";
-            subtitle: "Bound to physical key positions: under the Arabic (101) layout the A key still selects A; typed Arabic option letters in abjad order and Arabic-Indic digits work too (§13.3)";
+            subtitle: "Bound to physical key positions: under the Arabic (101) layout the A key still selects A; typed Arabic option letters in abjad order and Arabic-Indic digits work too";
             // the map's own rhythm: tighter below 880 px so all rows fit an 800 px window
             VerticalLayout {
                 spacing: root.win-h < 880px ? 4px : 10px;
                 KeyLine { narrow: root.narrow; action: "Set answer"; keys: "A–E · 1–5"; note: "A=أ or ش · B=ب or لا · C=ج or ؤ · D=د or ي · E=هـ or ث"; }
                 KeyLine { narrow: root.narrow; action: "Accept suggestion / commit"; keys: "Enter"; note: "Commits the chosen value when one is chosen"; }
-                KeyLine { narrow: root.narrow; action: "Apply to group"; keys: "Shift+Enter"; note: "Only when §13.2 batch-confirm conditions hold"; }
+                KeyLine { narrow: root.narrow; action: "Apply to group"; keys: "Shift+Enter"; note: "Only when the group may be confirmed at once"; }
                 KeyLine { narrow: root.narrow; action: "Next / previous"; keys: "↓ ↑ · J K"; note: "J and K only when no option uses them"; }
                 KeyLine { narrow: root.narrow; action: "Blank"; keys: "Backspace"; note: ""; }
                 KeyLine { narrow: root.narrow; action: "Multiple marks"; keys: "Ctrl+M"; note: "Invalid response"; }

@@ -15,13 +15,16 @@ use omr_model::Response;
 use shell_slint::app_backend::{AppBackend, GradeRequest, JobEvent, Spawn, run_grading};
 use shell_slint::backend::{Backend, Decision, ExamId, ItemId, Lane, ReviewAction, ReviewKind};
 use shell_slint::bind::Shell;
-use shell_slint::ui::{App, AppWindow, ExamsVM, Page, ResultsVM, ReviewVM, ScanVM, SetupVM, Theme};
+use shell_slint::ui::{
+    App, AppWindow, ExamsVM, OutcomesVM, Page, RemarkVM, ResultsVM, ReviewVM, ScanVM, SetupVM,
+    Theme,
+};
 use slint::{ComponentHandle, Model};
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use support::a11::{key, one, selected_queue_row, tab, with_prefix};
+use support::a11::{all_texts, by_label, click, key, one, selected_queue_row, tab, with_prefix};
 use support::synthetic_exam::{self as synth, MIDTERM};
 
 struct Harness {
@@ -810,6 +813,247 @@ fn req_a11_real_backend_empty_workspace_never_panics() {
     assert!(h.shell.current_item().is_none());
 }
 
+/// What only the demo shows (its exams' courses, its user, engine and workspace) and what the
+/// screens showed before a binding filled them: never on screen in a real session.
+fn demo_strings() -> Vec<String> {
+    let d = shell_slint::demo::DemoBackend::new().dashboard();
+    let mut v = vec![d.user.name, d.user.role, d.engine, d.workspace];
+    for e in d.exams {
+        v.extend([e.course_code, e.course_title, e.course_title_ar, e.batch_id]);
+    }
+    // its own values only, not a "—" it shows for a value it lacks
+    v.retain(|s| s.chars().filter(|c| c.is_alphanumeric()).count() >= 3);
+    v.extend(
+        [
+            "CS 211 Data Structures",
+            "Midterm 1",
+            "1448 H, 1st term",
+            "Fall 2026",
+            "Floor 40",
+            "Project saved",
+            "§",
+            "WCAG",
+        ]
+        .map(String::from),
+    );
+    v
+}
+
+/// Fails, naming the screen and the text, when anything on screen shows one of `banned`, or a
+/// "Saved" that no save made.
+fn assert_none_shown(ui: &AppWindow, banned: &[String], screen: &str) {
+    for t in all_texts(ui) {
+        assert_ne!(t, "Saved", "{screen}: a \"Saved\" pill");
+        if let Some(b) = banned.iter().find(|b| t.contains(b.as_str())) {
+            panic!("{screen} shows {b:?} in {t:?}");
+        }
+    }
+}
+
+/// True when some text on screen contains `part`.
+fn shown(ui: &AppWindow, part: &str) -> bool {
+    all_texts(ui).iter().any(|t| t.contains(part))
+}
+
+/// G-2: a real session with no exam (an empty exams folder) shows nothing of the demo and no
+/// placeholder: no course in the breadcrumbs, no capture-agent buttons, no "Saved", no step
+/// done. The exams table says the folder is empty and leads to New exam and the Remark import;
+/// every screen of one exam says none is open and leads back to Exams.
+#[test]
+fn req_a11_real_backend_empty_workspace_shows_no_demo_data() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (spawn, _held) = held_spawner();
+    let mut app = AppBackend::workspace(dir.path(), "principal:a11");
+    app.set_spawner(spawn);
+    let h = harness_for(app, ExamId("none".into()));
+    let ui = &h.ui;
+    let demo = demo_strings();
+    for p in PAGES {
+        h.shell.navigate(p);
+        let screen = format!("{p:?} with no exam");
+        assert_none_shown(ui, &demo, &screen);
+        let a = ui.global::<App>();
+        assert!(!a.get_has_exam(), "{screen}");
+        assert_eq!(a.get_course(), "", "{screen}");
+        assert_eq!(a.get_assessment(), "", "{screen}");
+        if !matches!(p, Page::Exams | Page::Settings) {
+            one(ui, "No exam open");
+            one(ui, "Go to Exams");
+        }
+    }
+
+    // Exams: an empty folder, and what to do about it
+    h.shell.navigate(Page::Exams);
+    one(ui, "No exams in this folder yet");
+    assert!(
+        by_label(ui, "Operator").is_empty(),
+        "no role is made up for the user"
+    );
+    click(ui, &one(ui, "New exam…"));
+    let ex = ui.global::<ExamsVM>();
+    assert!(ex.get_new_open(), "New exam… opens the form");
+    assert!(
+        by_label(ui, "No exams in this folder yet").is_empty(),
+        "the form covers the empty state (its buttons are never shown twice)"
+    );
+    click(ui, &one(ui, "Cancel"));
+    assert!(!ex.get_new_open());
+    click(ui, &one(ui, "Import from Remark export…"));
+    assert!(
+        ex.get_new_open(),
+        "the Remark import opens on the New-exam form"
+    );
+    assert!(ui.global::<RemarkVM>().get_new_panel());
+    one(ui, "Remark workbooks");
+    ex.set_new_open(false);
+
+    // Setup: no step is done or wanting, no key tag, no key buttons; Go to Exams goes there
+    h.shell.navigate(Page::Setup);
+    for (i, step) in [
+        "Template",
+        "Forms and key",
+        "CLO mapping",
+        "Roster",
+        "Policies",
+    ]
+    .iter()
+    .enumerate()
+    {
+        one(ui, &format!("{} {step}, to do", i + 1));
+    }
+    assert!(!shown(ui, "Key v"), "no key tag");
+    assert!(by_label(ui, "Replace key…").is_empty());
+    assert!(!ui.global::<SetupVM>().get_has_roster());
+    click(ui, &one(ui, "Go to Exams"));
+    assert_eq!(ui.global::<App>().get_page(), Page::Exams);
+
+    // Scan: no capture agent to pause or stop, nothing to add scans to, no review to open
+    h.shell.navigate(Page::Scan);
+    for control in ["Pause", "Resume", "Stop", "Add scans…", "Open review"] {
+        assert!(
+            with_prefix(ui, control).is_empty(),
+            "Scan with no exam offers {control:?}"
+        );
+    }
+    assert!(!shown(ui, "workers"), "no engine line without a batch");
+
+    // Review: no lanes, progress, undo or help for a code that is not there
+    h.shell.navigate(Page::Review);
+    assert!(by_label(ui, "Review progress").is_empty());
+    assert!(by_label(ui, "Undo last decision (Ctrl+Z)").is_empty());
+    assert!(with_prefix(ui, "Help for").is_empty());
+    assert!(!shown(ui, "audit head"));
+    assert!(!shown(ui, "Two-person rule"));
+}
+
+/// G-2: nothing of one exam stays on screen when another, or none, is shown: a graded exam's
+/// course, key tag, release block and review crop are gone once the shell shows no exam, and
+/// once it shows an exam that is being graded (whose screens say so). A fresh exam, graded from
+/// the New-exam form, shows its own data and nothing of the demo.
+#[test]
+fn req_a11_real_backend_never_shows_a_previous_exam_or_the_demo() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let spec = synth::Spec {
+        sheets: 6,
+        ..synth::BARE
+    };
+    let scans = synth::write_scans(&spec, &dir.path().join("scans"));
+    let ws = dir.path().join("exams");
+    let mut def = synth::definition(&spec);
+    def.term = "Spring 2027".into();
+    grade(&def, &scans, &ws.join("bare-quiz/project.omrproj"));
+    let (spawn, held) = held_spawner();
+    let mut app = AppBackend::workspace(&ws, "principal:a11");
+    app.set_spawner(spawn);
+    let h = harness(app);
+    let ui = &h.ui;
+    let demo = demo_strings();
+
+    // the graded exam on every screen: what of it would be stale elsewhere
+    for p in PAGES {
+        h.shell.navigate(p);
+        assert_none_shown(ui, &demo, &format!("{p:?} of a graded exam"));
+    }
+    h.shell.navigate(Page::Review);
+    let caption = ui.global::<ReviewVM>().get_caption().to_string();
+    assert!(caption.contains("booklet"), "{caption}");
+    let key_status = ui.global::<SetupVM>().get_key_status().to_string();
+    assert!(!key_status.is_empty());
+    h.shell.navigate(Page::Results);
+    let rs = ui.global::<ResultsVM>();
+    assert!(rs.get_release_blocked(), "an inferred key blocks release");
+    let reason = rs.get_release_reason().to_string();
+    let mut stale = vec![
+        spec.course_code.to_string(),
+        spec.course_title.to_string(),
+        caption,
+        key_status,
+        reason,
+    ];
+    stale.extend(demo.iter().cloned());
+
+    // the exam is gone (its folder removed, say): no screen keeps any of it
+    h.shell.select_exam(&ExamId("gone".into()));
+    for p in PAGES {
+        h.shell.navigate(p);
+        let screen = format!("{p:?} after the exam is gone");
+        assert_eq!(ui.global::<App>().get_course(), "", "{screen}");
+        assert!(!ui.global::<App>().get_has_exam(), "{screen}");
+        if p != Page::Exams {
+            assert_none_shown(ui, &stale, &screen);
+        }
+    }
+    assert!(!ui.global::<SetupVM>().get_has_roster());
+    assert_eq!(ui.global::<SetupVM>().get_key_status(), "");
+    assert!(!ui.global::<ResultsVM>().get_release_blocked());
+    assert!(!ui.global::<ReviewVM>().get_has_item());
+
+    // a new exam from the New-exam form, held while it is graded
+    h.shell.navigate(Page::Exams);
+    click(ui, &one(ui, "New exam"));
+    one(ui, "Scan files or folders").set_accessible_value(scans.to_str().unwrap());
+    one(ui, "Exam title").set_accessible_value("Quiz 9");
+    one(ui, "Course code").set_accessible_value("MATH 299");
+    one(ui, "Number of questions").set_accessible_value("30");
+    click(ui, &one(ui, "Grade exam"));
+    assert!(h.app.borrow().grading_in_progress());
+    for p in PAGES {
+        h.shell.navigate(p);
+        let screen = format!("{p:?} of an exam being graded");
+        assert!(ui.global::<App>().get_has_exam(), "{screen}");
+        assert!(
+            ui.global::<App>().get_course().contains("MATH 299"),
+            "{screen}"
+        );
+        if p != Page::Exams {
+            assert_none_shown(ui, &stale, &screen);
+        }
+    }
+    // the screens with nothing yet say why
+    h.shell.navigate(Page::Setup);
+    assert!(shown(ui, "being graded"), "Setup says why it is empty");
+    h.shell.navigate(Page::Results);
+    assert!(shown(ui, "being graded"), "Results says why it is empty");
+    h.shell.navigate(Page::Outcomes);
+    assert!(shown(ui, "being graded"), "Outcomes says why it is empty");
+    assert!(!ui.global::<OutcomesVM>().get_empty_to_setup());
+    h.shell.navigate(Page::Review);
+    one(ui, "No review queue");
+    one(ui, "Nothing to review");
+    assert!(shown(ui, "being graded"), "the review canvas says why");
+
+    // graded: its own data, nothing of the demo; no CLOs, and Outcomes says where to load them
+    run_held(&h, &held);
+    for p in PAGES {
+        h.shell.navigate(p);
+        assert_none_shown(ui, &demo, &format!("{p:?} of the fresh exam"));
+    }
+    h.shell.navigate(Page::Outcomes);
+    one(ui, "No CLOs for this exam");
+    click(ui, &one(ui, "Load a CLO file in Setup"));
+    assert_eq!(ui.global::<App>().get_page(), Page::Setup);
+}
+
 /// Every screen and the keyboard on a project that breaks naive code: no roster, no CLOs, an
 /// inferred key, and then no review item left. Nothing panics, every screen shows an honest
 /// state, and data the project lacks is never shown as real.
@@ -1353,7 +1597,7 @@ fn req_a11_real_backend_confirms_the_key_from_key_sheets() {
         .map(|kv| (kv.label.to_string(), kv.value.to_string()))
         .collect();
     assert!(
-        recon.contains(&("Key sheets, not students (§10.1)".into(), "2".into())),
+        recon.contains(&("Key sheets, not students".into(), "2".into())),
         "{recon:?}"
     );
     assert!(

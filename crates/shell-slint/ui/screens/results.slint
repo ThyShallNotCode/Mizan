@@ -9,7 +9,7 @@ import { App, ResultsVM, ItemRow, Page, SetupVM, RemarkVM } from "../state.slint
 import { ParallelRunView, CompareBar } from "remark.slint";
 import {
     Icons, ThemeToggle, Centered, SectionLabel, StatusText, Hatch, StepMeter, ShareSpark, EmptyState,
-    MessageText, Segment, SegmentGroup, TextField,
+    NoExamState, MessageText, Segment, SegmentGroup, TextField,
 } from "../widgets.slint";
 import { ListView } from "std-widgets.slint";
 
@@ -608,7 +608,7 @@ export component ResultsScreen inherits Rectangle {
                         text: root.narrow ? "Remark…" : "Compare with Remark…";
                         enabled: ResultsVM.available && RemarkVM.can-compare;
                         accessible-label: "Compare with Remark export…";
-                        accessible-description: "The parallel run (§23.7): this exam beside Remark's graded workbooks of the same sheets, every difference with its crop (Restricted)";
+                        accessible-description: "The parallel run: this exam beside Remark's graded workbooks of the same sheets, every difference with its crop (Restricted)";
                         clicked => {
                             ResultsVM.export-open = false;
                             ResultsVM.release-open = false;
@@ -639,7 +639,7 @@ export component ResultsScreen inherits Rectangle {
                         }
                     }
                 }
-                if ResultsVM.release-blocked: HorizontalLayout {
+                if ResultsVM.available && ResultsVM.release-blocked: HorizontalLayout {
                     spacing: Theme.space-xs + 2px;
                     Centered {
                         SeverityGlyph {
@@ -664,22 +664,18 @@ export component ResultsScreen inherits Rectangle {
                 }
             }
         }
-        if !ResultsVM.available: VerticalLayout {
+        if !App.has-exam: NoExamState {
             vertical-stretch: 1;
-            alignment: center;
-            spacing: Theme.space-md;
-            EmptyState {
-                title: ResultsVM.empty-title;
-                text: ResultsVM.empty-text;
-            }
-            if ResultsVM.empty-to-setup: HorizontalLayout {
-                alignment: center;
-                PrimaryButton {
-                    text: "Confirm the key in Setup";
-                    clicked => {
-                        SetupVM.ks-open = true;
-                        App.navigate(Page.setup);
-                    }
+        }
+        if App.has-exam && !ResultsVM.available: EmptyState {
+            vertical-stretch: 1;
+            title: ResultsVM.empty-title;
+            text: ResultsVM.empty-text;
+            if ResultsVM.empty-to-setup: PrimaryButton {
+                text: "Confirm the key in Setup";
+                clicked => {
+                    SetupVM.ks-open = true;
+                    App.navigate(Page.setup);
                 }
             }
         }
@@ -879,8 +875,16 @@ export component ResultsScreen inherits Rectangle {
                                     horizontal-stretch: 1;
                                 }
                             }
-                            ListView {
+                            if ResultsVM.items.length == 0: Text {
                                 vertical-stretch: 1;
+                                text: "No item statistics for this exam";
+                                font-size: Theme.text-sm;
+                                color: Theme.ink-2;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            ListView {
+                                vertical-stretch: ResultsVM.items.length == 0 ? 0 : 1;
                                 for it[i] in ResultsVM.items: ItemTableRow {
                                     height: 40px;
                                     narrow: root.narrow;
@@ -969,19 +973,13 @@ export component ResultsScreen inherits Rectangle {
             }
         }
         StatusBar {
-            Centered {
-                StatusPill {
-                    text: "Saved";
-                    tone: Tone.success;
-                }
-            }
             MessageText {
                 text: App.message;
                 tone: App.message-tone;
                 horizontal-stretch: 1;
             }
             StatusText {
-                text: "Release is a deliberate act of the instructor (PDPL IR Art. 11(2)(c))";
+                text: ResultsVM.available ? "Release is a deliberate act of the instructor" : "";
             }
             StatusText {
                 text: App.engine;

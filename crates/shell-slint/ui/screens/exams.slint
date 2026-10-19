@@ -9,7 +9,7 @@ import { App, ExamsVM, ExamRow, Page, RemarkVM } from "../state.slint";
 import { RemarkFields, RemarkRefusal, RemarkImportCard, RemarkSideCard } from "remark.slint";
 import {
     Icons, ThemeToggle, Centered, KVLine, SectionLabel, StatusText, SeverityStack, SeverityCount,
-    CoverageRing, Avatar, MessageText, TextField,
+    CoverageRing, Avatar, MessageText, TextField, EmptyState,
 } from "../widgets.slint";
 import { ListView } from "std-widgets.slint";
 
@@ -511,14 +511,14 @@ component NewExamBar inherits Rectangle {
                 title := FormField {
                     horizontal-stretch: 2;
                     label: "Exam title";
-                    placeholder: "e.g. Midterm 1";
+                    placeholder: "e.g. Midterm 2";
                     mono: false;
                     text <=> ExamsVM.new-title;
                 }
                 course := FormField {
                     horizontal-stretch: 1;
                     label: "Course code";
-                    placeholder: "e.g. CS 211";
+                    placeholder: "e.g. CS 101";
                     mono: false;
                     text <=> ExamsVM.new-course;
                 }
@@ -703,7 +703,7 @@ component RemarkNewPanel inherits Rectangle {
                 }
                 Text {
                     horizontal-stretch: 1;
-                    text: "Remark's graded Excel exports (Advanced Grade reports): the key with exact points per version, the learning objectives and the key sheets Remark graded as students, for your review. Its .rmx and .aky files are never opened (spec §3.5).";
+                    text: "Remark's graded Excel exports (Advanced Grade reports): the key with exact points per version, the learning objectives and the key sheets Remark graded as students, for your review. Its .rmx and .aky files are never opened.";
                     font-size: Theme.text-xs;
                     color: Theme.ink-2;
                     vertical-alignment: center;
@@ -814,7 +814,8 @@ export component ExamsScreen inherits Rectangle {
                     color: Theme.ink;
                     vertical-alignment: center;
                 }
-                Centered {
+                // the term of the exams listed (none in an empty folder: no empty tag)
+                if ExamsVM.term-label != "": Centered {
                     Tag {
                         text: ExamsVM.term-label;
                         mono: false;
@@ -859,7 +860,8 @@ export component ExamsScreen inherits Rectangle {
                         color: Theme.ink;
                         horizontal-alignment: right;
                     }
-                    Text {
+                    // a role only when the backend knows one (the real core has no roles)
+                    if App.user-role != "": Text {
                         text: App.user-role;
                         font-size: Theme.text-2xs;
                         color: Theme.ink-2;
@@ -921,14 +923,14 @@ export component ExamsScreen inherits Rectangle {
                         label: "SHEETS SCANNED THIS WEEK";
                         value: ExamsVM.sheets-week;
                         caption: ExamsVM.sheets-today;
-                        caption-tone: Tone.success;
+                        caption-tone: ExamsVM.sheets-today-tone;
                     }
                     StatTile {
                         horizontal-stretch: 1;
                         label: "OPEN EXCEPTIONS";
                         value: ExamsVM.open-exceptions;
                         caption: ExamsVM.open-errors;
-                        caption-tone: Tone.error;
+                        caption-tone: ExamsVM.open-errors-tone;
                     }
                     StatTile {
                         horizontal-stretch: 1;
@@ -942,7 +944,7 @@ export component ExamsScreen inherits Rectangle {
                         label: "THROUGHPUT";
                         value: ExamsVM.throughput;
                         unit: "pages / s";
-                        caption: "Floor 40 pages / s";
+                        caption: ExamsVM.throughput-caption;
                     }
                 }
                 Card {
@@ -984,7 +986,7 @@ export component ExamsScreen inherits Rectangle {
                         // One tab stop for the table: ↑ / ↓ move the selection, Enter or Space opens
                         // the drawer (DESIGN §9.1); the focused row shows the gold outline.
                         table-keys := FocusScope {
-                            vertical-stretch: 1;
+                            vertical-stretch: ExamsVM.rows.length == 0 ? 0 : 1;
                             key-pressed(event) => {
                                 if (event.modifiers.control || event.modifiers.alt) {
                                     return reject;
@@ -1024,6 +1026,39 @@ export component ExamsScreen inherits Rectangle {
                                 }
                             }
                         }
+                        // an empty folder: what goes here and how it gets here (the New-exam
+                        // form floats over this, so its buttons are never shown twice)
+                        if ExamsVM.rows.length == 0 && ExamsVM.filters[0].count == 0 && !ExamsVM.new-open: EmptyState {
+                            vertical-stretch: 1;
+                            title: "No exams in this folder yet";
+                            text: "Each exam graded into this folder is listed here. Grade one from its scans with New exam, or start from Remark's graded Excel exports.";
+                            PrimaryButton {
+                                text: "New exam…";
+                                icon: Icons.plus;
+                                clicked => {
+                                    App.request("New exam");
+                                }
+                            }
+                            if ExamsVM.can-create && RemarkVM.can-new: SecondaryButton {
+                                text: "Import from Remark export…";
+                                accessible-description: "Opens the New-exam form on Remark's graded Excel exports: the key with exact points per version and the learning objectives, shown for your review before the form uses them";
+                                clicked => {
+                                    RemarkVM.new-panel = true;
+                                    App.request("New exam");
+                                }
+                            }
+                        }
+                        // exams the status filter hides
+                        if ExamsVM.rows.length == 0 && ExamsVM.filters[0].count > 0: EmptyState {
+                            vertical-stretch: 1;
+                            title: "No exams with this status";
+                            GhostButton {
+                                text: "Show all exams";
+                                clicked => {
+                                    ExamsVM.set-filter(0);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1039,12 +1074,6 @@ export component ExamsScreen inherits Rectangle {
         }
         }
         StatusBar {
-            Centered {
-                StatusPill {
-                    text: "Project saved";
-                    tone: Tone.success;
-                }
-            }
             StatusText {
                 text: App.workspace;
                 mono: true;

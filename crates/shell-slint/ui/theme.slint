@@ -1053,23 +1053,27 @@ export component StatusBar inherits Rectangle {
     }
 }
 
-// Breadcrumb trail "MATH 101 / Midterm 1 / Term 1448-1"; last part is current. An empty part
-// (an exam without a course code) is left out with its separator.
+// Breadcrumb trail "MATH 101 / Midterm 1 / Term 1448-1"; the last part shown is current. An
+// empty part (an exam without a course code, no exam open) is left out with its separator, so
+// a trail never ends in "/".
 export component Breadcrumb inherits HorizontalLayout {
     in property <[string]> parts;
-    spacing: Theme.space-sm;
+    // the last part shown (a trail has at most four parts; a part past the end reads "")
+    property <int> last: root.parts[3] != "" ? 3 : root.parts[2] != "" ? 2 : root.parts[1] != "" ? 1 : 0;
     for part[i] in root.parts: HorizontalLayout {
         spacing: Theme.space-sm;
+        // the gap to the next part shown (a part left out takes no room at all)
+        padding-right: part != "" && i < root.last ? Theme.space-sm : 0px;
         visible: part != "";
         max-width: part != "" ? 100000px : 0px;
         Text {
             text: part;
             font-size: Theme.text-sm;
-            font-weight: i == root.parts.length - 1 ? Theme.weight-semibold : Theme.weight-regular;
-            color: i == root.parts.length - 1 ? Theme.ink : Theme.ink-2;
+            font-weight: i == root.last ? Theme.weight-semibold : Theme.weight-regular;
+            color: i == root.last ? Theme.ink : Theme.ink-2;
             vertical-alignment: center;
         }
-        if i < root.parts.length - 1: Text {
+        if i < root.last: Text {
             text: "/";
             font-size: Theme.text-sm;
             color: Theme.ink-3;

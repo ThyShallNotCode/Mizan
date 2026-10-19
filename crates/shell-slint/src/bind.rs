@@ -92,6 +92,14 @@ fn pct(x: f64) -> String {
     format!("{:.0} %", x * 100.0)
 }
 
+/// `text`, or "–" when it is empty (a value the exam does not have, never a blank).
+fn or_dash(text: impl AsRef<str>) -> String {
+    match text.as_ref() {
+        "" => "–".to_string(),
+        t => t.to_string(),
+    }
+}
+
 /// Joins the non-empty parts with `sep` (view-models leave unknown parts empty).
 fn join(parts: &[&str], sep: &str) -> String {
     parts
@@ -327,7 +335,7 @@ fn help_for(code: &str) -> &'static str {
             "CAP-006 Scanner streaks: dirty glass masks a column. If more than 30 % of a bubble is masked it is Unreadable; otherwise decide as usual."
         }
         "VERIFY" => {
-            "Blind verify sample (§13.4): an auto-accepted question drawn at random. Enter what is marked; the engine's reading is withheld so your answer is an independent label."
+            "Blind verify sample: an auto-accepted question drawn at random. Enter what is marked; the engine's reading is withheld so your answer is an independent label."
         }
         "IDN-004" => {
             "IDN-004 Identity unresolved: compare the grid, the write-in boxes, the name and the seat map. Keys 1–3 choose a candidate, N = not on roster, D = duplicate."
@@ -452,8 +460,8 @@ impl Shell {
                 zoom: 3,
                 help: false,
                 single_key: true,
-                sel_row: 17,
-                sel_col: 3,
+                sel_row: 0,
+                sel_col: 0,
                 search_request: 0,
                 ks_version: 0,
                 ks_picks: BTreeMap::new(),
@@ -480,6 +488,14 @@ impl Shell {
 
     fn exam(&self) -> Option<ExamId> {
         self.st.borrow().exam.clone()
+    }
+
+    /// Why the current exam has nothing to show on a screen: what the backend says of it (being
+    /// graded, grading failed), else that it is not graded yet.
+    fn why_closed(&self) -> String {
+        self.exam()
+            .and_then(|e| self.backend.borrow().closed(&e))
+            .unwrap_or_else(|| "This exam has no graded project to show yet.".to_string())
     }
 
     fn say(&self, text: impl AsRef<str>, t: s::Tone) {
@@ -896,7 +912,7 @@ impl Shell {
         let me = self.clone();
         rs.on_release(move || me.release());
         rs.set_release_note(ss(
-            "Release is the instructor's deliberate act (§13.4): the score run and key version \
+            "Release is the instructor's deliberate act: the score run and key version \
              are frozen in the audit log and the exports are written, the Blackboard upload with \
              them. A later change (a review decision, a key change, added scans) supersedes the \
              release; release again then.",
@@ -1575,7 +1591,7 @@ impl Shell {
 
     fn what_if(&self) {
         self.say(
-            "What-if preview is not built yet (§12.2): change the key in Setup to rescore, then undo it there",
+            "What-if preview is not built yet: change the key in Setup to rescore, then undo it there",
             s::Tone::Info,
         );
     }
@@ -1961,16 +1977,14 @@ impl Shell {
         if let Some(student_id) = typed {
             if self.typed_reason_missing(&student_id) {
                 self.say(
-                    "This overrides the engine's suggestion: choose a reason first (§13.4)",
+                    "This overrides the engine's suggestion: choose a reason first",
                     s::Tone::Warning,
                 );
                 return;
             }
             if let Some(reason) = self.note_missing() {
                 self.say(
-                    format!(
-                        "The reason \"{reason}\" needs a note: write why in the note field (§14.4)"
-                    ),
+                    format!("The reason \"{reason}\" needs a note: write why in the note field"),
                     s::Tone::Warning,
                 );
                 return;
@@ -2009,16 +2023,14 @@ impl Shell {
         };
         if self.reason_missing(decision) {
             self.say(
-                "This overrides the engine's suggestion: choose a reason first (§13.4)",
+                "This overrides the engine's suggestion: choose a reason first",
                 s::Tone::Warning,
             );
             return;
         }
         if let Some(reason) = self.note_missing() {
             self.say(
-                format!(
-                    "The reason \"{reason}\" needs a note: write why in the note field (§14.4)"
-                ),
+                format!("The reason \"{reason}\" needs a note: write why in the note field"),
                 s::Tone::Warning,
             );
             return;
@@ -2046,16 +2058,14 @@ impl Shell {
         if let Some(decision) = decision {
             if self.reason_missing(decision) {
                 self.say(
-                    "This overrides the engine's suggestion: choose a reason first (§13.4)",
+                    "This overrides the engine's suggestion: choose a reason first",
                     s::Tone::Warning,
                 );
                 return;
             }
             if let Some(reason) = self.note_missing() {
                 self.say(
-                    format!(
-                        "The reason \"{reason}\" needs a note: write why in the note field (§14.4)"
-                    ),
+                    format!("The reason \"{reason}\" needs a note: write why in the note field"),
                     s::Tone::Warning,
                 );
                 return;
@@ -2339,9 +2349,22 @@ impl Shell {
         )));
         ex.set_term_label(ss(join(&[&d.term.label, &d.term.gregorian], " · ")));
         ex.set_sheets_week(ss(thousands(d.stats.sheets_this_week)));
-        ex.set_sheets_today(ss(format!("+{} today", thousands(d.stats.sheets_today))));
+        // a caption in colour only when there is something to count
+        if d.stats.sheets_today > 0 {
+            ex.set_sheets_today(ss(format!("+{} today", thousands(d.stats.sheets_today))));
+            ex.set_sheets_today_tone(s::Tone::Success);
+        } else {
+            ex.set_sheets_today(ss("none today"));
+            ex.set_sheets_today_tone(s::Tone::Neutral);
+        }
         ex.set_open_exceptions(ss(thousands(d.stats.open_exceptions)));
-        ex.set_open_errors(ss(format!("{} ERROR or BLOCKER", d.stats.open_errors)));
+        if d.stats.open_errors > 0 {
+            ex.set_open_errors(ss(format!("{} ERROR or BLOCKER", d.stats.open_errors)));
+            ex.set_open_errors_tone(s::Tone::Error);
+        } else {
+            ex.set_open_errors(ss("no ERROR or BLOCKER"));
+            ex.set_open_errors_tone(s::Tone::Neutral);
+        }
         match d.stats.median_review_secs {
             Some(m) => {
                 ex.set_median_review(ss(format!("{m:.1}")));
@@ -2356,6 +2379,11 @@ impl Shell {
             .stats
             .throughput_pages_per_sec
             .map_or("–".to_string(), |t| format!("{t:.0}"))));
+        ex.set_throughput_caption(ss(if d.stats.throughput_pages_per_sec.is_some() {
+            "latest grading run"
+        } else {
+            "no grading run yet"
+        }));
 
         let statuses = [
             ("All", None),
@@ -2452,6 +2480,7 @@ impl Shell {
             .as_ref()
             .and_then(|id| d.exams.iter().find(|e| &e.id == id));
         ex.set_drawer_open(drawer_open && cur.is_some());
+        app.set_has_exam(cur.is_some());
         if let Some(e) = cur {
             app.set_course(ss(join(&[&e.course_code, &e.course_title], " ")));
             app.set_assessment(ss(&e.assessment));
@@ -2496,7 +2525,7 @@ impl Shell {
                 ),
                 b::ExamStatus::Released => (
                     "Released".into(),
-                    "Results were released; later changes need four-eyes approval (§10.8).".into(),
+                    "Results were released; later changes need four-eyes approval.".into(),
                     b::Tone::Success,
                 ),
                 b::ExamStatus::Setup => (
@@ -2530,12 +2559,20 @@ impl Shell {
                 } else {
                     format!("{} students", thousands(e.roster_count))
                 }),
-                sections: ss(e.sections.join(", ")),
-                last_scan: ss(&e.last_scan),
-                batch_id: ss(&e.batch_id),
+                sections: ss(or_dash(e.sections.join(", "))),
+                last_scan: ss(or_dash(&e.last_scan)),
+                batch_id: ss(or_dash(&e.batch_id)),
                 term: ss(join(&[&e.term.label, &e.term.gregorian], " · ")),
                 term_ar: ss(&e.term.label_ar),
             });
+        } else {
+            // no exam open (an empty folder, none chosen yet): nothing of a previous exam stays
+            app.set_course(SharedString::new());
+            app.set_assessment(SharedString::new());
+            app.set_term(SharedString::new());
+            app.set_term_gregorian(SharedString::new());
+            app.set_review_open(0);
+            ex.set_drawer(s::ExamDrawer::default());
         }
     }
 
@@ -2559,8 +2596,25 @@ impl Shell {
             .and_then(|e| self.backend.borrow().exam_setup(&e));
         su.set_available(setup.is_some());
         let Some(setup) = setup else {
+            // nothing of a previous exam stays (the top bar shows the key tag and the steps)
+            su.set_empty_text(ss(self.why_closed()));
             su.set_has_keysheets(false);
             su.set_ks_open(false);
+            su.set_has_roster(false);
+            su.set_key_status(SharedString::new());
+            su.set_key_published(false);
+            su.set_can_replace_key(false);
+            su.set_can_read_keysheets(false);
+            su.set_mappings_proposed(0);
+            su.set_template_id(SharedString::new());
+            su.set_template_kind(SharedString::new());
+            su.set_mapping_mode(SharedString::new());
+            su.set_template(model(Vec::new()));
+            su.set_versions(model(Vec::new()));
+            su.set_options(model(Vec::new()));
+            su.set_clos(model(Vec::new()));
+            su.set_rows(model(Vec::new()));
+            su.set_lints(model(Vec::new()));
             return;
         };
         su.set_mappings_proposed(setup.mappings_proposed as i32);
@@ -3024,10 +3078,32 @@ impl Shell {
             .as_ref()
             .and_then(|e| self.backend.borrow().batch_progress(e));
         sc.set_available(p.is_some());
-        if let Some(e) = &exam {
-            sc.set_review_open(self.lane_total(e) as i32);
-        }
-        let Some(p) = p else { return };
+        sc.set_review_open(exam.as_ref().map_or(0, |e| self.lane_total(e) as i32));
+        let Some(p) = p else {
+            // nothing of a previous exam's batch stays (the top bar shows its label, its Pause
+            // and Stop, the status bar its engine)
+            sc.set_empty_text(ss(self.why_closed()));
+            sc.set_batch_label(SharedString::new());
+            sc.set_source(SharedString::new());
+            sc.set_device(SharedString::new());
+            sc.set_running(false);
+            sc.set_pausable(false);
+            sc.set_can_add(false);
+            sc.set_add_open(false);
+            sc.set_add_note(SharedString::new());
+            sc.set_engine(SharedString::new());
+            sc.set_workers(0);
+            sc.set_stages(model(Vec::new()));
+            sc.set_codes(model(Vec::new()));
+            sc.set_codes_more(0);
+            sc.set_thumbs(model(Vec::new()));
+            sc.set_thumb_images(model(Vec::new()));
+            sc.set_key_sheet_count(0);
+            sc.set_recon(model(Vec::new()));
+            sc.set_recon_code(SharedString::new());
+            sc.set_activity(model(Vec::new()));
+            return;
+        };
         let total = p.pages_total.max(1);
         sc.set_batch_label(ss(&p.batch_label));
         sc.set_source(ss(&p.source));
@@ -3049,7 +3125,7 @@ impl Shell {
             p.abstention_rate * 100.0
         )));
         sc.set_first_value(ss(format!("{:.1}", p.first_result.as_secs_f64())));
-        sc.set_first_caption(ss("target < 3 s (A3)"));
+        sc.set_first_caption(ss("target < 3 s"));
         let secs = p.remaining.as_secs();
         sc.set_remaining_value(ss(format!("{}:{:02}", secs / 60, secs % 60)));
         sc.set_remaining_caption(ss(if p.queued + p.in_flight > 0 {
@@ -3221,7 +3297,25 @@ impl Shell {
         let ui = self.ui();
         let rv = ui.global::<s::ReviewVM>();
         let Some(exam) = self.exam() else {
-            rv.set_has_item(false);
+            // no exam: no lanes, no queue and no item (nothing of a previous exam stays)
+            rv.set_lanes(model(Vec::new()));
+            rv.set_queue(model(Vec::new()));
+            rv.set_resolved(0);
+            rv.set_total(0);
+            rv.set_median(SharedString::new());
+            rv.set_audit_head(SharedString::new());
+            rv.set_two_person(false);
+            rv.set_empty_title(SharedString::new());
+            rv.set_empty_text(SharedString::new());
+            ui.global::<s::App>().set_review_open(0);
+            {
+                let mut st = self.st.borrow_mut();
+                st.order.clear();
+                st.queue_ids.clear();
+                st.item = None;
+                st.current = None;
+            }
+            self.push_item();
             return;
         };
         let lane = self.st.borrow().lane;
@@ -3321,10 +3415,16 @@ impl Shell {
             adopt(&o.fills, &mut n.fills)
         }));
         rv.set_selected_y(selected_y);
-        rv.set_empty_text(ss(q
-            .unavailable
-            .clone()
-            .unwrap_or_else(|| format!("No open items in the {} lane", lane.label()))));
+        match &q.unavailable {
+            Some(why) => {
+                rv.set_empty_title(ss("No review queue"));
+                rv.set_empty_text(ss(why));
+            }
+            None => {
+                rv.set_empty_title(ss("Lane clear"));
+                rv.set_empty_text(ss(format!("No open items in the {} lane", lane.label())));
+            }
+        }
         {
             let mut st = self.st.borrow_mut();
             st.order = order;
@@ -3344,8 +3444,24 @@ impl Shell {
         rv.set_zoom(st.zoom);
         rv.set_help_open(st.help);
         let Some(c) = st.current.as_ref() else {
+            // nothing of the last item stays (its crop, a previous exam's booklet even)
             rv.set_has_item(false);
             rv.set_code(SharedString::new());
+            rv.set_code_title(SharedString::new());
+            rv.set_sub_reason(SharedString::new());
+            rv.set_caption(SharedString::new());
+            rv.set_question_label(SharedString::new());
+            rv.set_crop(Image::default());
+            rv.set_original(Image::default());
+            rv.set_has_original(false);
+            rv.set_bubbles(model(Vec::new()));
+            rv.set_fill_bars(model(Vec::new()));
+            rv.set_other_fills(model(Vec::new()));
+            rv.set_other_caption(SharedString::new());
+            rv.set_contact(model(Vec::new()));
+            rv.set_candidates(model(Vec::new()));
+            rv.set_summary(SharedString::new());
+            rv.set_help_text(SharedString::new());
             rv.set_reason_needed(false);
             rv.set_note_required(false);
             return;
@@ -3740,14 +3856,24 @@ impl Shell {
         let r = exam.as_ref().and_then(|e| self.backend.borrow().results(e));
         rs.set_available(r.is_some());
         let Some(r) = r else {
+            // a previous exam's release block is never shown on this one
+            rs.set_release_blocked(false);
+            rs.set_release_reason(SharedString::new());
             // why there is nothing to show, and where to go (a held key, §10.1)
-            match exam.as_ref().and_then(|e| self.backend.borrow().hold(e)) {
-                Some(why) => {
+            let closed = exam.as_ref().and_then(|e| self.backend.borrow().closed(e));
+            let hold = exam.as_ref().and_then(|e| self.backend.borrow().hold(e));
+            match (closed, hold) {
+                (Some(why), _) => {
+                    rs.set_empty_title(ss("No results yet"));
+                    rs.set_empty_text(ss(why));
+                    rs.set_empty_to_setup(false);
+                }
+                (None, Some(why)) => {
                     rs.set_empty_title(ss("Results wait for the key"));
                     rs.set_empty_text(ss(why));
                     rs.set_empty_to_setup(true);
                 }
-                None => {
+                (None, None) => {
                     rs.set_empty_title(ss("No results yet"));
                     rs.set_empty_text(ss(
                         "Results appear once every sheet of the exam is recognised and scored.",
@@ -4588,9 +4714,45 @@ impl Shell {
     fn refresh_outcomes(&self) {
         let ui = self.ui();
         let ov = ui.global::<s::OutcomesVM>();
-        let o = self.exam().and_then(|e| self.backend.borrow().outcomes(&e));
+        let exam = self.exam();
+        let o = exam
+            .as_ref()
+            .and_then(|e| self.backend.borrow().outcomes(e));
         ov.set_available(o.is_some());
-        let Some(o) = o else { return };
+        let Some(o) = o else {
+            // why there is no attainment, and whether a CLO file in Setup is what it needs
+            let be = self.backend.borrow();
+            let closed = exam.as_ref().and_then(|e| be.closed(e));
+            let hold = exam.as_ref().and_then(|e| be.hold(e));
+            let no_clos = closed.is_none()
+                && exam
+                    .as_ref()
+                    .and_then(|e| be.exam_setup(e))
+                    .is_some_and(|s| s.clos.is_empty());
+            drop(be);
+            let (title, text, to_setup) = match (closed, hold) {
+                (Some(why), _) => ("No outcomes yet", why, false),
+                (None, Some(why)) => ("Outcomes wait for the key", why, false),
+                (None, None) if no_clos => (
+                    "No CLOs for this exam",
+                    "CLO attainment needs the exam's course learning outcomes and the item → CLO \
+                     mapping: load a CLO file in Setup."
+                        .to_string(),
+                    true,
+                ),
+                (None, None) => (
+                    "No outcomes yet",
+                    "CLO attainment appears once the exam is scored and its items are mapped to \
+                     CLOs."
+                        .to_string(),
+                    false,
+                ),
+            };
+            ov.set_empty_title(ss(title));
+            ov.set_empty_text(ss(text));
+            ov.set_empty_to_setup(to_setup);
+            return;
+        };
         let p = &o.policy;
         let method = match p.class_method {
             b::ClassMethod::Average => "average μ",

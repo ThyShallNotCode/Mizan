@@ -1801,6 +1801,14 @@ pub trait Backend {
         None
     }
 
+    /// Why the exam has no project open to show (it is being graded, its grading failed, its
+    /// folder cannot be opened), with what to do; `None` when it is open. The screens of an
+    /// exam say this instead of showing nothing. The default: every exam is open.
+    fn closed(&self, exam: &ExamId) -> Option<String> {
+        let _ = exam;
+        None
+    }
+
     /// Reads key-sheet files (the instructor's filled answer sheets) for the exam with the
     /// same recognizer as the students' sheets; the key they give is shown for confirmation
     /// ([`Backend::key_sheets`]) and changes nothing until [`Backend::confirm_key_sheets`].

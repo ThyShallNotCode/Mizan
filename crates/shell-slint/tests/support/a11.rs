@@ -136,3 +136,25 @@ pub fn type_text(ui: &AppWindow, text: &str) {
         key(ui, &ch.to_string());
     }
 }
+
+/// Every text the accessible tree of the visible elements carries (labels, values,
+/// descriptions, placeholders): what a screen reader, or a test, reads off the screen.
+pub fn all_texts(ui: &AppWindow) -> Vec<String> {
+    let mut out = Vec::new();
+    for e in ElementQuery::from_root(ui).match_descendants().find_all() {
+        let texts = [
+            e.accessible_label(),
+            e.accessible_value(),
+            e.accessible_description(),
+            e.accessible_placeholder_text(),
+        ];
+        out.extend(
+            texts
+                .into_iter()
+                .flatten()
+                .filter(|t| !t.is_empty())
+                .map(|t| t.to_string()),
+        );
+    }
+    out
+}

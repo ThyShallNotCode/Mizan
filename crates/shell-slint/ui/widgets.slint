@@ -4,9 +4,9 @@
 
 import {
     Theme, Tone, Severity, MarkState, FocusRing, SeverityGlyph, Keycap, Tag, MarkGlyph, IconButton,
-    BubbleOverlay, StatusPill, TopBar, StatusBar,
+    BubbleOverlay, StatusPill, TopBar, StatusBar, PrimaryButton,
 } from "theme.slint";
-import { BubbleVM } from "state.slint";
+import { BubbleVM, App, Page } from "state.slint";
 
 export global Icons {
     out property <image> exams: @image-url("assets/icons/exams.svg");
@@ -287,7 +287,8 @@ export component StatusText inherits Text {
     vertical-alignment: center;
 }
 
-// Shown when a screen has nothing to show for the current exam.
+// Shown when a screen has nothing to show for the current exam. The element's children are
+// its actions (buttons that lead on), centred in a row under the text.
 export component EmptyState inherits Rectangle {
     in property <string> title;
     in property <string> text;
@@ -311,12 +312,30 @@ export component EmptyState inherits Rectangle {
             color: Theme.ink;
             horizontal-alignment: center;
         }
-        Text {
+        if root.text != "": Text {
             text: root.text;
             font-size: Theme.text-sm;
             color: Theme.ink-2;
             horizontal-alignment: center;
             wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: center;
+            spacing: Theme.space-sm;
+            @children
+        }
+    }
+}
+
+// The empty state of a screen that shows one exam while none is open (an empty exams folder,
+// or none chosen yet): exams are opened and created on the Exams screen.
+export component NoExamState inherits EmptyState {
+    title: "No exam open";
+    text: "Open an exam on the Exams screen, or create one there with New exam.";
+    PrimaryButton {
+        text: "Go to Exams";
+        clicked => {
+            App.navigate(Page.exams);
         }
     }
 }

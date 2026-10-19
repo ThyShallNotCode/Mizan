@@ -11,7 +11,7 @@ import {
 } from "remark.slint";
 import {
     Icons, ThemeToggle, Centered, SectionLabel, StatusText, KVLine, EditCell, StepIndicator,
-    EmptyState, MessageText, TextField, Segment, SegmentGroup,
+    EmptyState, NoExamState, MessageText, TextField, Segment, SegmentGroup,
 } from "../widgets.slint";
 import { ListView, ScrollView } from "std-widgets.slint";
 
@@ -405,6 +405,12 @@ component LintCard inherits Card {
         VerticalLayout {
         spacing: Theme.space-md;
         alignment: start;
+        if SetupVM.lints.length == 0: Text {
+            text: "No findings.";
+            font-size: Theme.text-xs;
+            color: Theme.ink-2;
+            wrap: word-wrap;
+        }
         for l in SetupVM.lints: HorizontalLayout {
             spacing: Theme.space-sm;
             VerticalLayout {
@@ -1180,49 +1186,51 @@ export component SetupScreen inherits VerticalLayout {
         Breadcrumb {
             parts: [App.course, App.assessment, "Setup"];
         }
+        // without a setup no step is done or wanting: every step shows as not started
         HorizontalLayout {
             spacing: Theme.space-lg;
             StepIndicator {
                 number: 1;
                 text: "Template";
                 compact: root.compact-bar;
-                state: 1;
+                state: SetupVM.available ? 1 : 0;
             }
             StepIndicator {
                 number: 2;
                 text: "Forms and key";
                 compact: root.compact-bar;
-                state: SetupVM.key-published ? 1 : 2;
+                state: !SetupVM.available ? 0 : SetupVM.key-published ? 1 : 2;
             }
             StepIndicator {
                 number: 3;
                 text: "CLO mapping";
                 compact: root.compact-bar;
-                state: SetupVM.lints.length > 0 || SetupVM.clos.length == 0 ? 2 : 1;
+                state: !SetupVM.available ? 0 : SetupVM.lints.length > 0 || SetupVM.clos.length == 0 ? 2 : 1;
             }
             // without a roster no identity is matched: shown as a warning, never as done
             StepIndicator {
                 number: 4;
                 text: "Roster";
                 compact: root.compact-bar;
-                state: SetupVM.has-roster ? 1 : 2;
+                state: !SetupVM.available ? 0 : SetupVM.has-roster ? 1 : 2;
             }
             StepIndicator {
                 number: 5;
                 text: "Policies";
                 compact: root.compact-bar;
-                state: 1;
+                state: SetupVM.available ? 1 : 0;
             }
         }
         HorizontalLayout {
             spacing: Theme.space-sm;
-            Centered {
+            if SetupVM.available && SetupVM.key-status != "": Centered {
                 Tag {
                     text: SetupVM.key-status;
                     tone: SetupVM.key-published ? Tone.success : Tone.accent;
                 }
             }
-            Centered {
+            // the key and the Remark import change an exam's setup: none without one
+            if SetupVM.available: Centered {
                 SecondaryButton {
                     text: root.compact-bar ? "Remark…" : "Import from Remark…";
                     enabled: RemarkVM.can-setup;
@@ -1235,7 +1243,7 @@ export component SetupScreen inherits VerticalLayout {
                     }
                 }
             }
-            Centered {
+            if SetupVM.available: Centered {
                 PrimaryButton {
                     text: "Replace key…";
                     enabled: SetupVM.can-replace-key;
@@ -1255,10 +1263,13 @@ export component SetupScreen inherits VerticalLayout {
     if SetupVM.available && SetupVM.key-open: KeyBar { }
     if SetupVM.available && SetupVM.ks-bar-open: KeySheetBar { }
     if SetupVM.available && RemarkVM.setup-bar: RemarkBar { }
-    if !SetupVM.available: EmptyState {
+    if !App.has-exam: NoExamState {
         vertical-stretch: 1;
-        title: "No setup for this exam yet";
-        text: "Choose a template to start.";
+    }
+    if App.has-exam && !SetupVM.available: EmptyState {
+        vertical-stretch: 1;
+        title: "No setup to show";
+        text: SetupVM.empty-text;
     }
     // the Remark import read here, for review (it replaces the matrix until applied or put aside)
     if SetupVM.available && RemarkVM.setup-open && RemarkVM.context == 2: HorizontalLayout {
@@ -1346,19 +1357,13 @@ export component SetupScreen inherits VerticalLayout {
         }
     }
     StatusBar {
-        Centered {
-            StatusPill {
-                text: "Saved";
-                tone: Tone.success;
-            }
-        }
         MessageText {
             text: App.message;
             tone: App.message-tone;
             horizontal-stretch: 1;
         }
         StatusText {
-            text: "Key and mapping edits are recorded as audited events (§14.4)";
+            text: SetupVM.available ? "Key and mapping edits are recorded as audited events" : "";
         }
         StatusText {
             text: App.engine;

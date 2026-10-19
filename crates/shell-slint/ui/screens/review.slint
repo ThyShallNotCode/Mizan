@@ -10,7 +10,7 @@ import {
 import { App, ReviewVM, Candidate, ContactTile } from "../state.slint";
 import {
     Icons, ThemeToggle, Centered, SectionLabel, StatusText, QueueRow, ScanPaper, FillBar,
-    ShortcutRow, AgreeGlyph, EmptyState, MessageText, KVLine, TextField,
+    ShortcutRow, AgreeGlyph, EmptyState, NoExamState, MessageText, KVLine, TextField,
 } from "../widgets.slint";
 import { ListView } from "std-widgets.slint";
 
@@ -64,10 +64,11 @@ component QueuePane inherits Rectangle {
             height: 1px;
             background: Theme.border;
         }
+        // the canvas says why (ReviewVM.empty-text): the lane is done, or the exam is being
+        // graded
         if ReviewVM.queue.length == 0: EmptyState {
             vertical-stretch: 1;
-            title: "Lane clear";
-            text: "No open items in this lane.";
+            title: ReviewVM.empty-title;
         }
         lv := ListView {
             vertical-stretch: ReviewVM.queue.length == 0 ? 0 : 1;
@@ -244,7 +245,9 @@ component ContactThumb inherits Rectangle {
     }
 }
 
-component CanvasPane inherits Rectangle {
+// The item on show: its scan crop with the view chips, and what the item kind adds (fill chart,
+// contact sheet, identity channels, notice).
+component ItemCanvas inherits Rectangle {
     // hands the keys back to the review canvas (after a typed student number)
     callback refocus();
     // 1280 px windows: the fill chart card shrinks to its five bars
@@ -381,7 +384,7 @@ component CanvasPane inherits Rectangle {
         if ReviewVM.kind == 1: Card {
             vertical-stretch: 0;
             title: "Blind verify";
-            subtitle: "The engine's reading is withheld (§13.4): no suggestion, fill bars, threshold or overlays.";
+            subtitle: "The engine's reading is withheld: no suggestion, fill bars, threshold or overlays.";
             Text {
                 text: "Enter what is marked: an option key (A–E, 1–5, or the Arabic letter), Backspace for blank, Ctrl+M for multiple marks, Ctrl+U for unreadable. Then press Enter.";
                 font-size: Theme.text-sm;
@@ -669,6 +672,24 @@ component CandidateRow inherits Rectangle {
     }
 }
 
+// The canvas column: the item on show, or why there is none (a scan crop, chips and charts with
+// nothing behind them are never drawn).
+component CanvasPane inherits Rectangle {
+    callback refocus();
+    in property <bool> narrow;
+    background: Theme.scan-backdrop;
+    if ReviewVM.has-item: ItemCanvas {
+        narrow: root.narrow;
+        refocus => {
+            root.refocus();
+        }
+    }
+    if !ReviewVM.has-item: EmptyState {
+        title: ReviewVM.queue.length > 0 ? "No item open" : "Nothing to review";
+        text: ReviewVM.queue.length > 0 ? "Pick an item from the queue." : ReviewVM.empty-text;
+    }
+}
+
 component DecisionPane inherits Rectangle {
     // below 880 px the keyboard legend gives way (the keys stay on every control; Settings
     // lists the whole map) so the pane fits 800 px windows
@@ -682,7 +703,6 @@ component DecisionPane inherits Rectangle {
     }
     if !ReviewVM.has-item: EmptyState {
         title: "Nothing to decide";
-        text: "Pick an item from the queue.";
     }
     if ReviewVM.has-item: VerticalLayout {
         padding: Theme.space-lg + Theme.space-xs;
@@ -1012,7 +1032,7 @@ export component ReviewScreen inherits VerticalLayout {
     TopBar {
         // narrow windows drop the trailing "Review" (the active nav tab names the page)
         Breadcrumb {
-            parts: root.narrow ? [App.course, App.assessment] : [App.course, App.assessment, "Review"];
+            parts: root.narrow && App.has-exam ? [App.course, App.assessment] : [App.course, App.assessment, "Review"];
         }
         HorizontalLayout {
             spacing: Theme.space-sm;
@@ -1028,7 +1048,7 @@ export component ReviewScreen inherits VerticalLayout {
                 }
             }
         }
-        VerticalLayout {
+        if App.has-exam: VerticalLayout {
             alignment: center;
             spacing: Theme.space-xs;
             width: root.narrow ? 150px : 200px;
@@ -1073,7 +1093,7 @@ export component ReviewScreen inherits VerticalLayout {
             Centered {
                 ThemeToggle { }
             }
-            Centered {
+            if App.has-exam: Centered {
                 IconButton {
                     icon: Icons.undo;
                     label: "Undo last decision (Ctrl+Z)";
@@ -1086,7 +1106,7 @@ export component ReviewScreen inherits VerticalLayout {
             Centered {
                 IconButton {
                     icon: Icons.help;
-                    label: "Help for " + ReviewVM.code + " (F1)";
+                    label: ReviewVM.code != "" ? "Help for " + ReviewVM.code + " (F1)" : "Help (F1)";
                     active: ReviewVM.help-open;
                     clicked => {
                         ReviewVM.toggle-help();
@@ -1104,7 +1124,7 @@ export component ReviewScreen inherits VerticalLayout {
             }
             return reject;
         }
-        HorizontalLayout {
+        if App.has-exam: HorizontalLayout {
             QueuePane {
                 width: Theme.list-pane-width;
             }
@@ -1123,16 +1143,11 @@ export component ReviewScreen inherits VerticalLayout {
                 }
             }
         }
+        if !App.has-exam: NoExamState { }
     }
     StatusBar {
-        Centered {
-            StatusPill {
-                text: "Saved";
-                tone: Tone.success;
-            }
-        }
         StatusText {
-            text: "audit head " + ReviewVM.audit-head;
+            text: ReviewVM.audit-head != "" ? "audit head " + ReviewVM.audit-head : "";
             mono: true;
         }
         MessageText {
@@ -1141,7 +1156,7 @@ export component ReviewScreen inherits VerticalLayout {
             horizontal-stretch: 1;
         }
         StatusText {
-            text: ReviewVM.two-person ? "Two-person rule: on" : "Two-person rule: off";
+            text: !App.has-exam ? "" : ReviewVM.two-person ? "Two-person rule: on" : "Two-person rule: off";
         }
         StatusText {
             text: App.engine;

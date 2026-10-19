@@ -454,6 +454,24 @@ impl AppBackend {
     }
 
     /// True while `exam`'s project is closed for an added batch.
+    /// Why `exam` has no project open, once [`AppBackend::with`] found none: it is being
+    /// graded, its grading failed or its folder could not be opened, or it is not graded.
+    fn closed_reason(&self, exam: &ExamId) -> String {
+        if self
+            .job
+            .as_ref()
+            .is_some_and(|j| &j.exam == exam && j.running())
+        {
+            "The exam is being graded: it opens here when the Scan screen says the batch is \
+             complete"
+                .to_string()
+        } else if let Some(why) = self.failed.borrow().get(exam) {
+            why.clone()
+        } else {
+            "No graded project is open for this exam".to_string()
+        }
+    }
+
     fn busy(&self, exam: &ExamId) -> bool {
         self.job
             .as_ref()
@@ -2430,11 +2448,7 @@ impl Opened {
             .filter(|p| alignment_refusal(p).is_some())
             .count() as u32;
         let handled = [
-            (
-                "Key sheets, not students (§10.1)",
-                key_sheets,
-                b::Tone::Neutral,
-            ),
+            ("Key sheets, not students", key_sheets, b::Tone::Neutral),
             (
                 "Not read: alignment unverified (REG-003)",
                 unaligned,
@@ -2721,7 +2735,7 @@ impl Opened {
                     let inf = it.booklet.and_then(|bk| s.booklets[bk].inference.as_ref());
                     Some(b::Suggestion {
                         decision,
-                        source: b::SuggestionSource::Rule("form inference (§10.3)".into()),
+                        source: b::SuggestionSource::Rule("form inference".into()),
                         fill: 0.0,
                         margin: inf.map_or(0.0, |i| i.margin_milli as f32 / 1000.0),
                     })
@@ -3097,8 +3111,7 @@ impl Opened {
                 )
             } else if def.roster.is_none() {
                 Some(
-                    "No roster: results without a roster are never pushed (§16.1). Grade with \
-                     --roster"
+                    "No roster: results without a roster are never pushed. Grade with --roster"
                         .into(),
                 )
             } else if self.p.scoring.as_ref().is_none_or(|sc| sc.run.is_err()) {
@@ -4364,7 +4377,8 @@ impl Backend for AppBackend {
         b::Dashboard {
             user: b::UserInfo {
                 name: self.operator.trim_start_matches("principal:").to_string(),
-                role: "Operator".into(),
+                // the core has no roles: none is shown rather than one made up
+                role: String::new(),
                 initials,
             },
             term,
@@ -4462,26 +4476,9 @@ impl Backend for AppBackend {
 
     fn review_queue(&self, exam: &ExamId, lane: b::Lane) -> b::ReviewQueue {
         // an exam without a queue says why (never "no open items" while it is being graded)
-        let unavailable = || {
-            if self
-                .job
-                .as_ref()
-                .is_some_and(|j| &j.exam == exam && j.running())
-            {
-                Some(
-                    "The exam is being graded: its review queue appears when the Scan screen \
-                     says the batch is complete"
-                        .to_string(),
-                )
-            } else if let Some(why) = self.failed.borrow().get(exam) {
-                Some(why.clone())
-            } else {
-                Some("No graded project is open for this exam".to_string())
-            }
-        };
         self.with(exam, |o| o.queue(lane))
             .unwrap_or_else(|| b::ReviewQueue {
-                unavailable: unavailable(),
+                unavailable: Some(self.closed_reason(exam)),
                 lane,
                 lanes: b::Lane::ALL
                     .iter()
@@ -4710,6 +4707,13 @@ impl Backend for AppBackend {
 
     fn key_sheets(&self, exam: &ExamId) -> Option<b::KeySheetSummary> {
         self.with(exam, Opened::key_summary).flatten()
+    }
+
+    fn closed(&self, exam: &ExamId) -> Option<String> {
+        match self.with(exam, |_| ()) {
+            Some(()) => None,
+            None => Some(self.closed_reason(exam)),
+        }
     }
 
     fn hold(&self, exam: &ExamId) -> Option<String> {
