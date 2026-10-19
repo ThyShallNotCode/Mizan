@@ -110,6 +110,18 @@ component ThumbTile inherits Rectangle {
     // show another sheet in this tile by the release)
     callback clicked(Thumb);
     property <Thumb> pressed;
+    // The arrow keys (DESIGN §9.3): `step` asks the grid for the tile `d` places on; the grid
+    // names the tile that takes the keyboard (`focus-ix`) and counts the requests
+    // (`focus-gen`), so the same tile can be asked twice.
+    in property <int> index;
+    in property <int> focus-ix: -1;
+    in property <int> focus-gen;
+    callback step(int);
+    changed focus-gen => {
+        if (root.focus-ix == root.index) {
+            fs.focus();
+        }
+    }
     height: self.width * 1.12 + 22px;
     border-radius: Theme.radius-sm;
     background: Theme.surface-raised;
@@ -139,6 +151,23 @@ component ThumbTile inherits Rectangle {
         key-pressed(event) => {
             if (event.text == Key.Return) {
                 root.clicked(root.t);
+                return accept;
+            }
+            // the grid runs left to right in every language: Left is the tile before
+            if (event.text == Key.LeftArrow) {
+                root.step(-1);
+                return accept;
+            }
+            if (event.text == Key.RightArrow) {
+                root.step(1);
+                return accept;
+            }
+            if (event.text == Key.UpArrow) {
+                root.step(-10);
+                return accept;
+            }
+            if (event.text == Key.DownArrow) {
+                root.step(10);
                 return accept;
             }
             return reject;
@@ -474,7 +503,7 @@ export component ScanScreen inherits Rectangle {
                         value: ScanVM.first-value;
                         unit: "s";
                         caption: ScanVM.first-caption;
-                        caption-tone: Tone.success;
+                        caption-tone: ScanVM.first-tone;
                     }
                     StatTile {
                         horizontal-stretch: 1;
@@ -549,7 +578,7 @@ export component ScanScreen inherits Rectangle {
                                     color: Theme.ink;
                                 }
                                 Text {
-                                    text: "Latest 30 · arrows move, Enter opens the sheet";
+                                    text: "Latest 30 · arrows move, Enter opens the sheet's review item";
                                     font-size: Theme.text-xs;
                                     color: Theme.ink-2;
                                 }
@@ -588,6 +617,9 @@ export component ScanScreen inherits Rectangle {
                             property <length> tile-w: (self.width - 2 * Theme.space-lg - 9 * self.gap) / 10;
                             property <length> row-h: self.tile-w * 1.12 + 22px + self.gap;
                             property <int> rows: max(1, floor((self.height - Theme.space-md + self.gap) / self.row-h));
+                            // the tile the arrow keys move the keyboard to, and how often asked
+                            property <int> focus-ix: -1;
+                            property <int> focus-gen;
                             for t[i] in ScanVM.thumbs: ThumbTile {
                                 x: Theme.space-lg + mod(i, 10) * (parent.tile-w + parent.gap);
                                 y: floor(i / 10) * parent.row-h;
@@ -595,8 +627,18 @@ export component ScanScreen inherits Rectangle {
                                 visible: floor(i / 10) < parent.rows;
                                 t: t;
                                 img: ScanVM.thumb-images[t.variant];
+                                index: i;
+                                focus-ix: parent.focus-ix;
+                                focus-gen: parent.focus-gen;
                                 clicked(p) => {
-                                    ScanVM.open-sheet(p.serial, p.code);
+                                    ScanVM.open-sheet(p.serial, p.code, p.item);
+                                }
+                                // never onto a row that is left out (it has no tile on screen)
+                                step(d) => {
+                                    if (i + d >= 0 && i + d < min(ScanVM.thumbs.length, parent.rows * 10)) {
+                                        parent.focus-ix = i + d;
+                                        parent.focus-gen += 1;
+                                    }
                                 }
                             }
                             if ScanVM.thumbs.length == 0: Text {

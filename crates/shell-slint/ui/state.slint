@@ -448,6 +448,8 @@ export struct Thumb {
     severity: Severity,
     variant: int,
     label: string,
+    // the sheet's own open item (the one whose code the tile shows), -1 none
+    item: int,
 }
 
 export struct CodeBar {
@@ -476,6 +478,8 @@ export global ScanVM {
     in property <string> auto-caption;
     in property <string> first-value;
     in property <string> first-caption;
+    // success under the 3 s target, a warning over it, neutral before the first result
+    in property <Tone> first-tone;
     in property <string> remaining-value;
     in property <string> remaining-caption;
     in property <float> done-frac;
@@ -508,8 +512,9 @@ export global ScanVM {
     callback toggle-pause();
     callback open-review();
     callback open-code(string);
-    // a thumbnail: its serial and worst open code ("" when none)
-    callback open-sheet(string, string);
+    // a thumbnail: its serial, worst open code ("" when none) and that code's item of this
+    // sheet (-1 none)
+    callback open-sheet(string, string, int);
 }
 
 // ------------------------------------------------------------------------------- review

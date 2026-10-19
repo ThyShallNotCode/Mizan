@@ -1951,6 +1951,60 @@ fn req_a11_a_tile_pressed_during_a_refresh_opens_the_sheet_pressed() {
 }
 
 #[test]
+fn req_a11_the_arrow_keys_move_through_the_sheets() {
+    // The Sheets card says "arrows move", but a tile took only Enter: the arrows did nothing,
+    // and only Tab moved, through every tile in turn.
+    let h = harness();
+    let ui = &h.ui;
+    ui.window()
+        .set_size(slint::LogicalSize::new(1600.0, 1100.0));
+    slint::platform::update_timers_and_animations();
+    click(ui, &tab(ui, "Scan"));
+    let thumbs = ui.global::<ScanVM>().get_thumbs();
+    let tile = |i: usize| thumbs.row_data(i).expect("a tile");
+    // tiles with no open item: Enter names the sheet on the status line, and Scan stays
+    let i = (0..9)
+        .find(|&i| [i, i + 1, i + 11].iter().all(|&j| tile(j).code.is_empty()))
+        .expect("three tiles without a code");
+    let opened = || ui.global::<App>().get_message().to_string();
+    click(ui, &one(ui, &tile(i).label));
+    assert!(opened().starts_with(&format!("Sheet {}:", tile(i).serial)));
+    special(ui, Key::RightArrow);
+    special(ui, Key::Return);
+    assert!(
+        opened().starts_with(&format!("Sheet {}:", tile(i + 1).serial)),
+        "{}",
+        opened()
+    );
+    special(ui, Key::DownArrow);
+    special(ui, Key::Return);
+    assert!(
+        opened().starts_with(&format!("Sheet {}:", tile(i + 11).serial)),
+        "{}",
+        opened()
+    );
+    special(ui, Key::LeftArrow);
+    special(ui, Key::UpArrow);
+    special(ui, Key::Return);
+    assert!(opened().starts_with(&format!("Sheet {}:", tile(i).serial)));
+    // never onto a row left out of the card: in a window this short the card shows one row
+    // (the others have no tile on screen), and Down stays on it
+    ui.window().set_size(slint::LogicalSize::new(1280.0, 600.0));
+    slint::platform::update_timers_and_animations();
+    let c = (0..10)
+        .find(|&c| tile(c).code.is_empty())
+        .expect("a tile without a code");
+    click(ui, &one(ui, &tile(c).label));
+    special(ui, Key::DownArrow);
+    special(ui, Key::Return);
+    assert!(
+        opened().starts_with(&format!("Sheet {}:", tile(c).serial)),
+        "{}",
+        opened()
+    );
+}
+
+#[test]
 fn req_a11_a_code_pressed_during_a_refresh_opens_the_code_pressed() {
     // The same for the exceptions by code beside the tiles.
     let (ui, b, shell) = hooked(Hooked::default());

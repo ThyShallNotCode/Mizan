@@ -439,6 +439,10 @@ pub struct Thumbnail {
     /// The page as scanned, scaled down; `None` while the page is not available (the shell
     /// shows a blank sheet, never an invented one).
     pub image: Option<CropImage>,
+    /// The open item behind `state`'s code, opened by a click on the tile: this sheet's, never
+    /// the first item of the code in the queue (another student's). `None`: the shell opens
+    /// the code's queue.
+    pub item: Option<ItemId>,
 }
 
 /// Pipeline stage counter.
@@ -502,12 +506,18 @@ pub struct BatchProgress {
     pub floor_pages_per_sec: f64,
     /// Gauge maximum (stretch target × 1.2).
     pub max_pages_per_sec: f64,
-    /// Share of questions auto-accepted, 0..1.
-    pub auto_accepted: f64,
-    /// Abstention rate AR, 0..1.
-    pub abstention_rate: f64,
-    pub first_result: Duration,
-    pub remaining: Duration,
+    /// Share of questions auto-accepted, 0..1; `None` while no question has been read (the
+    /// screen shows "–", never an invented 100 %).
+    pub auto_accepted: Option<f64>,
+    /// Abstention rate AR, 0..1; `None` while no question has been read.
+    pub abstention_rate: Option<f64>,
+    /// `None` until the first page is read.
+    pub first_result: Option<Duration>,
+    /// `None` while no page rate is known.
+    pub remaining: Option<Duration>,
+    /// What a running batch does now ("reading inputs", "identity", "scoring"), for the
+    /// remaining-time caption once no page waits; empty when nothing is said.
+    pub stage: String,
     /// Pipeline: pages done, in flight and queued (sum = `pages_total`).
     pub in_flight: u32,
     pub queued: u32,

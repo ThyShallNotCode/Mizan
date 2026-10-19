@@ -912,12 +912,24 @@ fn req_a10_corrupt_inputs_inferred_key_and_view_models() {
     assert_eq!(res.grades.iter().map(|g| g.count).sum::<u32>(), 8);
     // A mark item renders its crop (RGBA from the stored original) with bubble overlays.
     let mut tracker = omr_app::vm::ProgressTracker::default();
+    // before any page: no share, time or estimate is invented
+    let snap = tracker.snapshot();
+    assert_eq!(snap.stage, "reading inputs");
     tracker.push(&omr_app::Progress::Started {
         pages: 2,
         workers: 2,
     });
     let snap = tracker.snapshot();
     assert_eq!((snap.pages_total, snap.workers), (2, 2));
+    assert_eq!(
+        (
+            snap.auto_accepted,
+            snap.abstention_rate,
+            snap.first_result,
+            snap.remaining
+        ),
+        (None, None, None, None)
+    );
     if let Some(item) = p.queue(Some(omr_app::Lane::Marks)).first().map(|i| i.id) {
         let v = p.review_item_vm(item).unwrap();
         assert_eq!(

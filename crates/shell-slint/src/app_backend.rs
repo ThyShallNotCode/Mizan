@@ -1797,8 +1797,8 @@ fn trim(x: f64) -> String {
 
 // ------------------------------------------------------------------------------------ views
 
-/// The worst open item (code, severity) per page or booklet index.
-type Worst = BTreeMap<usize, (String, AppSeverity)>;
+/// The worst open item (code, severity, item) per page or booklet index.
+type Worst = BTreeMap<usize, (String, AppSeverity, ItemId)>;
 
 impl Opened {
     fn summary(&self, entry: Option<&Entry>) -> b::ExamSummary {
@@ -2185,17 +2185,18 @@ impl Opened {
         let mut by_page = Worst::new();
         let mut by_booklet = Worst::new();
         for it in self.p.session.review.items.iter().filter(|i| i.is_open()) {
-            let worse = |cur: Option<&(String, AppSeverity)>| {
-                cur.is_none_or(|(c, s)| it.severity > *s || (it.severity == *s && it.code < *c))
+            let worse = |cur: Option<&(String, AppSeverity, ItemId)>| {
+                cur.is_none_or(|(c, s, _)| it.severity > *s || (it.severity == *s && it.code < *c))
             };
+            let worst = (it.code.clone(), it.severity, ItemId(it.id));
             if let Some(bk) = it.booklet {
                 if worse(by_booklet.get(&bk)) {
-                    by_booklet.insert(bk, (it.code.clone(), it.severity));
+                    by_booklet.insert(bk, worst);
                 }
             } else if let Some(pg) = it.page
                 && worse(by_page.get(&pg))
             {
-                by_page.insert(pg, (it.code.clone(), it.severity));
+                by_page.insert(pg, worst);
             }
         }
         (by_page, by_booklet)
@@ -2222,17 +2223,26 @@ impl Opened {
                 severity: sev(e.severity),
             };
         }
-        let worst = pg
-            .booklet
-            .and_then(|bk| by_booklet.get(&bk))
-            .or_else(|| by_page.get(&page));
-        match worst {
-            Some((c, s)) => b::ThumbState::Review {
+        match self.worst_of(page, by_page, by_booklet) {
+            Some((c, s, _)) => b::ThumbState::Review {
                 code: c.clone(),
                 severity: sev(*s),
             },
             None => b::ThumbState::Auto,
         }
+    }
+
+    /// The worst open item of a page: its booklet's, else the page's own.
+    fn worst_of<'w>(
+        &self,
+        page: usize,
+        by_page: &'w Worst,
+        by_booklet: &'w Worst,
+    ) -> Option<&'w (String, AppSeverity, ItemId)> {
+        self.p.session.pages[page]
+            .booklet
+            .and_then(|bk| by_booklet.get(&bk))
+            .or_else(|| by_page.get(&page))
     }
 
     fn serial_of_page(&self, page: usize) -> String {
@@ -2254,11 +2264,8 @@ impl Opened {
             .flat_map(|b| &b.questions)
             .filter(|q| q.status == ResponseStatus::Auto)
             .count();
-        let auto_share = if questions == 0 {
-            0.0
-        } else {
-            auto as f64 / questions as f64
-        };
+        // nothing read (every page refused): no share, never 0 % or 100 %
+        let auto_share = (questions > 0).then(|| auto as f64 / questions as f64);
         let pps = if t.page_stage_ms > 0.0 {
             t.pages as f64 / (t.page_stage_ms / 1e3)
         } else {
@@ -2344,10 +2351,21 @@ impl Opened {
         let thumbnails = pages
             .into_iter()
             .take(THUMBS)
-            .map(|p| b::Thumbnail {
-                serial: self.serial_of_page(p),
-                state: self.thumb_state(p, &by_page, &by_booklet),
-                image: self.thumbnail(p),
+            .map(|p| {
+                let state = self.thumb_state(p, &by_page, &by_booklet);
+                // the item whose code the tile shows (a refused page has no item of its own)
+                let item = match &state {
+                    b::ThumbState::Review { .. } => self
+                        .worst_of(p, &by_page, &by_booklet)
+                        .map(|(_, _, id)| *id),
+                    _ => None,
+                };
+                b::Thumbnail {
+                    serial: self.serial_of_page(p),
+                    state,
+                    image: self.thumbnail(p),
+                    item,
+                }
             })
             .collect();
         let warn = |n: u32| {
@@ -2485,9 +2503,11 @@ impl Opened {
             floor_pages_per_sec: 40.0,
             max_pages_per_sec: 120.0_f64.max(pps * 1.2),
             auto_accepted: auto_share,
-            abstention_rate: 1.0 - auto_share,
-            first_result: Duration::from_secs_f64(t.first_result_ms.max(0.0) / 1e3),
-            remaining: Duration::ZERO,
+            abstention_rate: auto_share.map(|a| 1.0 - a),
+            first_result: (t.first_result_ms > 0.0)
+                .then(|| Duration::from_secs_f64(t.first_result_ms / 1e3)),
+            remaining: Some(Duration::ZERO),
+            stage: String::new(),
             in_flight: 0,
             queued: 0,
             stages: vec![
@@ -3427,6 +3447,8 @@ fn job_batch(j: &Job, opened: Option<&Opened>) -> b::BatchProgress {
                     (Some(o), Some(p)) => o.thumbnail(p),
                     _ => None,
                 },
+                // a running batch has no items yet: the tile opens its code's queue
+                item: None,
             }
         })
         .collect();
@@ -3457,6 +3479,7 @@ fn job_batch(j: &Job, opened: Option<&Opened>) -> b::BatchProgress {
         abstention_rate: v.abstention_rate,
         first_result: v.first_result,
         remaining: v.remaining,
+        stage: v.stage.clone(),
         in_flight: if failed { 0 } else { v.in_flight },
         queued: if failed { 0 } else { v.queued },
         stages: v

@@ -1699,6 +1699,7 @@ impl DemoBackend {
                 serial: format!("{s:04}"),
                 state: Self::thumb_state(s),
                 image: None,
+                item: None,
             });
         }
         for k in 1..=3 {
@@ -1710,6 +1711,7 @@ impl DemoBackend {
                     ThumbState::Auto
                 },
                 image: None,
+                item: None,
             });
         }
         for k in 4..=6 {
@@ -1721,6 +1723,7 @@ impl DemoBackend {
                     ThumbState::Auto
                 },
                 image: None,
+                item: None,
             });
         }
         let ts = |s: u32| {
@@ -1757,10 +1760,11 @@ impl DemoBackend {
             pages_per_sec: pps,
             floor_pages_per_sec: 40.0,
             max_pages_per_sec: 120.0,
-            auto_accepted: 0.992,
-            abstention_rate: 0.008,
-            first_result: Duration::from_millis(2100),
-            remaining,
+            auto_accepted: Some(0.992),
+            abstention_rate: Some(0.008),
+            first_result: Some(Duration::from_millis(2100)),
+            remaining: Some(remaining),
+            stage: String::new(),
             in_flight,
             queued,
             stages: vec![
@@ -1855,6 +1859,7 @@ impl DemoBackend {
                 serial: format!("{s:04}"),
                 state,
                 image: None,
+                item: None,
             });
         }
         let counts = self.open_counts(&ExamId(CS211.into()));
@@ -1869,10 +1874,11 @@ impl DemoBackend {
             pages_per_sec: 48.0,
             floor_pages_per_sec: 40.0,
             max_pages_per_sec: 120.0,
-            auto_accepted: 0.996,
-            abstention_rate: 0.004,
-            first_result: Duration::from_millis(1800),
-            remaining: Duration::ZERO,
+            auto_accepted: Some(0.996),
+            abstention_rate: Some(0.004),
+            first_result: Some(Duration::from_millis(1800)),
+            remaining: Some(Duration::ZERO),
+            stage: String::new(),
             in_flight: 0,
             queued: 0,
             stages: vec![

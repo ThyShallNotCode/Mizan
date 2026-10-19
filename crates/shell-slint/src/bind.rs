@@ -553,6 +553,16 @@ impl Shell {
         self.refresh_all();
         if current {
             self.restart_review();
+            // "Grading N scan files into …" is no longer true once the run has ended (the Scan
+            // screen says how it ended)
+            if self
+                .ui()
+                .global::<s::App>()
+                .get_message()
+                .starts_with("Grading ")
+            {
+                self.say("", s::Tone::Neutral);
+            }
         }
         true
     }
@@ -820,16 +830,21 @@ impl Shell {
         let me = self.clone();
         sc.on_open_code(move |code| me.open_code(&code));
         let me = self.clone();
-        sc.on_open_sheet(move |serial, code| {
+        sc.on_open_sheet(move |serial, code, item| {
             if code.starts_with("KEY") {
                 // the instructor's key sheet: its key summary in Setup
                 me.ui().global::<s::SetupVM>().set_ks_open(true);
                 me.navigate(s::Page::Setup);
-            } else if code.is_empty() {
+                return;
+            }
+            // the sheet's own item, never the first of its code (another student's)
+            if u64::try_from(item).is_ok_and(|i| me.open_item(ItemId(i))) {
+                return;
+            }
+            if code.is_empty() {
+                // read automatically (or not read yet): no item of this sheet waits
                 me.say(
-                    format!(
-                        "Sheet {serial}: the page viewer is not built yet; its review items open from the codes on the right"
-                    ),
+                    format!("Sheet {serial}: nothing to review, no open item on this sheet"),
                     s::Tone::Info,
                 );
             } else {
@@ -1827,30 +1842,48 @@ impl Shell {
             self.navigate(s::Page::Setup);
             return;
         }
-        for lane in Lane::ALL {
+        let first = Lane::ALL.iter().find_map(|&lane| {
             let q = self.backend.borrow().review_queue(&exam, lane);
-            if let Some(id) = q
-                .groups
+            q.groups
                 .iter()
                 .find(|g| g.code == code)
                 .and_then(|g| g.items.first())
                 .map(|i| i.id)
-            {
-                {
-                    let mut st = self.st.borrow_mut();
-                    st.lane = lane;
-                    st.collapsed.remove(code);
-                }
-                self.ui().global::<s::App>().set_page(s::Page::Review);
-                self.select_item(Some(id));
-                return;
-            }
+        });
+        if first.is_some_and(|id| self.open_item(id)) {
+            return;
         }
         self.navigate(s::Page::Review);
         self.say(
             format!("No open {code} items in this exam's queue"),
             s::Tone::Info,
         );
+    }
+
+    /// Opens open item `id` on the Review screen, in its lane and with its group expanded;
+    /// false when no lane of the current exam's queue holds it (any more).
+    fn open_item(&self, id: ItemId) -> bool {
+        let Some(exam) = self.exam() else {
+            return false;
+        };
+        let found = Lane::ALL.iter().find_map(|&lane| {
+            let q = self.backend.borrow().review_queue(&exam, lane);
+            q.groups
+                .iter()
+                .find(|g| g.items.iter().any(|i| i.id == id))
+                .map(|g| (lane, g.code.clone()))
+        });
+        let Some((lane, code)) = found else {
+            return false;
+        };
+        {
+            let mut st = self.st.borrow_mut();
+            st.lane = lane;
+            st.collapsed.remove(&code);
+        }
+        self.ui().global::<s::App>().set_page(s::Page::Review);
+        self.select_item(Some(id));
+        true
     }
 
     /// Shows item `id` (or nothing) in the review frame.
@@ -3192,19 +3225,41 @@ impl Shell {
             thousands(p.pages_total),
             100.0 * p.pages_done as f64 / total as f64
         )));
-        sc.set_auto_value(ss(format!("{:.1}", p.auto_accepted * 100.0)));
-        sc.set_auto_caption(ss(format!(
-            "questions · AR {:.1} %",
-            p.abstention_rate * 100.0
-        )));
-        sc.set_first_value(ss(format!("{:.1}", p.first_result.as_secs_f64())));
+        // what is not known yet (no question read, no page done, no rate) reads "–", never a
+        // value the batch has not reached
+        sc.set_auto_value(ss(p
+            .auto_accepted
+            .map_or("–".to_string(), |a| format!("{:.1}", a * 100.0))));
+        sc.set_auto_caption(ss(p
+            .abstention_rate
+            .map_or("questions · AR –".to_string(), |ar| {
+                format!("questions · AR {:.1} %", ar * 100.0)
+            })));
+        sc.set_first_value(ss(p
+            .first_result
+            .map_or("–".to_string(), |f| format!("{:.1}", f.as_secs_f64()))));
         sc.set_first_caption(ss("target < 3 s"));
-        let secs = p.remaining.as_secs();
-        sc.set_remaining_value(ss(format!("{}:{:02}", secs / 60, secs % 60)));
-        sc.set_remaining_caption(ss(if p.queued + p.in_flight > 0 {
-            format!("m:ss · {} pages queued", thousands(p.queued + p.in_flight))
-        } else {
+        // the time counts from the start, reading the inputs included: over 3 s is a warning
+        sc.set_first_tone(match p.first_result {
+            Some(f) if f.as_secs_f64() < 3.0 => s::Tone::Success,
+            Some(_) => s::Tone::Warning,
+            None => s::Tone::Neutral,
+        });
+        sc.set_remaining_value(ss(p.remaining.map_or("–".to_string(), |r| {
+            let secs = r.as_secs();
+            format!("{}:{:02}", secs / 60, secs % 60)
+        })));
+        let waiting = p.queued + p.in_flight;
+        sc.set_remaining_caption(ss(if !p.running {
             "batch complete".to_string()
+        } else if p.pages_total == 0 {
+            "reading inputs".to_string()
+        } else if waiting > 0 {
+            format!("m:ss · {} pages queued", thousands(waiting))
+        } else if !p.stage.is_empty() {
+            p.stage.clone()
+        } else {
+            "finishing".to_string()
         }));
         sc.set_done_frac(p.pages_done as f32 / total as f32);
         sc.set_flight_frac(p.in_flight as f32 / total as f32);
@@ -3316,6 +3371,7 @@ impl Shell {
                     code: ss(code),
                     severity: severity(sev),
                     variant: i as i32,
+                    item: t.item.and_then(|id| i32::try_from(id.0).ok()).unwrap_or(-1),
                     label: ss(if is_key {
                         format!("Key sheet {}, {word}", t.serial)
                     } else {

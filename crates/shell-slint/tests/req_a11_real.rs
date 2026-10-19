@@ -1406,7 +1406,22 @@ fn req_a11_real_backend_creates_an_exam_from_the_new_exam_form() {
     assert!(!ui.global::<ExamsVM>().get_new_open(), "the form closes");
     assert_eq!(ui.global::<App>().get_page(), Page::Scan);
     assert!(!h.app.borrow().can_create_exam(), "one run at a time");
+    // before the first page is read nothing is invented: no share, time or estimate, and the
+    // run is not "complete"
+    let sc = ui.global::<ScanVM>();
+    assert!(sc.get_running());
+    let tiles = [
+        sc.get_auto_value(),
+        sc.get_first_value(),
+        sc.get_remaining_value(),
+    ];
+    assert_eq!(tiles.map(|t| t.to_string()), ["–", "–", "–"]);
+    assert_eq!(sc.get_auto_caption(), "questions · AR –");
+    assert_eq!(sc.get_remaining_caption(), "reading inputs");
     run_held(&h, &held);
+    // the status line no longer says the run is grading
+    let msg = ui.global::<App>().get_message().to_string();
+    assert!(!msg.starts_with("Grading "), "{msg}");
     assert_eq!(h.app.borrow().grading_error(), None);
     let project = ws.join("cs-213-quiz-1/project.omrproj");
     assert!(
@@ -1997,4 +2012,60 @@ fn req_a11_real_scan_thumbnails_are_decoded_off_the_ui_thread() {
     h.shell.navigate(Page::Scan);
     assert!(held.borrow().is_empty());
     assert_eq!(shown_thumbnails(ui), tiles);
+}
+
+/// A click on a Scan tile opens the item of that sheet, not the first item of its code in the
+/// queue (another student's, opened under the clicked sheet's name).
+#[test]
+fn req_a11_real_backend_a_tile_opens_its_own_sheet() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let spec = synth::Spec {
+        sheets: 24,
+        folder: "tiles",
+        ..MIDTERM
+    };
+    let built = synth::build(&spec, dir.path());
+    let h = harness(AppBackend::project(&built.project, "principal:a11").expect("open"));
+    let ui = &h.ui;
+    ui.window()
+        .set_size(slint::LogicalSize::new(1600.0, 1100.0));
+    tab(ui, "Scan").invoke_accessible_default_action();
+    // every tile with a code whose sheet is not the first of that code in the queue
+    let tiles: Vec<(String, String, String)> = ui
+        .global::<ScanVM>()
+        .get_thumbs()
+        .iter()
+        .filter(|t| t.state == 1)
+        .map(|t| {
+            (
+                t.label.to_string(),
+                t.serial.to_string(),
+                t.code.to_string(),
+            )
+        })
+        .collect();
+    assert!(tiles.len() >= 3, "{tiles:?}");
+    let mut other_sheet = 0;
+    for (label, serial, code) in tiles {
+        let first = Lane::ALL.iter().find_map(|&l| {
+            let q = h.app.borrow().review_queue(&h.exam, l);
+            q.groups
+                .iter()
+                .find(|g| g.code == code)
+                .and_then(|g| g.items.first())
+                .map(|i| i.id)
+        });
+        let first_serial = first.map(|id| h.item(id).serial).unwrap_or_default();
+        if first_serial != serial {
+            other_sheet += 1;
+        }
+        h.shell.navigate(Page::Scan);
+        click(ui, &one(ui, &label));
+        assert_eq!(ui.global::<App>().get_page(), Page::Review, "{label}");
+        let id = h.shell.current_item().expect("an item");
+        let it = h.item(id);
+        assert_eq!(it.serial, serial, "{label} opened booklet {}", it.serial);
+        assert_eq!(it.code, code, "{label}");
+    }
+    assert!(other_sheet > 0, "a sheet that is not the first of its code");
 }

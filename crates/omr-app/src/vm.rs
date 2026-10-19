@@ -202,14 +202,17 @@ pub struct BatchProgress {
     pub floor_pages_per_sec: f64,
     /// Gauge maximum.
     pub max_pages_per_sec: f64,
-    /// Share of questions auto-accepted.
-    pub auto_accepted: f64,
-    /// Abstention rate.
-    pub abstention_rate: f64,
-    /// Time to the first result.
-    pub first_result: Duration,
-    /// Remaining (estimate).
-    pub remaining: Duration,
+    /// Share of questions auto-accepted; `None` while no question has been read (never an
+    /// invented 100 %).
+    pub auto_accepted: Option<f64>,
+    /// Abstention rate; `None` while no question has been read.
+    pub abstention_rate: Option<f64>,
+    /// Time to the first result; `None` until the first page is read.
+    pub first_result: Option<Duration>,
+    /// Remaining (estimate); `None` while no page rate is known.
+    pub remaining: Option<Duration>,
+    /// What the run does now ("reading inputs", "page stage", "identity", "finished").
+    pub stage: String,
     /// In flight.
     pub in_flight: u32,
     /// Queued.
@@ -302,11 +305,7 @@ impl ProgressTracker {
             .map(|((c, s), n)| (c.clone(), *s, *n))
             .collect();
         exceptions.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(a.0.cmp(&b.0)));
-        let ar = if self.questions == 0 {
-            0.0
-        } else {
-            1.0 - self.auto as f64 / self.questions as f64
-        };
+        let ar = (self.questions > 0).then(|| 1.0 - self.auto as f64 / self.questions as f64);
         BatchProgress {
             batch_label: "Batch 1 of 1".into(),
             source: "file import".into(),
@@ -316,13 +315,15 @@ impl ProgressTracker {
             pages_per_sec: pps,
             floor_pages_per_sec: 40.0,
             max_pages_per_sec: 120.0,
-            auto_accepted: 1.0 - ar,
+            auto_accepted: ar.map(|ar| 1.0 - ar),
             abstention_rate: ar,
-            first_result: Duration::from_secs_f64(self.first_ms.unwrap_or(0.0) / 1e3),
-            remaining: if pps > 0.0 {
-                Duration::from_secs_f64(f64::from(left) / pps)
+            first_result: self.first_ms.map(|ms| Duration::from_secs_f64(ms / 1e3)),
+            remaining: (pps > 0.0).then(|| Duration::from_secs_f64(f64::from(left) / pps)),
+            // before Started the run reads and stores its inputs
+            stage: if self.stage.is_empty() {
+                "reading inputs".into()
             } else {
-                Duration::ZERO
+                self.stage.clone()
             },
             in_flight: left.min(self.workers),
             queued: left.saturating_sub(self.workers),
