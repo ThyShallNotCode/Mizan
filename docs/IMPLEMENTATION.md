@@ -136,6 +136,18 @@ expectation tied to the real exams out of the repository.
   every answer on a photographed **student** sheet goes to review (MRK-001
   `uncalibrated_capture`), and key-sheet photos are confirmed by the instructor as every key
   sheet is.
+- Parts of the version and key backstops (§10.3; built: undeclared versions held, identical
+  versions scored under the shared key, key answers beyond the count named, own sheets' cancel
+  mode from the spec, labelled keys never copied, group confirmation only by 10 nats):
+  - students' rows beyond the question count (G-3 design, G4): the recognizer decides only
+    the exam's rows of a student's sheet, so answers past a count typed too low are not seen
+    there (key files and key sheets name theirs; the New-exam survey covers the desktop);
+  - SCO-005 `near_chance` stays a score-run notice, not a review item (an owner decision, G6);
+  - a batch MRK-018 for confident marks below the last question on many sheets (Fable E5);
+  - reusing the survey's page measurements for the grade (each pass reads the pages);
+  - `omr grade` keeps its defaults (`--cancel-mode erase_only`, versions A,B without a key
+    file that names them): the desktop takes an own sheet's cancel mode from its spec;
+  - the IAU student-ID scheme accepts intake years up to 2030 only (§9.2).
 
 ## 3. Crates and ownership
 
