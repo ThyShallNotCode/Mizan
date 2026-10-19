@@ -260,6 +260,68 @@ fn key_rows_beyond_the_question_count_are_named_in_every_layout() {
     );
 }
 
+#[test]
+fn an_own_sheets_cancel_mode_comes_from_its_spec_and_the_key_sheet_rule_from_the_inputs() {
+    use omr_app::define::{Inputs, Sheet, define};
+    let dir = tempfile::tempdir().unwrap();
+    let spec_file = |name: &str, cancel: Option<CancelMode>| {
+        let mut s = omr_forms::TemplateSpec::standard(
+            omr_model::ExamId(uuid::Uuid::from_u128(
+                0x0190_aaaa_bbbb_7ccc_8ddd_0000_0000_0099,
+            )),
+            20,
+            4,
+            CancelMode::CrossCancels,
+        );
+        s.cancel_mode = cancel;
+        let p = dir.path().join(name);
+        let json = serde_json::json!({"template": s, "exam_key_hex": "6b".repeat(32)});
+        std::fs::write(&p, serde_json::to_vec(&json).unwrap()).unwrap();
+        p
+    };
+    // The sheets print cross_cancels: the exam marks with it, with nothing typed.
+    let cross = Inputs::new(
+        Sheet::Spec(spec_file("cross.json", Some(CancelMode::CrossCancels))),
+        20,
+    );
+    let (d, _) = define(&cross).unwrap();
+    assert_eq!(d.cancel_mode, CancelMode::CrossCancels);
+    // A typed mode must agree with the printed one.
+    let mut typed = cross.clone();
+    typed.cancel_mode = Some("cross_cancels".into());
+    assert_eq!(
+        define(&typed).unwrap().0.cancel_mode,
+        CancelMode::CrossCancels
+    );
+    typed.cancel_mode = Some("erase_only".into());
+    let e = define(&typed).unwrap_err().to_string();
+    assert!(e.contains("cancel mode"), "{e}");
+    // A spec without one could not have printed sheets: refused, naming the file and field.
+    let none = Inputs::new(Sheet::Spec(spec_file("unset.json", None)), 20);
+    let e = define(&none).unwrap_err().to_string();
+    assert!(e.contains("unset.json") && e.contains("cancel_mode"), "{e}");
+    // The IAU sheet marks with erase_only.
+    let iau = Inputs::new(Sheet::Template("iau-ccsit-v1".into()), 20);
+    let (d, _) = define(&iau).unwrap();
+    assert_eq!(d.cancel_mode, CancelMode::EraseOnly);
+    assert_eq!(d.key_sheets, omr_app::KeySheetRule::default());
+    // The key-sheet rule the CLI's --key-sheet-marker sets reaches the definition.
+    let mut ruled = iau.clone();
+    let rule = omr_app::KeySheetRule {
+        detect_in_stack: false,
+        markers: vec![9],
+        declared: Vec::new(),
+    };
+    ruled.key_sheets = Some(rule.clone());
+    assert_eq!(define(&ruled).unwrap().0.key_sheets, rule);
+    ruled.key_sheets = Some(omr_app::KeySheetRule {
+        markers: vec![9, 9],
+        ..omr_app::KeySheetRule::default()
+    });
+    let e = define(&ruled).unwrap_err().to_string();
+    assert!(e.contains("markers repeat"), "{e}");
+}
+
 fn roster_def() -> ExamDefinition {
     let mut d = ExamDefinition::new(
         "Quiz",

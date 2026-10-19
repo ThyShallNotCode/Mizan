@@ -228,7 +228,8 @@ student number whose answers are another sheet's is paired last and flagged.
 - Own sheets: `omr templates --example-spec > spec.json`, edit it, then
   `omr sheet render --spec spec.json --out sheets.pdf --copies 120`. The exam's secret key file
   is written to your private key folder (§7), not beside the PDF; grade with
-  `--spec <that key file>` instead of `--template`.
+  `--spec <that key file>` instead of `--template`, and with `--cancel-mode` set to the
+  marking convention the spec prints (the desktop's New exam takes it from the spec).
 
 ## 3. Review
 

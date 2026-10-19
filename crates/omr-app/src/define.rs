@@ -6,7 +6,8 @@
 
 use crate::AppError;
 use crate::exam::{
-    self, ExamDefinition, FormKey, IdSchemeChoice, KeySource, MultiReviewPolicy, TemplateChoice,
+    self, ExamDefinition, FormKey, IdSchemeChoice, KeySheetRule, KeySource, MultiReviewPolicy,
+    TemplateChoice,
 };
 use omr_model::CancelMode;
 use std::path::{Path, PathBuf};
@@ -57,7 +58,8 @@ pub struct Inputs {
     pub course: Option<String>,
     /// Term.
     pub term: Option<String>,
-    /// `erase_only`, `cross_cancels` or `fill_cancels_check`.
+    /// `erase_only`, `cross_cancels` or `fill_cancels_check` (default: the IAU sheet's
+    /// `erase_only`; an own sheet's printed convention, from its spec).
     pub cancel_mode: Option<String>,
     /// `never`, `always` or `high_stakes`.
     pub multi_review: Option<String>,
@@ -65,6 +67,9 @@ pub struct Inputs {
     pub high_stakes: bool,
     /// `iau`, `pnu`, `ksu` or `digits:N` (default: the sheet's ID grid).
     pub id_scheme: Option<String>,
+    /// How key sheets are told apart from the students' (markers, detection in the stack;
+    /// default: [`KeySheetRule::default`]), as `omr grade --key-sheet-marker` sets it.
+    pub key_sheets: Option<KeySheetRule>,
 }
 
 impl Inputs {
@@ -86,6 +91,7 @@ impl Inputs {
             multi_review: None,
             high_stakes: false,
             id_scheme: None,
+            key_sheets: None,
         }
     }
 }
@@ -160,15 +166,37 @@ pub fn define(i: &Inputs) -> Result<(ExamDefinition, Vec<String>), AppError> {
         .into_iter()
         .map(|f| f.trim().to_uppercase())
         .collect();
-    let cancel = match i.cancel_mode.as_deref().unwrap_or("erase_only") {
-        "erase_only" => CancelMode::EraseOnly,
-        "cross_cancels" => CancelMode::CrossCancels,
-        "fill_cancels_check" => CancelMode::FillCancelsCheck,
-        o => {
+    let typed = match i.cancel_mode.as_deref() {
+        None => None,
+        Some("erase_only") => Some(CancelMode::EraseOnly),
+        Some("cross_cancels") => Some(CancelMode::CrossCancels),
+        Some("fill_cancels_check") => Some(CancelMode::FillCancelsCheck),
+        Some(o) => {
             return Err(AppError::Definition(format!(
                 "cancel mode {o}: use erase_only, cross_cancels or fill_cancels_check"
             )));
         }
+    };
+    // The marking convention is printed on the sheet (§6.5): the IAU sheet's is erase_only, an
+    // own sheet's is its spec's (a typed one must agree, `ExamDefinition::validate`). A spec
+    // without one cannot have printed sheets (lint L14): refused, never guessed.
+    let cancel = match &template {
+        TemplateChoice::Generated(spec) => match (spec.cancel_mode, typed) {
+            (Some(printed), t) => t.unwrap_or(printed),
+            (None, _) => {
+                let path = match &i.sheet {
+                    Sheet::Spec(p) => p.display().to_string(),
+                    Sheet::Template(t) => t.clone(),
+                };
+                return Err(AppError::Definition(format!(
+                    "{path}: the sheet spec sets no cancel_mode, so the marking convention \
+                     printed on the sheets is unknown (lint L14); set `cancel_mode` in the spec \
+                     to the one the sheets print (erase_only, cross_cancels or \
+                     fill_cancels_check)"
+                )));
+            }
+        },
+        TemplateChoice::Legacy(_) => typed.unwrap_or(CancelMode::EraseOnly),
     };
     let mut d = ExamDefinition::new(
         i.title
@@ -187,6 +215,9 @@ pub fn define(i: &Inputs) -> Result<(ExamDefinition, Vec<String>), AppError> {
     d.high_stakes = i.high_stakes;
     // Every new exam holds a sheet bubbling a version it does not declare (§10.3 backstop).
     d.hold_undeclared_versions = true;
+    if let Some(rule) = &i.key_sheets {
+        d.key_sheets = rule.clone();
+    }
     d.multi_review = match i.multi_review.as_deref().unwrap_or("never") {
         "never" => MultiReviewPolicy::Never,
         "always" => MultiReviewPolicy::Always,
