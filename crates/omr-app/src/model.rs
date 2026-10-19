@@ -89,8 +89,9 @@ pub enum FormSource {
     /// Unknown.
     Unknown,
     /// The sheet declares no version (blank or unclear bubble) and the exam grades every
-    /// sheet with one key: a one-version exam. Scored under that key; per-version breakdowns
-    /// count it as "version not declared".
+    /// sheet with one key: a one-version exam, or versions whose keys, points and mapping are
+    /// identical (SCO-005 `identical_forms`, INFO). Scored under that key; per-version
+    /// breakdowns count it as "version not declared", never as the first version.
     Shared,
 }
 
@@ -204,6 +205,16 @@ impl Booklet {
         self.exceptions.iter().any(|e| {
             e.code == "SCO-005" && e.sub_reason.as_deref() == Some(crate::infer::UNDECLARED_VERSION)
         })
+    }
+
+    /// The version the booklet counts under in per-version breakdowns: its form's letter,
+    /// `None` without a form or when the form only stands for the shared key
+    /// ([`FormSource::Shared`]: the version is not declared).
+    pub fn version<'a>(&self, forms: &'a [String]) -> Option<&'a str> {
+        if self.form_source == FormSource::Shared {
+            return None;
+        }
+        self.form.and_then(|f| forms.get(f)).map(String::as_str)
     }
 }
 

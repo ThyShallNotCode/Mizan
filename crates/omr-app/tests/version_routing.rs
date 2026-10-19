@@ -325,3 +325,110 @@ fn a_new_exam_from_the_new_exam_form_holds_undeclared_versions() {
     let (d, _) = omr_app::define::define(&i).unwrap();
     assert!(d.hold_undeclared_versions);
 }
+
+/// An exam whose versions all carry version A's key, points and mapping (identical versions).
+fn identical_exam(forms: &[&str], hold: bool) -> ExamDefinition {
+    let keys = forms
+        .iter()
+        .map(|f| FormKey {
+            form: (*f).into(),
+            answers: (0..N).map(|q| letter(key(0, q))).collect(),
+        })
+        .collect();
+    let mut d = legacy_def("Identical", N, forms, KeySource::Provided { forms: keys });
+    d.hold_undeclared_versions = hold;
+    d
+}
+
+/// The stack's files of the observations named.
+fn only(scans: &Path, stems: &[&str]) -> Vec<PathBuf> {
+    SHEETS
+        .iter()
+        .enumerate()
+        .filter(|(_, (stem, _, _))| stems.contains(stem))
+        .map(|(k, (stem, _, _))| scans.join(format!("{k}-{stem}.png")))
+        .collect()
+}
+
+/// The Form column of results.csv for the student of observation `k`.
+fn form_cell(out: &Path, k: usize) -> String {
+    let mut r = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .flexible(true)
+        .from_path(out.join("results.csv"))
+        .unwrap();
+    let form = r
+        .headers()
+        .unwrap()
+        .iter()
+        .position(|h| h == "Form")
+        .unwrap();
+    r.records()
+        .map(|x| x.unwrap())
+        .find(|x| x.iter().any(|c| c.contains(&student(k))))
+        .map(|x| x[form].to_string())
+        .unwrap_or_else(|| panic!("student of sheet {k} not in results.csv"))
+}
+
+#[test]
+fn identical_versions_score_an_undeclared_sheet_under_the_shared_key_without_review() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scans = write_stack(&tmp.path().join("scans"));
+    let inputs = only(&scans, &["a", "b", "blank", "unclear"]);
+    let out = tmp.path().join("out");
+    let p = grade(&identical_exam(&["A", "B"], true), &inputs, &out, 2);
+    let sc = p.scoring.as_ref().unwrap();
+    for (bi, b) in p.session.booklets.iter().enumerate() {
+        let k = sheet_no(&p, bi);
+        let (stem, shows, answered) = SHEETS[k];
+        let sco005: Vec<_> = b
+            .exceptions
+            .iter()
+            .filter(|e| e.code == "SCO-005")
+            .collect();
+        if let Shows::Letter(l) = shows {
+            assert_eq!(b.form, Some(usize::from(l)), "{stem}");
+            assert_eq!(b.form_source, FormSource::Bubbled, "{stem}");
+            assert!(sco005.is_empty(), "{stem}");
+            assert_eq!(form_cell(&out, k), letter(l), "{stem}");
+        } else {
+            // Scored under the key both versions share, counted, never queued.
+            assert_eq!(b.form, Some(0), "{stem}");
+            assert_eq!(b.form_source, FormSource::Shared, "{stem}");
+            assert_eq!(sco005.len(), 1, "{stem}");
+            assert_eq!(sco005[0].sub_reason.as_deref(), Some("identical_forms"));
+            assert_eq!(sco005[0].severity, omr_model::Severity::Info, "{stem}");
+            // Per-version columns: "version not declared", never version A.
+            assert_eq!(form_cell(&out, k), "", "{stem}");
+        }
+        let row = sc.row_of[bi].expect("scored");
+        assert_eq!(
+            sc.run.as_ref().unwrap().students[row].raw.to_string(),
+            hand_score(answered, 0).to_string(),
+            "{stem}"
+        );
+    }
+    assert!(p.queue(None).iter().all(|i| i.code != "SCO-005"));
+    let r = p.results_vm().unwrap();
+    assert!(
+        r.readiness
+            .contains(&(true, "0 forms inferred".to_string())),
+        "{:?}",
+        r.readiness
+    );
+    p.close().unwrap();
+    // A definition saved before the backstops keeps queueing them (CR-16), byte for byte.
+    let p = grade(
+        &identical_exam(&["A", "B"], false),
+        &inputs,
+        &tmp.path().join("old"),
+        2,
+    );
+    let inferred = p
+        .queue(Some(Lane::Scoring))
+        .iter()
+        .filter(|i| i.sub_reason.as_deref() == Some("inferred"))
+        .count();
+    assert_eq!(inferred, 2);
+    p.close().unwrap();
+}

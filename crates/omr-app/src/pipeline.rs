@@ -1846,6 +1846,12 @@ fn resolve_key(
         // Several forms, no key: booklets without a declared form cannot be scored or inferred.
         return Ok(None);
     };
+    // Identical versions (the same key, points and mapping on every one, §10.3): a booklet
+    // that declares no version is scored under the shared key and counted (SCO-005
+    // `identical_forms`, INFO), never queued. Not while key sheets wait for confirmation, which
+    // may still make the versions differ, and not in definitions saved before the backstops.
+    let identical =
+        def.hold_undeclared_versions && !k.inferred && k.shared_items && !key_sheets.pending;
     let inf = infer::infer_forms(booklets, &k.forms, n, def.options);
     for (b, inf) in booklets.iter_mut().zip(inf) {
         b.inference = inf.clone();
@@ -1867,6 +1873,11 @@ fn resolve_key(
                         ));
                     }
                 }
+            }
+            (None, _) if identical => {
+                b.form = Some(0);
+                b.form_source = FormSource::Shared;
+                b.exceptions.push(infer::sco005_identical(b.serial));
             }
             (None, Some(i)) => {
                 b.form = Some(i.argmax);

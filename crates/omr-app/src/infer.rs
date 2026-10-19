@@ -14,7 +14,8 @@
 //! - **Version backstops** (definitions with `hold_undeclared_versions`): a confident version
 //!   letter the exam does not declare is held, never given a provisional form (SCO-005
 //!   `undeclared_version`, ERROR; the inference is kept as a suggestion only when its margin
-//!   reaches 10 nats).
+//!   reaches 10 nats); with the same key, points and mapping on every version, a booklet that
+//!   declares none is scored under the shared key (SCO-005 `identical_forms`, INFO).
 
 use crate::model::{Booklet, FormInference, KeyCell, ResponseStatus};
 use omr_model::exceptions::Target;
@@ -25,6 +26,9 @@ pub const DELTA_LL_NATS: f64 = 10.0;
 
 /// SCO-005 sub-reason: the sheet bubbles a version letter the exam does not declare.
 pub const UNDECLARED_VERSION: &str = "undeclared_version";
+
+/// SCO-005 sub-reason (INFO): no version declared, every version shares the key.
+pub const IDENTICAL_FORMS: &str = "identical_forms";
 
 /// True when an inference separates its best form from the runner-up by at least
 /// [`DELTA_LL_NATS`]: its form may be suggested for a held sheet and confirmed as a group.
@@ -300,4 +304,18 @@ pub fn sco005_undeclared(serial: u32, letter: &str, forms: &[String]) -> Excepti
              then",
             forms.join(", ")
         ))
+}
+/// SCO-005 `identical_forms` (INFO, Booklet; counted, not queued): no version declared, and
+/// every version carries the same key, points and mapping, so the shared key scores it.
+pub fn sco005_identical(serial: u32) -> Exception {
+    Exception::must("SCO-005", Severity::Info, Scope::Booklet)
+        .with_sub_reason(IDENTICAL_FORMS)
+        .with_target(Target {
+            booklet: Some(serial),
+            ..Target::default()
+        })
+        .with_detail(
+            "no version declared; every version has the same key, points and mapping, so the \
+             shared key scores the sheet",
+        )
 }

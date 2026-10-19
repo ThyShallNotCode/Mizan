@@ -5,7 +5,7 @@
 
 use crate::AppError;
 use crate::app::ExamProject;
-use crate::model::{PageStatus, ResponseStatus};
+use crate::model::{FormSource, PageStatus, ResponseStatus};
 use crate::review::Lane;
 use omr_model::{Response, Severity};
 use omr_report::{
@@ -696,6 +696,21 @@ pub fn write_all(p: &ExamProject, dir: &Path) -> Result<ExportSummary, AppError>
             &students(p),
         )
         .map_err(rep)?;
+        // A sheet scored under the key every version shares declares no version: its form
+        // cell is empty ("version not declared"), never the first version's letter.
+        let shared: std::collections::BTreeSet<u32> = s
+            .booklets
+            .iter()
+            .filter(|b| b.form_source == FormSource::Shared)
+            .map(|b| b.serial)
+            .collect();
+        for r in table
+            .rows
+            .iter_mut()
+            .filter(|r| shared.contains(&r.booklet))
+        {
+            r.form.clear();
+        }
         // Roster students who handed in no sheet: status `absent` (not 0, §10.5), no booklet,
         // no score; never in the Blackboard upload.
         for r in p.absent_students() {
