@@ -82,6 +82,7 @@ fn run_exam(
         snapshot_utc: Some("2026-10-16T00:00:00Z".into()),
         operator: "principal:test".into(),
         max_pages: None,
+        cancel: Default::default(),
     };
     let t0 = std::time::Instant::now();
     let mut p = ExamProject::grade(&def, pdfs, &opts, &|_| {}).expect("grade");

@@ -28,9 +28,48 @@ use omr_model::{Exception, Response, Scope, Severity};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
+/// The operator's cancel of a grading run or a survey (G-3): a shared flag the shell sets from
+/// another thread. The run checks it before the project package is created, before each
+/// page's decoding and between stages, never once the store stage has begun: a cancelled new
+/// exam stores nothing ([`AppError::Cancelled`]; its package is removed). A cancelled run of a
+/// graded exam (scans added, a roster given) leaves its results as they were but keeps what its
+/// spool stored: a new scan batch, left open, with the originals and page rows of the scans
+/// added; adding the same files again adds each page once. Clones share the flag; a token
+/// nobody cancels (the default) never stops a run.
+#[derive(Clone, Debug, Default)]
+pub struct Cancel(Arc<AtomicBool>);
+
+impl Cancel {
+    /// Asks every run holding this token (or a clone) to stop at its next check.
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    /// True once [`Self::cancel`] was called on this token or a clone.
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+
+    /// [`AppError::Cancelled`] once cancelled.
+    pub(crate) fn check(&self) -> Result<(), AppError> {
+        if self.is_cancelled() {
+            Err(AppError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Two requests are the same when they share the token (a fresh token is another request).
+impl PartialEq for Cancel {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
 
 /// How to run a grading job.
 #[derive(Clone, Debug)]
@@ -45,6 +84,8 @@ pub struct GradeOptions {
     pub operator: String,
     /// Grade only the first `n` pages in input order (time-to-first-result runs).
     pub max_pages: Option<usize>,
+    /// The operator's cancel (default: never cancelled).
+    pub cancel: Cancel,
 }
 
 impl Default for GradeOptions {
@@ -55,6 +96,7 @@ impl Default for GradeOptions {
             snapshot_utc: None,
             operator: "principal:operator".into(),
             max_pages: None,
+            cancel: Cancel::default(),
         }
     }
 }
@@ -179,6 +221,21 @@ struct Staged {
     blank: bool,
     /// Page notes added to the decided page (CAP-002 WARN/INFO).
     notes: Vec<Exception>,
+}
+
+impl Staged {
+    /// Nothing read (a duplicate's page, or a page a cancelled run skipped).
+    fn empty() -> Self {
+        Self {
+            measured: None,
+            refusal: None,
+            capture: None,
+            source_dpi: None,
+            working: None,
+            blank: false,
+            notes: Vec::new(),
+        }
+    }
 }
 
 /// Dark-pixel ceiling of a blank page (§8.9 CAP-012: < 0.2 % dark pixels and no tags).
@@ -514,7 +571,9 @@ pub fn grade_into(
         }
     }
 
-    // ---- Spool first (§7.4): originals durable in the store before any computation.
+    // ---- Spool first (§7.4): originals durable in the store before any computation. A run
+    // cancelled by now creates no package.
+    opts.cancel.check()?;
     let (mut store, prior_run) = match append {
         Some(a) => (Some(a.store), Some(a.prior)),
         None => match &opts.project_dir {
@@ -580,16 +639,12 @@ pub fn grade_into(
         tasks
             .par_iter()
             .map(|t| {
+                // A cancelled run decodes no further page (the run stops after this stage).
+                if opts.cancel.is_cancelled() {
+                    return Staged::empty();
+                }
                 let out = if t.duplicate_of.is_some() {
-                    Staged {
-                        measured: None,
-                        refusal: None,
-                        capture: None,
-                        source_dpi: None,
-                        working: None,
-                        blank: false,
-                        notes: Vec::new(),
-                    }
+                    Staged::empty()
                 } else {
                     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         stage_page(
@@ -653,6 +708,7 @@ pub fn grade_into(
         v => v as f64 / 1000.0,
     };
     timings.pages = tasks.len();
+    opts.cancel.check()?;
 
     // ---- Batch stage: baseline per slice (capture class × device dpi), then decisions.
     // Key sheets (§10.1) are read with the slice's baseline but never shape it: the students
@@ -785,6 +841,36 @@ pub fn grade_into(
             }
         }
     }
+    // Key sheets that mark rows beyond the exam's questions (§10.1): the key pages are read
+    // once more at the sheet's printed count, and the marked rows past the exam's count are
+    // named in the key summary (never part of the key), as a key file's are.
+    let printed = recognizer.printed_questions();
+    let mut beyond: Vec<Vec<u16>> = vec![Vec::new(); tasks.len()];
+    if printed > def.questions {
+        for &i in &key_pages {
+            let (Some(m), Ok(Some(_))) = (staged[i].measured.as_ref(), &reads[i]) else {
+                continue;
+            };
+            let b = &baselines[&(m.bitonal(), staged[i].source_dpi)];
+            let full = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                recognizer.decide_rows(m, b, &tasks[i].page_id, printed)
+            }));
+            if let Ok(full) = full {
+                beyond[i] = full
+                    .questions
+                    .iter()
+                    .filter(|q| q.question >= def.questions)
+                    .filter(|q| {
+                        matches!(
+                            q.response,
+                            Response::Single(_) | Response::Multi(_) | Response::Set(_)
+                        )
+                    })
+                    .map(|q| q.question + 1)
+                    .collect();
+            }
+        }
+    }
     let mut batch_exceptions: Vec<Exception> = Vec::new();
     for b in baselines.values() {
         for e in b.exceptions() {
@@ -889,9 +975,10 @@ pub fn grade_into(
         pages = order.iter().map(|&i| pages[i].clone()).collect();
         tasks = order.iter().map(|&i| tasks[i].clone()).collect();
         is_declared = order.iter().map(|&i| is_declared[i]).collect();
+        beyond = order.iter().map(|&i| beyond[i].clone()).collect();
     }
     let mut key_sheets = crate::model::KeySheets {
-        sheets: crate::keysheet::collect(def, &pages, &source_infos, &is_declared),
+        sheets: crate::keysheet::collect(def, &pages, &source_infos, &is_declared, &beyond),
         notes: stack_notes,
         ..Default::default()
     };
@@ -918,12 +1005,14 @@ pub fn grade_into(
     }
 
     // ---- Identity (§9).
+    opts.cancel.check()?;
     progress(&Progress::Stage("identity"));
     let t_id = Instant::now();
     identify(def, &mut booklets, &pages)?;
     timings.identity_ms = ms(t_id);
 
     // ---- Forms, key, inference, scoring (§10).
+    opts.cancel.check()?;
     progress(&Progress::Stage("scoring"));
     let t_sc = Instant::now();
     let mut exam_exceptions = Vec::new();
@@ -984,7 +1073,9 @@ pub fn grade_into(
     let scoring = Scoring::build(&session)?;
     timings.scoring_ms = ms(t_sc);
 
-    // ---- Store: recognition run, identity, exceptions, score run.
+    // ---- Store: recognition run, identity, exceptions, score run. The last check: once the
+    // store stage has begun the run is written whole.
+    opts.cancel.check()?;
     progress(&Progress::Stage("store"));
     let t_st = Instant::now();
     if let Some(st) = store.as_mut() {
@@ -1468,6 +1559,30 @@ fn collate(
             .map(|g: &omr_recog::GridField| g.text())
             .unwrap_or_default();
         let single = def.forms.len() == 1;
+        // The version backstop (§10.3): a confident letter the exam does not declare is held,
+        // never scored under another version's key, on a one-version exam too, where only a
+        // blank, unclear or the declared letter takes the one version (as an own sheet's
+        // undeclared page code is, IDN-002). Definitions saved before the backstop keep the
+        // one-version shortcut.
+        let undeclared = def.hold_undeclared_versions
+            && declared_form.is_none()
+            && !declared_text.is_empty()
+            && declared_text != "?";
+        let (form, form_source) = if undeclared {
+            exceptions.push(infer::sco005_undeclared(serial, &declared_text, &def.forms));
+            (None, FormSource::Unknown)
+        } else if single && declared_form.is_none() {
+            let source = if def.hold_undeclared_versions {
+                FormSource::Shared
+            } else {
+                FormSource::Bubbled
+            };
+            (Some(0), source)
+        } else if single {
+            (Some(0), form_source)
+        } else {
+            (declared_form, form_source)
+        };
         // A blank booklet (MRK-015) is never scored 0 automatically: its score is held as
         // pending until a reviewer acknowledges it (§8.8).
         let hold = exceptions
@@ -1486,12 +1601,8 @@ fn collate(
             pages: g,
             declared_form,
             declared_text,
-            form: if single { Some(0) } else { declared_form },
-            form_source: if single && declared_form.is_none() {
-                FormSource::Bubbled
-            } else {
-                form_source
-            },
+            form,
+            form_source,
             inference: None,
             hold,
             questions,
@@ -1826,9 +1937,20 @@ fn resolve_key(
         // Several forms, no key: booklets without a declared form cannot be scored or inferred.
         return Ok(None);
     };
+    // Identical versions (the same key, points and mapping on every one, §10.3): a booklet
+    // that declares no version is scored under the shared key and counted (SCO-005
+    // `identical_forms`, INFO), never queued. Not while key sheets wait for confirmation, which
+    // may still make the versions differ, and not in definitions saved before the backstops.
+    let identical =
+        def.hold_undeclared_versions && !k.inferred && k.shared_items && !key_sheets.pending;
     let inf = infer::infer_forms(booklets, &k.forms, n, def.options);
     for (b, inf) in booklets.iter_mut().zip(inf) {
         b.inference = inf.clone();
+        // A held sheet (an undeclared version letter) gets no provisional form and no second
+        // SCO-005: its inference is only the reviewer's suggestion (§10.3 backstop).
+        if b.undeclared_version() {
+            continue;
+        }
         match (b.declared_form, inf) {
             (Some(d), Some(i)) => {
                 if i.argmax != d {
@@ -1842,6 +1964,11 @@ fn resolve_key(
                         ));
                     }
                 }
+            }
+            (None, _) if identical => {
+                b.form = Some(0);
+                b.form_source = FormSource::Shared;
+                b.exceptions.push(infer::sco005_identical(b.serial));
             }
             (None, Some(i)) => {
                 b.form = Some(i.argmax);

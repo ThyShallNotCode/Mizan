@@ -3,6 +3,9 @@
 //! ```text
 //! omr templates
 //! omr sheet render --spec spec.json --out sheets.pdf [--copies N]
+//! omr survey <scans…> [--template iau-ccsit-v1 | --spec spec.json] [--key key.csv]
+//!            [--key-sheet FILE …] [--roster FILE] [--answer A …] [--json]
+//!                                      (exit 2 while the proposal asks a question)
 //! omr grade <inputs…> --template iau-ccsit-v1 | --spec spec.json --questions N
 //!           [--key key.csv | --infer-key] [--key-sheet FILE …] [--roster roster.csv|.xlsx]
 //!           [--clo clo.csv] --out DIR
@@ -23,7 +26,7 @@
 //! ```
 //!
 //! Exit codes: 0 success; 2 usage or exam definition; 3 input; 4 project store; 5 scoring;
-//! 6 review; 7 not found; 8 I/O; 70 internal.
+//! 6 review; 7 not found; 8 I/O; 70 internal; 130 cancelled.
 #![forbid(unsafe_code)]
 
 use clap::{Args, Parser, Subcommand};
@@ -64,6 +67,12 @@ enum Cmd {
         #[command(subcommand)]
         cmd: SheetCmd,
     },
+    /// Survey scans before grading them: what the sheets show (versions bubbled, rows
+    /// answered, key sheets in the stack), counts only, and the exam definition proposed from
+    /// them and the given files, each value with its source. Exits 2 while the proposal asks a
+    /// question; answer it with --answer (or change the files) and run it again. Nothing is
+    /// written.
+    Survey(SurveyArgs),
     /// Grade scans: recognition, identity, scoring, outcomes, exports.
     Grade(GradeArgs),
     /// Add a later batch of scans to a graded exam (e.g. a second section scanned on another
@@ -250,6 +259,70 @@ struct GradeArgs {
     /// again, on purpose).
     #[arg(long)]
     reuse_exam_id: bool,
+}
+
+#[derive(Args)]
+struct SurveyArgs {
+    /// Scan files and folders (PDF, JPEG, PNG, TIFF).
+    #[arg(required = true)]
+    inputs: Vec<PathBuf>,
+    /// Legacy template name (default: iau-ccsit-v1).
+    #[arg(long, conflicts_with = "spec")]
+    template: Option<String>,
+    /// Own-form spec JSON (with its page-code key).
+    #[arg(long)]
+    spec: Option<PathBuf>,
+    /// Answer key CSV.
+    #[arg(long)]
+    key: Option<PathBuf>,
+    /// A teacher-filled key sheet (repeat for each file).
+    #[arg(long = "key-sheet")]
+    key_sheet: Vec<PathBuf>,
+    /// Roster CSV or XLSX.
+    #[arg(long)]
+    roster: Option<PathBuf>,
+    /// CLO file CSV.
+    #[arg(long)]
+    clo: Option<PathBuf>,
+    /// Questions used by the exam (checked against the key and the sheets).
+    #[arg(long)]
+    questions: Option<String>,
+    /// Options per question.
+    #[arg(long)]
+    options: Option<String>,
+    /// Form (version) letters, comma separated.
+    #[arg(long)]
+    forms: Option<String>,
+    /// Student-ID scheme: iau | pnu | ksu | digits:N.
+    #[arg(long)]
+    id_scheme: Option<String>,
+    /// Exam title.
+    #[arg(long)]
+    title: Option<String>,
+    /// Course code.
+    #[arg(long)]
+    course: Option<String>,
+    /// Term label.
+    #[arg(long)]
+    term: Option<String>,
+    /// An answer to a question of the proposal (repeat): provisional-key, same-key, hold:C,
+    /// key-versions:A,B, unlabelled-rows, questions:N, keep-questions:N, key-gaps,
+    /// keep:FIELD, use:FIELD=VALUE, one-exam, keep-sheet. Each question prints the answers it
+    /// takes.
+    #[arg(long = "answer")]
+    answer: Vec<String>,
+    /// The exams folder the new exam's folder is proposed in.
+    #[arg(long, default_value = ".")]
+    workspace: PathBuf,
+    /// Worker threads (0 = all cores).
+    #[arg(long, default_value_t = 0)]
+    threads: usize,
+    /// The survey and the proposal as JSON.
+    #[arg(long)]
+    json: bool,
+    /// No progress lines.
+    #[arg(long)]
+    quiet: bool,
 }
 
 #[derive(Args)]
@@ -708,6 +781,8 @@ fn definition(a: &ExamArgs, key_forms: Option<Vec<String>>) -> Result<ExamDefini
         }
     };
     d.page_code_key_hex = key_hex;
+    // A new exam holds a sheet bubbling a version it does not declare (§10.3 backstop).
+    d.hold_undeclared_versions = true;
     d.exam_id = d.derived_exam_id();
     Ok(d)
 }
@@ -852,6 +927,9 @@ fn build_def(g: &GradeArgs) -> Result<ExamDefinition, AppError> {
     let mut d = definition(&g.exam, key_forms)?;
     if let Some(k) = &g.key {
         let k = exam::read_key_file_full(&read_file(k)?, &d.forms, d.questions, d.options)?;
+        if let Some(w) = k.ignored_warning(d.questions) {
+            eprintln!("warning: {w}");
+        }
         d.key = KeySource::Provided { forms: k.forms };
         d.set_key_points(&k.points);
     } else if g.infer_key {
@@ -893,6 +971,162 @@ fn project_dir(p: &Path) -> PathBuf {
     } else {
         p.join("project.omrproj")
     }
+}
+
+/// How a choice of the proposal is made on the command line.
+fn cli_choice(a: &omr_app::propose::ChoiceAction) -> String {
+    use omr_app::propose::{ChoiceAction, FieldId};
+    let flag = |f: FieldId| match f {
+        FieldId::Scans => "other scans".into(),
+        FieldId::Sheet => "--template NAME or --spec FILE".into(),
+        FieldId::Key => "--key FILE".into(),
+        FieldId::KeySheets => "--key-sheet FILE".into(),
+        FieldId::Remark => "omr import remark, then --key".into(),
+        FieldId::Versions => "--forms A,B".into(),
+        FieldId::Folder => "--workspace DIR".into(),
+        f => format!("--{} VALUE", f.name()),
+    };
+    match a {
+        ChoiceAction::Answer(x) => format!("--answer {}", x.token()),
+        ChoiceAction::Pick(f) | ChoiceAction::Type(f) => flag(*f),
+        ChoiceAction::Clear(f) => format!("leave out {}", flag(*f)),
+        ChoiceAction::Survey => "run omr survey again".into(),
+    }
+}
+
+fn cmd_survey(a: SurveyArgs) -> Result<(), AppError> {
+    use omr_app::define::Sheet;
+    use omr_app::propose::{Answer, Context, Given, Level, propose};
+    let sheet = match (&a.template, &a.spec) {
+        (_, Some(p)) => Sheet::Spec(p.clone()),
+        (Some(t), None) => Sheet::Template(t.clone()),
+        (None, None) => Sheet::Template("iau-ccsit-v1".into()),
+    };
+    let answers = a
+        .answer
+        .iter()
+        .map(|t| Answer::parse(t).map_err(usage))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut given = Given::new(sheet, a.inputs.clone());
+    given.key = a.key.clone();
+    given.key_sheets = a.key_sheet.clone();
+    given.roster = a.roster.clone();
+    given.clo = a.clo.clone();
+    given.answers = answers;
+    let t = &mut given.typed;
+    t.questions = a.questions.clone();
+    t.options = a.options.clone();
+    t.forms = a.forms.clone();
+    t.id_scheme = a.id_scheme.clone();
+    t.title = a.title.clone();
+    t.course = a.course.clone();
+    t.term = a.term.clone();
+    let quiet = a.quiet;
+    let progress = move |p: &Progress| {
+        if quiet {
+            return;
+        }
+        match p {
+            Progress::Started { pages, workers } => {
+                eprintln!("surveying {pages} page(s) on {workers} worker(s)")
+            }
+            Progress::Page { done, total, .. } if *done == *total || *done % 25 == 0 => {
+                eprintln!("  {done}/{total} pages")
+            }
+            _ => {}
+        }
+    };
+    let t0 = Instant::now();
+    // A sheet the survey cannot read (an own sheet's spec without a cancel mode) is a question
+    // of the proposal, which is made from the files alone.
+    let survey = match omr_app::survey::survey(&given.survey_request(a.threads), &progress) {
+        Ok(s) => Some(s),
+        Err(AppError::Definition(e)) => {
+            eprintln!("omr: the scans were not surveyed: {e}");
+            None
+        }
+        Err(e) => return Err(e),
+    };
+    let ms = t0.elapsed().as_secs_f64() * 1e3;
+    let p = propose(&given, survey.as_ref(), &Context::new(&a.workspace));
+    let asks = p.asks().count();
+    if a.json {
+        let choice = |c: &omr_app::propose::Choice| json!({"label": c.label, "action": c.action, "cli": cli_choice(&c.action)});
+        let issues: Vec<Value> = p
+            .issues
+            .iter()
+            .map(|i| {
+                json!({
+                    "field": i.field,
+                    "level": i.level,
+                    "text": i.text,
+                    "choices": i.choices.iter().map(choice).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        let out = json!({
+            "survey": survey,
+            "survey_ms": ms.round(),
+            "proposal": {
+                "ready": p.inputs.is_some(),
+                "fields": p.fields,
+                "issues": issues,
+                "folder": p.folder.display().to_string(),
+            },
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&out).map_err(|e| AppError::Internal(e.to_string()))?
+        );
+    } else {
+        if let Some(s) = &survey {
+            println!(
+                "surveyed {} page(s) of {} file(s) in {ms:.0} ms: {} student sheet(s), {} key \
+                 sheet(s)",
+                s.pages,
+                s.files,
+                s.booklets,
+                s.key_sheets.len()
+            );
+        }
+        for f in &p.fields {
+            let mark = match f.state {
+                omr_app::propose::FieldState::Ok => " ",
+                omr_app::propose::FieldState::Note => "*",
+                omr_app::propose::FieldState::Ask => "?",
+            };
+            println!(
+                "{mark} {:<14} {:<24} {}{}",
+                f.id.label(),
+                if f.value.is_empty() { "—" } else { &f.value },
+                f.source.text(),
+                if f.detail.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {}", f.detail)
+                }
+            );
+        }
+        for i in p.issues.iter().filter(|i| i.level == Level::Note) {
+            println!("note ({}): {}", i.field.label(), i.text);
+        }
+        for (k, i) in p.asks().enumerate() {
+            println!("question {} ({}): {}", k + 1, i.field.label(), i.text);
+            for c in &i.choices {
+                println!("    {} — {}", c.label, cli_choice(&c.action));
+            }
+        }
+        if asks == 0 {
+            println!("ready to grade into {}", p.folder.display());
+        }
+    }
+    if asks > 0 {
+        return Err(AppError::Definition(format!(
+            "{asks} question(s) to answer before grading (see above): answer with --answer, or \
+             change the files and survey again"
+        )));
+    }
+    Ok(())
 }
 
 fn cmd_grade(g: GradeArgs) -> Result<(), AppError> {
@@ -944,6 +1178,7 @@ fn cmd_grade(g: GradeArgs) -> Result<(), AppError> {
         snapshot_utc: g.snapshot_time.clone(),
         operator: g.operator.clone(),
         max_pages: None,
+        cancel: Default::default(),
     };
     let quiet = g.quiet;
     let progress = move |p: &Progress| {
@@ -1280,6 +1515,7 @@ fn cmd_add(a: AddArgs) -> Result<(), AppError> {
         snapshot_utc: a.snapshot_time.clone(),
         operator: a.operator.clone(),
         max_pages: None,
+        cancel: Default::default(),
     };
     let r = p.add_scans(&a.inputs, &opts, &|_| {})?;
     println!(
@@ -1646,6 +1882,7 @@ fn cmd_key(cmd: KeyCmd) -> Result<(), AppError> {
                     snapshot_utc: None,
                     operator: operator.clone(),
                     max_pages: None,
+                    cancel: Default::default(),
                 };
                 let r = p.add_key_sheets(&from_key_sheets, &opts, &|_| {})?;
                 println!(
@@ -1671,6 +1908,9 @@ fn cmd_key(cmd: KeyCmd) -> Result<(), AppError> {
                 def.questions,
                 def.options,
             )?;
+            if let Some(w) = k.ignored_warning(def.questions) {
+                eprintln!("warning: {w}");
+            }
             let points =
                 (k.points.all.is_some() || !k.points.per_form.is_empty()).then_some(&k.points);
             p.replace_key_points(
@@ -1811,6 +2051,7 @@ fn cmd_bench(b: BenchArgs) -> Result<(), AppError> {
         snapshot_utc: Some("2026-10-16T00:00:00Z".into()),
         operator: "principal:bench".into(),
         max_pages: Some(b.first),
+        cancel: Default::default(),
     };
     let srcs = sources.iter().cloned().map(Ok).collect();
     let g = omr_app::pipeline::grade_sources(&def, srcs, &opts, &pool, t0, &|_| {})?;
@@ -2059,6 +2300,7 @@ fn run(cli: Cli) -> Result<(), AppError> {
                     new_key,
                 },
         } => cmd_render(&spec, &out, copies, key_out.as_deref(), new_key),
+        Cmd::Survey(a) => cmd_survey(a),
         Cmd::Grade(g) => cmd_grade(g),
         Cmd::Add(a) => cmd_add(a),
         Cmd::Review { cmd } => cmd_review(cmd),

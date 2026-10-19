@@ -869,20 +869,26 @@ pub fn build_queue(
             }
             push(it);
         }
-        // Form: IDN-003 / SCO-005 `inferred`.
-        for e in b
-            .exceptions
-            .iter()
-            .filter(|e| e.code == "IDN-003" || e.code == "SCO-005")
-        {
+        // Form: IDN-003 / SCO-005 `inferred` and `undeclared_version` (an INFO SCO-005,
+        // `identical_forms`, is counted, not queued).
+        for e in b.exceptions.iter().filter(|e| {
+            (e.code == "IDN-003" || e.code == "SCO-005") && e.severity >= Severity::Error
+        }) {
             let mut it = blank_item(Lane::Scoring, ItemKind::Form, e);
             it.booklet = Some(bi);
             it.page = b.pages.first().copied();
-            it.suggestion = b.inference.as_ref().map(|i| Decision::Form(i.argmax as u8));
+            // A sheet that bubbles an undeclared version is suggested a version only when the
+            // answers single it out by 10 nats (§10.3); otherwise the reviewer chooses.
+            let held = e.sub_reason.as_deref() == Some(crate::infer::UNDECLARED_VERSION);
+            it.suggestion = b
+                .inference
+                .as_ref()
+                .filter(|i| !held || crate::infer::confident(i))
+                .map(|i| Decision::Form(i.argmax as u8));
             let bucket = b
                 .inference
                 .as_ref()
-                .map_or(0, |i| u8::from(i.margin_milli >= 10_000));
+                .map_or(0, |i| u8::from(crate::infer::confident(i)));
             it.group_key = group_key(
                 &e.code,
                 e.sub_reason.as_deref(),

@@ -425,6 +425,9 @@ fn app_err(e: AppError) -> BackendError {
         AppError::Internal(m) => BackendError::Denied(format!(
             "Internal error: {m}. Nothing was changed; please report it with the project folder"
         )),
+        AppError::Cancelled => BackendError::Denied(
+            "Cancelled: nothing was saved; your scan files are unchanged".into(),
+        ),
     }
 }
 
@@ -657,6 +660,7 @@ impl AppBackend {
                 snapshot_utc: None,
                 operator: self.operator.clone(),
                 max_pages: None,
+                cancel: Default::default(),
             },
         };
         let (tx, rx) = std::sync::mpsc::channel::<JobEvent>();
@@ -1268,6 +1272,7 @@ impl AppBackend {
                 snapshot_utc: None,
                 operator: self.operator.clone(),
                 max_pages: None,
+                cancel: Default::default(),
             },
         };
         let started =
@@ -3627,6 +3632,7 @@ fn app_message(e: &AppError) -> String {
         | AppError::NotFound(m)
         | AppError::Internal(m) => m.clone(),
         AppError::Io(e) => e.to_string(),
+        AppError::Cancelled => e.to_string(),
     }
 }
 
@@ -4996,6 +5002,7 @@ impl Backend for AppBackend {
                 snapshot_utc: None,
                 operator: operator.clone(),
                 max_pages: None,
+                cancel: Default::default(),
             };
             o.p.add_key_sheets(&paths, &opts, &|_| {})
                 .map_err(app_err)?;

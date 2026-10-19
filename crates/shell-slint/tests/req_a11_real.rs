@@ -577,6 +577,7 @@ fn grade(def: &omr_app::ExamDefinition, scans: &Path, project: &Path) {
         snapshot_utc: Some(synth::SNAPSHOT.into()),
         operator: "principal:a11".into(),
         max_pages: None,
+        cancel: Default::default(),
     };
     ExamProject::grade(def, &[scans.to_path_buf()], &opts, &|_| {})
         .expect("grading")
@@ -1259,6 +1260,7 @@ fn req_a11_real_backend_grades_live_through_pump() {
             snapshot_utc: Some(synth::SNAPSHOT.into()),
             operator: "principal:a11".into(),
             max_pages: None,
+            cancel: Default::default(),
         },
     };
     // the test plays the binary's part: it owns the worker thread

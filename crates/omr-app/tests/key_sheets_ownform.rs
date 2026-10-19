@@ -122,6 +122,7 @@ fn options(out: &Path) -> GradeOptions {
         snapshot_utc: Some("2026-10-17T09:00:00Z".into()),
         operator: "principal:test".into(),
         max_pages: None,
+        cancel: Default::default(),
     }
 }
 

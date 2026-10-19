@@ -39,6 +39,21 @@ fn refresh_inferred_forms(session: &mut Session, key: &crate::model::EffectiveKe
     );
     for (bi, i) in inf.into_iter().enumerate() {
         let b = &mut session.booklets[bi];
+        // A held sheet (an undeclared version letter) keeps no form: only its suggestion
+        // follows the new key, and only when the answers single a version out by 10 nats.
+        if b.form.is_none() && b.undeclared_version() {
+            let suggestion = i
+                .as_ref()
+                .filter(|i| crate::infer::confident(i))
+                .map(|i| Decision::Form(i.argmax as u8));
+            for it in session.review.items.iter_mut() {
+                if it.booklet == Some(bi) && it.kind == ItemKind::Form && it.is_open() {
+                    it.suggestion = suggestion.clone();
+                }
+            }
+            b.inference = i;
+            continue;
+        }
         if b.form_source != FormSource::Inferred {
             continue;
         }
@@ -221,34 +236,49 @@ fn reason_for(code: &str) -> &'static str {
 
 impl ExamProject {
     /// Grades inputs (see [`crate::pipeline::grade`]) and saves the session snapshot. A run
-    /// that fails leaves no half-made project behind (the package it created is removed), so
-    /// the same `--out` folder can be used again.
+    /// that fails or is cancelled ([`crate::Cancel`]) leaves no half-made project behind (the
+    /// package it created is removed, and the exam folder it created when nothing else is in
+    /// it), so the same `--out` folder can be used again.
     pub fn grade(
         def: &ExamDefinition,
         inputs: &[PathBuf],
         opts: &GradeOptions,
         progress: &(dyn Fn(&Progress) + Sync),
     ) -> Result<Self, AppError> {
+        Self::grade_fresh(opts, || crate::pipeline::grade(def, inputs, opts, progress))
+    }
+
+    /// Runs `run` into the package `opts.project_dir` names and saves the graded exam; on
+    /// failure, removes what this call created (the package, and its folder when empty).
+    fn grade_fresh(
+        opts: &GradeOptions,
+        run: impl FnOnce() -> Result<Graded, AppError>,
+    ) -> Result<Self, AppError> {
         let fresh = opts.project_dir.as_ref().filter(|d| !d.exists()).cloned();
         // The exam folder that will hold the package and its exports is private to the user
         // when the app creates it (Restricted data, §19.3).
-        if let Some(parent) = fresh
+        let parent = fresh
             .as_deref()
             .and_then(Path::parent)
             .filter(|d| !d.as_os_str().is_empty() && !d.exists())
-        {
+            .map(Path::to_path_buf);
+        if let Some(parent) = &parent {
             crate::keys::create_private_dir(parent)?;
         }
-        let result = crate::pipeline::grade(def, inputs, opts, progress).and_then(|g| {
+        let result = run().and_then(|g| {
             let mut p = Self::from_graded(g);
             p.save()?;
             p.judge_flags()?;
             Ok(p)
         });
-        if result.is_err()
-            && let Some(dir) = fresh
-        {
-            let _ = std::fs::remove_dir_all(dir);
+        if result.is_err() {
+            if let Some(dir) = fresh {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+            // Only an empty folder goes (nothing else was put in it meanwhile).
+            if let Some(parent) = parent {
+                let _ = std::fs::remove_dir(parent);
+            }
         }
         result
     }
@@ -266,28 +296,9 @@ impl ExamProject {
         if key_sheets.is_empty() {
             return Self::grade(def, inputs, opts, progress);
         }
-        let fresh = opts.project_dir.as_ref().filter(|d| !d.exists()).cloned();
-        if let Some(parent) = fresh
-            .as_deref()
-            .and_then(Path::parent)
-            .filter(|d| !d.as_os_str().is_empty() && !d.exists())
-        {
-            crate::keys::create_private_dir(parent)?;
-        }
-        let result =
+        Self::grade_fresh(opts, || {
             crate::pipeline::grade_with_key_sheets(def, inputs, key_sheets, opts, progress)
-                .and_then(|g| {
-                    let mut p = Self::from_graded(g);
-                    p.save()?;
-                    p.judge_flags()?;
-                    Ok(p)
-                });
-        if result.is_err()
-            && let Some(dir) = fresh
-        {
-            let _ = std::fs::remove_dir_all(dir);
-        }
-        result
+        })
     }
 
     /// Makes the originals of an exam graded in memory available for page images and crops
@@ -860,6 +871,31 @@ impl ExamProject {
                             "item {} has an UNREADABLE bubble: batch confirm refused (§13.2)",
                             m.id
                         )));
+                    }
+                    // §10.3: forms are confirmed as a group only where the answers single the
+                    // version out by 10 nats, and never for a sheet bubbling a version the
+                    // exam does not declare.
+                    if m.kind == ItemKind::Form {
+                        if m.sub_reason.as_deref() == Some(crate::infer::UNDECLARED_VERSION) {
+                            return Err(AppError::Review(format!(
+                                "item {} is a sheet bubbling a version this exam does not \
+                                 declare: decide its version on its own (§10.3)",
+                                m.id
+                            )));
+                        }
+                        let confident = m
+                            .booklet
+                            .and_then(|b| self.session.booklets[b].inference.as_ref())
+                            .is_some_and(crate::infer::confident);
+                        if !confident {
+                            return Err(AppError::Review(format!(
+                                "item {}: the answers fit its suggested version by less than \
+                                 {} nats, so it is not confirmed as a group; decide it on its \
+                                 own (§10.3)",
+                                m.id,
+                                crate::infer::DELTA_LL_NATS
+                            )));
+                        }
                     }
                 }
                 for m in &members {
@@ -2508,14 +2544,16 @@ impl ExamProject {
     /// was already imported is CAP-011 (byte-identical) and adds nothing. Earlier review events
     /// stay in the history but can no longer be undone. `opts.threads` and
     /// `opts.snapshot_utc` apply (the exam's snapshot time by default); the package is this
-    /// project's.
+    /// project's. A run that fails or is cancelled (`opts.cancel`) after its spool leaves the
+    /// exam's results as they were but keeps the spool: its batch stays open in the log, and the
+    /// originals and page rows it stored stay; adding the same files again adds their pages
+    /// once (they keep that batch's ID).
     pub fn add_scans(
         &mut self,
         inputs: &[PathBuf],
         opts: &GradeOptions,
         progress: &(dyn Fn(&Progress) + Sync),
     ) -> Result<crate::append::AppendReport, AppError> {
-        use rayon::prelude::*;
         if self.session.key_unconfirmed() {
             return Err(AppError::Review(
                 "the key read from the key sheets is not confirmed: confirm it first (omr key \
@@ -2524,6 +2562,23 @@ impl ExamProject {
             ));
         }
         let paths = ingest::collect_paths(inputs)?;
+        let def = self.session.definition.clone();
+        self.regrade(def, &paths, opts, progress, "scans added")
+    }
+
+    /// The exam graded again under `def` over every stored original plus the files `paths`
+    /// (none: the same scans, e.g. under a new roster), as [`Self::add_scans`] describes; a
+    /// release is superseded naming `change`. The exam changes only when the run succeeds.
+    fn regrade(
+        &mut self,
+        def: ExamDefinition,
+        paths: &[PathBuf],
+        opts: &GradeOptions,
+        progress: &(dyn Fn(&Progress) + Sync),
+        change: &str,
+    ) -> Result<crate::append::AppendReport, AppError> {
+        use rayon::prelude::*;
+        let pool = crate::pipeline::pool(opts.threads)?;
         let Some(store) = self.store.take() else {
             return Err(AppError::Store(
                 "this exam was opened read-only; open it for writing (omr add --project DIR) \
@@ -2534,7 +2589,6 @@ impl ExamProject {
         let root = store.root();
         let actor = store.actor().clone();
         let prior = self.session.clone();
-        let pool = crate::pipeline::pool(opts.threads)?;
         let mut sources = match crate::append::stored_sources(&prior, &store) {
             Ok(s) => s,
             Err(e) => {
@@ -2561,7 +2615,6 @@ impl ExamProject {
         if o.snapshot_utc.is_none() {
             o.snapshot_utc = Some(prior.snapshot_utc.clone());
         }
-        let def = prior.definition.clone();
         let g = crate::pipeline::grade_into(
             &def,
             sources,
@@ -2624,7 +2677,7 @@ impl ExamProject {
         self.session.release = release;
         self.scoring = g.scoring;
         self.store = g.store;
-        self.after_release("scans added")?;
+        self.after_release(change)?;
         self.touch_all();
         self.sources.lock().expect("sources lock").clear();
         self.pages.lock().expect("page cache").clear();
@@ -2685,6 +2738,71 @@ impl ExamProject {
                 Err(e)
             }
         }
+    }
+
+    /// A roster given to a graded exam, or replacing its roster (§9.1: a rosterless exam is
+    /// converted by a normal linkage run; §9.6: assignment runs again after a new roster
+    /// snapshot). The rows are imported as `--roster` imports them
+    /// ([`ExamDefinition::import_roster`]: leading zeros restored; duplicate, damaged or
+    /// national IDs refuse the roster), then every booklet is identified again over the stored
+    /// originals ([`Self::add_scans`] without new scans): booklets, scores, the queue and the
+    /// exports are those of grading with this roster from the start, every review decision
+    /// carries over (a re-run that contradicts a reviewer's student raises SYS-032 and keeps
+    /// it) and a release is superseded. Audited by the run's store stage, in one decision with
+    /// the identity run that names it: the roster snapshot (its parent the roster it replaces)
+    /// and `RosterReplaced` (row count and hashes, no student data). The exam row keeps the
+    /// identity mode it was created with; the roster in force is the latest identity run's.
+    /// Refused while the key read from key sheets waits for confirmation; a refused roster, or
+    /// a run that fails or is cancelled, leaves the exam and its definition as they were and
+    /// records no roster (a run stopped after its spool leaves the scan batch it opened open
+    /// in the log; it spools no page).
+    pub fn set_roster(
+        &mut self,
+        rows: Vec<crate::exam::RosterStudent>,
+        opts: &GradeOptions,
+        progress: &(dyn Fn(&Progress) + Sync),
+    ) -> Result<crate::append::RosterReport, AppError> {
+        if self.session.key_unconfirmed() {
+            return Err(AppError::Review(
+                "the key read from the key sheets is not confirmed: confirm it first (omr key \
+                 confirm), or give the key as a file (omr key replace), then add the roster"
+                    .into(),
+            ));
+        }
+        let Some(st) = self.store.as_mut() else {
+            return Err(AppError::Store(
+                "this exam was opened read-only; open it for writing to add the roster".into(),
+            ));
+        };
+        let mut def = self.session.definition.clone();
+        // Student numbers masked: the notes reach logs and the status line.
+        let warnings: Vec<String> = def
+            .import_roster(rows)?
+            .iter()
+            .map(|w| crate::export::mask_numbers(w))
+            .collect();
+        st.stage_roster(&def);
+        let report = match self.regrade(def, &[], opts, progress, "roster replaced") {
+            Ok(r) => r,
+            Err(e) => {
+                // A run that failed before its store stage recorded no roster.
+                if let Some(st) = self.store.as_mut() {
+                    st.unstage_roster();
+                }
+                return Err(e);
+            }
+        };
+        let s = &self.session;
+        let matched = s.booklets.iter().filter(|b| b.student().is_some()).count();
+        Ok(crate::append::RosterReport {
+            students: s.definition.roster.as_ref().map_or(0, Vec::len),
+            matched,
+            not_on_roster: s.booklets.len() - matched,
+            absent: self.absent_students().len(),
+            carried_over: report.carried_over,
+            conflicts: report.conflicts,
+            warnings,
+        })
     }
 
     /// Releases the results (§10.8, §13.4): refused while anything blocks release (an open

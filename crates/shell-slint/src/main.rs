@@ -437,6 +437,7 @@ fn backend(a: &Args) -> Result<(Built, bool), String> {
                     snapshot_utc: None,
                     operator: op.clone(),
                     max_pages: None,
+                    cancel: Default::default(),
                 },
             };
             let (tx, rx) = std::sync::mpsc::channel::<JobEvent>();

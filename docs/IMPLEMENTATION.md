@@ -96,6 +96,12 @@ expectation tied to the real exams out of the repository.
   its head-to-head figures stay inside the university). Remark's binary formats are never read.
 - CSV/XLSX/HTML exports (§16.3, §17), listed in a manifest signed with the device key; the release step (§13.4: `ResultsReleased`, superseded by any later change) gates the Blackboard grade-center upload.
 - The end-to-end pipeline in `omr-app` with rayon parallelism.
+- The New-exam proposal (G-3): a survey of the scans before the exam is defined (one
+  recognition pass in memory under a definition that reads every printed row, version and key
+  sheet; counts only, no student number; `omr_app::survey`) and a proposal of every value of
+  the definition from the evidence, each with its source, that asks when the evidence
+  disagrees and gives `define` inputs only when nothing is left to ask (`omr_app::propose`,
+  `omr survey`). Its thresholds are untuned (one `Thresholds` struct).
 - The `omr` CLI.
 - The Slint desktop shell (§5.2): an exams folder by default (demo data only with `--demo`, marked on every screen), a New-exam form that grades a folder of scans, setup with key replacement, live import and added batches, the review queue, results with release and exports, and outcomes.
 
@@ -136,6 +142,54 @@ expectation tied to the real exams out of the repository.
   every answer on a photographed **student** sheet goes to review (MRK-001
   `uncalibrated_capture`), and key-sheet photos are confirmed by the instructor as every key
   sheet is.
+- Parts of the version and key backstops (§10.3; built: undeclared versions held, identical
+  versions scored under the shared key, key answers beyond the count named, own sheets' cancel
+  mode from the spec, labelled keys never copied, group confirmation only by 10 nats):
+  - students' rows beyond the question count (G-3 design, G4): the recognizer decides only
+    the exam's rows of a student's sheet, so answers past a count typed too low are not seen
+    there (key files and key sheets name theirs; the New-exam survey covers the desktop);
+  - SCO-005 `near_chance` stays a score-run notice, not a review item (an owner decision, G6);
+  - a batch MRK-018 for confident marks below the last question on many sheets (Fable E5);
+  - reusing the survey's page measurements for the grade (each pass reads the pages);
+  - `omr grade` keeps its defaults (`--cancel-mode erase_only`, versions A,B without a key
+    file that names them) and does not take them from the proposal (`omr survey` prints them):
+    the desktop takes an own sheet's cancel mode from its spec;
+  - the desktop's New exam does not show the proposal yet (the shell step of G-3, design-flow
+    §4): it still builds its inputs from the form, and a blank key field still infers the key;
+  - the setup's provenance (each value with its source, `ExamDefinition::provenance`) is
+    recorded only for exams defined from a proposal; the survey's own counts are not stored;
+  - `omr grade --key` and `omr key replace` read headerless key rows that start with a letter
+    by the question count (a row as long as the count holds answers alone, else its first
+    cell is its version); the New-exam proposal asks when the count allows both readings and
+    gives the definition the one it shows (`Inputs::key_rows_labelled`);
+  - the proposal's note on sheets without a version follows the key file's shape: a key with
+    a column per version (or a Remark import) whose keys happen to be equal still notes a
+    version review, although grading scores those sheets under the shared key;
+  - a stack whose only key is a key sheet with a blank version bubble, on a one-version exam:
+    the proposal asks for a key sheet of the version the students bubble (rule 5), although
+    grading reads the blank key sheet as that version's;
+  - the IAU student-ID scheme accepts intake years up to 2030 only (§9.2).
+- Parts of cancelling a run (G-3 D7; built in `omr-app`: `Cancel` stops a new exam's grading
+  or a survey before anything is stored):
+  - a cancelled run keeps nothing and cannot be resumed (§22.4 keeps the completed pages and
+    the job resumable): the operator grades the scans again;
+  - cancelling an appended batch (or a roster given after grading): its store opens the run
+    (a new scan batch, the new originals and their page rows spooled) before the pages are
+    read, so a cancel there ends as a failed append does: the exam's results stay as they were,
+    that batch stays open in the log and the spooled originals and page rows stay; adding the
+    same files again adds each page once (it keeps the stopped batch's ID), never refuses it;
+  - `omr` sets no cancel on Ctrl+C: its exit code 130 is reserved for `AppError::Cancelled`,
+    which only a caller holding the token raises (the desktop's *Cancel grading*, the shell
+    step of G-3 D7).
+- Parts of a roster after grading (G-3 D8; built in `omr-app`: `ExamProject::set_roster`
+  identifies a graded exam again against a roster given later, or a replacing one):
+  - the exam row's `identity_mode` stays the mode the exam was created with (`candidate_number`
+    for an exam graded without a roster): the roster given later is recorded by
+    `RosterReplaced` and by the identity runs that name its snapshot (the roster in force), and
+    the row is not projected from them (nothing decides from it);
+  - its run opens a scan batch with no scans, as an appended batch does, for the runs it
+    names; a roster cannot be removed from an exam;
+  - `omr roster set --project DIR roster.csv` (CLI parity) is not built.
 
 ## 3. Crates and ownership
 

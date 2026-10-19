@@ -288,6 +288,14 @@ impl Recognizer {
         }
     }
 
+    /// Questions the sheet prints (the legacy template's rows, an own sheet's spec count).
+    pub fn printed_questions(&self) -> u16 {
+        match self {
+            Recognizer::Legacy { engine, .. } => engine.template().question_count(),
+            Recognizer::Own { engine, .. } => engine.template().question_count(),
+        }
+    }
+
     /// True for the legacy path.
     pub fn is_legacy(&self) -> bool {
         matches!(self, Recognizer::Legacy { .. })
@@ -490,12 +498,29 @@ impl Recognizer {
 
     /// Batch stage, part 2: decisions for one page.
     pub fn decide(&self, m: &Measured, b: &BatchBaseline, label: &str) -> PageRead {
+        let questions = match self {
+            Recognizer::Legacy { questions, .. } | Recognizer::Own { questions, .. } => *questions,
+        };
+        self.decide_rows(m, b, label, questions)
+    }
+
+    /// [`Self::decide`] for the first `questions` printed rows instead of the exam's: a key
+    /// sheet's rows beyond the exam's questions are read this way to be named in the key
+    /// summary, never used (§10.1).
+    pub fn decide_rows(
+        &self,
+        m: &Measured,
+        b: &BatchBaseline,
+        label: &str,
+        questions: u16,
+    ) -> PageRead {
+        let questions = &questions;
         match (self, m, b) {
             (
                 Recognizer::Legacy {
                     engine,
-                    questions,
                     high_stakes,
+                    ..
                 },
                 Measured::Legacy(m, capture),
                 BatchBaseline::Legacy(b),
@@ -566,13 +591,7 @@ impl Recognizer {
                     form_geom,
                 }
             }
-            (
-                Recognizer::Own {
-                    engine, questions, ..
-                },
-                Measured::Own(m),
-                BatchBaseline::Own(b),
-            ) => {
+            (Recognizer::Own { engine, .. }, Measured::Own(m), BatchBaseline::Own(b)) => {
                 let _ = label;
                 let r = engine.decide(m, b);
                 let cfg = self.decision_config(m.request.capture.is_bitonal());
