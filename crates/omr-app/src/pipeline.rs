@@ -785,6 +785,36 @@ pub fn grade_into(
             }
         }
     }
+    // Key sheets that mark rows beyond the exam's questions (§10.1): the key pages are read
+    // once more at the sheet's printed count, and the marked rows past the exam's count are
+    // named in the key summary (never part of the key), as a key file's are.
+    let printed = recognizer.printed_questions();
+    let mut beyond: Vec<Vec<u16>> = vec![Vec::new(); tasks.len()];
+    if printed > def.questions {
+        for &i in &key_pages {
+            let (Some(m), Ok(Some(_))) = (staged[i].measured.as_ref(), &reads[i]) else {
+                continue;
+            };
+            let b = &baselines[&(m.bitonal(), staged[i].source_dpi)];
+            let full = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                recognizer.decide_rows(m, b, &tasks[i].page_id, printed)
+            }));
+            if let Ok(full) = full {
+                beyond[i] = full
+                    .questions
+                    .iter()
+                    .filter(|q| q.question >= def.questions)
+                    .filter(|q| {
+                        matches!(
+                            q.response,
+                            Response::Single(_) | Response::Multi(_) | Response::Set(_)
+                        )
+                    })
+                    .map(|q| q.question + 1)
+                    .collect();
+            }
+        }
+    }
     let mut batch_exceptions: Vec<Exception> = Vec::new();
     for b in baselines.values() {
         for e in b.exceptions() {
@@ -889,9 +919,10 @@ pub fn grade_into(
         pages = order.iter().map(|&i| pages[i].clone()).collect();
         tasks = order.iter().map(|&i| tasks[i].clone()).collect();
         is_declared = order.iter().map(|&i| is_declared[i]).collect();
+        beyond = order.iter().map(|&i| beyond[i].clone()).collect();
     }
     let mut key_sheets = crate::model::KeySheets {
-        sheets: crate::keysheet::collect(def, &pages, &source_infos, &is_declared),
+        sheets: crate::keysheet::collect(def, &pages, &source_infos, &is_declared, &beyond),
         notes: stack_notes,
         ..Default::default()
     };

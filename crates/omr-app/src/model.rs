@@ -335,6 +335,10 @@ pub struct KeySheet {
     /// Where the sheet is: its first page's file and page number (e.g. `scans.pdf page 31`).
     #[serde(default)]
     pub label: String,
+    /// Questions beyond the exam's count (1-based, ascending) the sheet marks: never part of
+    /// the key, named in the key summary (a count typed too low drops them otherwise).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub beyond: Vec<u16>,
 }
 
 impl KeySheet {

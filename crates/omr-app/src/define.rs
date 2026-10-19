@@ -99,8 +99,9 @@ fn read(p: &Path, what: &str) -> Result<Vec<u8>, AppError> {
     })
 }
 
-/// The validated definition, with the roster import's warnings (student numbers masked:
-/// they reach logs and the status line).
+/// The validated definition, with its warnings: answer-key rows beyond the question count
+/// (never graded, named so a count typed too low is seen) and the roster import's (student
+/// numbers masked: they reach logs and the status line).
 pub fn define(i: &Inputs) -> Result<(ExamDefinition, Vec<String>), AppError> {
     let (template, options, default_forms, key_hex) = match &i.sheet {
         Sheet::Template(t) => (
@@ -212,6 +213,7 @@ pub fn define(i: &Inputs) -> Result<(ExamDefinition, Vec<String>), AppError> {
             },
         };
     }
+    let mut warnings = Vec::new();
     match (&key_bytes, i.infer_key) {
         (Some(_), true) => {
             return Err(AppError::Definition(
@@ -220,13 +222,13 @@ pub fn define(i: &Inputs) -> Result<(ExamDefinition, Vec<String>), AppError> {
         }
         (Some(bytes), false) => {
             let k = exam::read_key_file_full(bytes, &d.forms, d.questions, d.options)?;
+            warnings.extend(k.ignored_warning(d.questions));
             d.key = KeySource::Provided { forms: k.forms };
             d.set_key_points(&k.points);
         }
         (None, true) => d.key = KeySource::Inferred,
         (None, false) => {}
     }
-    let mut warnings = Vec::new();
     if let Some(r) = &i.roster {
         let ext = r
             .extension()
@@ -245,11 +247,11 @@ pub fn define(i: &Inputs) -> Result<(ExamDefinition, Vec<String>), AppError> {
         } else {
             exam::read_roster_csv(&bytes)
         }?;
-        warnings = d
-            .import_roster(rows)?
-            .iter()
-            .map(|w| crate::export::mask_numbers(w))
-            .collect();
+        warnings.extend(
+            d.import_roster(rows)?
+                .iter()
+                .map(|w| crate::export::mask_numbers(w)),
+        );
     }
     if let Some(c) = &i.clo {
         d.outcomes = Some(exam::read_clo_csv(&read(c, "CLO mapping")?, d.questions)?);

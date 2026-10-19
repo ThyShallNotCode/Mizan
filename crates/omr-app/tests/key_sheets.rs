@@ -947,3 +947,50 @@ fn confirmed_key_sheets_keep_each_versions_points() {
     }
     p.close().unwrap();
 }
+
+#[test]
+fn key_sheet_rows_beyond_the_question_count_are_named_in_the_summary() {
+    let tmp = tempfile::tempdir().unwrap();
+    let e = iau();
+    let def = legacy_def("Final", N, &["A"], KeySource::None);
+    // The instructor filled 35 rows; the exam uses N = 29.
+    let answers: Vec<Option<u8>> = (0..35).map(|q| Some(key(0, q))).collect();
+    let long = write(
+        tmp.path(),
+        "key-35.png",
+        &png(&sheet(&e, &Marks::new(&answers, "0000000000", Some(0)), 7)),
+    );
+    let p = read_key_sheets(&def, &[long], 2).unwrap();
+    assert_eq!(
+        p.session.key_sheets.sheets[0].beyond,
+        (30..=35).collect::<Vec<u16>>()
+    );
+    // Rows 1–29 are the key, as without the extra rows.
+    let rows = &p.key_sheet_summary(false).unwrap().versions[0].rows;
+    assert_eq!(rows.len(), usize::from(N));
+    let sum = p.key_sheet_summary(false).unwrap();
+    assert!(
+        sum.notes.iter().any(|n| n.contains("key-35.png page 1")
+            && n.contains("questions 30–35")
+            && n.contains("29 questions")
+            && n.contains("question count to 35")),
+        "{:?}",
+        sum.notes
+    );
+    assert!(summary_html(&sum, "").contains("questions 30–35"));
+    // A key sheet filled to the count names nothing.
+    let exact = write(
+        tmp.path(),
+        "key-29.png",
+        &png(&sheet(&e, &key_marks(0, '0'), 8)),
+    );
+    let p = read_key_sheets(&def, &[exact], 2).unwrap();
+    assert!(p.session.key_sheets.sheets[0].beyond.is_empty());
+    assert!(
+        p.key_sheet_summary(false)
+            .unwrap()
+            .notes
+            .iter()
+            .all(|n| !n.contains("question count")),
+    );
+}

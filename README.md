@@ -89,7 +89,9 @@ omr grade scans/cs211-midterm/ --template iau-ccsit-v1 --questions 30 \
 ```
 
 - `--template iau-ccsit-v1` is the IAU CCSIT answer sheet; `--questions` is how many of its
-  questions the exam uses.
+  questions the exam uses. Answers in the key file (or marked on a key sheet) beyond that
+  count are not graded, and a warning (the key summary, for a key sheet) names them with the
+  count that would grade them.
 - `--key` is the answer key, one column per exam version (A, B): see
   [`docs/examples/key.csv`](docs/examples/key.csv). The versions come from the key file. A
   single `key` (or `answer`) column, a column of answers alone or `1,B` rows without a header

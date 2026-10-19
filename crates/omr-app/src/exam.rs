@@ -1221,7 +1221,8 @@ pub const KEY_LAYOUTS: &str = "accepted layouts: one row per question (`question
 /// - **a single column** of answers, one per question.
 ///
 /// Question numbers may be written `7`, `Q7`, `7.` or in Arabic-Indic digits; questions
-/// beyond the exam's count are ignored (the sheet may print more). Entries follow
+/// beyond the exam's count are not part of the key (the sheet may print more): the ones with
+/// an entry are named in [`KeyFile::ignored_questions`]. Entries follow
 /// [`parse_key_entry`]. Returns the per-form keys (in `forms` order) and the points column if
 /// present. Every malformed line fails with its line number and what to change (R10).
 pub fn read_key_csv(
@@ -1249,6 +1250,48 @@ pub struct KeyFile {
     pub forms: Vec<FormKey>,
     /// Its points columns.
     pub points: KeyFilePoints,
+    /// Questions beyond the exam's count (1-based, ascending) that have an entry in some
+    /// version, in any layout (rows, columns or a single column): read, never part of the key,
+    /// and named to the instructor ([`Self::ignored_warning`]) since a count typed too low
+    /// silently drops them otherwise.
+    pub ignored_questions: Vec<u32>,
+}
+
+impl KeyFile {
+    /// The warning naming [`Self::ignored_questions`], if any, for an exam of `questions`.
+    pub fn ignored_warning(&self, questions: u16) -> Option<String> {
+        let last = *self.ignored_questions.last()?;
+        let one = self.ignored_questions.len() == 1;
+        let (noun, verb, they, them) = if one {
+            ("question", "has", "it is", "it")
+        } else {
+            ("questions", "have", "they are", "them")
+        };
+        Some(format!(
+            "key file: {noun} {} {verb} an answer but the exam has {questions} questions, so \
+             {they} not graded; set the question count to {last} to grade {them}",
+            question_ranges(&self.ignored_questions),
+        ))
+    }
+}
+
+/// Question numbers as ranges: `31–35, 40`.
+pub fn question_ranges(qs: &[u32]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < qs.len() {
+        let mut j = i;
+        while j + 1 < qs.len() && qs[j + 1] == qs[j] + 1 {
+            j += 1;
+        }
+        out.push(if j > i {
+            format!("{}–{}", qs[i], qs[j])
+        } else {
+            qs[i].to_string()
+        });
+        i = j + 1;
+    }
+    out.join(", ")
 }
 
 /// The version a per-version points header names (`points_A`, `points A`, `pts B`,
@@ -1330,6 +1373,10 @@ pub fn read_key_file_full(
         parse_key_entry(v, options).map_err(|m| key_error(line, format!("{col}: {m}")))?;
         Ok(v.to_string())
     };
+    // A cell beyond the exam's questions that holds an entry (an answer, a void, or text that
+    // is no entry at all): never part of the key, but named.
+    let has_entry = |v: &str| !matches!(parse_key_entry(v, options), Ok(ParsedKey::Missing));
+    let sorted = |v: BTreeSet<u32>| v.into_iter().collect::<Vec<u32>>();
     let points_cell = |line: u64, q: usize, what: &str, v: &str| -> Result<String, AppError> {
         let v = v.replace(',', ".");
         omr_scoring::parse_points(&v).map_err(|e| {
@@ -1357,6 +1404,7 @@ pub fn read_key_file_full(
             .map(|(f, _)| (f.clone(), vec!["1".to_string(); n]))
             .collect();
         let mut seen: BTreeMap<usize, (u64, Vec<String>)> = BTreeMap::new();
+        let mut ignored = BTreeSet::new();
         for (line, row) in body {
             let q = parse_question_number(&row[0]).ok_or_else(|| {
                 key_error(
@@ -1381,7 +1429,14 @@ pub fn read_key_file_full(
                 ));
             }
             if q > n {
-                continue; // the sheet may print more questions than the exam uses
+                // The sheet may print more questions than the exam uses.
+                if cols
+                    .iter()
+                    .any(|(_, i)| row.get(*i).is_some_and(|v| has_entry(v)))
+                {
+                    ignored.insert(q as u32);
+                }
+                continue;
             }
             let cells: Vec<String> = cols
                 .iter()
@@ -1441,6 +1496,7 @@ pub fn read_key_file_full(
                 all: points,
                 per_form,
             },
+            ignored_questions: sorted(ignored),
         })
     };
     // One row per version: `labelled` rows start with the form letter.
@@ -1466,6 +1522,7 @@ pub fn read_key_file_full(
                 .collect(),
         };
         let mut out = Vec::new();
+        let mut ignored = BTreeSet::new();
         for (k, (line, row)) in body.iter().enumerate() {
             let form = if labelled {
                 form_label(&row[0])
@@ -1490,10 +1547,14 @@ pub fn read_key_file_full(
             }
             let mut answers = vec![String::new(); n];
             for (j, v) in row[skip..].iter().enumerate() {
-                if let Some(Some(q)) = qcols.get(j)
-                    && *q <= n
-                {
-                    answers[q - 1] = entry(*line, &format!("form {form} question {q}"), v)?;
+                match qcols.get(j) {
+                    Some(Some(q)) if *q <= n => {
+                        answers[q - 1] = entry(*line, &format!("form {form} question {q}"), v)?;
+                    }
+                    Some(Some(q)) if has_entry(v) => {
+                        ignored.insert(*q as u32);
+                    }
+                    _ => {}
                 }
             }
             out.push(FormKey { form, answers });
@@ -1501,6 +1562,7 @@ pub fn read_key_file_full(
         Ok(KeyFile {
             forms: order_keys(out, forms)?,
             points: KeyFilePoints::default(),
+            ignored_questions: sorted(ignored),
         })
     };
     if QUESTION_HEADERS.contains(&h0.as_str()) {
@@ -1559,6 +1621,13 @@ pub fn read_key_file_full(
             .collect::<Result<Vec<_>, _>>()?;
         let mut answers = answers;
         answers.resize(n, String::new());
+        let ignored = rows
+            .iter()
+            .enumerate()
+            .skip(n)
+            .filter(|(_, (_, r))| has_entry(&r[0]))
+            .map(|(q, _)| q as u32 + 1)
+            .collect();
         return Ok(KeyFile {
             forms: order_keys(
                 vec![FormKey {
@@ -1568,6 +1637,7 @@ pub fn read_key_file_full(
                 forms,
             )?,
             points: KeyFilePoints::default(),
+            ignored_questions: sorted(ignored),
         });
     }
     let labelled = rows.iter().all(|(_, r)| {

@@ -212,6 +212,54 @@ fn a_key_labelled_with_one_version_is_never_copied_to_another() {
     assert_eq!(keys(abcd, &["A", "B", "C", "D"], 2).len(), 4);
 }
 
+#[test]
+fn key_rows_beyond_the_question_count_are_named_in_every_layout() {
+    let two = forms(&["A", "B"]);
+    // Questions 1–5 with answers; the exam uses 3. Question 6 has no answer, question 7 only
+    // points: neither is named.
+    let long = b"question,A,B,points\n1,A,B,1\n2,B,C,1\n3,C,D,1\n4,D,E,1\n5,,A,1\n6,,,1\n7,,,2\n";
+    let k = exam::read_key_file_full(long, &two, 3, 5).unwrap();
+    assert_eq!(k.ignored_questions, vec![4, 5], "long");
+    assert_eq!(answers(&k.forms)[0], vec!["A", "B", "C"]);
+    // One row per version, with and without a header.
+    let wide = b"version,Q1,Q2,Q3,Q4,Q5,Q6\nA,A,B,C,D,,\nB,B,C,D,*,E,\n";
+    let k = exam::read_key_file_full(wide, &two, 3, 5).unwrap();
+    assert_eq!(k.ignored_questions, vec![4, 5], "wide");
+    let k = exam::read_key_file_full(b"C,A,B,D,E\nD,B,C,E,A\n", &two, 3, 5).unwrap();
+    assert_eq!(k.ignored_questions, vec![4, 5], "wide, no header");
+    assert_eq!(answers(&k.forms)[1], vec!["D", "B", "C"]);
+    // A single column of answers, and headerless rows.
+    let k = exam::read_key_file_full(b"A\nB\nC\nD\n-\nE\n", &forms(&["A"]), 3, 5).unwrap();
+    assert_eq!(
+        k.ignored_questions,
+        vec![4, 6],
+        "single column ('-' is no entry)"
+    );
+    let k = exam::read_key_file_full(b"1,A\n2,B\n3,C\n10,D\n", &two, 3, 5).unwrap();
+    assert_eq!(k.ignored_questions, vec![10], "headerless rows");
+    // Nothing beyond: nothing named, no warning.
+    let k = exam::read_key_file_full(long, &two, 7, 5).unwrap();
+    assert!(k.ignored_questions.is_empty());
+    assert_eq!(k.ignored_warning(7), None);
+    // The new-exam definition names them in a warning, with the count that grades them.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("key.csv");
+    std::fs::write(&path, long).unwrap();
+    let mut i =
+        omr_app::define::Inputs::new(omr_app::define::Sheet::Template("iau-ccsit-v1".into()), 3);
+    i.key = Some(path);
+    let (d, warnings) = omr_app::define::define(&i).unwrap();
+    assert_eq!(d.questions, 3);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].contains("questions 4–5 have an answer")
+            && warnings[0].contains("3 questions")
+            && warnings[0].contains("question count to 5"),
+        "{}",
+        warnings[0]
+    );
+}
+
 fn roster_def() -> ExamDefinition {
     let mut d = ExamDefinition::new(
         "Quiz",

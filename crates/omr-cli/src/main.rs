@@ -853,6 +853,9 @@ fn build_def(g: &GradeArgs) -> Result<ExamDefinition, AppError> {
     let mut d = definition(&g.exam, key_forms)?;
     if let Some(k) = &g.key {
         let k = exam::read_key_file_full(&read_file(k)?, &d.forms, d.questions, d.options)?;
+        if let Some(w) = k.ignored_warning(d.questions) {
+            eprintln!("warning: {w}");
+        }
         d.key = KeySource::Provided { forms: k.forms };
         d.set_key_points(&k.points);
     } else if g.infer_key {
@@ -1672,6 +1675,9 @@ fn cmd_key(cmd: KeyCmd) -> Result<(), AppError> {
                 def.questions,
                 def.options,
             )?;
+            if let Some(w) = k.ignored_warning(def.questions) {
+                eprintln!("warning: {w}");
+            }
             let points =
                 (k.points.all.is_some() || !k.points.per_form.is_empty()).then_some(&k.points);
             p.replace_key_points(
