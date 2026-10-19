@@ -11,6 +11,10 @@
 //!   argmax → accept; declared ≠ argmax with ΔLL ≥ 10 nats → IDN-003 (ERROR, never
 //!   auto-switch); declared ≠ argmax below 10 nats → keep declared; nothing declared →
 //!   provisional argmax + SCO-005 `inferred` (ERROR).
+//! - **Version backstops** (definitions with `hold_undeclared_versions`): a confident version
+//!   letter the exam does not declare is held, never given a provisional form (SCO-005
+//!   `undeclared_version`, ERROR; the inference is kept as a suggestion only when its margin
+//!   reaches 10 nats).
 
 use crate::model::{Booklet, FormInference, KeyCell, ResponseStatus};
 use omr_model::exceptions::Target;
@@ -18,6 +22,15 @@ use omr_model::{Exception, Response, Scope, Severity};
 
 /// Margin for IDN-003 and group confirmation (nats; heuristic, §10.3).
 pub const DELTA_LL_NATS: f64 = 10.0;
+
+/// SCO-005 sub-reason: the sheet bubbles a version letter the exam does not declare.
+pub const UNDECLARED_VERSION: &str = "undeclared_version";
+
+/// True when an inference separates its best form from the runner-up by at least
+/// [`DELTA_LL_NATS`]: its form may be suggested for a held sheet and confirmed as a group.
+pub fn confident(i: &FormInference) -> bool {
+    i.margin_milli as f64 / 1000.0 >= DELTA_LL_NATS
+}
 
 /// Category of a response: option index, `m` = blank, `m + 1` = multi; `None` = unusable.
 fn category(r: &Response, m: usize) -> Option<usize> {
@@ -268,5 +281,23 @@ pub fn sco005_inferred(serial: u32, argmax: &str, delta: f64) -> Exception {
             } else {
                 ""
             }
+        ))
+}
+
+/// SCO-005 `undeclared_version` (ERROR, Booklet): the sheet confidently bubbles version
+/// `letter`, which the exam does not declare; held (no form, never scored) until a reviewer
+/// chooses its version.
+pub fn sco005_undeclared(serial: u32, letter: &str, forms: &[String]) -> Exception {
+    Exception::must("SCO-005", Severity::Error, Scope::Booklet)
+        .with_sub_reason(UNDECLARED_VERSION)
+        .with_target(Target {
+            booklet: Some(serial),
+            ..Target::default()
+        })
+        .with_detail(format!(
+            "the sheet bubbles version {letter}, which this exam does not declare ({}): choose \
+             its version, or add version {letter} and its key and grade again; not scored until \
+             then",
+            forms.join(", ")
         ))
 }

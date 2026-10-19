@@ -39,6 +39,21 @@ fn refresh_inferred_forms(session: &mut Session, key: &crate::model::EffectiveKe
     );
     for (bi, i) in inf.into_iter().enumerate() {
         let b = &mut session.booklets[bi];
+        // A held sheet (an undeclared version letter) keeps no form: only its suggestion
+        // follows the new key, and only when the answers single a version out by 10 nats.
+        if b.form.is_none() && b.undeclared_version() {
+            let suggestion = i
+                .as_ref()
+                .filter(|i| crate::infer::confident(i))
+                .map(|i| Decision::Form(i.argmax as u8));
+            for it in session.review.items.iter_mut() {
+                if it.booklet == Some(bi) && it.kind == ItemKind::Form && it.is_open() {
+                    it.suggestion = suggestion.clone();
+                }
+            }
+            b.inference = i;
+            continue;
+        }
         if b.form_source != FormSource::Inferred {
             continue;
         }

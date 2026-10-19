@@ -184,6 +184,8 @@ pub fn define(i: &Inputs) -> Result<(ExamDefinition, Vec<String>), AppError> {
     d.term = i.term.clone().unwrap_or_default();
     d.page_code_key_hex = key_hex;
     d.high_stakes = i.high_stakes;
+    // Every new exam holds a sheet bubbling a version it does not declare (§10.3 backstop).
+    d.hold_undeclared_versions = true;
     d.multi_review = match i.multi_review.as_deref().unwrap_or("never") {
         "never" => MultiReviewPolicy::Never,
         "always" => MultiReviewPolicy::Always,

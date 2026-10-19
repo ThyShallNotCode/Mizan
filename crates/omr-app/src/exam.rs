@@ -439,6 +439,20 @@ pub struct ExamDefinition {
     /// it out and the project keeps it in its private `secrets/` file (read back on open).
     #[serde(default, skip_serializing)]
     pub page_code_key_hex: Option<String>,
+    /// The version backstops of §10.3 (G-3), set on every definition built by
+    /// [`crate::define::define`] and `omr grade`:
+    /// - a sheet that confidently bubbles a version letter the exam does not declare is held
+    ///   (SCO-005 `undeclared_version`, ERROR), never scored under another version's key; on a
+    ///   one-version exam too, where only a blank, unclear or the declared letter takes the
+    ///   one version;
+    /// - when every version shares the key, points and mapping, a sheet that declares no
+    ///   version is scored under the shared key (SCO-005 `identical_forms`, INFO).
+    ///
+    /// Off (the default) in definitions saved before the backstops existed: adding a batch or
+    /// regrading such an exam keeps its earlier decisions byte for byte. Never serialised when
+    /// off, so those definitions also keep their bytes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hold_undeclared_versions: bool,
 }
 
 impl ExamDefinition {
@@ -482,6 +496,7 @@ impl ExamDefinition {
             outcomes: None,
             key_sheets: KeySheetRule::default(),
             page_code_key_hex: None,
+            hold_undeclared_versions: false,
         };
         d.exam_id = d.derived_exam_id();
         d

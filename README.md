@@ -92,7 +92,9 @@ omr grade scans/cs211-midterm/ --template iau-ccsit-v1 --questions 30 \
   questions the exam uses.
 - `--key` is the answer key, one column per exam version (A, B): see
   [`docs/examples/key.csv`](docs/examples/key.csv). The versions come from the key file. For
-  an exam with a single version, add `--forms A`.
+  an exam with a single version, add `--forms A`. A sheet that bubbles a version the exam does
+  not have (C on an A, B exam; B on a single-version exam) is held for review and never
+  scored until you choose its version.
 - `--roster` (CSV or Excel `.xlsx`, [`example`](docs/examples/roster.csv)) and `--clo`
   ([`example`](docs/examples/clo.csv)) are optional. Without a roster, sheets are identified
   by the student number bubbled on them; without a CLO file there are no outcome tables.

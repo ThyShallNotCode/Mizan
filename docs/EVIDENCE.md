@@ -831,6 +831,11 @@ These limits apply to the MVP as measured here.
 - IAU legacy form: only `cancel_mode = erase_only`; a mirrored scan is held (REG-003), not
   un-mirrored. A single-version exam needs `--forms A`, otherwise a blank version bubble is
   queued (SCO-005) although both versions share the key (CR-16).
+- A sheet bubbling a version the exam does not declare is held (SCO-005 `undeclared_version`,
+  never scored) only in exams created since the version backstops (`omr grade`, the desktop's
+  New exam). Projects created before keep their routing when a batch is added or they are
+  regraded: on a one-version exam every sheet takes that version whatever its bubble shows,
+  and on a several-version exam such a sheet gets a provisional version (SCO-005 `inferred`).
 - No hot-folder watching and no SVG/PNG sheet output (CR-19). Key sheets (CR-11, §4.1) are
   confirmed with `omr key confirm` or in the desktop app's Setup screen (read, rendered summary,
   confirmation; covered by `shell-slint/tests/req_a11_real.rs` on synthetic key sheets); the

@@ -707,6 +707,8 @@ fn definition(a: &ExamArgs, key_forms: Option<Vec<String>>) -> Result<ExamDefini
         }
     };
     d.page_code_key_hex = key_hex;
+    // A new exam holds a sheet bubbling a version it does not declare (§10.3 backstop).
+    d.hold_undeclared_versions = true;
     d.exam_id = d.derived_exam_id();
     Ok(d)
 }

@@ -88,6 +88,10 @@ pub enum FormSource {
     Reviewed,
     /// Unknown.
     Unknown,
+    /// The sheet declares no version (blank or unclear bubble) and the exam grades every
+    /// sheet with one key: a one-version exam. Scored under that key; per-version breakdowns
+    /// count it as "version not declared".
+    Shared,
 }
 
 /// Form inference evidence (§10.3).
@@ -192,6 +196,14 @@ impl Booklet {
     /// Display label, e.g. "Booklet 0007".
     pub fn label(&self) -> String {
         format!("Booklet {:04}", self.serial)
+    }
+
+    /// True when the sheet bubbles a version the exam does not declare (SCO-005
+    /// `undeclared_version`): held, never scored, until a reviewer chooses its version.
+    pub fn undeclared_version(&self) -> bool {
+        self.exceptions.iter().any(|e| {
+            e.code == "SCO-005" && e.sub_reason.as_deref() == Some(crate::infer::UNDECLARED_VERSION)
+        })
     }
 }
 

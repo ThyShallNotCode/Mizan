@@ -1468,6 +1468,30 @@ fn collate(
             .map(|g: &omr_recog::GridField| g.text())
             .unwrap_or_default();
         let single = def.forms.len() == 1;
+        // The version backstop (§10.3): a confident letter the exam does not declare is held,
+        // never scored under another version's key, on a one-version exam too, where only a
+        // blank, unclear or the declared letter takes the one version (as an own sheet's
+        // undeclared page code is, IDN-002). Definitions saved before the backstop keep the
+        // one-version shortcut.
+        let undeclared = def.hold_undeclared_versions
+            && declared_form.is_none()
+            && !declared_text.is_empty()
+            && declared_text != "?";
+        let (form, form_source) = if undeclared {
+            exceptions.push(infer::sco005_undeclared(serial, &declared_text, &def.forms));
+            (None, FormSource::Unknown)
+        } else if single && declared_form.is_none() {
+            let source = if def.hold_undeclared_versions {
+                FormSource::Shared
+            } else {
+                FormSource::Bubbled
+            };
+            (Some(0), source)
+        } else if single {
+            (Some(0), form_source)
+        } else {
+            (declared_form, form_source)
+        };
         // A blank booklet (MRK-015) is never scored 0 automatically: its score is held as
         // pending until a reviewer acknowledges it (§8.8).
         let hold = exceptions
@@ -1486,12 +1510,8 @@ fn collate(
             pages: g,
             declared_form,
             declared_text,
-            form: if single { Some(0) } else { declared_form },
-            form_source: if single && declared_form.is_none() {
-                FormSource::Bubbled
-            } else {
-                form_source
-            },
+            form,
+            form_source,
             inference: None,
             hold,
             questions,
@@ -1829,6 +1849,11 @@ fn resolve_key(
     let inf = infer::infer_forms(booklets, &k.forms, n, def.options);
     for (b, inf) in booklets.iter_mut().zip(inf) {
         b.inference = inf.clone();
+        // A held sheet (an undeclared version letter) gets no provisional form and no second
+        // SCO-005: its inference is only the reviewer's suggestion (§10.3 backstop).
+        if b.undeclared_version() {
+            continue;
+        }
         match (b.declared_form, inf) {
             (Some(d), Some(i)) => {
                 if i.argmax != d {

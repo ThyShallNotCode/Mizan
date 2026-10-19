@@ -1,0 +1,327 @@
+//! Version routing on IAU sheets (§10.3 version backstops), synthetic data only: which key
+//! scores a sheet, for every version the exam may declare crossed with what a sheet's version
+//! bubble may show. A confident letter the exam does not declare is held (SCO-005
+//! `undeclared_version`) and never scored, on a one-version exam too; a definition saved before
+//! the backstops keeps its earlier routing byte for byte.
+//!
+//! The keys overlap on half the questions and the students answer their own version's key
+//! well, so a sheet scored under another version's key would score far above chance: holding
+//! it never relies on SCO-005 `near_chance`.
+
+mod common;
+
+use common::{Marks, bubble, grade, iau, legacy_def, png, sheet, source_of, write};
+use omr_app::model::FormSource;
+use omr_app::{Action, Decision, ExamDefinition, ExamProject, FormKey, ItemKind, KeySource, Lane};
+use omr_forms::legacy::LegacyField;
+use std::path::{Path, PathBuf};
+
+const N: u16 = 20;
+
+/// The key of version `v` (0 = A … 3 = D): even questions are the same on every version,
+/// odd ones differ.
+fn key(v: u8, q: u16) -> u8 {
+    let base = ((q * 3) % 5) as u8;
+    if q.is_multiple_of(2) {
+        base
+    } else {
+        (base + v) % 5
+    }
+}
+
+/// A strong student of version `v`: the key, but wrong on every seventh question.
+fn answers(v: u8) -> Vec<Option<u8>> {
+    (0..N)
+        .map(|q| {
+            let k = key(v, q);
+            Some(if q % 7 == 3 { (k + 1) % 5 } else { k })
+        })
+        .collect()
+}
+
+fn hand_score(answered_as: u8, scored_as: u8) -> usize {
+    (0..N)
+        .filter(|&q| answers(answered_as)[usize::from(q)] == Some(key(scored_as, q)))
+        .count()
+}
+
+/// What one sheet's version bubble shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Shows {
+    /// A confident letter (0 = A).
+    Letter(u8),
+    /// Nothing bubbled.
+    Blank,
+    /// Two letters bubbled (A and C): not read as a version.
+    Unclear,
+}
+
+/// The stack: one sheet per observation, `(file stem, what the bubble shows, the version the
+/// student answered)`. `c-answers-a` bubbles C but answers version A's key.
+const SHEETS: [(&str, Shows, u8); 7] = [
+    ("a", Shows::Letter(0), 0),
+    ("b", Shows::Letter(1), 1),
+    ("c", Shows::Letter(2), 2),
+    ("d", Shows::Letter(3), 3),
+    ("blank", Shows::Blank, 0),
+    ("unclear", Shows::Unclear, 0),
+    ("c-answers-a", Shows::Letter(2), 0),
+];
+
+fn student(k: usize) -> String {
+    format!("2210345{k:03}")
+}
+
+fn write_stack(dir: &Path) -> PathBuf {
+    let e = iau();
+    for (k, (stem, shows, v)) in SHEETS.iter().enumerate() {
+        let mut m = Marks::new(&answers(*v), &student(k), None);
+        match shows {
+            Shows::Letter(l) => m.version = Some(*l),
+            Shows::Blank => {}
+            Shows::Unclear => {
+                m.extra.push(bubble(&e, LegacyField::Version, 0, 0));
+                m.extra.push(bubble(&e, LegacyField::Version, 0, 2));
+            }
+        }
+        write(
+            dir,
+            &format!("{k}-{stem}.png"),
+            &png(&sheet(&e, &m, 300 + k as u64)),
+        );
+    }
+    dir.to_path_buf()
+}
+
+/// An IAU exam declaring `forms`, each with its own key; `hold` as a definition built today.
+fn exam(forms: &[&str], hold: bool) -> ExamDefinition {
+    let keys = forms
+        .iter()
+        .map(|f| FormKey {
+            form: (*f).into(),
+            answers: (0..N)
+                .map(|q| char::from(b'A' + key(f.as_bytes()[0] - b'A', q)).to_string())
+                .collect(),
+        })
+        .collect();
+    let mut d = legacy_def("Routing", N, forms, KeySource::Provided { forms: keys });
+    d.hold_undeclared_versions = hold;
+    d
+}
+
+/// The observation index of booklet `bi` (from its file name `k-stem.png`).
+fn sheet_no(p: &ExamProject, bi: usize) -> usize {
+    source_of(p, bi).split('-').next().unwrap().parse().unwrap()
+}
+
+fn letter(v: u8) -> String {
+    char::from(b'A' + v).to_string()
+}
+
+#[test]
+fn every_version_set_routes_every_bubble_and_holds_undeclared_letters() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scans = write_stack(&tmp.path().join("scans"));
+    for active in [
+        vec!["A"],
+        vec!["C"],
+        vec!["A", "B"],
+        vec!["A", "B", "C", "D"],
+    ] {
+        let name = active.join("");
+        let def = exam(&active, true);
+        let out = tmp.path().join(&name);
+        let p = grade(&def, std::slice::from_ref(&scans), &out, 2);
+        let s = &p.session;
+        assert_eq!(s.booklets.len(), SHEETS.len(), "[{name}]");
+        let sc = p.scoring.as_ref().expect("scored");
+        let run = sc.run.as_ref().unwrap();
+        let results = std::fs::read_to_string(out.join("results.csv")).unwrap();
+        for (bi, b) in s.booklets.iter().enumerate() {
+            let k = sheet_no(&p, bi);
+            let (stem, shows, answered) = SHEETS[k];
+            let ctx = format!("[{name}] sheet {stem}");
+            let sco005: Vec<&str> = b
+                .exceptions
+                .iter()
+                .filter(|e| e.code == "SCO-005")
+                .map(|e| e.sub_reason.as_deref().unwrap_or(""))
+                .collect();
+            let declared = match shows {
+                Shows::Letter(l) => active.iter().position(|f| *f == letter(l)),
+                _ => None,
+            };
+            match (shows, declared) {
+                // A declared letter: its own key.
+                (Shows::Letter(_), Some(f)) => {
+                    assert_eq!(b.form, Some(f), "{ctx}");
+                    assert_eq!(b.form_source, FormSource::Bubbled, "{ctx}");
+                    assert!(sco005.is_empty(), "{ctx}: {sco005:?}");
+                }
+                // A letter the exam does not declare: held, never scored, never given a
+                // provisional version.
+                (Shows::Letter(l), None) => {
+                    assert_eq!(b.form, None, "{ctx}");
+                    assert_eq!(b.form_source, FormSource::Unknown, "{ctx}");
+                    assert_eq!(sco005, ["undeclared_version"], "{ctx}");
+                    let e = b.exceptions.iter().find(|e| e.code == "SCO-005").unwrap();
+                    assert!(
+                        e.detail.contains(&format!("bubbles version {}", letter(l)))
+                            && e.detail.contains(&active.join(", ")),
+                        "{ctx}: {}",
+                        e.detail
+                    );
+                    assert_eq!(sc.row_of[bi], None, "{ctx}: never in the score run");
+                    assert!(!results.contains(&student(k)), "{ctx}: not in results.csv");
+                    let items: Vec<_> = p
+                        .queue(Some(Lane::Scoring))
+                        .into_iter()
+                        .filter(|i| i.booklet == Some(bi))
+                        .collect();
+                    assert_eq!(items.len(), 1, "{ctx}");
+                    assert_eq!(items[0].kind, ItemKind::Form, "{ctx}");
+                    assert_eq!(
+                        items[0].sub_reason.as_deref(),
+                        Some("undeclared_version"),
+                        "{ctx}"
+                    );
+                    // The answers suggest a version only when they single one out by 10 nats:
+                    // the sheet that bubbles C but answers A's key on an A,B exam.
+                    let want = (stem == "c-answers-a" && active.len() > 1).then_some(0u8);
+                    assert_eq!(items[0].suggestion, want.map(Decision::Form), "{ctx}");
+                }
+                // No version read: the one version of a one-version exam ...
+                (_, _) if active.len() == 1 => {
+                    assert_eq!(b.form, Some(0), "{ctx}");
+                    assert_eq!(b.form_source, FormSource::Shared, "{ctx}");
+                    assert!(sco005.is_empty(), "{ctx}: {sco005:?}");
+                }
+                // ... else inferred from the answers (provisional, reviewed).
+                (_, _) => {
+                    assert_eq!(b.form, Some(0), "{ctx}: answers A's key");
+                    assert_eq!(b.form_source, FormSource::Inferred, "{ctx}");
+                    assert_eq!(sco005, ["inferred"], "{ctx}");
+                }
+            }
+            if shows == Shows::Unclear {
+                assert_eq!(b.declared_text, "?", "{ctx}");
+            }
+            // Every scored sheet scores its hand count under the key of its version.
+            if let Some(f) = b.form {
+                assert!(results.contains(&student(k)), "{ctx}: in results.csv");
+                let row = sc.row_of[bi].expect("a sheet with a version is scored");
+                let scored_as = active[f].as_bytes()[0] - b'A';
+                assert_eq!(
+                    run.students[row].raw.to_string(),
+                    hand_score(answered, scored_as).to_string(),
+                    "{ctx}"
+                );
+            }
+        }
+        assert!(s.release_blocked().is_some(), "[{name}]");
+        p.close().unwrap();
+    }
+}
+
+#[test]
+fn a_reviewer_gives_a_held_sheet_its_version_and_it_is_scored() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scans = write_stack(&tmp.path().join("scans"));
+    let mut p = grade(
+        &exam(&["A", "B"], true),
+        std::slice::from_ref(&scans),
+        &tmp.path().join("out"),
+        2,
+    );
+    let held: Vec<(u64, usize)> = p
+        .queue(Some(Lane::Scoring))
+        .iter()
+        .filter(|i| i.sub_reason.as_deref() == Some("undeclared_version"))
+        .map(|i| (i.id, i.booklet.unwrap()))
+        .collect();
+    assert_eq!(held.len(), 3, "c, d and c-answers-a");
+    for (id, bi) in held {
+        // The student meant version A (only `c-answers-a` did; the others are graded under A
+        // all the same when the reviewer says so).
+        p.apply(
+            id,
+            Action::Resolve {
+                decision: Decision::Form(0),
+                accepted_suggestion: false,
+                note: String::new(),
+            },
+        )
+        .unwrap();
+        let b = &p.session.booklets[bi];
+        assert_eq!(b.form, Some(0));
+        assert_eq!(b.form_source, FormSource::Reviewed);
+        let sc = p.scoring.as_ref().unwrap();
+        let row = sc.row_of[bi].expect("scored after the decision");
+        let (_, _, answered) = SHEETS[sheet_no(&p, bi)];
+        assert_eq!(
+            sc.run.as_ref().unwrap().students[row].raw.to_string(),
+            hand_score(answered, 0).to_string()
+        );
+    }
+}
+
+#[test]
+fn a_definition_saved_before_the_backstop_keeps_its_routing_and_bytes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scans = write_stack(&tmp.path().join("scans"));
+    // The definition of an existing project: the flag is not in its JSON and reads as off,
+    // and an off flag is never written, so the saved definition keeps its bytes.
+    let old = exam(&["A"], false);
+    let json = serde_json::to_string(&old).unwrap();
+    assert!(!json.contains("hold_undeclared_versions"), "{json}");
+    let back: ExamDefinition = serde_json::from_str(&json).unwrap();
+    assert!(!back.hold_undeclared_versions);
+    assert_eq!(serde_json::to_string(&back).unwrap(), json);
+    let new = exam(&["A"], true);
+    let back: ExamDefinition = serde_json::from_str(&serde_json::to_string(&new).unwrap()).unwrap();
+    assert!(back.hold_undeclared_versions);
+    // One version: every sheet takes it, whatever its bubble shows (the earlier shortcut).
+    let p = grade(
+        &old,
+        std::slice::from_ref(&scans),
+        &tmp.path().join("one"),
+        2,
+    );
+    for (bi, b) in p.session.booklets.iter().enumerate() {
+        let (stem, _, _) = SHEETS[sheet_no(&p, bi)];
+        assert_eq!(b.form, Some(0), "{stem}");
+        assert_eq!(b.form_source, FormSource::Bubbled, "{stem}");
+        assert!(b.exceptions.iter().all(|e| e.code != "SCO-005"), "{stem}");
+        assert!(p.scoring.as_ref().unwrap().row_of[bi].is_some(), "{stem}");
+    }
+    p.close().unwrap();
+    // Two versions: an undeclared letter is inferred as before (provisional, SCO-005).
+    let p = grade(
+        &exam(&["A", "B"], false),
+        std::slice::from_ref(&scans),
+        &tmp.path().join("two"),
+        2,
+    );
+    for (bi, b) in p.session.booklets.iter().enumerate() {
+        let (stem, shows, _) = SHEETS[sheet_no(&p, bi)];
+        if matches!(shows, Shows::Letter(2) | Shows::Letter(3)) {
+            assert_eq!(b.form_source, FormSource::Inferred, "{stem}");
+            assert!(b.form.is_some(), "{stem}");
+            assert!(
+                b.exceptions
+                    .iter()
+                    .any(|e| e.sub_reason.as_deref() == Some("inferred")),
+                "{stem}"
+            );
+        }
+    }
+    p.close().unwrap();
+}
+
+#[test]
+fn a_new_exam_from_the_new_exam_form_holds_undeclared_versions() {
+    let i =
+        omr_app::define::Inputs::new(omr_app::define::Sheet::Template("iau-ccsit-v1".into()), N);
+    let (d, _) = omr_app::define::define(&i).unwrap();
+    assert!(d.hold_undeclared_versions);
+}
