@@ -516,10 +516,12 @@ impl Shell {
         let reloaded = self.backend.borrow_mut().take_reloaded();
         if reloaded.is_empty() {
             if changed {
-                self.refresh_scan();
+                // twice a second during a run: the screen on show only (the others are
+                // refreshed when they are shown)
                 self.refresh_dashboard();
+                self.refresh_if_shown(s::Page::Scan);
                 // flag stability (§12.2) arrives from a background job
-                self.refresh_results();
+                self.refresh_if_shown(s::Page::Results);
             }
             return changed;
         }
@@ -533,8 +535,7 @@ impl Shell {
         }
         self.refresh_all();
         if current {
-            let first = self.st.borrow().order.first().copied();
-            self.select_item(first);
+            self.restart_review();
         }
         true
     }
@@ -556,11 +557,48 @@ impl Shell {
                     self.refresh_review();
                 }
             }
+            page => self.refresh_page(page),
+        }
+    }
+
+    /// The screen on show.
+    fn shown(&self) -> s::Page {
+        self.ui().global::<s::App>().get_page()
+    }
+
+    /// Fills the view-model of `page`'s screen from the backend.
+    fn refresh_page(&self, page: s::Page) {
+        match page {
             s::Page::Setup => self.refresh_setup(),
             s::Page::Scan => self.refresh_scan(),
+            s::Page::Review => self.refresh_review(),
             s::Page::Results => self.refresh_results(),
             s::Page::Outcomes => self.refresh_outcomes(),
-            _ => {}
+            s::Page::Exams | s::Page::Settings => {}
+        }
+    }
+
+    /// Refreshes `page` when it is on show. A screen off show needs nothing: `navigate`
+    /// refreshes every screen it shows, so what changed meanwhile is read then.
+    fn refresh_if_shown(&self, page: s::Page) {
+        if self.shown() == page {
+            self.refresh_page(page);
+        }
+    }
+
+    /// Opens the first item of the current exam's queue: now when Review is on show, else when
+    /// it is next shown (`navigate` opens the first item into an empty frame), so its crops are
+    /// decoded only for a frame on show.
+    fn restart_review(&self) {
+        if self.shown() == s::Page::Review {
+            let first = self.st.borrow().order.first().copied();
+            self.select_item(first);
+        } else {
+            let mut st = self.st.borrow_mut();
+            st.item = None;
+            st.current = None;
+            st.pending = None;
+            st.reason = None;
         }
     }
 
@@ -588,11 +626,22 @@ impl Shell {
             st.exam = Some(exam.clone());
         }
         self.refresh_all();
-        let first = self.st.borrow().order.first().copied();
-        self.select_item(first);
+        self.restart_review();
     }
 
+    /// Refreshes what every screen shares (the dashboard and the chrome, the Remark context) and
+    /// the screen on show. A first look at an exam is costly on some screens (Scan decodes the
+    /// page thumbnails, Outcomes computes the attainment), and nobody waits for a screen that is
+    /// not shown: `navigate` refreshes each one when it is shown.
     pub fn refresh_all(&self) {
+        self.refresh_dashboard();
+        self.refresh_page(self.shown());
+        self.refresh_remark();
+    }
+
+    /// Refreshes every screen, shown or not: for headless renders and tests that read the
+    /// view-model of a screen off show.
+    pub fn refresh_all_pages(&self) {
         self.refresh_dashboard();
         self.refresh_setup();
         self.refresh_scan();
@@ -1155,7 +1204,7 @@ impl Shell {
                         rm.set_setup_open(false);
                         self.say(what, s::Tone::Success);
                         self.refresh_setup();
-                        self.refresh_results();
+                        self.refresh_if_shown(s::Page::Results);
                         self.refresh_dashboard();
                     }
                     Err(e) => self.say(e.to_string(), s::Tone::Warning),
@@ -1253,7 +1302,7 @@ impl Shell {
                 let req = self.st.borrow().parallel_request.clone();
                 self.compare_remark(req);
                 self.refresh_dashboard();
-                self.refresh_results();
+                self.refresh_if_shown(s::Page::Results);
                 self.say(what, s::Tone::Success);
             }
             Err(e) => self.say(e.to_string(), s::Tone::Warning),
@@ -1279,7 +1328,7 @@ impl Shell {
             Ok(what) => {
                 self.say(what, s::Tone::Success);
                 self.refresh_dashboard();
-                self.refresh_results();
+                self.refresh_if_shown(s::Page::Results);
             }
             Err(e) => self.say(e.to_string(), s::Tone::Warning),
         }
@@ -1298,7 +1347,7 @@ impl Shell {
                 su.set_key_path(SharedString::new());
                 self.say(what, s::Tone::Success);
                 self.refresh_setup();
-                self.refresh_results();
+                self.refresh_if_shown(s::Page::Results);
                 self.refresh_dashboard();
             }
             Err(e) => self.say(e.to_string(), s::Tone::Warning),
@@ -1429,8 +1478,7 @@ impl Shell {
                 self.say(what, s::Tone::Success);
                 // the key may now be in force: every screen shows the scored exam
                 self.refresh_all();
-                let first = self.st.borrow().order.first().copied();
-                self.select_item(first);
+                self.restart_review();
             }
             Err(e) => self.say(e.to_string(), s::Tone::Warning),
         }
@@ -2055,7 +2103,7 @@ impl Shell {
                 self.refresh_review();
                 self.select_item(out.next);
                 self.refresh_dashboard();
-                self.refresh_results();
+                self.refresh_if_shown(s::Page::Results);
             }
             Err(e) => self.say(e.to_string(), s::Tone::Error),
         }
@@ -2080,7 +2128,7 @@ impl Shell {
                 }
                 self.select_item(Some(id));
                 self.refresh_dashboard();
-                self.refresh_results();
+                self.refresh_if_shown(s::Page::Results);
             }
             Ok(None) => self.say("Nothing to undo", s::Tone::Neutral),
             Err(e) => self.say(e.to_string(), s::Tone::Error),
@@ -2197,7 +2245,7 @@ impl Shell {
             Ok(what) => {
                 self.say(what, s::Tone::Success);
                 self.refresh_setup();
-                self.refresh_outcomes();
+                self.refresh_if_shown(s::Page::Outcomes);
             }
             Err(e) => self.say(e.to_string(), s::Tone::Warning),
         }
@@ -2213,7 +2261,7 @@ impl Shell {
                 self.ui().global::<s::SetupVM>().set_clo_path(ss(""));
                 self.say(what, s::Tone::Success);
                 self.refresh_setup();
-                self.refresh_outcomes();
+                self.refresh_if_shown(s::Page::Outcomes);
             }
             Err(e) => self.say(e.to_string(), s::Tone::Warning),
         }

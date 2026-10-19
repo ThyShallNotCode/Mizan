@@ -26,6 +26,7 @@ use omr_model::Severity as AppSeverity;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::Duration;
 
@@ -221,6 +222,11 @@ struct Entry {
     page_stage_ms: f64,
 }
 
+/// Page thumbnails by project folder and page ID, decoded from the stored originals at first
+/// sight. A stored page never changes, and the cache outlives the project's reopening after an
+/// added batch, so the pages already shown are not decoded again (about 28 ms each).
+type Thumbs = RefCell<BTreeMap<(PathBuf, String), Option<b::CropImage>>>;
+
 /// An opened project and the derived view-models cached until its next change.
 struct Opened {
     p: ExamProject,
@@ -230,8 +236,8 @@ struct Opened {
     items: RefCell<BTreeMap<u64, Option<b::ReviewItem>>>,
     results: RefCell<Option<Option<b::Results>>>,
     outcomes: RefCell<Option<Option<b::Outcomes>>>,
-    /// Page thumbnails by page index (pages never change after grading).
-    thumbs: RefCell<BTreeMap<usize, Option<b::CropImage>>>,
+    /// The backend's page thumbnails (see [`Thumbs`]).
+    thumbs: Rc<Thumbs>,
     /// Key-sheet files read for this exam and not confirmed yet (nothing in the exam changes
     /// until the confirmation replaces its key).
     preview: Option<Preview>,
@@ -259,7 +265,7 @@ struct Preview {
 }
 
 impl Opened {
-    fn new(p: ExamProject, dir: PathBuf, read_only: Option<String>) -> Self {
+    fn new(p: ExamProject, dir: PathBuf, read_only: Option<String>, thumbs: Rc<Thumbs>) -> Self {
         Self {
             p,
             read_only,
@@ -267,7 +273,7 @@ impl Opened {
             items: RefCell::new(BTreeMap::new()),
             results: RefCell::new(None),
             outcomes: RefCell::new(None),
-            thumbs: RefCell::new(BTreeMap::new()),
+            thumbs,
             preview: None,
             keysheets: RefCell::new(None),
             stability: RefCell::new(None),
@@ -315,6 +321,8 @@ pub struct AppBackend {
     stability_jobs: RefCell<Vec<StabilityJob>>,
     /// A Remark import read on the New-exam form and not used yet (§3.5).
     remark_new: Option<HeldImport>,
+    /// Page thumbnails of every project opened (shared with each [`Opened`]).
+    thumbs: Rc<Thumbs>,
 }
 
 struct StabilityJob {
@@ -360,6 +368,7 @@ impl AppBackend {
             reloaded: Vec::new(),
             stability_jobs: RefCell::new(Vec::new()),
             remark_new: None,
+            thumbs: Rc::default(),
         }
     }
 
@@ -393,9 +402,10 @@ impl AppBackend {
         let (p, read_only) = open_project(&dir, operator)?;
         let summary = p.summary_vm();
         let id = me.add_entry(dir.clone(), summary, Some(&p));
-        me.opened
-            .borrow_mut()
-            .insert(id.clone(), Opened::new(p, dir, read_only));
+        me.opened.borrow_mut().insert(
+            id.clone(),
+            Opened::new(p, dir, read_only, me.thumbs.clone()),
+        );
         me.default = Some(id);
         Ok(me)
     }
@@ -736,7 +746,7 @@ impl AppBackend {
                 Ok((p, ro)) => {
                     self.opened
                         .borrow_mut()
-                        .insert(exam.clone(), Opened::new(p, dir, ro));
+                        .insert(exam.clone(), Opened::new(p, dir, ro, self.thumbs.clone()));
                 }
                 Err(e) => {
                     self.failed.borrow_mut().insert(exam.clone(), e);
@@ -985,7 +995,7 @@ impl AppBackend {
                     self.failed.borrow_mut().remove(&exam);
                     self.opened
                         .borrow_mut()
-                        .insert(exam.clone(), Opened::new(p, dir, ro));
+                        .insert(exam.clone(), Opened::new(p, dir, ro, self.thumbs.clone()));
                 }
                 Err(e) => {
                     self.failed.borrow_mut().insert(exam.clone(), e);
@@ -1930,7 +1940,11 @@ impl Opened {
 
     /// A page thumbnail (decoded from the stored original once, then cached).
     fn thumbnail(&self, page: usize) -> Option<b::CropImage> {
-        if let Some(hit) = self.thumbs.borrow().get(&page) {
+        let key = (
+            self.dir.clone(),
+            self.p.session.pages.get(page)?.page_id.clone(),
+        );
+        if let Some(hit) = self.thumbs.borrow().get(&key) {
             return hit.clone();
         }
         let made = self.p.page_image(page).ok().map(|img| {
@@ -1941,7 +1955,7 @@ impl Opened {
                 rgba: c.rgba,
             }
         });
-        self.thumbs.borrow_mut().insert(page, made.clone());
+        self.thumbs.borrow_mut().insert(key, made.clone());
         made
     }
 

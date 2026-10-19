@@ -1130,3 +1130,129 @@ fn req_a11_demo_data_is_marked_on_every_screen() {
         "{msg}"
     );
 }
+
+/// The demo backend, counting the calls whose first answer is costly on a real exam: the
+/// Scan screen's batch (it decodes the page thumbnails), the outcomes and the review items
+/// (their crops).
+#[derive(Default)]
+struct Counting {
+    demo: DemoBackend,
+    batches: std::cell::Cell<u32>,
+    outcomes: std::cell::Cell<u32>,
+    items: std::cell::Cell<u32>,
+}
+
+impl Backend for Counting {
+    fn dashboard(&self) -> shell_slint::backend::Dashboard {
+        self.demo.dashboard()
+    }
+    fn default_exam(&self) -> Option<ExamId> {
+        self.demo.default_exam()
+    }
+    fn exam_setup(&self, exam: &ExamId) -> Option<shell_slint::backend::ExamSetup> {
+        self.demo.exam_setup(exam)
+    }
+    fn set_key(
+        &mut self,
+        exam: &ExamId,
+        version: usize,
+        question: u32,
+        answer: &str,
+    ) -> Result<(), shell_slint::backend::BackendError> {
+        self.demo.set_key(exam, version, question, answer)
+    }
+    fn set_mapping_weight(
+        &mut self,
+        exam: &ExamId,
+        question: u32,
+        clo: usize,
+        weight: Option<f64>,
+    ) -> Result<(), shell_slint::backend::BackendError> {
+        self.demo.set_mapping_weight(exam, question, clo, weight)
+    }
+    fn set_mapping_note(
+        &mut self,
+        exam: &ExamId,
+        question: u32,
+        clo: usize,
+        note: &str,
+    ) -> Result<(), shell_slint::backend::BackendError> {
+        self.demo.set_mapping_note(exam, question, clo, note)
+    }
+    fn batch_progress(&self, exam: &ExamId) -> Option<shell_slint::backend::BatchProgress> {
+        self.batches.set(self.batches.get() + 1);
+        self.demo.batch_progress(exam)
+    }
+    fn review_queue(&self, exam: &ExamId, lane: Lane) -> shell_slint::backend::ReviewQueue {
+        self.demo.review_queue(exam, lane)
+    }
+    fn review_item(
+        &self,
+        exam: &ExamId,
+        item: shell_slint::backend::ItemId,
+    ) -> Option<shell_slint::backend::ReviewItem> {
+        self.items.set(self.items.get() + 1);
+        self.demo.review_item(exam, item)
+    }
+    fn apply(
+        &mut self,
+        exam: &ExamId,
+        item: shell_slint::backend::ItemId,
+        action: ReviewAction,
+    ) -> Result<shell_slint::backend::ApplyOutcome, shell_slint::backend::BackendError> {
+        self.demo.apply(exam, item, action)
+    }
+    fn undo(
+        &mut self,
+        exam: &ExamId,
+    ) -> Result<Option<shell_slint::backend::ItemId>, shell_slint::backend::BackendError> {
+        self.demo.undo(exam)
+    }
+    fn review_history(&self, exam: &ExamId) -> Vec<shell_slint::backend::DecisionRecord> {
+        self.demo.review_history(exam)
+    }
+    fn results(&self, exam: &ExamId) -> Option<shell_slint::backend::Results> {
+        self.demo.results(exam)
+    }
+    fn outcomes(&self, exam: &ExamId) -> Option<shell_slint::backend::Outcomes> {
+        self.outcomes.set(self.outcomes.get() + 1);
+        self.demo.outcomes(exam)
+    }
+}
+
+#[test]
+fn req_a11_opening_an_exam_does_the_work_of_the_screen_on_show_only() {
+    // The first look at an exam froze the window for about a second: every screen was
+    // refreshed, shown or not, and Scan's page thumbnails and the outcomes are costly at first.
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = AppWindow::new().expect("window");
+    ui.global::<Theme>().set_reduce_motion(true);
+    let counted = Rc::new(RefCell::new(Counting::default()));
+    let dynamic: Rc<RefCell<dyn Backend>> = counted.clone();
+    let shell = Shell::bind(&ui, dynamic);
+    ui.show().expect("show");
+    let calls = || {
+        let c = counted.borrow();
+        (c.batches.get(), c.outcomes.get(), c.items.get())
+    };
+    assert_eq!(calls(), (0, 0, 0), "the Exams screen needs none of them");
+    let ex = ui.global::<ExamsVM>();
+    let other = (0..ex.get_rows().row_count())
+        .find(|&i| i as i32 != ex.get_selected())
+        .expect("a second exam");
+    ex.invoke_select(other as i32);
+    assert_eq!(calls(), (0, 0, 0), "nor does opening another exam from it");
+    // each screen reads its part when it is shown
+    click(&ui, &tab(&ui, "Scan"));
+    assert_eq!(calls(), (1, 0, 0));
+    click(&ui, &tab(&ui, "Outcomes"));
+    assert_eq!(calls(), (1, 1, 0));
+    let review = with_prefix(&ui, "Review")
+        .into_iter()
+        .map(|(_, e)| e)
+        .find(|e| e.accessible_role() == Some(AccessibleRole::Tab))
+        .expect("the Review tab");
+    click(&ui, &review);
+    assert!(calls().2 > 0, "Review opens the first item");
+    assert!(shell.current_item().is_some());
+}
