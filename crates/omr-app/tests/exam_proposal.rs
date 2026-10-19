@@ -524,6 +524,17 @@ fn p1_one_version_with_one_answer_column_grades_without_version_review() {
         value(&p, FieldId::Questions),
         ("20".into(), Source::KeyFile)
     );
+    // Four options typed: the students' marks on E go to review (MRK-017), as noted.
+    let mut four = g.clone();
+    four.typed.options = Some("4".into());
+    let p4 = propose(&four, Some(&s), &ctx(tmp.path()));
+    assert!(
+        notes_on(&p4, FieldId::Options)
+            .iter()
+            .any(|n| n.contains("on options beyond D go to review (MRK-017)")),
+        "{:#?}",
+        p4.issues
+    );
     let x = grade_with(&p, &[scans]);
     let sc = x.scoring.as_ref().unwrap();
     for (bi, b) in x.session.booklets.iter().enumerate() {
@@ -546,12 +557,22 @@ fn p2_two_versions_from_the_key_header_and_blank_bubbles_noted() {
     let mut sheets = students(0, 4, Shows::Letter(0), 0, 20);
     sheets.extend(students(4, 4, Shows::Letter(1), 1, 20));
     sheets.extend(students(8, 2, Shows::Blank, 1, 20));
+    // Two numbers the IAU scheme does not accept (it starts with 2): noted.
+    sheets[0].id = "1100000001".into();
+    sheets[1].id = "1100000002".into();
     let scans = render(&tmp.path().join("scans"), &sheets);
     let s = survey_of(std::slice::from_ref(&scans), &[], 2);
     let mut g = given(std::slice::from_ref(&scans));
     g.key = Some(per_version_key(tmp.path(), &[0, 1], 20));
     let p = propose(&g, Some(&s), &ctx(tmp.path()));
     ready(&p);
+    assert!(
+        notes_on(&p, FieldId::IdScheme)
+            .iter()
+            .any(|n| n.contains("2 of 10 complete student numbers do not fit iau")),
+        "{:#?}",
+        p.issues
+    );
     assert_eq!(
         value(&p, FieldId::Versions),
         ("A, B".into(), Source::KeyFile)
@@ -649,6 +670,13 @@ fn p4_p5_a_version_the_key_lacks_is_asked_and_a_stray_one_noted_then_held() {
     g.answers.push(hold);
     let p = propose(&g, Some(&s), &ctx(tmp.path()));
     ready(&p);
+    assert!(
+        notes_on(&p, FieldId::Versions)
+            .iter()
+            .any(|n| n.starts_with("6 sheets bubbling version C are held for your decision")),
+        "{:#?}",
+        p.issues
+    );
     let x = grade_with(&p, std::slice::from_ref(&scans));
     let sc = x.scoring.as_ref().unwrap();
     let mut held = 0;
@@ -684,6 +712,13 @@ fn p4_p5_a_version_the_key_lacks_is_asked_and_a_stray_one_noted_then_held() {
     let mut g = given(&no_b);
     g.key = Some(per_version_key(tmp.path(), &[0, 1], 20));
     let p = propose(&g, Some(&s), &ctx(tmp.path()));
+    assert!(
+        notes_on(&p, FieldId::Versions)
+            .iter()
+            .any(|n| n == "no sheet bubbles version B"),
+        "{:#?}",
+        p.issues
+    );
     let read_as = Answer::KeyVersions(vec!["A".into(), "C".into()]);
     assert!(
         has_answer(&p, FieldId::Versions, &read_as),
@@ -872,6 +907,15 @@ fn p7_p9_the_count_and_the_gaps_come_from_the_key_file() {
         "{:#?}",
         p.issues
     );
+    let keep = Answer::KeepQuestions(100);
+    assert!(has_answer(&p, FieldId::Key, &keep));
+    g.answers.push(keep);
+    let p = propose(&g, None, &c);
+    assert!(
+        p.asks().all(|i| !i.text.contains("answers questions 120")),
+        "{:#?}",
+        p.issues
+    );
     // The key uses option E on an exam typed with 4 options.
     let mut g = given(std::slice::from_ref(&scans));
     g.key = Some(write(tmp.path(), "e.csv", b"question,key\n1,A\n2,E\n"));
@@ -944,10 +988,31 @@ fn numbered_and_unlabelled_key_versions_are_asked_and_read_as_answered() {
         "{}",
         a.text
     );
-    g.answers.push(ab);
+    g.answers.push(ab.clone());
     assert_eq!(
         define(ready(&propose(&g, None, &c))).unwrap().0.forms,
         ["A", "B"]
+    );
+    // A gap in an unlabelled key is asked under the version it was read as.
+    let mut t = String::new();
+    for q in 0..20 {
+        let a = if q == 4 {
+            String::new()
+        } else {
+            letter(key(0, q))
+        };
+        t.push_str(&format!("{},{a},{}\n", q + 1, letter(key(1, q))));
+    }
+    let mut g = given(std::slice::from_ref(&scans));
+    g.key = Some(write(tmp.path(), "gap.csv", t.as_bytes()));
+    g.answers.push(ab);
+    let p = propose(&g, None, &c);
+    let a = ask_on(&p, FieldId::Key);
+    assert!(
+        a.text
+            .contains("gap.csv has no answer for version A question 5"),
+        "{}",
+        a.text
     );
     // Headerless rows that start with their version: A and C.
     let t = format!("{}{}", row("A", 0), row("C", 2));
@@ -1042,6 +1107,32 @@ fn p10_the_count_comes_from_the_key_sheets() {
         "{:#?}",
         p.issues
     );
+    // A count past the key sheets' rows is noted; one short of them is asked.
+    let mut more = g.clone();
+    more.typed.questions = Some("40".into());
+    let p40 = propose(&more, Some(&s), &ctx(tmp.path()));
+    ready(&p40);
+    assert!(
+        notes_on(&p40, FieldId::Questions)
+            .iter()
+            .any(|n| n.contains("the key sheets mark rows up to 35: rows 36–40 get their key")),
+        "{:#?}",
+        p40.issues
+    );
+    more.typed.questions = Some("30".into());
+    let p30 = propose(&more, Some(&s), &ctx(tmp.path()));
+    let a = ask_on(&p30, FieldId::Questions);
+    assert!(
+        a.text
+            .contains("the key sheets mark rows 1–35, but the exam has 30 questions"),
+        "{}",
+        a.text
+    );
+    assert!(has_answer(
+        &p30,
+        FieldId::Questions,
+        &Answer::KeepQuestions(30)
+    ));
     let x = grade_with(&p, &[scans]);
     assert_eq!(x.session.key_sheets.sheets.len(), 1);
     assert!(x.session.key_unconfirmed());
@@ -1090,16 +1181,17 @@ fn p11_no_key_is_asked_and_a_provisional_key_is_only_chosen() {
 
 /// P12 (C6): a Remark import gives the versions and the count; a version it lacks is asked; a
 /// typed count or a key file against it is asked too.
-#[test]
-fn p12_a_remark_import_gives_the_versions_and_the_count() {
+/// A Remark import of versions A and B with `n` questions and `students` students on each,
+/// every one wrong on question 1 (a row equal to the key is Remark's key sheet, not a student).
+fn remark_import(n: u16, students: u64) -> omr_app::remark::RemarkImport {
     use remark_common::{Book, Student, xlsx};
-    let tmp = tempfile::tempdir().unwrap();
-    let n = 10u16;
     let book = |v: u8, first: u64| {
         let key: Vec<String> = (0..n).map(|q| letter(key(v, q))).collect();
-        let students = (0..4)
+        let rows = (0..students)
             .map(|k| {
-                let refs: Vec<&str> = key.iter().map(String::as_str).collect();
+                let mut a = key.clone();
+                a[0] = letter((self::key(v, 0) + 1) % 5);
+                let refs: Vec<&str> = a.iter().map(String::as_str).collect();
                 Student::new(&(first + k).to_string(), &letter(v), &refs)
             })
             .collect();
@@ -1108,7 +1200,7 @@ fn p12_a_remark_import_gives_the_versions_and_the_count() {
             key,
             points: vec![1.0; usize::from(n)],
             groups: Vec::new(),
-            students,
+            students: rows,
             footer: true,
         }
     };
@@ -1126,7 +1218,14 @@ fn p12_a_remark_import_gives_the_versions_and_the_count() {
         [(String::new(), vec![Some("1".to_string()); usize::from(n)])]
             .into_iter()
             .collect();
-    let imp = omr_app::remark::import(&wbs, &given_points).unwrap();
+    omr_app::remark::import(&wbs, &given_points).unwrap()
+}
+
+#[test]
+fn p12_a_remark_import_gives_the_versions_and_the_count() {
+    let tmp = tempfile::tempdir().unwrap();
+    let n = 10u16;
+    let imp = remark_import(n, 4);
     let mut sheets = students(0, 4, Shows::Letter(0), 0, n);
     sheets.extend(students(4, 4, Shows::Letter(1), 1, n));
     sheets.extend(students(8, 3, Shows::Letter(2), 2, n));
@@ -1150,6 +1249,17 @@ fn p12_a_remark_import_gives_the_versions_and_the_count() {
             .contains("3 sheets bubble version C, but the Remark export has A, B"),
         "{}",
         a.text
+    );
+    // C6: 4 sheets and 4 students of each version agree; 8 students of each do not.
+    assert!(notes_on(&p, FieldId::Remark).is_empty(), "{:#?}", p.issues);
+    let mut more = g.clone();
+    more.remark = Some(remark_import(n, 8));
+    let p8 = propose(&more, Some(&s), &c);
+    assert!(
+        notes_on(&p8, FieldId::Remark).iter().any(|t| t
+            .contains("the sheets show 4 version A sheets, the Remark export 8 students")),
+        "{:#?}",
+        p8.issues
     );
     g.answers.push(Answer::HoldVersions(vec!["C".into()]));
     let p = propose(&g, Some(&s), &c);
@@ -1330,6 +1440,18 @@ fn p17_a_survey_of_other_inputs_is_ignored() {
     stale(&propose(&g, Some(&s), &c));
     let s = survey_of(&files, &[], 2);
     ready(&propose(&g, Some(&s), &c));
+    // Key sheets or a roster named after the survey: the survey did not see them.
+    let keys = render(&tmp.path().join("keys"), &[S::key_sheet("key-a", 0, 20, 0)]);
+    let mut named = g.clone();
+    named.key_sheets = files_of(&keys);
+    stale(&propose(&named, Some(&s), &c));
+    let mut rostered = g.clone();
+    rostered.roster = Some(write(
+        tmp.path(),
+        "roster.csv",
+        format!("id,name\n{},Student\n", student_id(0)).as_bytes(),
+    ));
+    stale(&propose(&rostered, Some(&s), &c));
     // A scan replaced after the survey.
     let e = iau();
     write(
@@ -1483,4 +1605,922 @@ fn s6_p13_own_sheets_are_surveyed_by_their_page_codes_with_the_specs_cancel_mode
         a.text
     );
     assert_eq!(a.choices[0].action, ChoiceAction::Pick(FieldId::Sheet));
+}
+
+/// A survey built by hand for `scans` (nothing rendered): `n` sheets, printed row `q` (0-based)
+/// marked on `marked(q)` of them, `letters` bubbled (the rest blank), `types` exam-type bubbles.
+fn hand_survey(
+    scans: &[PathBuf],
+    n: usize,
+    marked: &dyn Fn(usize) -> u32,
+    letters: &[(&str, u32)],
+    types: &[(&str, u32)],
+) -> Survey {
+    use omr_app::survey::{IdCounts, RowUse, VersionCounts, request_digest};
+    let by_letter: std::collections::BTreeMap<String, u32> =
+        letters.iter().map(|(l, c)| (l.to_string(), *c)).collect();
+    let bubbled: u32 = by_letter.values().sum();
+    Survey {
+        fingerprint: String::new(),
+        request: request_digest(&iau_sheet(), scans, &[], None).unwrap(),
+        template: "iau-ccsit-v1".into(),
+        files: n,
+        pages: n,
+        booklets: n,
+        blank_booklets: 0,
+        blank_pages: 0,
+        duplicates: 0,
+        refused: 0,
+        photos: 0,
+        not_this_sheet: Vec::new(),
+        versions: VersionCounts {
+            by_letter,
+            blank: n as u32 - bubbled,
+            unclear: 0,
+        },
+        rows: (0..100)
+            .map(|q| RowUse {
+                marked: marked(q),
+                multi: 0,
+                by_option: vec![0; 5],
+            })
+            .collect(),
+        last_rows: Default::default(),
+        multi_marks: 0,
+        ids: IdCounts::default(),
+        key_sheets: Vec::new(),
+        key_sheet_notes: Vec::new(),
+        exam_types: types.iter().map(|(t, c)| (t.to_string(), *c)).collect(),
+        sections: Default::default(),
+    }
+}
+
+/// The extent is high (N50 is the count) only when row N50 is marked on 70 % of the sheets,
+/// every row before it on 30 % and no row after it on more than 5 %; otherwise a provisional
+/// key's count is asked, offering N50.
+#[test]
+fn the_extent_is_high_only_when_the_last_row_the_body_and_the_tail_all_say_so() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scans = vec![dummy_scans(tmp.path())];
+    let c = ctx(tmp.path());
+    let t = Default::default();
+    let mut g = given(&scans);
+    g.answers.push(Answer::InferKeyProvisionally);
+    // Rows 1–30 on every sheet: high, and the count.
+    let s = hand_survey(&scans, 20, &|q| if q < 30 { 20 } else { 0 }, &[], &[]);
+    let e = s.extent(&t);
+    assert_eq!(
+        (e.n50, e.last, e.tail_max_permille, e.high),
+        (30, 30, 0, true)
+    );
+    let p = propose(&g, Some(&s), &c);
+    ready(&p);
+    assert_eq!(value(&p, FieldId::Questions), ("30".into(), Source::Sheets));
+    // Row 30 on 60 % only; row 10 on 20 % only; row 35 on 10 %.
+    let at_n50 = |q: usize| -> u32 {
+        match q {
+            0..29 => 20,
+            29 => 12,
+            _ => 0,
+        }
+    };
+    let body = |q: usize| -> u32 {
+        match q {
+            9 => 4,
+            0..30 => 20,
+            _ => 0,
+        }
+    };
+    let tail = |q: usize| -> u32 {
+        match q {
+            0..30 => 20,
+            34 => 2,
+            _ => 0,
+        }
+    };
+    type Marked<'a> = &'a dyn Fn(usize) -> u32;
+    let cases: [(&str, Marked, u32); 3] = [
+        ("row N50", &at_n50, 0),
+        ("the body", &body, 0),
+        ("the tail", &tail, 100),
+    ];
+    for (what, marked, tail) in cases {
+        let s = hand_survey(&scans, 20, marked, &[], &[]);
+        let e = s.extent(&t);
+        assert_eq!(e.n50, 30, "{what}");
+        assert_eq!(e.tail_max_permille, tail, "{what}");
+        assert!(!e.high, "{what}: {e:?}");
+        let p = propose(&g, Some(&s), &c);
+        assert!(p.inputs.is_none(), "{what}");
+        let a = ask_on(&p, FieldId::Questions);
+        assert!(
+            a.text.contains("The sheets do not say clearly"),
+            "{what}: {}",
+            a.text
+        );
+        assert!(
+            has_answer(&p, FieldId::Questions, &Answer::UseQuestions(30)),
+            "{what}"
+        );
+        assert_eq!(value(&p, FieldId::Questions).0, "", "{what}");
+    }
+    // Without a survey the count is asked too, to be typed.
+    let p = propose(&g, None, &c);
+    let a = ask_on(&p, FieldId::Questions);
+    assert!(a.text.starts_with("how many questions"), "{}", a.text);
+    assert_eq!(a.choices[0].action, ChoiceAction::Type(FieldId::Questions));
+}
+
+/// A letter on 3 of 70 sheets (under 5 %) is a stray even with a one-column key: noted, never
+/// a reason to ask about a second version. A folder named `scans` and an exam-type bubble on
+/// half the sheets name no title.
+#[test]
+fn a_letter_on_few_sheets_is_a_stray_and_weak_evidence_names_no_title() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scans = vec![dummy_scans(tmp.path())];
+    let c = ctx(tmp.path());
+    let mut g = given(&scans);
+    g.key = Some(shared_key(tmp.path(), 20));
+    let s = hand_survey(
+        &scans,
+        70,
+        &|q| if q < 20 { 70 } else { 0 },
+        &[("A", 67), ("B", 3)],
+        &[("Midterm", 35)],
+    );
+    let p = propose(&g, Some(&s), &c);
+    ready(&p);
+    assert_eq!(value(&p, FieldId::Versions), ("A".into(), Source::Sheets));
+    assert!(
+        notes_on(&p, FieldId::Versions)
+            .iter()
+            .any(|n| n.starts_with("3 sheets bubble version B, which the exam does not declare")),
+        "{:#?}",
+        p.issues
+    );
+    assert_eq!(value(&p, FieldId::Title), ("Exam".into(), Source::Default));
+}
+
+/// Asks no other case raises: a key file that cannot be read, a typed cancel mode the sheet
+/// does not print, a folder that holds an exam, no scans, a roster `define` refuses, a count or
+/// options typed out of range. Each keeps the inputs back until answered.
+#[test]
+fn files_and_typed_values_the_exam_cannot_use_are_asked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scans = vec![dummy_scans(tmp.path())];
+    let c = ctx(tmp.path());
+    let keyed = || {
+        let mut g = given(&scans);
+        g.key = Some(shared_key(tmp.path(), 20));
+        g
+    };
+    // An Excel workbook as the key, the count typed: asked, never graded without the key.
+    let mut g = given(&scans);
+    g.key = Some(write(tmp.path(), "key.xlsx", b"PK\x03\x04"));
+    g.typed.questions = Some("20".into());
+    let p = propose(&g, None, &c);
+    assert!(p.inputs.is_none(), "{:#?}", p.issues);
+    let a = ask_on(&p, FieldId::Key);
+    assert!(
+        a.text.contains("key.xlsx") && a.text.contains("save the key as CSV"),
+        "{}",
+        a.text
+    );
+    assert_eq!(a.choices[0].action, ChoiceAction::Pick(FieldId::Key));
+    // A key file with an entry no sheet prints: asked naming its line.
+    g.key = Some(write(tmp.path(), "bad.csv", b"question,key\n1,B\n2,Z\n"));
+    let p = propose(&g, None, &c);
+    assert!(p.inputs.is_none());
+    let a = ask_on(&p, FieldId::Key);
+    assert!(
+        a.text.contains("bad.csv") && a.text.contains("line 3"),
+        "{}",
+        a.text
+    );
+    // The IAU sheet prints erase_only: a typed cross_cancels is asked and shown as typed.
+    let mut g = keyed();
+    g.typed.cancel_mode = Some("cross_cancels".into());
+    let p = propose(&g, None, &c);
+    assert!(p.inputs.is_none());
+    assert_eq!(
+        value(&p, FieldId::CancelMode),
+        ("cross_cancels".into(), Source::Typed)
+    );
+    let erase = Answer::UseValue(FieldId::CancelMode, "erase_only".into());
+    assert!(has_answer(&p, FieldId::CancelMode, &erase));
+    g.answers.push(erase);
+    assert_eq!(
+        ready(&propose(&g, None, &c)).cancel_mode.as_deref(),
+        Some("erase_only")
+    );
+    // A folder that holds an exam.
+    let mut g = keyed();
+    let old = tmp.path().join("old-exam");
+    write(&old, "project.omrproj", b"");
+    g.typed.folder = Some(old);
+    let p = propose(&g, None, &c);
+    assert!(p.inputs.is_none());
+    assert!(
+        ask_on(&p, FieldId::Folder)
+            .text
+            .contains("already holds an exam")
+    );
+    // No scans.
+    let mut g = keyed();
+    g.scans.clear();
+    let p = propose(&g, None, &c);
+    assert!(p.inputs.is_none());
+    let a = ask_on(&p, FieldId::Scans);
+    assert_eq!(a.choices[0].action, ChoiceAction::Pick(FieldId::Scans));
+    // A roster that lists a student twice: `define` refuses it, asked on the roster.
+    let mut g = keyed();
+    g.roster = Some(write(
+        tmp.path(),
+        "roster.csv",
+        format!("id,name\n{0},One\n{0},Two\n", student_id(1)).as_bytes(),
+    ));
+    let p = propose(&g, None, &c);
+    assert!(p.inputs.is_none(), "{:#?}", p.issues);
+    let a = ask_on(&p, FieldId::Roster);
+    assert_eq!(a.choices[0].action, ChoiceAction::Pick(FieldId::Roster));
+    // A count or options typed out of range.
+    let mut g = keyed();
+    g.typed.questions = Some("abc".into());
+    let p = propose(&g, None, &c);
+    assert!(
+        ask_on(&p, FieldId::Questions)
+            .text
+            .contains("`abc` is not a question count")
+    );
+    g.typed.questions = None;
+    g.typed.options = Some("7".into());
+    let p = propose(&g, None, &c);
+    ask_on(&p, FieldId::Options);
+    assert!(has_answer(
+        &p,
+        FieldId::Options,
+        &Answer::UseValue(FieldId::Options, "5".into())
+    ));
+    // Nothing contradicted: a folder named `scans` names no title.
+    let p = propose(&keyed(), None, &c);
+    ready(&p);
+    assert_eq!(value(&p, FieldId::Title), ("Exam".into(), Source::Default));
+}
+
+/// Key sheets in a stack against the versions: a version bubbled on many sheets with no key
+/// sheet is asked (rule 5); a key sheet for a version the typed versions lack would hold the
+/// run, asked (C5); key sheets that cannot give a key are asked like a missing key, with their
+/// notes; a stack that is mostly another sheet is asked.
+#[test]
+fn key_sheets_and_pages_that_cannot_serve_the_exam_are_asked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let c = ctx(tmp.path());
+    let mut sheets = students(0, 4, Shows::Letter(0), 0, 20);
+    sheets.extend(students(4, 4, Shows::Letter(1), 1, 20));
+    sheets.push(S::key_sheet("key-a", 0, 20, 0));
+    sheets.push(S::key_sheet("key-c", 2, 20, 9));
+    let scans = render(&tmp.path().join("scans"), &sheets);
+    let s = survey_of(std::slice::from_ref(&scans), &[], 2);
+    assert_eq!(s.key_sheets.len(), 2);
+    let mut g = given(std::slice::from_ref(&scans));
+    let p = propose(&g, Some(&s), &c);
+    assert!(p.inputs.is_none());
+    let a = ask_on(&p, FieldId::Versions);
+    assert!(
+        a.text
+            .contains("4 sheets bubble version B, but no key sheet is for version B"),
+        "{}",
+        a.text
+    );
+    assert!(has_answer(
+        &p,
+        FieldId::Versions,
+        &Answer::HoldVersions(vec!["B".into()])
+    ));
+    g.typed.forms = Some("A".into());
+    let p = propose(&g, Some(&s), &c);
+    let a = ask_on(&p, FieldId::KeySheets);
+    assert!(
+        a.text
+            .contains("is a key sheet for version C, but the exam declares A"),
+        "{}",
+        a.text
+    );
+    assert!(has_answer(
+        &p,
+        FieldId::KeySheets,
+        &Answer::UseValue(FieldId::Versions, "A,C".into())
+    ));
+    // A student's sheet named as the key sheet: no marker, so no key.
+    let only = render(
+        &tmp.path().join("students"),
+        &students(0, 4, Shows::Letter(0), 0, 20),
+    );
+    let named = render(
+        &tmp.path().join("named"),
+        &[S::student(9, Shows::Letter(0), 0, 20)],
+    );
+    let named = files_of(&named);
+    let s = survey_of(std::slice::from_ref(&only), &named, 2);
+    assert_eq!(s.key_sheets.len(), 1);
+    assert!(s.key_sheets[0].problem.is_some(), "{:?}", s.key_sheets);
+    let mut g = given(std::slice::from_ref(&only));
+    g.key_sheets = named;
+    let p = propose(&g, Some(&s), &c);
+    assert!(p.inputs.is_none());
+    let a = ask_on(&p, FieldId::Key);
+    assert!(
+        a.text.starts_with("the key sheets cannot give a key"),
+        "{}",
+        a.text
+    );
+    assert!(
+        notes_on(&p, FieldId::KeySheets)
+            .iter()
+            .any(|n| n.contains("student-number grid of a key sheet must be bubbled")),
+        "{:#?}",
+        p.issues
+    );
+    // One sheet and two pages that are no IAU sheet: asked, then held on the answer.
+    let foreign = render(
+        &tmp.path().join("foreign"),
+        &students(0, 1, Shows::Blank, 0, 20),
+    );
+    let e = iau();
+    let front = sheet(&e, &S::student(0, Shows::Blank, 0, 20).marks(&e), 500);
+    let mut rng = omr_imaging::SplitMix64::new(5);
+    for k in 0..2 {
+        let noise = omr_imaging::GrayImage::from_fn(front.width(), front.height(), |_, _| {
+            (rng.next_u64() % 256) as u8
+        });
+        write(&foreign, &format!("noise-{k}.png"), &png(&noise));
+    }
+    let s = survey_of(std::slice::from_ref(&foreign), &[], 2);
+    assert_eq!((s.booklets, s.not_this_sheet.len()), (1, 2));
+    let mut g = given(std::slice::from_ref(&foreign));
+    g.key = Some(shared_key(tmp.path(), 20));
+    let p = propose(&g, Some(&s), &c);
+    assert!(p.inputs.is_none());
+    let a = ask_on(&p, FieldId::Sheet);
+    assert!(a.text.contains("only 1 of 3 pages register"), "{}", a.text);
+    assert!(has_answer(&p, FieldId::Sheet, &Answer::KeepSheet));
+    g.answers.push(Answer::KeepSheet);
+    let p = propose(&g, Some(&s), &c);
+    ready(&p);
+    assert!(
+        notes_on(&p, FieldId::Sheet)
+            .iter()
+            .any(|n| n.starts_with("2 pages are not this exam's sheet")),
+        "{:#?}",
+        p.issues
+    );
+}
+
+/// A key sheet whose version is blank is judged against the exam's versions (one version: it
+/// is that version's, nothing to ask), never a problem of its own; a confident double mark is
+/// counted.
+#[test]
+fn a_key_sheet_without_a_version_serves_a_one_version_exam_and_double_marks_are_counted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut sheets = students(0, 4, Shows::Letter(0), 0, 20);
+    // A second mark on question 2 (the key is D there).
+    sheets[0].stray.push(1);
+    let mut ks = S::key_sheet("key-x", 0, 20, 9);
+    ks.shows = Shows::Blank;
+    sheets.push(ks);
+    let scans = render(&tmp.path().join("scans"), &sheets);
+    let s = survey_of(std::slice::from_ref(&scans), &[], 2);
+    assert_eq!(s.key_sheets.len(), 1);
+    assert_eq!(s.key_sheets[0].version, "");
+    assert!(s.key_sheets[0].problem.is_none(), "{:?}", s.key_sheets);
+    assert_eq!(s.multi_marks, 1);
+    let mut g = given(&[scans]);
+    g.key = Some(shared_key(tmp.path(), 20));
+    let p = propose(&g, Some(&s), &ctx(tmp.path()));
+    let i = ready(&p);
+    assert_eq!(i.forms, Some(vec!["A".to_string()]));
+    assert!(
+        notes_on(&p, FieldId::KeySheets)
+            .iter()
+            .any(|n| n.starts_with("1 key sheet is also in the scans")),
+        "{:#?}",
+        p.issues
+    );
+}
+
+/// Six sheets bubble two exam types: the scans may hold two exams.
+#[test]
+fn p14_two_exam_types_in_one_stack_are_asked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut sheets = students(0, 4, Shows::Blank, 0, 20);
+    sheets.extend(students(4, 4, Shows::Blank, 0, 20));
+    for (k, s) in sheets.iter_mut().enumerate() {
+        s.exam_type = Some(if k < 4 { 3 } else { 1 });
+    }
+    let scans = render(&tmp.path().join("scans"), &sheets);
+    let s = survey_of(std::slice::from_ref(&scans), &[], 2);
+    assert_eq!(s.exam_types.len(), 2, "{:?}", s.exam_types);
+    let mut g = given(&[scans]);
+    g.key = Some(shared_key(tmp.path(), 20));
+    let p = propose(&g, Some(&s), &ctx(tmp.path()));
+    let a = ask_on(&p, FieldId::Scans);
+    assert!(
+        a.text.starts_with("the sheets bubble") && a.text.contains("Midterm on 4"),
+        "{}",
+        a.text
+    );
+    assert!(has_answer(&p, FieldId::Scans, &Answer::OneExam));
+}
+
+/// Versions typed with a key file of one answer column: asked whether it is every version's
+/// key, never copied to each unasked (P6's question), also after the card's own "Declare A, B";
+/// answered, both versions take it.
+#[test]
+fn typed_versions_with_one_answer_column_ask_whether_it_is_every_versions_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut sheets = students(0, 4, Shows::Letter(0), 0, 20);
+    sheets.extend(students(4, 4, Shows::Letter(1), 1, 20));
+    let scans = render(&tmp.path().join("scans"), &sheets);
+    let s = survey_of(std::slice::from_ref(&scans), &[], 2);
+    let c = ctx(tmp.path());
+    let mut g = given(std::slice::from_ref(&scans));
+    g.key = Some(shared_key(tmp.path(), 20));
+    g.typed.forms = Some("A,B".into());
+    let same = Answer::SameKeyForEveryVersion;
+    let asked = |p: &Proposal| {
+        assert!(p.inputs.is_none(), "{:#?}", p.issues);
+        let a = ask_on(p, FieldId::Versions);
+        assert!(
+            a.text
+                .contains("key.csv has one answer column, but the exam declares A, B"),
+            "{}",
+            a.text
+        );
+        assert!(has_answer(p, FieldId::Versions, &same));
+    };
+    asked(&propose(&g, Some(&s), &c));
+    asked(&propose(&g, None, &c));
+    // Typed A: the card offers to declare B, and that answer asks the same.
+    g.typed.forms = Some("A".into());
+    let p = propose(&g, Some(&s), &c);
+    let declare = Answer::UseValue(FieldId::Versions, "A,B".into());
+    assert!(
+        has_answer(&p, FieldId::Versions, &declare),
+        "{:#?}",
+        p.issues
+    );
+    g.answers.push(declare);
+    asked(&propose(&g, Some(&s), &c));
+    g.answers.push(same.clone());
+    let p = propose(&g, Some(&s), &c);
+    assert_eq!(ready(&p).forms, Some(vec!["A".to_string(), "B".into()]));
+    assert_eq!(
+        value(&p, FieldId::Versions),
+        ("A, B".into(), Source::Answer)
+    );
+}
+
+/// P6 with the versions typed: the one answer column is every version's key once answered, so
+/// sheets without a version are scored under it, and the card never promises them a version
+/// review (not even while it asks).
+#[test]
+fn p6_typed_versions_with_one_answer_column_share_the_key_without_version_review() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut sheets = students(0, 4, Shows::Letter(0), 0, 20);
+    sheets.extend(students(4, 4, Shows::Letter(1), 0, 20));
+    sheets.extend(students(8, 2, Shows::Blank, 0, 20));
+    let scans = render(&tmp.path().join("scans"), &sheets);
+    let s = survey_of(std::slice::from_ref(&scans), &[], 2);
+    let mut g = given(std::slice::from_ref(&scans));
+    g.key = Some(shared_key(tmp.path(), 20));
+    g.typed.forms = Some("A,B".into());
+    let no_review = |p: &Proposal| {
+        assert!(
+            notes_on(p, FieldId::Versions)
+                .iter()
+                .all(|n| !n.contains("blank")),
+            "{:#?}",
+            p.issues
+        );
+    };
+    let p = propose(&g, Some(&s), &ctx(tmp.path()));
+    ask_on(&p, FieldId::Versions);
+    no_review(&p);
+    g.answers.push(Answer::SameKeyForEveryVersion);
+    let p = propose(&g, Some(&s), &ctx(tmp.path()));
+    ready(&p);
+    no_review(&p);
+    let x = grade_with(&p, &[scans]);
+    let sc = x.scoring.as_ref().unwrap();
+    for (bi, b) in x.session.booklets.iter().enumerate() {
+        let st = sheet_of(&x, bi, &sheets);
+        if st.shows == Shows::Blank {
+            assert_eq!(b.form_source, FormSource::Shared, "{}", st.name);
+        }
+        let row = sc.row_of[bi].unwrap();
+        assert_eq!(
+            sc.run.as_ref().unwrap().students[row].raw.to_string(),
+            st.score(0, 20).to_string()
+        );
+    }
+    assert!(x.queue(None).iter().all(|i| i.code != "SCO-005"));
+}
+
+/// Headerless key rows that start with a letter, on an exam with as many questions as a row has
+/// cells: the letter is a version or the answer to question 1. Asked; under each answer the
+/// card's versions and count are the keys the definition reads.
+#[test]
+fn headerless_rows_starting_with_a_letter_are_asked_when_the_count_reaches_the_row() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scans = dummy_scans(tmp.path());
+    let c = ctx(tmp.path());
+    // Two rows of 20 cells, `A,…` and `C,…`.
+    let row = |first: u8, v: u8| -> Vec<String> {
+        std::iter::once(letter(first))
+            .chain((1..20).map(|q| letter(key(v, q))))
+            .collect()
+    };
+    let rows = [row(0, 0), row(2, 1)];
+    let text: String = rows.iter().map(|r| format!("{}\n", r.join(","))).collect();
+    let mut g = given(std::slice::from_ref(&scans));
+    g.key = Some(write(tmp.path(), "rows.csv", text.as_bytes()));
+    let keys_of = |p: &Proposal| {
+        let (def, _) = define(ready(p)).unwrap();
+        let omr_app::KeySource::Provided { forms } = def.key else {
+            panic!("a provided key")
+        };
+        (def.forms, def.questions, forms)
+    };
+    // Nothing typed: the first cell is the version, 19 questions (with a note).
+    let p = propose(&g, None, &c);
+    assert_eq!(
+        value(&p, FieldId::Versions),
+        ("A, C".into(), Source::KeyFile)
+    );
+    let (forms, q, k) = keys_of(&p);
+    assert_eq!((forms, q), (vec!["A".to_string(), "C".into()], 19));
+    assert_eq!(
+        (k[0].answers.as_slice(), k[1].answers.as_slice()),
+        (&rows[0][1..], &rows[1][1..])
+    );
+    // 20 typed: asked, nothing graded before the answer.
+    g.typed.questions = Some("20".into());
+    let p = propose(&g, None, &c);
+    assert!(p.inputs.is_none(), "{:#?}", p.issues);
+    let a = ask_on(&p, FieldId::Key);
+    assert!(
+        a.text.contains("rows.csv has no header row") && a.text.contains("20 questions"),
+        "{}",
+        a.text
+    );
+    let labelled = Answer::UseQuestions(19);
+    assert!(has_answer(&p, FieldId::Key, &labelled));
+    assert!(has_answer(&p, FieldId::Key, &Answer::KeyRowsUnlabelled));
+    // The first cell is the version: 19 questions, each key the cells after it.
+    let mut v = g.clone();
+    v.answers.push(labelled);
+    let p = propose(&v, None, &c);
+    assert_eq!(value(&p, FieldId::Questions), ("19".into(), Source::Answer));
+    let (forms, q, k) = keys_of(&p);
+    assert_eq!((forms, q), (vec!["A".to_string(), "C".into()], 19));
+    assert_eq!(
+        (k[0].answers.as_slice(), k[1].answers.as_slice()),
+        (&rows[0][1..], &rows[1][1..])
+    );
+    // The first cell is the answer to question 1: two keys of 20 answers, their versions asked.
+    let mut u = g.clone();
+    u.answers.push(Answer::KeyRowsUnlabelled);
+    let p = propose(&u, None, &c);
+    let a = ask_on(&p, FieldId::Versions);
+    assert!(
+        a.text
+            .contains("rows.csv has 2 keys without a version label"),
+        "{}",
+        a.text
+    );
+    let ab = Answer::KeyVersions(vec!["A".into(), "B".into()]);
+    assert!(has_answer(&p, FieldId::Versions, &ab));
+    u.answers.push(ab);
+    let p = propose(&u, None, &c);
+    assert_eq!(value(&p, FieldId::Questions), ("20".into(), Source::Typed));
+    assert!(
+        p.issues.iter().all(|i| !i.text.contains("no answer for")),
+        "{:#?}",
+        p.issues
+    );
+    let (forms, q, k) = keys_of(&p);
+    assert_eq!((forms, q), (vec!["A".to_string(), "B".into()], 20));
+    assert_eq!(
+        (&k[0].answers, &k[1].answers),
+        (&rows[0].to_vec(), &rows[1].to_vec())
+    );
+    // One such row is a key without a version (its letter answers question 1), also when the
+    // count passes the row: the gap is question 21.
+    let mut one = given(std::slice::from_ref(&scans));
+    one.key = Some(write(
+        tmp.path(),
+        "one.csv",
+        format!("{}\n", rows[0].join(",")).as_bytes(),
+    ));
+    one.typed.questions = Some("21".into());
+    one.answers.push(Answer::GradeWithKeyGaps);
+    let p = propose(&one, None, &c);
+    assert!(
+        notes_on(&p, FieldId::Versions)
+            .iter()
+            .any(|n| n.contains("one.csv's key names no version: it is read as version A")),
+        "{:#?}",
+        p.issues
+    );
+    assert!(
+        notes_on(&p, FieldId::Key)
+            .iter()
+            .any(|n| n.contains("one.csv has no answer for version A question 21")),
+        "{:#?}",
+        p.issues
+    );
+    let (_, q, k) = keys_of(&p);
+    assert_eq!(q, 21);
+    assert_eq!(&k[0].answers[..20], &rows[0][..]);
+    assert_eq!(k[0].answers[20], "");
+}
+
+/// A one-column key with an empty cell (an empty line): the gap is asked at its own question.
+#[test]
+fn an_empty_cell_of_a_one_column_key_is_asked_as_a_gap() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scans = dummy_scans(tmp.path());
+    let c = ctx(tmp.path());
+    let mut g = given(std::slice::from_ref(&scans));
+    g.key = Some(write(tmp.path(), "col.csv", b"B\r\nC\r\n\r\nA\r\nD\r\n"));
+    let p = propose(&g, None, &c);
+    assert!(p.inputs.is_none());
+    assert_eq!(value(&p, FieldId::Questions), ("5".into(), Source::KeyFile));
+    let a = ask_on(&p, FieldId::Key);
+    assert!(
+        a.text.contains("col.csv has no answer for question 3"),
+        "{}",
+        a.text
+    );
+    g.answers.push(Answer::GradeWithKeyGaps);
+    let (def, _) = define(ready(&propose(&g, None, &c))).unwrap();
+    let omr_app::KeySource::Provided { forms } = def.key else {
+        panic!("a provided key")
+    };
+    assert_eq!(forms[0].answers, ["B", "C", "", "A", "D"]);
+}
+
+/// Key sheets in the stack beside a Remark import (or a key file): the card says they are laid
+/// over its key and the run waits for their confirmation, as it does; named key sheets beside
+/// an import are asked, one or the other.
+#[test]
+fn key_sheets_beside_a_remark_import_or_a_key_file_are_noted_or_asked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let n = 10u16;
+    let c = ctx(tmp.path());
+    let mut sheets = students(0, 4, Shows::Letter(0), 0, n);
+    sheets.extend(students(4, 4, Shows::Letter(1), 1, n));
+    sheets.push(S::key_sheet("key-a", 0, n, 0));
+    let scans = render(&tmp.path().join("scans"), &sheets);
+    let s = survey_of(std::slice::from_ref(&scans), &[], 2);
+    assert_eq!(s.key_sheets.len(), 1);
+    let mut g = given(std::slice::from_ref(&scans));
+    g.remark = Some(remark_import(n, 4));
+    let p = propose(&g, Some(&s), &c);
+    assert!(
+        notes_on(&p, FieldId::KeySheets)
+            .iter()
+            .any(|t| t.starts_with(
+                "1 key sheet is also in the scans: the Remark import gives the key, the key sheets \
+             are laid over it and the run waits until you confirm them in Setup"
+            )),
+        "{:#?}",
+        p.issues
+    );
+    let x = grade_with(&p, std::slice::from_ref(&scans));
+    assert!(x.session.key_unconfirmed());
+    // Named key sheets beside the import: one of them gives the key.
+    let keys = render(&tmp.path().join("keys"), &[S::key_sheet("key-b", 1, n, 9)]);
+    let named = files_of(&keys);
+    let s2 = survey_of(std::slice::from_ref(&scans), &named, 2);
+    let mut both = g.clone();
+    both.key_sheets = named;
+    let p = propose(&both, Some(&s2), &c);
+    assert!(p.inputs.is_none());
+    let a = ask_on(&p, FieldId::KeySheets);
+    for f in [FieldId::KeySheets, FieldId::Remark] {
+        assert!(
+            a.choices.iter().any(|c| c.action == ChoiceAction::Clear(f)),
+            "{a:?}"
+        );
+    }
+    // A key file with the key sheet in the stack: the same note.
+    let mut file = given(std::slice::from_ref(&scans));
+    file.key = Some(per_version_key(tmp.path(), &[0, 1], n));
+    let p = propose(&file, Some(&s), &c);
+    assert!(
+        notes_on(&p, FieldId::KeySheets)
+            .iter()
+            .any(|t| t.starts_with("1 key sheet is also in the scans: key.csv gives the key")),
+        "{:#?}",
+        p.issues
+    );
+}
+
+/// A key template whose version columns C and D are empty: the card offers the versions that
+/// have a key, and graded with them every sheet is scored.
+#[test]
+fn a_key_templates_empty_version_columns_can_be_left_out() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut sheets = students(0, 4, Shows::Letter(0), 0, 20);
+    sheets.extend(students(4, 4, Shows::Letter(1), 1, 20));
+    let scans = render(&tmp.path().join("scans"), &sheets);
+    let s = survey_of(std::slice::from_ref(&scans), &[], 2);
+    let mut g = given(std::slice::from_ref(&scans));
+    g.key = Some(key_csv(
+        tmp.path(),
+        "tmpl.csv",
+        "question,A,B,C,D",
+        20,
+        &|q| {
+            vec![
+                letter(key(0, q)),
+                letter(key(1, q)),
+                String::new(),
+                String::new(),
+            ]
+        },
+    ));
+    let c = ctx(tmp.path());
+    let p = propose(&g, Some(&s), &c);
+    assert_eq!(
+        value(&p, FieldId::Versions),
+        ("A, B, C, D".into(), Source::KeyFile)
+    );
+    let ab = Answer::UseValue(FieldId::Versions, "A,B".into());
+    assert!(has_answer(&p, FieldId::Key, &ab), "{:#?}", p.issues);
+    g.answers.push(ab);
+    let p = propose(&g, Some(&s), &c);
+    assert_eq!(ready(&p).forms, Some(vec!["A".to_string(), "B".into()]));
+    let x = grade_with(&p, &[scans]);
+    let sc = x.scoring.as_ref().unwrap();
+    let run = sc.run.as_ref().expect("a score run");
+    for (bi, _) in x.session.booklets.iter().enumerate() {
+        let st = sheet_of(&x, bi, &sheets);
+        let row = sc.row_of[bi].expect("scored");
+        assert_eq!(
+            run.students[row].raw.to_string(),
+            st.score(st.answered, 20).to_string(),
+            "{}",
+            st.name
+        );
+    }
+}
+
+/// Typed versions with a key file that numbers its versions (`question,1,2`): asked which
+/// letters they are, and the answer reads the file's columns as those versions.
+#[test]
+fn typed_versions_read_a_numbered_key_file_as_answered() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scans = dummy_scans(tmp.path());
+    let c = ctx(tmp.path());
+    let mut g = given(std::slice::from_ref(&scans));
+    g.key = Some(key_csv(tmp.path(), "num.csv", "question,1,2", 20, &|q| {
+        vec![letter(key(0, q)), letter(key(1, q))]
+    }));
+    g.typed.forms = Some("A,B".into());
+    let p = propose(&g, None, &c);
+    assert!(p.inputs.is_none());
+    let a = ask_on(&p, FieldId::Versions);
+    assert!(
+        a.text.contains("num.csv names its versions 1, 2"),
+        "{}",
+        a.text
+    );
+    let ab = Answer::KeyVersions(vec!["A".into(), "B".into()]);
+    assert!(has_answer(&p, FieldId::Versions, &ab), "{:#?}", p.issues);
+    g.answers.push(ab);
+    let p = propose(&g, None, &c);
+    assert_eq!(value(&p, FieldId::Versions), ("A, B".into(), Source::Typed));
+    let (def, _) = define(ready(&p)).unwrap();
+    assert_eq!(def.forms, ["A", "B"]);
+    let omr_app::KeySource::Provided { forms } = &def.key else {
+        panic!("a provided key")
+    };
+    for (f, k) in forms.iter().enumerate() {
+        let want: Vec<String> = (0..20).map(|q| letter(key(f as u8, q))).collect();
+        assert_eq!(k.answers, want, "version {}", k.form);
+    }
+}
+
+/// Typed versions while three sheets bubble C: "Declare A, B, C" is offered only when the key
+/// file has a key for C (else only another key file or holding them).
+#[test]
+fn declaring_a_bubbled_version_is_offered_only_when_the_key_has_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut sheets = Vec::new();
+    for v in 0..3u8 {
+        sheets.extend(students(usize::from(v) * 3, 3, Shows::Letter(v), v, 20));
+    }
+    let scans = render(&tmp.path().join("scans"), &sheets);
+    let s = survey_of(std::slice::from_ref(&scans), &[], 2);
+    let c = ctx(tmp.path());
+    let mut g = given(std::slice::from_ref(&scans));
+    g.typed.forms = Some("A,B".into());
+    let declare = Answer::UseValue(FieldId::Versions, "A,B,C".into());
+    let hold = Answer::HoldVersions(vec!["C".into()]);
+    g.key = Some(per_version_key(tmp.path(), &[0, 1], 20));
+    let p = propose(&g, Some(&s), &c);
+    let a = ask_on(&p, FieldId::Versions);
+    assert!(a.text.contains("3 sheets bubble version C"), "{}", a.text);
+    assert!(!has_answer(&p, FieldId::Versions, &declare), "{a:?}");
+    assert!(has_answer(&p, FieldId::Versions, &hold));
+    g.key = Some(per_version_key(tmp.path(), &[0, 1, 2], 20));
+    let p = propose(&g, Some(&s), &c);
+    assert!(
+        has_answer(&p, FieldId::Versions, &declare),
+        "{:#?}",
+        p.issues
+    );
+    g.answers.push(declare);
+    let p = propose(&g, Some(&s), &c);
+    assert_eq!(
+        ready(&p).forms,
+        Some(vec!["A".to_string(), "B".into(), "C".into()])
+    );
+    let x = grade_with(&p, &[scans]);
+    let sc = x.scoring.as_ref().unwrap();
+    for (bi, b) in x.session.booklets.iter().enumerate() {
+        let st = sheet_of(&x, bi, &sheets);
+        assert_eq!(b.form, Some(usize::from(st.answered)), "{}", st.name);
+        let row = sc.row_of[bi].expect("scored");
+        assert_eq!(
+            sc.run.as_ref().unwrap().students[row].raw.to_string(),
+            st.score(st.answered, 20).to_string(),
+            "{}",
+            st.name
+        );
+    }
+}
+
+/// A make-up stack of one or two sheets, all bubbling B, with a one-column key: version B and
+/// every sheet scored. One B beside a blank sheet stays a stray: version A, the B sheet held.
+#[test]
+fn a_make_up_stack_bubbling_one_letter_declares_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    for k in [1usize, 2] {
+        let dir = tmp.path().join(format!("stack-{k}"));
+        let sheets = students(0, k, Shows::Letter(1), 0, 20);
+        let scans = render(&dir.join("scans"), &sheets);
+        let s = survey_of(std::slice::from_ref(&scans), &[], 2);
+        let mut g = given(std::slice::from_ref(&scans));
+        g.key = Some(shared_key(&dir, 20));
+        let p = propose(&g, Some(&s), &ctx(&dir));
+        let i = ready(&p);
+        assert_eq!(i.forms, Some(vec!["B".to_string()]), "{k} sheets");
+        assert_eq!(value(&p, FieldId::Versions), ("B".into(), Source::Sheets));
+        assert!(
+            notes_on(&p, FieldId::Versions)
+                .iter()
+                .all(|n| !n.contains("no sheet bubbles version")),
+            "{:#?}",
+            p.issues
+        );
+        let x = grade_with(&p, &[scans]);
+        let sc = x.scoring.as_ref().unwrap();
+        for (bi, b) in x.session.booklets.iter().enumerate() {
+            assert!(!b.undeclared_version(), "{k} sheets");
+            let row = sc.row_of[bi].expect("scored");
+            assert_eq!(
+                sc.run.as_ref().unwrap().students[row].raw.to_string(),
+                sheet_of(&x, bi, &sheets).score(0, 20).to_string()
+            );
+        }
+    }
+    let dir = tmp.path().join("stray");
+    let sheets = vec![
+        S::student(0, Shows::Letter(1), 0, 20),
+        S::student(1, Shows::Blank, 0, 20),
+    ];
+    let scans = render(&dir.join("scans"), &sheets);
+    let s = survey_of(std::slice::from_ref(&scans), &[], 2);
+    let mut g = given(std::slice::from_ref(&scans));
+    g.key = Some(shared_key(&dir, 20));
+    let p = propose(&g, Some(&s), &ctx(&dir));
+    assert_eq!(ready(&p).forms, Some(vec!["A".to_string()]));
+    assert!(
+        notes_on(&p, FieldId::Versions)
+            .iter()
+            .any(|n| n.starts_with("1 sheet bubbles version B")),
+        "{:#?}",
+        p.issues
+    );
+    let x = grade_with(&p, &[scans]);
+    let held = x
+        .session
+        .booklets
+        .iter()
+        .filter(|b| b.undeclared_version())
+        .count();
+    assert_eq!(held, 1);
 }

@@ -74,6 +74,11 @@ pub struct Inputs {
     /// The key file's version labels read as the exam's versions (`1` → `A`, or a key
     /// version given to another letter), as the instructor answered the New-exam proposal.
     pub key_versions: Vec<(String, String)>,
+    /// How the key file's headerless rows of one version each are read: their first cell is
+    /// the version (`Some(true)`) or the answer to question 1 (`Some(false)`), as the New-exam
+    /// proposal showed them; `None` decides it from the question count, as `omr grade` does
+    /// ([`exam::read_key_file_rows`]).
+    pub key_rows_labelled: Option<bool>,
     /// A Remark import (§3.5): its keys, exact points per version and learning objectives
     /// are the exam's (never with a key file, an inferred key or a CLO file).
     pub remark: Option<Box<RemarkImport>>,
@@ -103,6 +108,7 @@ impl Inputs {
             id_scheme: None,
             key_sheets: None,
             key_versions: Vec::new(),
+            key_rows_labelled: None,
             remark: None,
             provenance: Vec::new(),
         }
@@ -374,7 +380,13 @@ pub fn define(i: &Inputs) -> Result<(ExamDefinition, Vec<String>), AppError> {
                         .map_or_else(|| f.clone(), |(from, _)| from.clone())
                 })
                 .collect();
-            let mut k = exam::read_key_file_full(bytes, &labels, d.questions, d.options)?;
+            let mut k = exam::read_key_file_rows(
+                bytes,
+                &labels,
+                d.questions,
+                d.options,
+                i.key_rows_labelled,
+            )?;
             for key in &mut k.forms {
                 key.form = as_version(std::mem::take(&mut key.form));
             }

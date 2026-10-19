@@ -506,3 +506,106 @@ fn versions_are_confirmed_as_a_group_only_by_a_10_nat_margin() {
     assert_eq!(form_items(&p, &["c", "d", "c-answers-a"]).len(), 3);
     p.close().unwrap();
 }
+
+/// The keys of a definition with a provided key.
+fn keys_of(d: &ExamDefinition) -> Vec<FormKey> {
+    let KeySource::Provided { forms } = &d.key else {
+        panic!("a provided key")
+    };
+    forms.clone()
+}
+
+/// The suggestion of the open Form item of the sheet `stem`, and its booklet.
+fn form_suggestion(p: &ExamProject, stem: &str) -> (Option<Decision>, usize) {
+    let item = p
+        .queue(Some(Lane::Scoring))
+        .into_iter()
+        .find(|i| i.kind == ItemKind::Form && SHEETS[sheet_no(p, i.booklet.unwrap())].0 == stem)
+        .unwrap_or_else(|| panic!("no Form item for {stem}"));
+    (item.suggestion.clone(), item.booklet.unwrap())
+}
+
+#[test]
+fn a_key_change_refreshes_a_held_sheets_suggestion_only_by_a_10_nat_margin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scans = write_stack(&tmp.path().join("scans"));
+    let def = exam(&["A", "B"], true);
+    let mut p = grade(
+        &def,
+        std::slice::from_ref(&scans),
+        &tmp.path().join("out"),
+        2,
+    );
+    // `c-answers-a` bubbles C and answers A's key: suggested A.
+    let (s, bi) = form_suggestion(&p, "c-answers-a");
+    assert_eq!(s, Some(Decision::Form(0)));
+    let graded = format!("{:?}", p.session.booklets[bi].inference);
+    // A key giving both versions the same answers: the answers single out no version, and the
+    // held sheets' suggestions follow the key.
+    p.replace_key(keys_of(&identical_exam(&["A", "B"], true)), None, None)
+        .unwrap();
+    assert_ne!(format!("{:?}", p.session.booklets[bi].inference), graded);
+    for stem in ["c", "d", "c-answers-a"] {
+        assert_eq!(form_suggestion(&p, stem).0, None, "{stem}");
+    }
+    // The versions' own keys again: A suggested again, C's and D's answers single out neither
+    // A nor B by 10 nats.
+    p.replace_key(keys_of(&def), None, None).unwrap();
+    assert_eq!(
+        form_suggestion(&p, "c-answers-a").0,
+        Some(Decision::Form(0))
+    );
+    assert_eq!(format!("{:?}", p.session.booklets[bi].inference), graded);
+    for stem in ["c", "d"] {
+        assert_eq!(form_suggestion(&p, stem).0, None, "{stem}");
+    }
+    p.close().unwrap();
+}
+
+#[test]
+fn a_sheet_without_a_version_is_inferred_while_key_sheets_wait_for_confirmation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scans = write_stack(&tmp.path().join("scans"));
+    let mut inputs = only(&scans, &["a", "b", "blank", "unclear"]);
+    // Key sheets for A and B in the stack whose rows are the shared key: the versions look
+    // identical, but the key sheets may still change them until they are confirmed.
+    let e = iau();
+    let shared: Vec<Option<u8>> = (0..N).map(|q| Some(key(0, q))).collect();
+    for (k, marker) in ["0000000000", "9999999999"].iter().enumerate() {
+        inputs.push(write(
+            &tmp.path().join("keys"),
+            &format!("key-{k}.png"),
+            &png(&sheet(
+                &e,
+                &Marks::new(&shared, marker, Some(k as u8)),
+                90 + k as u64,
+            )),
+        ));
+    }
+    let p = grade(
+        &identical_exam(&["A", "B"], true),
+        &inputs,
+        &tmp.path().join("out"),
+        2,
+    );
+    assert!(p.session.key_unconfirmed());
+    let mut seen = 0;
+    for (bi, b) in p.session.booklets.iter().enumerate() {
+        let name = source_of(&p, bi);
+        let (stem, shows, _) = SHEETS[sheet_no(&p, bi)];
+        if matches!(shows, Shows::Letter(_)) {
+            continue;
+        }
+        seen += 1;
+        let sco005: Vec<&str> = b
+            .exceptions
+            .iter()
+            .filter(|e| e.code == "SCO-005")
+            .map(|e| e.sub_reason.as_deref().unwrap_or(""))
+            .collect();
+        assert_eq!(b.form_source, FormSource::Inferred, "{stem} ({name})");
+        assert_eq!(sco005, ["inferred"], "{stem}");
+    }
+    assert_eq!(seen, 2, "blank and unclear");
+    p.close().unwrap();
+}

@@ -996,3 +996,84 @@ fn the_licence_review_is_stated_and_a_refusal_stops_the_comparison() {
     );
     p.close().unwrap();
 }
+
+/// A sheet without a version on an exam whose versions share one key is scored under the
+/// shared key and declares no version: the parallel run pairs it by its answers with a row of
+/// any version's workbook and reports that workbook's version.
+#[test]
+fn a_sheet_scored_under_the_shared_key_pairs_with_any_versions_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let ka: Vec<String> = (0..N).map(|q| letter(key(0, q))).collect();
+    // s0 bubbles A, s1 bubbles B, s2 no version; every version has A's key.
+    let people: [(&str, Option<u8>, Vec<usize>); 3] = [
+        ("2210000001", Some(0), vec![3, 9]),
+        ("2210000005", Some(1), vec![6]),
+        ("2210000003", None, vec![1, 5, 10]),
+    ];
+    let e = iau();
+    let mut files = Vec::new();
+    for (k, (id, v, wrong)) in people.iter().enumerate() {
+        let m = Marks::new(&answers(0, wrong, &[]), id, *v);
+        files.push(write(
+            &dir.path().join("scans"),
+            &format!("sheet-{k:02}.png"),
+            &common::png(&sheet(&e, &m, 60 + k as u64)),
+        ));
+    }
+    let shared_key = ["A", "B"]
+        .map(|f| omr_app::FormKey {
+            form: f.into(),
+            answers: ka.clone(),
+        })
+        .to_vec();
+    let mut def = legacy_def(
+        "Shared",
+        N as u16,
+        &["A", "B"],
+        KeySource::Provided { forms: shared_key },
+    );
+    def.hold_undeclared_versions = true;
+    let p =
+        ExamProject::grade(&def, &files, &options(&dir.path().join("exam"), 2), &|_| {}).unwrap();
+    let shared = p
+        .session
+        .booklets
+        .iter()
+        .position(|b| b.form_source == omr_app::model::FormSource::Shared)
+        .expect("s2 is scored under the shared key");
+    // Remark: A's workbook holds s0; B's holds s1, and s2 under an ID no booklet has.
+    let row = |id: &str, v: &str, wrong: &[usize]| student(id, v, &text(&answers(0, wrong, &[])));
+    let book = |students| Book {
+        sections: false,
+        key: ka.clone(),
+        points: vec![1.0; N],
+        groups: Vec::new(),
+        students,
+        footer: true,
+    };
+    let wbs: Vec<RemarkWorkbook> = [
+        (book(vec![row("2210000001", "A", &[3, 9])]), "A_Graded.xlsx"),
+        (
+            book(vec![
+                row("2210000005", "B", &[6]),
+                row("2210000093", "B", &[1, 5, 10]),
+            ]),
+            "B_Graded.xlsx",
+        ),
+    ]
+    .iter()
+    .map(|(b, n)| read_workbook(n, &xlsx(b)).unwrap())
+    .collect();
+    let opts = CompareOptions {
+        given_points: [(String::new(), vec![Some("1".to_string()); N])]
+            .into_iter()
+            .collect(),
+        handwritten: Vec::new(),
+        crops: false,
+    };
+    let run = p.compare_remark(&wbs, &opts).unwrap();
+    assert_eq!(run.counts.paired_by_answers, 1, "{:#?}", run.students);
+    let st = run.students.iter().find(|s| s.booklet == shared).unwrap();
+    assert_eq!(st.remark_id, "2210000093", "paired by its answers: {st:?}");
+    assert_eq!(st.form, "B", "the version of the workbook it pairs with");
+}

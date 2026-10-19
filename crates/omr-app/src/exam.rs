@@ -1113,6 +1113,42 @@ fn delimited_rows(bytes: &[u8], what: &str) -> Result<Vec<(u64, Vec<String>)>, A
     Ok(out)
 }
 
+/// The cells of a file of one column, one per line with its 1-based line number, read from the
+/// lines themselves: an empty line between the first and the last entry is an empty cell (a
+/// spreadsheet saves a one-column sheet's empty cell as an empty line, which a CSV reader
+/// skips, so every answer after it would move up a question). Empty lines before the first
+/// entry and after the last are not cells. A line is read as the CSV reader reads it (quotes
+/// removed, then [`clean_cell`]); only its first cell is kept (the others are empty when the
+/// caller checked the file has one column).
+fn single_column(bytes: &[u8]) -> Vec<(u64, String)> {
+    let text = decode_text(bytes).replace("\r\n", "\n").replace('\r', "\n");
+    let delimiter = sniff_delimiter(&text);
+    let cells: Vec<(u64, String)> = text
+        .split('\n')
+        .enumerate()
+        .map(|(i, line)| {
+            let cell = csv::ReaderBuilder::new()
+                .has_headers(false)
+                .flexible(true)
+                .delimiter(delimiter)
+                .from_reader(line.as_bytes())
+                .records()
+                .next()
+                .and_then(Result::ok)
+                .and_then(|r| r.get(0).map(clean_cell))
+                .unwrap_or_default();
+            (i as u64 + 1, cell)
+        })
+        .collect();
+    match (
+        cells.iter().position(|(_, c)| !c.is_empty()),
+        cells.iter().rposition(|(_, c)| !c.is_empty()),
+    ) {
+        (Some(a), Some(b)) => cells[a..=b].to_vec(),
+        _ => Vec::new(),
+    }
+}
+
 fn norm_header(h: &str) -> String {
     clean_cell(h)
         .to_lowercase()
@@ -1238,7 +1274,8 @@ pub const KEY_LAYOUTS: &str = "accepted layouts: one row per question (`question
 ///   exam's form order);
 /// - **one row per version**: `form,Q1,Q2,…` / `version,1,2,…`, or headerless `A,B,C,D,…`
 ///   (the first cell names the form) or unlabeled rows of answers in the exam's form order;
-/// - **a single column** of answers, one per question.
+/// - **a single column** of answers, one per line and question (an empty line between answers,
+///   a spreadsheet's empty cell, is a question without an entry).
 ///
 /// Question numbers may be written `7`, `Q7`, `7.` or in Arabic-Indic digits; questions
 /// beyond the exam's count are not part of the key (the sheet may print more): the ones with
@@ -1382,6 +1419,22 @@ pub fn read_key_file_full(
     forms: &[String],
     questions: u16,
     options: u8,
+) -> Result<KeyFile, AppError> {
+    read_key_file_rows(bytes, forms, questions, options, None)
+}
+
+/// [`read_key_file_full`] with the reading of headerless rows of one version each given:
+/// `Some(true)`, a row's first cell is its version (`C,B,A,…`); `Some(false)`, every cell is an
+/// answer (rows of answers alone, in `forms` order); `None`, decided as `omr grade` decides it,
+/// from the question count (a row as long as the count holds answers alone). The New-exam
+/// proposal gives the reading it showed ([`KeyShape::first_cell_labels`]), so the definition
+/// never reads the file another way. Other layouts ignore it.
+pub fn read_key_file_rows(
+    bytes: &[u8],
+    forms: &[String],
+    questions: u16,
+    options: u8,
+    labelled_rows: Option<bool>,
 ) -> Result<KeyFile, AppError> {
     let rows = delimited_rows(bytes, "key file")?;
     let Some((_, first)) = rows.first() else {
@@ -1632,20 +1685,22 @@ pub fn read_key_file_full(
         return long(&rows, &cols, None, &[], k + 1);
     }
     if rows.iter().all(|(_, r)| r.len() == 1) {
-        // A single column: one answer per question, in order.
-        let answers = rows
+        // A single column: one answer per line, in order; an empty line between answers is a
+        // question without an entry.
+        let cells = single_column(bytes);
+        let answers = cells
             .iter()
             .enumerate()
             .take(n)
-            .map(|(q, (line, r))| entry(*line, &format!("question {}", q + 1), &r[0]))
+            .map(|(q, (line, v))| entry(*line, &format!("question {}", q + 1), v))
             .collect::<Result<Vec<_>, _>>()?;
         let mut answers = answers;
         answers.resize(n, String::new());
-        let ignored = rows
+        let ignored = cells
             .iter()
             .enumerate()
             .skip(n)
-            .filter(|(_, (_, r))| has_entry(&r[0]))
+            .filter(|(_, (_, v))| has_entry(v))
             .map(|(q, _)| q as u32 + 1)
             .collect();
         return Ok(KeyFile {
@@ -1660,9 +1715,11 @@ pub fn read_key_file_full(
             ignored_questions: sorted(ignored),
         });
     }
-    let labelled = rows.iter().all(|(_, r)| {
-        let f = form_label(&r[0]);
-        r.len() != n && forms.contains(&f)
+    let labelled = labelled_rows.unwrap_or_else(|| {
+        rows.iter().all(|(_, r)| {
+            let f = form_label(&r[0]);
+            r.len() != n && forms.contains(&f)
+        })
     });
     wide(&rows, None, labelled)
 }
@@ -1784,7 +1841,8 @@ pub struct KeyShape {
     pub versions: KeyVersions,
     /// Headerless rows that start with a bare letter (`A,B,D,…`): read as labelled rows,
     /// though the letter may be each row's answer to question 1 (then every row holds one
-    /// more question); the students' sheets tell the two apart.
+    /// more question); the New-exam proposal asks when the exam has more questions than the
+    /// labelled rows answer, and gives the definition the reading it shows.
     pub first_cell_labels: bool,
     /// The highest question with an entry (an answer or a void) in any version; trailing empty
     /// rows of a template do not count. 0 when the file has no entry.
@@ -1852,6 +1910,19 @@ pub fn key_file_shape(
     bytes: &[u8],
     printed_questions: u16,
     printed_options: u8,
+) -> Result<KeyShape, AppError> {
+    key_file_shape_rows(bytes, printed_questions, printed_options, None)
+}
+
+/// [`key_file_shape`] with the reading of headerless rows that start with a bare letter given
+/// (`Some(false)`: the letter is the row's answer to question 1, the rows are unlabelled keys;
+/// `Some(true)` or `None`: it is the row's version). Rows labelled by a word (`Form A`) are
+/// labelled whatever it says.
+pub fn key_file_shape_rows(
+    bytes: &[u8],
+    printed_questions: u16,
+    printed_options: u8,
+    labelled_rows: Option<bool>,
 ) -> Result<KeyShape, AppError> {
     let rows = delimited_rows(bytes, "key file")?;
     let Some((_, first)) = rows.first() else {
@@ -1980,11 +2051,12 @@ pub fn key_file_shape(
             KeyVersions::Named(cols.into_iter().map(|(l, _)| l).collect())
         }
     } else if rows.iter().all(|(_, r)| r.len() == 1) {
-        // A single column: one answer per question, in order.
+        // A single column: one answer per line, in order (an empty line between answers is a
+        // gap, never skipped).
         let mut map = BTreeMap::new();
-        for (k, (line, r)) in rows.iter().enumerate() {
+        for (k, (line, v)) in single_column(bytes).iter().enumerate() {
             let q = k as u32 + 1;
-            map.insert(q, entry(*line, &format!("question {q}"), &r[0])?);
+            map.insert(q, entry(*line, &format!("question {q}"), v)?);
             listed = q;
         }
         keys.push((String::new(), map));
@@ -2002,13 +2074,15 @@ pub fn key_file_shape(
             )
         } else {
             // Bare letters label the rows only when there are several and they differ (one
-            // row, or rows starting alike, are answers to question 1).
+            // row, or rows starting alike, are answers to question 1), unless the caller says
+            // they are answers.
             body.iter()
                 .map(|(_, r)| row_label(&r[0]))
                 .collect::<Option<Vec<_>>>()
                 .filter(|l| {
                     l.iter().all(|x| x.1)
-                        || (l.len() >= 2
+                        || (labelled_rows != Some(false)
+                            && l.len() >= 2
                             && l.iter().map(|x| &x.0).collect::<BTreeSet<_>>().len() == l.len())
                 })
         };

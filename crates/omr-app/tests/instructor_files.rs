@@ -105,10 +105,16 @@ fn c5_key_files_in_every_common_layout_read_the_same_key() {
     )
     .unwrap();
     assert_eq!(p.unwrap(), vec!["2", "0.5", "1"]);
-    let k = keys(b"B\nc\n\n D\n", &["A"], 3);
+    // An empty line between answers is a question without an entry (an empty cell).
+    let k = keys(b"B\nc\n\n D\n", &["A"], 4);
     assert_eq!(
         entries(&k, 0),
-        vec![Options(vec![1]), Options(vec![2]), Options(vec![3])]
+        vec![
+            Options(vec![1]),
+            Options(vec![2]),
+            Missing,
+            Options(vec![3])
+        ]
     );
     // A question left out is missing (SCO-003 when scored), never a guess.
     let k = keys(b"question,A\n1,B\n3,C\n", &["A"], 3);
@@ -210,6 +216,47 @@ fn a_key_labelled_with_one_version_is_never_copied_to_another() {
         vec![vec!["A", "B"], vec!["B", "C"]]
     );
     assert_eq!(keys(abcd, &["A", "B", "C", "D"], 2).len(), 4);
+}
+
+/// A one-column key saved by a spreadsheet with an empty cell (an empty line): that question has
+/// no entry, and every later answer stays on its own question.
+#[test]
+fn an_empty_cell_of_a_one_column_key_is_a_gap_never_skipped() {
+    let a = forms(&["A"]);
+    for (what, bytes) in [
+        ("CRLF", &b"B\r\nC\r\n\r\nA\r\nD\r\nE\r\n"[..]),
+        ("LF", b"B\nC\n\nA\nD\nE\n"),
+        ("a line of spaces", b"B\nC\n \nA\nD\nE\n"),
+        ("a quoted empty cell", b"B\nC\n\"\"\nA\nD\nE\n"),
+    ] {
+        let k = exam::read_key_file_full(bytes, &a, 5, 5).unwrap();
+        assert_eq!(answers(&k.forms)[0], vec!["B", "C", "", "A", "D"], "{what}");
+        assert_eq!(k.ignored_questions, vec![6], "{what}");
+        let k = exam::read_key_file_full(bytes, &a, 6, 5).unwrap();
+        assert_eq!(
+            answers(&k.forms)[0],
+            vec!["B", "C", "", "A", "D", "E"],
+            "{what}"
+        );
+        assert!(k.ignored_questions.is_empty(), "{what}");
+        let s = exam::key_file_shape(bytes, 100, 5).unwrap();
+        assert_eq!(s.versions, exam::KeyVersions::Shared, "{what}");
+        assert_eq!((s.questions, s.listed), (6, 6), "{what}");
+        assert_eq!(s.gaps, vec![(String::new(), 3)], "{what}");
+    }
+    // Empty lines before the first answer and after the last are no questions.
+    let lead = b"\r\n\r\nB\r\nC\r\n\r\n\r\n";
+    let k = exam::read_key_file_full(lead, &a, 3, 5).unwrap();
+    assert_eq!(answers(&k.forms)[0], vec!["B", "C", ""]);
+    let s = exam::key_file_shape(lead, 100, 5).unwrap();
+    assert_eq!((s.questions, s.listed, s.gaps.len()), (2, 2, 0));
+    // An entry after an empty line is refused naming its own line.
+    for bytes in [&b"B\nC\n\nF\n"[..], b"B\r\nC\r\n\r\nF\r\n"] {
+        let m = err(exam::read_key_file_full(bytes, &a, 4, 5));
+        assert!(m.contains("line 4") && m.contains("question 4"), "{m}");
+        let m = err(exam::key_file_shape(bytes, 100, 5));
+        assert!(m.contains("line 4") && m.contains("question 4"), "{m}");
+    }
 }
 
 #[test]

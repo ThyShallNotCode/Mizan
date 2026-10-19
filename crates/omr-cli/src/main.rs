@@ -305,8 +305,9 @@ struct SurveyArgs {
     #[arg(long)]
     term: Option<String>,
     /// An answer to a question of the proposal (repeat): provisional-key, same-key, hold:C,
-    /// key-versions:A,B, questions:N, keep-questions:N, key-gaps, keep:FIELD,
-    /// use:FIELD=VALUE, one-exam, keep-sheet. Each question prints the answers it takes.
+    /// key-versions:A,B, unlabelled-rows, questions:N, keep-questions:N, key-gaps,
+    /// keep:FIELD, use:FIELD=VALUE, one-exam, keep-sheet. Each question prints the answers it
+    /// takes.
     #[arg(long = "answer")]
     answer: Vec<String>,
     /// The exams folder the new exam's folder is proposed in.

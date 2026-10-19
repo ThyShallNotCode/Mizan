@@ -158,6 +158,16 @@ expectation tied to the real exams out of the repository.
     §4): it still builds its inputs from the form, and a blank key field still infers the key;
   - the setup's provenance (each value with its source, `ExamDefinition::provenance`) is
     recorded only for exams defined from a proposal; the survey's own counts are not stored;
+  - `omr grade --key` and `omr key replace` read headerless key rows that start with a letter
+    by the question count (a row as long as the count holds answers alone, else its first
+    cell is its version); the New-exam proposal asks when the count allows both readings and
+    gives the definition the one it shows (`Inputs::key_rows_labelled`);
+  - the proposal's note on sheets without a version follows the key file's shape: a key with
+    a column per version (or a Remark import) whose keys happen to be equal still notes a
+    version review, although grading scores those sheets under the shared key;
+  - a stack whose only key is a key sheet with a blank version bubble, on a one-version exam:
+    the proposal asks for a key sheet of the version the students bubble (rule 5), although
+    grading reads the blank key sheet as that version's;
   - the IAU student-ID scheme accepts intake years up to 2030 only (§9.2).
 - Parts of cancelling a run (G-3 D7; built in `omr-app`: `Cancel` stops a new exam's grading
   or a survey before anything is stored):

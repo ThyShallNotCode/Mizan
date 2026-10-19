@@ -34,7 +34,8 @@ use std::path::{Path, PathBuf};
 /// here, so a tuning run changes one place (shares are in ‰ of the surveyed sheets, n).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Thresholds {
-    /// A version letter is **substantial** when at least this many sheets bubble it…
+    /// A version letter is **substantial** when at least this many sheets bubble it (every
+    /// sheet, in a smaller stack: a make-up stack of one or two sheets)…
     pub substantial_min: u32,
     /// …and at least this share of the sheets (5 %); a letter on fewer sheets is a **stray**,
     /// held sheet by sheet, never a reason to declare the version.
@@ -361,6 +362,9 @@ pub enum Answer {
     /// The key file's versions, in the file's order, are these letters (numbered versions,
     /// unlabelled keys, or a key version read as another).
     KeyVersions(Vec<String>),
+    /// The key file's headerless rows hold answers alone: the letter each starts with is its
+    /// answer to question 1, not its version (the rows are unlabelled keys).
+    KeyRowsUnlabelled,
     /// The exam has this many questions.
     UseQuestions(u16),
     /// The exam has this many questions: key entries and students' rows beyond it are not
@@ -381,14 +385,16 @@ pub enum Answer {
 
 impl Answer {
     /// The answer as one word for the command line (`omr survey --answer`): `provisional-key`,
-    /// `same-key`, `hold:C,D`, `key-versions:A,B`, `questions:40`, `keep-questions:30`,
-    /// `key-gaps`, `keep:id-scheme`, `use:options=5`, `one-exam`, `keep-sheet`.
+    /// `same-key`, `hold:C,D`, `key-versions:A,B`, `unlabelled-rows`, `questions:40`,
+    /// `keep-questions:30`, `key-gaps`, `keep:id-scheme`, `use:options=5`, `one-exam`,
+    /// `keep-sheet`.
     pub fn token(&self) -> String {
         match self {
             Answer::InferKeyProvisionally => "provisional-key".into(),
             Answer::SameKeyForEveryVersion => "same-key".into(),
             Answer::HoldVersions(v) => format!("hold:{}", v.join(",")),
             Answer::KeyVersions(v) => format!("key-versions:{}", v.join(",")),
+            Answer::KeyRowsUnlabelled => "unlabelled-rows".into(),
             Answer::UseQuestions(n) => format!("questions:{n}"),
             Answer::KeepQuestions(n) => format!("keep-questions:{n}"),
             Answer::GradeWithKeyGaps => "key-gaps".into(),
@@ -409,8 +415,8 @@ impl Answer {
         let bad = || {
             format!(
                 "--answer {s}: use provisional-key, same-key, hold:C, key-versions:A,B, \
-                 questions:N, keep-questions:N, key-gaps, keep:FIELD, use:FIELD=VALUE, one-exam \
-                 or keep-sheet"
+                 unlabelled-rows, questions:N, keep-questions:N, key-gaps, keep:FIELD, \
+                 use:FIELD=VALUE, one-exam or keep-sheet"
             )
         };
         Ok(match word {
@@ -418,6 +424,7 @@ impl Answer {
             "same-key" => Answer::SameKeyForEveryVersion,
             "hold" => Answer::HoldVersions(letters(arg).ok_or_else(bad)?),
             "key-versions" => Answer::KeyVersions(letters(arg).ok_or_else(bad)?),
+            "unlabelled-rows" => Answer::KeyRowsUnlabelled,
             "questions" => Answer::UseQuestions(number(arg).ok_or_else(bad)?),
             "keep-questions" => Answer::KeepQuestions(number(arg).ok_or_else(bad)?),
             "key-gaps" => Answer::GradeWithKeyGaps,
@@ -791,6 +798,38 @@ fn answer(label: impl Into<String>, a: Answer) -> Choice {
     choice(label, ChoiceAction::Answer(a))
 }
 
+/// Asks which versions a key file's `labels` are, when the sheet cannot bubble them (`1, 2`);
+/// `to`: the letters the one-click answer reads them as.
+fn ask_numbered(
+    card: &mut Card,
+    name: &str,
+    labels: &[String],
+    printed: &[String],
+    to: Option<Vec<String>>,
+) {
+    let mut choices = Vec::new();
+    if let Some(to) = to {
+        choices.push(answer(
+            format!("Read {} as {}", join(labels), join(&to)),
+            Answer::KeyVersions(to),
+        ));
+    }
+    choices.push(choice(
+        "Choose another key file…",
+        ChoiceAction::Pick(FieldId::Key),
+    ));
+    card.ask(
+        FieldId::Versions,
+        format!(
+            "{name} names its versions {}, which the sheet cannot bubble (it prints {}): which \
+             versions are they?",
+            join(labels),
+            join(printed)
+        ),
+        choices,
+    );
+}
+
 /// Where the key comes from.
 enum Plan {
     /// The Remark import.
@@ -807,7 +846,9 @@ enum Plan {
     Missing,
 }
 
-fn read_shape(p: &Path, printed: &PrintedSheet) -> Result<KeyShape, AppError> {
+/// What the key file `p` holds; `unlabelled`: its headerless rows that start with a letter are
+/// read as answers alone ([`Answer::KeyRowsUnlabelled`]).
+fn read_shape(p: &Path, printed: &PrintedSheet, unlabelled: bool) -> Result<KeyShape, AppError> {
     let ext = p
         .extension()
         .and_then(|e| e.to_str())
@@ -820,7 +861,12 @@ fn read_shape(p: &Path, printed: &PrintedSheet) -> Result<KeyShape, AppError> {
     }
     let bytes = std::fs::read(p)
         .map_err(|e| AppError::Input(format!("{e}; check the path of the file")))?;
-    exam::key_file_shape(&bytes, printed.questions, printed.options)
+    exam::key_file_shape_rows(
+        &bytes,
+        printed.questions,
+        printed.options,
+        unlabelled.then_some(false),
+    )
 }
 
 /// The field a `define` error is about, with the choice that fixes it.
@@ -938,7 +984,9 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
             .unwrap_or(0)
     };
     let substantial = |c: u32| {
-        n > 0 && c >= t.substantial_min && share_at_least(c.into(), n, t.substantial_permille)
+        n > 0
+            && u64::from(c) >= u64::from(t.substantial_min).min(n)
+            && share_at_least(c.into(), n, t.substantial_permille)
     };
     let pct = |c: u64| (c * 100 + n / 2).checked_div(n).unwrap_or(0);
     let scans_files = crate::ingest::collect_paths(&given.scans).map_or(0, |v| v.len());
@@ -1130,7 +1178,7 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
         }
         Plan::Remark(imp.clone())
     } else if let Some(k) = &given.key {
-        match read_shape(k, &printed) {
+        match read_shape(k, &printed, answered(&Answer::KeyRowsUnlabelled)) {
             Ok(shape) => Plan::File(shape, key_name.clone()),
             Err(e) => {
                 card.ask(
@@ -1189,7 +1237,6 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
         _ => None,
     });
     let mut key_versions: Vec<(String, String)> = Vec::new();
-    let mut shared_key = false;
     let typed_forms = use_value(FieldId::Versions)
         .map(|v| (v, Source::Answer))
         .or_else(|| text(&typed.forms).map(|v| (v, Source::Typed)))
@@ -1206,7 +1253,67 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
     };
     let (forms, forms_source, mut forms_detail): (Option<Vec<String>>, Source, String) =
         if let Some((v, s)) = typed_forms {
-            (Some(v), s, String::new())
+            // Typed versions are never replaced, but the key file is still read against them.
+            let mut detail = String::new();
+            if let Plan::File(shape, name) = &plan {
+                match &shape.versions {
+                    // Numbered versions are read as the letters answered.
+                    KeyVersions::Named(labels) if !printable(labels) => {
+                        let fits = key_versions_answer
+                            .as_ref()
+                            .filter(|kv| kv.len() == labels.len() && printable(kv));
+                        if let Some(kv) = fits {
+                            key_versions = labels
+                                .iter()
+                                .cloned()
+                                .zip(kv.iter().cloned())
+                                .filter(|(a, b)| a != b)
+                                .collect();
+                            detail =
+                                format!("{name}'s versions {} read as {}", join(labels), join(kv));
+                        } else {
+                            let to = if labels.len() == v.len() && printable(&v) {
+                                Some(v.clone())
+                            } else {
+                                (labels.len() <= printed.versions.len())
+                                    .then(|| first_letters(labels.len()))
+                            };
+                            ask_numbered(&mut card, name, labels, &printed.versions, to);
+                        }
+                    }
+                    // One answer column for several versions: never copied to each unasked.
+                    KeyVersions::Shared
+                        if v.len() >= 2 && !answered(&Answer::SameKeyForEveryVersion) =>
+                    {
+                        let c = counts_text();
+                        card.ask(
+                            FieldId::Versions,
+                            format!(
+                                "{name} has one answer column, but the exam declares {}{}: is it \
+                                 the key of every version?",
+                                join(&v),
+                                if c.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(" ({c})")
+                                }
+                            ),
+                            vec![
+                                choice(
+                                    "Choose a key file with a column per version…",
+                                    ChoiceAction::Pick(FieldId::Key),
+                                ),
+                                answer(
+                                    "The same key for every version",
+                                    Answer::SameKeyForEveryVersion,
+                                ),
+                            ],
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            (Some(v), s, detail)
         } else {
             match &plan {
                 Plan::Remark(imp) => (
@@ -1233,28 +1340,8 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
                             )
                         } else if !printable(labels) {
                             let k = labels.len();
-                            let mut choices = Vec::new();
-                            if k <= printed.versions.len() {
-                                let to = first_letters(k);
-                                choices.push(answer(
-                                    format!("Read {} as {}", join(labels), join(&to)),
-                                    Answer::KeyVersions(to),
-                                ));
-                            }
-                            choices.push(choice(
-                                "Choose another key file…",
-                                ChoiceAction::Pick(FieldId::Key),
-                            ));
-                            card.ask(
-                                FieldId::Versions,
-                                format!(
-                                    "{name} names its versions {}, which the sheet cannot bubble \
-                                     (it prints {}): which versions are they?",
-                                    join(labels),
-                                    join(&printed.versions)
-                                ),
-                                choices,
-                            );
+                            let to = (k <= printed.versions.len()).then(|| first_letters(k));
+                            ask_numbered(&mut card, name, labels, &printed.versions, to);
                             (None, Source::KeyFile, String::new())
                         } else {
                             if shape.first_cell_labels {
@@ -1275,7 +1362,6 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
                         }
                     }
                     KeyVersions::Shared => {
-                        shared_key = true;
                         if subst.len() >= 2 && answered(&Answer::SameKeyForEveryVersion) {
                             (
                                 Some(subst.clone()),
@@ -1464,7 +1550,28 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
                 }
             }
         };
-    let same_key = shared_key || answered(&Answer::SameKeyForEveryVersion);
+    // Every version has the one key of a one-column key file, whoever named the versions: a
+    // sheet without a version is scored under it, never reviewed (CR-16), unless points per
+    // version or key sheets in the stack (pending until confirmed) keep the versions apart.
+    let same_key = matches!(&plan, Plan::File(shape, _)
+        if shape.versions == KeyVersions::Shared && shape.points_per_version.is_empty())
+        && seen_sheets.is_empty();
+    // Whether the key source can give version `x` a key (a declared version needs one).
+    let keyed = |x: &String| match &plan {
+        Plan::File(shape, _) => match &shape.versions {
+            KeyVersions::Shared => true,
+            KeyVersions::Named(labels) => labels.iter().any(|l| {
+                key_versions
+                    .iter()
+                    .find(|(a, _)| a == l)
+                    .map_or(l, |(_, b)| b)
+                    == x
+            }),
+            KeyVersions::Unlabeled(_) => false,
+        },
+        Plan::Remark(imp) => imp.forms().contains(x),
+        Plan::Sheets | Plan::Provisional | Plan::Broken | Plan::Missing => true,
+    };
     // C1–C5: the sheets against the versions.
     if let (Some(s), Some(f)) = (survey, forms.as_ref()) {
         let declared = |x: &String| f.contains(x);
@@ -1497,7 +1604,7 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
                         ChoiceAction::Pick(FieldId::Key),
                     ));
                 }
-                if matches!(forms_source, Source::Typed | Source::Answer) {
+                if matches!(forms_source, Source::Typed | Source::Answer) && keyed(x) {
                     let mut more = f.clone();
                     more.push(x.clone());
                     more.sort();
@@ -1585,6 +1692,7 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
             )];
             if matches!(forms_source, Source::Typed | Source::Answer)
                 && printed.versions.contains(&k.version)
+                && keyed(&k.version)
             {
                 let mut more = f.clone();
                 more.push(k.version.clone());
@@ -1927,8 +2035,54 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
                 }
             }
         }
+        // Q7: headerless key rows that start with a letter read as versions, while the exam has
+        // more questions than they then answer: the letter may be each row's answer to
+        // question 1. Asked, so the definition reads the rows as the card shows them.
+        let mut rows_asked = false;
+        if let Plan::File(shape, name) = &plan
+            && let KeyVersions::Named(labels) = &shape.versions
+            && shape.first_cell_labels
+            && u32::from(q) > shape.questions
+        {
+            rows_asked = true;
+            let mut choices = Vec::new();
+            if shape.questions > 0 {
+                choices.push(answer(
+                    format!(
+                        "The first cell is the version ({}): {} questions",
+                        join(labels),
+                        shape.questions
+                    ),
+                    Answer::UseQuestions(shape.questions as u16),
+                ));
+            }
+            choices.push(answer(
+                format!(
+                    "The first cell is the answer to question 1: {} without a version",
+                    plural(labels.len() as u64, "key", "keys")
+                ),
+                Answer::KeyRowsUnlabelled,
+            ));
+            choices.push(choice(
+                "Choose another key file…",
+                ChoiceAction::Pick(FieldId::Key),
+            ));
+            card.ask(
+                FieldId::Key,
+                format!(
+                    "{name} has no header row: the first cell of each row ({}) is read as its \
+                     version, so each row answers questions 1–{}, but the exam has {q} \
+                     questions: is the first cell the version, or the answer to question 1?",
+                    join(labels),
+                    shape.questions
+                ),
+                choices,
+            );
+        }
         // Q4: key entries missing up to the count; Q5: key entries beyond the sheet.
-        if let (Plan::File(shape, name), Some(f)) = (&plan, &forms) {
+        if let (Plan::File(shape, name), Some(f)) = (&plan, &forms)
+            && !rows_asked
+        {
             let label_version = |l: &str| -> Option<String> {
                 if l.is_empty() {
                     return Some(String::new());
@@ -1987,6 +2141,24 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
                         choices.push(answer(
                             format!("Use {k} questions"),
                             Answer::UseQuestions(k),
+                        ));
+                    }
+                    // A key file's empty columns (a template's spare versions) are no versions
+                    // of the exam unless the instructor declares them.
+                    let empty: Vec<&String> = f
+                        .iter()
+                        .filter(|v| gaps.get(*v).is_some_and(|g| g.len() == usize::from(q)))
+                        .collect();
+                    let rest: Vec<String> =
+                        f.iter().filter(|v| !empty.contains(v)).cloned().collect();
+                    if forms_source == Source::KeyFile
+                        && matches!(shape.versions, KeyVersions::Named(_))
+                        && !empty.is_empty()
+                        && !rest.is_empty()
+                    {
+                        choices.push(answer(
+                            format!("Use versions {}", join(&rest)),
+                            Answer::UseValue(FieldId::Versions, rest.join(",")),
                         ));
                     }
                     choices.push(answer(
@@ -2435,14 +2607,19 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
         Plan::Broken | Plan::Missing => (Source::Default, String::new()),
     };
     card.set(FieldId::Key, key_value, key_src, key_detail);
-    if let Plan::File(..) = plan
+    let given_by = match &plan {
+        Plan::File(..) => Some(key_name.clone()),
+        Plan::Remark(_) => Some("the Remark import".to_string()),
+        _ => None,
+    };
+    if let Some(by) = given_by
         && !seen_sheets.is_empty()
     {
         card.note(
             FieldId::KeySheets,
             format!(
-                "{} also in the scans: {key_name} gives the key, the key sheets are laid over it \
-                 and the run waits until you confirm them in Setup",
+                "{} also in the scans: {by} gives the key, the key sheets are laid over it and \
+                 the run waits until you confirm them in Setup",
                 plural(seen_sheets.len() as u64, "key sheet is", "key sheets are")
             ),
         );
@@ -2547,6 +2724,14 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
         i.options = Some(o);
         i.forms = Some(f);
         i.key_versions = key_versions.clone();
+        // Headerless rows of one version each are read as the card shows them.
+        if let Plan::File(shape, _) = &plan {
+            i.key_rows_labelled = match shape.versions {
+                KeyVersions::Named(_) => Some(true),
+                KeyVersions::Unlabeled(_) => Some(false),
+                KeyVersions::Shared => None,
+            };
+        }
         match &plan {
             Plan::Remark(imp) => i.remark = Some(Box::new(imp.clone())),
             Plan::File(..) => i.key.clone_from(&given.key),

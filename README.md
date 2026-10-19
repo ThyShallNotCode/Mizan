@@ -92,7 +92,7 @@ question, the key sheets' last marked row, or how far the students answered), th
 in the stack, the title from the sheets' exam-type bubble and the course from the folder name.
 It keeps counts only, never a student number. When the evidence disagrees (six sheets bubble
 version C but the key has A and B; the key answers questions 1–40 but `--questions 30` was
-given; there is no key at all) it asks, prints the answers each question takes
+given; `--forms A,B` with a key of one answer column; there is no key at all) it asks, prints the answers each question takes
 (`--answer hold:C`, `--answer keep-questions:30`, `--answer provisional-key`, …) and exits 2;
 run it again with your answer. `--json` prints the survey's counts and the proposal for
 scripts. `omr grade` keeps its own defaults (versions A, B unless the key names them; the
@@ -338,7 +338,7 @@ line, or render the screens to PNG files with `omr-desktop --screenshot DIR`.
 
 | File | Layout |
 |---|---|
-| Answer key | CSV `question,A,B` (one column per version, optional `points` column, or `points_A`, `points_B` when the versions carry different points), or `form,Q1,Q2,…`, or one column of answers. Entries: `B`, `A\|C` (either accepted; also `A or C`, `AC`), `*` (void), empty (missing); an AND key (`A+C`, `A&C`, `A and C`: all answers required, Remark's partial credit) is refused, not scored yet. UTF-8, UTF-16 or Windows-1256; commas, semicolons or tabs, as Excel saves it. Or a key sheet: an answer sheet filled by the instructor, student number all 0 or all 9 and the version bubbled (§2) |
+| Answer key | CSV `question,A,B` (one column per version, optional `points` column, or `points_A`, `points_B` when the versions carry different points), or `form,Q1,Q2,…`, or one column of answers (an empty line between answers is a question without one). Entries: `B`, `A\|C` (either accepted; also `A or C`, `AC`), `*` (void), empty (missing); an AND key (`A+C`, `A&C`, `A and C`: all answers required, Remark's partial credit) is refused, not scored yet. UTF-8, UTF-16 or Windows-1256; commas, semicolons or tabs, as Excel saves it. Or a key sheet: an answer sheet filled by the instructor, student number all 0 or all 9 and the version bubbled (§2) |
 | Roster | CSV or `.xlsx` with a header row: `student_id` (or `ID`, `الرقم الجامعي`), `name`, `name_ar`, `section`. Student numbers that Excel damaged (`2250000001.0`, lost leading zeros) are repaired when nothing was lost; duplicates are refused naming the rows |
 | CLO mapping | CSV `clo,domain,title,plo,questions,weight,note`, with question lists such as `1-8,12`; optional `form` (the row maps one version's questions) and `status`/`source` (`imported, needs review`, `Remark import`) |
 | Remark export | Remark Office OMR's graded workbook (`.xlsx`): Student Response Report with the answer key, Student Statistics Report (learning objectives), Test Statistics Report; `omr import remark`, `omr compare remark` |
