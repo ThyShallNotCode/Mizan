@@ -2203,15 +2203,13 @@ impl Shell {
         );
     }
 
+    /// Saves the weight of a cell. The selection is left as it is: it follows the focus
+    /// ([`Self::select_cell`]), which may already be on the next cell (Tab, or a click
+    /// elsewhere, commits the cell it leaves).
     fn set_weight(&self, row: usize, clo: usize, text: &str) {
         let Some((exam, setup, q)) = self.setup_row(row) else {
             return;
         };
-        {
-            let mut st = self.st.borrow_mut();
-            st.sel_row = row;
-            st.sel_col = clo;
-        }
         let r = match parse_weight(text) {
             Ok(w) => self
                 .backend

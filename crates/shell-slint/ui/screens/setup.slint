@@ -440,6 +440,10 @@ component CellCard inherits Card {
     title: SetupVM.sel-title;
     subtitle: SetupVM.sel-clo;
     vertical-stretch: 0;
+    // The cell the editors below write to, taken when one of them takes the focus: a click on
+    // another matrix cell selects that cell before this editor loses the focus and commits.
+    property <int> edit-row;
+    property <int> edit-col;
     VerticalLayout {
         spacing: Theme.space-sm;
         SectionLabel {
@@ -454,8 +458,12 @@ component CellCard inherits Card {
             border-width: 1px;
             border-color: Theme.border-strong;
             background: Theme.surface-raised;
+            focused => {
+                root.edit-row = SetupVM.sel-row;
+                root.edit-col = SetupVM.sel-col;
+            }
             committed(v) => {
-                SetupVM.set-weight(SetupVM.sel-row, SetupVM.sel-col, v);
+                SetupVM.set-weight(root.edit-row, root.edit-col, v);
             }
         }
         SectionLabel {
@@ -472,8 +480,12 @@ component CellCard inherits Card {
             border-width: 1px;
             border-color: Theme.border-strong;
             background: Theme.surface-raised;
+            focused => {
+                root.edit-row = SetupVM.sel-row;
+                root.edit-col = SetupVM.sel-col;
+            }
             committed(v) => {
-                SetupVM.set-note(SetupVM.sel-row, SetupVM.sel-col, v);
+                SetupVM.set-note(root.edit-row, root.edit-col, v);
             }
         }
         if SetupVM.error != "": Text {

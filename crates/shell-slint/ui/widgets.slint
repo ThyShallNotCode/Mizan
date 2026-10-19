@@ -546,10 +546,15 @@ export component EditCell inherits Rectangle {
     callback committed(string);
     callback focused();
     property <bool> editing: input.has-focus;
+    // The text the edit started from (when the cell took the focus, or at its last commit).
+    // Leaving commits what was typed since: compared with this, never with `text`, which may
+    // already show another cell (the Setup cell editor follows the selection).
+    property <string> started;
     // Commits, then shows the backend's canonical value (a refused edit snaps back).
     function commit(v: string) {
         root.committed(v);
         input.text = root.text;
+        root.started = input.text;
     }
     // The view-model is the source of truth: follow it unless the user is typing.
     changed text => {
@@ -608,9 +613,15 @@ export component EditCell inherits Rectangle {
         accessible-role: none;
         changed has-focus => {
             if (self.has-focus) {
+                // what is typed replaces the value, as in a spreadsheet: a click would leave the
+                // caret where it landed, inside the old value (Tab selects all by itself)
+                self.select-all();
+                root.started = self.text;
                 root.focused();
-            } else if (self.text != root.text) {
+            } else if (self.text != root.started) {
                 root.commit(self.text);
+            } else {
+                self.text = root.text;
             }
         }
         accepted => {

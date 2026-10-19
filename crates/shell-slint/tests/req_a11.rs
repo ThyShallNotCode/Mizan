@@ -451,13 +451,17 @@ fn req_a11_identity_lane_and_candidates_by_label() {
 #[test]
 fn req_a11_a_clicked_weight_cell_keeps_what_is_typed() {
     // Focusing a cell selected it by rebuilding every matrix row, which destroyed the text
-    // input that had just taken the focus: what was typed next went nowhere.
+    // input that had just taken the focus: what was typed next went nowhere. Then the click
+    // left the caret where it landed, so typing 0.5 into a cell holding 1 saved 0.51.
     let h = harness();
     let ui = &h.ui;
     click(ui, &tab(ui, "Setup"));
     assert_eq!(ui.global::<App>().get_page(), Page::Setup);
+    assert_eq!(
+        one(ui, "Q02 CLO1 weight").accessible_value().as_deref(),
+        Some("1")
+    );
     click(ui, &one(ui, "Q02 CLO1 weight"));
-    chord(ui, Key::Control, "a");
     type_text(ui, "0.5");
     special(ui, Key::Return);
     let weight =
@@ -470,6 +474,76 @@ fn req_a11_a_clicked_weight_cell_keeps_what_is_typed() {
     type_text(ui, "1");
     special(ui, Key::Return);
     assert_eq!(weight(&h), Some(1.0));
+}
+
+fn setup_cell(h: &Harness, row: usize, clo: usize) -> shell_slint::backend::MappingCell {
+    h.demo.borrow().exam_setup(&cs211()).unwrap().mapping[row].cells[clo].clone()
+}
+
+#[test]
+fn req_a11_the_cell_editor_saves_to_the_cell_it_edits() {
+    // The editor beside the matrix committed, when it lost the focus, to the selected cell; a
+    // click on another matrix cell had selected that one first, so the value landed there.
+    let h = harness();
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Setup"));
+    click(ui, &one(ui, "Q02 CLO1 weight"));
+    let q03 = setup_cell(&h, 2, 1);
+    assert_ne!(q03.weight, Some(0.25));
+    click(ui, &one(ui, "Weight of Q02 × CLO1"));
+    type_text(ui, "0.25");
+    click(ui, &one(ui, "Q03 CLO2 weight"));
+    assert_eq!(setup_cell(&h, 1, 0).weight, Some(0.25));
+    assert_eq!(
+        setup_cell(&h, 2, 1).weight,
+        q03.weight,
+        "the cell clicked next"
+    );
+    // the editor shows the cell clicked
+    let su = ui.global::<SetupVM>();
+    assert_eq!(su.get_sel_title(), "Q03 × CLO2");
+    assert_eq!(
+        one(ui, "Weight of Q03 × CLO2").accessible_value(),
+        one(ui, "Q03 CLO2 weight").accessible_value()
+    );
+    // the note editor alike
+    click(ui, &one(ui, "Note of Q03 × CLO2"));
+    type_text(ui, "big-O");
+    click(ui, &one(ui, "Q02 CLO1 weight"));
+    assert_eq!(setup_cell(&h, 2, 1).note, "big-O");
+    assert_ne!(setup_cell(&h, 1, 0).note, "big-O");
+    assert_eq!(su.get_sel_title(), "Q02 × CLO1");
+    // a value equal to the next cell's is saved too (it differs from the cell edited)
+    click(ui, &one(ui, "Q03 CLO2 weight"));
+    click(ui, &one(ui, "Weight of Q03 × CLO2"));
+    type_text(ui, "0.25");
+    click(ui, &one(ui, "Q02 CLO1 weight"));
+    assert_eq!(setup_cell(&h, 2, 1).weight, Some(0.25));
+}
+
+#[test]
+fn req_a11_the_selection_follows_the_focus_past_an_edit() {
+    // Saving a weight moved the selection back to the cell saved after Tab had moved the focus
+    // on: the selection mark and the cell editor stayed one cell behind the focus.
+    let h = harness();
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Setup"));
+    click(ui, &one(ui, "Q02 CLO1 weight"));
+    type_text(ui, "0.5");
+    special(ui, Key::Tab);
+    assert_eq!(setup_cell(&h, 1, 0).weight, Some(0.5));
+    let su = ui.global::<SetupVM>();
+    assert_eq!(su.get_sel_title(), "Q02 × CLO2");
+    let cells = su.get_rows().row_data(1).expect("row Q02").cells;
+    let selected: Vec<bool> = (0..2)
+        .map(|c| cells.row_data(c).expect("cell").selected)
+        .collect();
+    assert_eq!(selected, [false, true]);
+    // what is typed now goes to the cell with the focus
+    type_text(ui, "0.5");
+    special(ui, Key::Return);
+    assert_eq!(setup_cell(&h, 1, 1).weight, Some(0.5));
+    assert_eq!(setup_cell(&h, 1, 0).weight, Some(0.5));
 }
 
 #[test]
