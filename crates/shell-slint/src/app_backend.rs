@@ -3125,8 +3125,9 @@ impl Opened {
     }
 
     fn make_outcomes(&self, exam: &ExamId) -> Option<b::Outcomes> {
+        // computed once, for the shell's rows and omr-app's screen view alike
         let o = self.p.outcomes()?;
-        let v = self.p.outcomes_vm()?;
+        let v = ExamProject::outcomes_view(&o);
         let def = &self.p.session.definition;
         let setup = def.outcomes.as_ref()?;
         let clo_def = |code: &str| setup.clos.iter().find(|c| c.code == code);

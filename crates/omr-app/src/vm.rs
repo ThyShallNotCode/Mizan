@@ -1365,7 +1365,12 @@ impl ExamProject {
 
     /// Outcomes screen.
     pub fn outcomes_vm(&self) -> Option<Outcomes> {
-        let o = self.outcomes()?;
+        Some(Self::outcomes_view(&self.outcomes()?))
+    }
+
+    /// The Outcomes screen of a computed outcome report ([`Self::outcomes`]): for a shell that
+    /// shows the report as well, which then computes it once (the costly part).
+    pub fn outcomes_view(o: &crate::outcomes::OutcomeReport) -> Outcomes {
         let clos = o
             .result
             .clos
@@ -1402,14 +1407,14 @@ impl ExamProject {
                     })
                 })
                 .collect();
-        Some(Outcomes {
+        Outcomes {
             method: o.policy.class_method.name().into(),
             tau: f(&o.policy.tau),
             target: f(&o.policy.target),
             clos,
             tp154_b1,
             classification: "Restricted · مقيد".into(),
-        })
+        }
     }
 
     /// One booklet's responses as text (CLI and tests).
