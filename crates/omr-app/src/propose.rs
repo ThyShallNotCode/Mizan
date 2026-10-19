@@ -499,7 +499,7 @@ impl Given {
         }
     }
 
-    /// The survey request for these scans.
+    /// The survey request for these scans (never cancelled: set its `cancel` to stop it).
     pub fn survey_request(&self, threads: usize) -> survey::SurveyRequest {
         survey::SurveyRequest {
             sheet: self.sheet.clone(),
@@ -507,6 +507,7 @@ impl Given {
             key_sheets: self.key_sheets.clone(),
             roster: self.roster.clone(),
             threads,
+            cancel: Default::default(),
         }
     }
 }

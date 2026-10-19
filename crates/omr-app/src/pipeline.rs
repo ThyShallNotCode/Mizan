@@ -28,9 +28,45 @@ use omr_model::{Exception, Response, Scope, Severity};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
+/// The operator's cancel of a grading run or a survey (G-3): a shared flag the shell sets from
+/// another thread. The run checks it before the project package is created, before each
+/// page's decoding and between stages, never once the store stage has begun: a cancelled run
+/// stores nothing ([`AppError::Cancelled`]; a new exam's package is removed). Clones share the
+/// flag; a token nobody cancels (the default) never stops a run.
+#[derive(Clone, Debug, Default)]
+pub struct Cancel(Arc<AtomicBool>);
+
+impl Cancel {
+    /// Asks every run holding this token (or a clone) to stop at its next check.
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    /// True once [`Self::cancel`] was called on this token or a clone.
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+
+    /// [`AppError::Cancelled`] once cancelled.
+    pub(crate) fn check(&self) -> Result<(), AppError> {
+        if self.is_cancelled() {
+            Err(AppError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Two requests are the same when they share the token (a fresh token is another request).
+impl PartialEq for Cancel {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
 
 /// How to run a grading job.
 #[derive(Clone, Debug)]
@@ -45,6 +81,8 @@ pub struct GradeOptions {
     pub operator: String,
     /// Grade only the first `n` pages in input order (time-to-first-result runs).
     pub max_pages: Option<usize>,
+    /// The operator's cancel (default: never cancelled).
+    pub cancel: Cancel,
 }
 
 impl Default for GradeOptions {
@@ -55,6 +93,7 @@ impl Default for GradeOptions {
             snapshot_utc: None,
             operator: "principal:operator".into(),
             max_pages: None,
+            cancel: Cancel::default(),
         }
     }
 }
@@ -179,6 +218,21 @@ struct Staged {
     blank: bool,
     /// Page notes added to the decided page (CAP-002 WARN/INFO).
     notes: Vec<Exception>,
+}
+
+impl Staged {
+    /// Nothing read (a duplicate's page, or a page a cancelled run skipped).
+    fn empty() -> Self {
+        Self {
+            measured: None,
+            refusal: None,
+            capture: None,
+            source_dpi: None,
+            working: None,
+            blank: false,
+            notes: Vec::new(),
+        }
+    }
 }
 
 /// Dark-pixel ceiling of a blank page (§8.9 CAP-012: < 0.2 % dark pixels and no tags).
@@ -514,7 +568,9 @@ pub fn grade_into(
         }
     }
 
-    // ---- Spool first (§7.4): originals durable in the store before any computation.
+    // ---- Spool first (§7.4): originals durable in the store before any computation. A run
+    // cancelled by now creates no package.
+    opts.cancel.check()?;
     let (mut store, prior_run) = match append {
         Some(a) => (Some(a.store), Some(a.prior)),
         None => match &opts.project_dir {
@@ -580,16 +636,12 @@ pub fn grade_into(
         tasks
             .par_iter()
             .map(|t| {
+                // A cancelled run decodes no further page (the run stops after this stage).
+                if opts.cancel.is_cancelled() {
+                    return Staged::empty();
+                }
                 let out = if t.duplicate_of.is_some() {
-                    Staged {
-                        measured: None,
-                        refusal: None,
-                        capture: None,
-                        source_dpi: None,
-                        working: None,
-                        blank: false,
-                        notes: Vec::new(),
-                    }
+                    Staged::empty()
                 } else {
                     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         stage_page(
@@ -653,6 +705,7 @@ pub fn grade_into(
         v => v as f64 / 1000.0,
     };
     timings.pages = tasks.len();
+    opts.cancel.check()?;
 
     // ---- Batch stage: baseline per slice (capture class × device dpi), then decisions.
     // Key sheets (§10.1) are read with the slice's baseline but never shape it: the students
@@ -949,12 +1002,14 @@ pub fn grade_into(
     }
 
     // ---- Identity (§9).
+    opts.cancel.check()?;
     progress(&Progress::Stage("identity"));
     let t_id = Instant::now();
     identify(def, &mut booklets, &pages)?;
     timings.identity_ms = ms(t_id);
 
     // ---- Forms, key, inference, scoring (§10).
+    opts.cancel.check()?;
     progress(&Progress::Stage("scoring"));
     let t_sc = Instant::now();
     let mut exam_exceptions = Vec::new();
@@ -1015,7 +1070,9 @@ pub fn grade_into(
     let scoring = Scoring::build(&session)?;
     timings.scoring_ms = ms(t_sc);
 
-    // ---- Store: recognition run, identity, exceptions, score run.
+    // ---- Store: recognition run, identity, exceptions, score run. The last check: once the
+    // store stage has begun the run is written whole.
+    opts.cancel.check()?;
     progress(&Progress::Stage("store"));
     let t_st = Instant::now();
     if let Some(st) = store.as_mut() {

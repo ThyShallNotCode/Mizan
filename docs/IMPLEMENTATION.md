@@ -156,11 +156,19 @@ expectation tied to the real exams out of the repository.
     the desktop takes an own sheet's cancel mode from its spec;
   - the desktop's New exam does not show the proposal yet (the shell step of G-3, design-flow
     §4): it still builds its inputs from the form, and a blank key field still infers the key;
-  - a survey cannot be cancelled: an abandoned one runs to its end (the cancel token of G-3 D7
-    is not built yet);
   - the setup's provenance (each value with its source, `ExamDefinition::provenance`) is
     recorded only for exams defined from a proposal; the survey's own counts are not stored;
   - the IAU student-ID scheme accepts intake years up to 2030 only (§9.2).
+- Parts of cancelling a run (G-3 D7; built in `omr-app`: `Cancel` stops a new exam's grading
+  or a survey before anything is stored):
+  - a cancelled run keeps nothing and cannot be resumed (§22.4 keeps the completed pages and
+    the job resumable): the operator grades the scans again;
+  - cancelling an appended batch: its store opens the run (a new scan batch, the originals
+    spooled) before the pages are read, so a cancel there ends as a failed append does, with
+    that batch left open in the log;
+  - `omr` sets no cancel on Ctrl+C: its exit code 130 is reserved for `AppError::Cancelled`,
+    which only a caller holding the token raises (the desktop's *Cancel grading*, the shell
+    step of G-3 D7).
 
 ## 3. Crates and ownership
 

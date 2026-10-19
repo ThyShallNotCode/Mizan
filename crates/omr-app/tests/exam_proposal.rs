@@ -176,6 +176,7 @@ fn survey_of(scans: &[PathBuf], key_sheets: &[PathBuf], threads: usize) -> Surve
             key_sheets: key_sheets.to_vec(),
             roster: None,
             threads,
+            cancel: Default::default(),
         },
         &|_| {},
     )
@@ -1420,6 +1421,7 @@ fn s6_p13_own_sheets_are_surveyed_by_their_page_codes_with_the_specs_cancel_mode
         key_sheets: Vec::new(),
         roster: None,
         threads: 2,
+        cancel: Default::default(),
     };
     let s = survey(&req, &|_| {}).unwrap();
     assert_eq!(s.booklets, 8);

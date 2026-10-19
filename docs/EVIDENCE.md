@@ -560,6 +560,21 @@ IAU sheets, Linux container): 10 pages in 1.30 s at 1 thread and 0.50 s at 4; 27
 Release figures are not measured yet; the survey is one more recognition pass than grading
 alone.
 
+### 3.1.6 Cancelling a run (G-3)
+
+`omr_app::Cancel` is the operator's cancel of a new exam's grading or of a survey: the run
+checks it before the project package is created, before each page is decoded and between
+stages, never once the store stage has begun (synthetic IAU sheets;
+`omr-app/tests/cancel.rs`). The desktop's *Cancel grading* is the shell's part of G-3.
+
+| Case | What happens | Test (`cancel.rs::…`) |
+|---|---|---|
+| Cancelled before the run starts | `AppError::Cancelled` ("cancelled by the operator; nothing was saved", exit code 130); no package created, no page read | `a_run_cancelled_before_it_starts_creates_no_package` |
+| Cancelled while the first page is read | No further page is decoded and no stage runs; the package (its originals already spooled) and the exam folder the run made are removed; the same folder then grades from scratch. **Was:** an empty exam folder stayed behind after a failed run | `a_cancel_during_the_page_stage_removes_the_package_and_its_new_folder` |
+| Cancelled at the batch, identity or scoring stage | Stops before the next stage; nothing stored | `a_cancel_between_stages_stops_before_the_next_one` |
+| Cancelled once the store stage has begun | Too late: the exam is written whole, opens and passes the audit checks | `a_cancel_once_the_store_stage_has_begun_is_too_late` |
+| A survey cancelled while it reads | Stops with `Cancelled`; a survey with a fresh token runs to its end | `a_survey_honours_the_cancel` |
+
 ### 3.2 Security and code review: what was fixed
 
 A security review and a code review of the MVP raised 26 findings above "low" (SEC-01…SEC-11,

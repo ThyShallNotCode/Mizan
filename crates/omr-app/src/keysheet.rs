@@ -1391,6 +1391,7 @@ pub fn read_key_sheets(
         snapshot_utc: Some(crate::pipeline::now_utc()),
         operator: "principal:operator".into(),
         max_pages: None,
+        cancel: Default::default(),
     };
     let g = crate::pipeline::grade_sources(
         &d,

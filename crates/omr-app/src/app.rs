@@ -236,34 +236,49 @@ fn reason_for(code: &str) -> &'static str {
 
 impl ExamProject {
     /// Grades inputs (see [`crate::pipeline::grade`]) and saves the session snapshot. A run
-    /// that fails leaves no half-made project behind (the package it created is removed), so
-    /// the same `--out` folder can be used again.
+    /// that fails or is cancelled ([`crate::Cancel`]) leaves no half-made project behind (the
+    /// package it created is removed, and the exam folder it created when nothing else is in
+    /// it), so the same `--out` folder can be used again.
     pub fn grade(
         def: &ExamDefinition,
         inputs: &[PathBuf],
         opts: &GradeOptions,
         progress: &(dyn Fn(&Progress) + Sync),
     ) -> Result<Self, AppError> {
+        Self::grade_fresh(opts, || crate::pipeline::grade(def, inputs, opts, progress))
+    }
+
+    /// Runs `run` into the package `opts.project_dir` names and saves the graded exam; on
+    /// failure, removes what this call created (the package, and its folder when empty).
+    fn grade_fresh(
+        opts: &GradeOptions,
+        run: impl FnOnce() -> Result<Graded, AppError>,
+    ) -> Result<Self, AppError> {
         let fresh = opts.project_dir.as_ref().filter(|d| !d.exists()).cloned();
         // The exam folder that will hold the package and its exports is private to the user
         // when the app creates it (Restricted data, §19.3).
-        if let Some(parent) = fresh
+        let parent = fresh
             .as_deref()
             .and_then(Path::parent)
             .filter(|d| !d.as_os_str().is_empty() && !d.exists())
-        {
+            .map(Path::to_path_buf);
+        if let Some(parent) = &parent {
             crate::keys::create_private_dir(parent)?;
         }
-        let result = crate::pipeline::grade(def, inputs, opts, progress).and_then(|g| {
+        let result = run().and_then(|g| {
             let mut p = Self::from_graded(g);
             p.save()?;
             p.judge_flags()?;
             Ok(p)
         });
-        if result.is_err()
-            && let Some(dir) = fresh
-        {
-            let _ = std::fs::remove_dir_all(dir);
+        if result.is_err() {
+            if let Some(dir) = fresh {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+            // Only an empty folder goes (nothing else was put in it meanwhile).
+            if let Some(parent) = parent {
+                let _ = std::fs::remove_dir(parent);
+            }
         }
         result
     }
@@ -281,28 +296,9 @@ impl ExamProject {
         if key_sheets.is_empty() {
             return Self::grade(def, inputs, opts, progress);
         }
-        let fresh = opts.project_dir.as_ref().filter(|d| !d.exists()).cloned();
-        if let Some(parent) = fresh
-            .as_deref()
-            .and_then(Path::parent)
-            .filter(|d| !d.as_os_str().is_empty() && !d.exists())
-        {
-            crate::keys::create_private_dir(parent)?;
-        }
-        let result =
+        Self::grade_fresh(opts, || {
             crate::pipeline::grade_with_key_sheets(def, inputs, key_sheets, opts, progress)
-                .and_then(|g| {
-                    let mut p = Self::from_graded(g);
-                    p.save()?;
-                    p.judge_flags()?;
-                    Ok(p)
-                });
-        if result.is_err()
-            && let Some(dir) = fresh
-        {
-            let _ = std::fs::remove_dir_all(dir);
-        }
-        result
+        })
     }
 
     /// Makes the originals of an exam graded in memory available for page images and crops

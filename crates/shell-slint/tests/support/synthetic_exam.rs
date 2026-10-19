@@ -689,6 +689,7 @@ pub fn build_with_key_sheets(spec: &Spec, workspace: &Path) -> Built {
         snapshot_utc: Some(spec.snapshot.into()),
         operator: "principal:synthetic".into(),
         max_pages: None,
+        cancel: Default::default(),
     };
     ExamProject::grade_with_key_sheets(&def, &[scans], &keys, &opts, &|_| {})
         .expect("grading with key sheets")
@@ -756,6 +757,7 @@ pub fn build_in_two_batches(spec: &Spec, workspace: &Path, first: usize) -> Buil
         snapshot_utc: Some(spec.snapshot.into()),
         operator: "principal:synthetic".into(),
         max_pages: None,
+        cancel: Default::default(),
     };
     ExamProject::grade(&definition(spec), &[day1], &opts, &|_| {})
         .expect("grading")
@@ -785,6 +787,7 @@ pub fn build(spec: &Spec, workspace: &Path) -> Built {
         snapshot_utc: Some(spec.snapshot.into()),
         operator: "principal:synthetic".into(),
         max_pages: None,
+        cancel: Default::default(),
     };
     let p = ExamProject::grade(&definition(spec), &[scans], &opts, &|_| {}).expect("grading");
     p.close().expect("close");

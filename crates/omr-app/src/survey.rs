@@ -16,7 +16,7 @@ use crate::define::{self, Inputs, Sheet};
 use crate::exam::{ExamDefinition, IdSchemeChoice, TemplateChoice};
 use crate::export::mask_numbers;
 use crate::model::{PageStatus, Session};
-use crate::pipeline::{self, GradeOptions, Progress};
+use crate::pipeline::{self, Cancel, GradeOptions, Progress};
 use crate::propose::Thresholds;
 use omr_model::Response;
 use serde::{Deserialize, Serialize};
@@ -37,6 +37,9 @@ pub struct SurveyRequest {
     pub roster: Option<PathBuf>,
     /// Worker threads (0 = available parallelism).
     pub threads: usize,
+    /// The operator's cancel (the New-exam form discards a survey of scans it no longer
+    /// shows): the survey stops between its stages ([`crate::AppError::Cancelled`]).
+    pub cancel: Cancel,
 }
 
 /// Version bubbles of the students' sheets.
@@ -282,6 +285,7 @@ pub fn survey(
     let opts = GradeOptions {
         threads: req.threads,
         project_dir: None,
+        cancel: req.cancel.clone(),
         ..GradeOptions::default()
     };
     let g = pipeline::grade_with_key_sheets(&def, &req.scans, &req.key_sheets, &opts, progress)?;

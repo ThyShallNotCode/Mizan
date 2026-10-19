@@ -396,6 +396,7 @@ pub fn options(out: &Path, threads: usize) -> GradeOptions {
         snapshot_utc: Some("2026-10-17T12:00:00Z".into()),
         operator: "principal:test".into(),
         max_pages: None,
+        cancel: Default::default(),
     }
 }
 

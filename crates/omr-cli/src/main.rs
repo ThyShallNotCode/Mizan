@@ -26,7 +26,7 @@
 //! ```
 //!
 //! Exit codes: 0 success; 2 usage or exam definition; 3 input; 4 project store; 5 scoring;
-//! 6 review; 7 not found; 8 I/O; 70 internal.
+//! 6 review; 7 not found; 8 I/O; 70 internal; 130 cancelled.
 #![forbid(unsafe_code)]
 
 use clap::{Args, Parser, Subcommand};
@@ -1176,6 +1176,7 @@ fn cmd_grade(g: GradeArgs) -> Result<(), AppError> {
         snapshot_utc: g.snapshot_time.clone(),
         operator: g.operator.clone(),
         max_pages: None,
+        cancel: Default::default(),
     };
     let quiet = g.quiet;
     let progress = move |p: &Progress| {
@@ -1512,6 +1513,7 @@ fn cmd_add(a: AddArgs) -> Result<(), AppError> {
         snapshot_utc: a.snapshot_time.clone(),
         operator: a.operator.clone(),
         max_pages: None,
+        cancel: Default::default(),
     };
     let r = p.add_scans(&a.inputs, &opts, &|_| {})?;
     println!(
@@ -1878,6 +1880,7 @@ fn cmd_key(cmd: KeyCmd) -> Result<(), AppError> {
                     snapshot_utc: None,
                     operator: operator.clone(),
                     max_pages: None,
+                    cancel: Default::default(),
                 };
                 let r = p.add_key_sheets(&from_key_sheets, &opts, &|_| {})?;
                 println!(
@@ -2046,6 +2049,7 @@ fn cmd_bench(b: BenchArgs) -> Result<(), AppError> {
         snapshot_utc: Some("2026-10-16T00:00:00Z".into()),
         operator: "principal:bench".into(),
         max_pages: Some(b.first),
+        cancel: Default::default(),
     };
     let srcs = sources.iter().cloned().map(Ok).collect();
     let g = omr_app::pipeline::grade_sources(&def, srcs, &opts, &pool, t0, &|_| {})?;
