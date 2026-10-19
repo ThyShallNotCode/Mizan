@@ -36,6 +36,26 @@ pub struct AppendReport {
     pub conflicts: usize,
 }
 
+/// What a roster given to a graded exam did ([`crate::ExamProject::set_roster`]).
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct RosterReport {
+    /// Students on the roster.
+    pub students: usize,
+    /// Booklets matched to a roster student.
+    pub matched: usize,
+    /// Booklets matched to no roster student (not on it, or a number too unclear to match):
+    /// each is an identity item.
+    pub not_on_roster: usize,
+    /// Roster students who handed in no sheet (provisional while an identity item is open).
+    pub absent: usize,
+    /// Review resolutions carried over from the earlier run.
+    pub carried_over: usize,
+    /// Human values the re-run contradicts (SYS-032, queued).
+    pub conflicts: usize,
+    /// The roster import's notes (repairs, scheme mismatches), student numbers masked.
+    pub warnings: Vec<String>,
+}
+
 /// An input file read for grading, or the path of an unreadable one and why.
 pub type SourceRead = Result<SourceFile, (PathBuf, String)>;
 

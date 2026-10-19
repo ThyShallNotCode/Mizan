@@ -2551,7 +2551,6 @@ impl ExamProject {
         opts: &GradeOptions,
         progress: &(dyn Fn(&Progress) + Sync),
     ) -> Result<crate::append::AppendReport, AppError> {
-        use rayon::prelude::*;
         if self.session.key_unconfirmed() {
             return Err(AppError::Review(
                 "the key read from the key sheets is not confirmed: confirm it first (omr key \
@@ -2560,6 +2559,23 @@ impl ExamProject {
             ));
         }
         let paths = ingest::collect_paths(inputs)?;
+        let def = self.session.definition.clone();
+        self.regrade(def, &paths, opts, progress, "scans added")
+    }
+
+    /// The exam graded again under `def` over every stored original plus the files `paths`
+    /// (none: the same scans, e.g. under a new roster), as [`Self::add_scans`] describes; a
+    /// release is superseded naming `change`. The exam changes only when the run succeeds.
+    fn regrade(
+        &mut self,
+        def: ExamDefinition,
+        paths: &[PathBuf],
+        opts: &GradeOptions,
+        progress: &(dyn Fn(&Progress) + Sync),
+        change: &str,
+    ) -> Result<crate::append::AppendReport, AppError> {
+        use rayon::prelude::*;
+        let pool = crate::pipeline::pool(opts.threads)?;
         let Some(store) = self.store.take() else {
             return Err(AppError::Store(
                 "this exam was opened read-only; open it for writing (omr add --project DIR) \
@@ -2570,7 +2586,6 @@ impl ExamProject {
         let root = store.root();
         let actor = store.actor().clone();
         let prior = self.session.clone();
-        let pool = crate::pipeline::pool(opts.threads)?;
         let mut sources = match crate::append::stored_sources(&prior, &store) {
             Ok(s) => s,
             Err(e) => {
@@ -2597,7 +2612,6 @@ impl ExamProject {
         if o.snapshot_utc.is_none() {
             o.snapshot_utc = Some(prior.snapshot_utc.clone());
         }
-        let def = prior.definition.clone();
         let g = crate::pipeline::grade_into(
             &def,
             sources,
@@ -2660,7 +2674,7 @@ impl ExamProject {
         self.session.release = release;
         self.scoring = g.scoring;
         self.store = g.store;
-        self.after_release("scans added")?;
+        self.after_release(change)?;
         self.touch_all();
         self.sources.lock().expect("sources lock").clear();
         self.pages.lock().expect("page cache").clear();
@@ -2721,6 +2735,70 @@ impl ExamProject {
                 Err(e)
             }
         }
+    }
+
+    /// A roster given to a graded exam, or replacing its roster (§9.1: a rosterless exam is
+    /// converted by a normal linkage run; §9.6: assignment runs again after a new roster
+    /// snapshot). The rows are imported as `--roster` imports them
+    /// ([`ExamDefinition::import_roster`]: leading zeros restored; duplicate, damaged or
+    /// national IDs refuse the roster), then every booklet is identified again over the stored
+    /// originals ([`Self::add_scans`] without new scans): booklets, scores, the queue and the
+    /// exports are those of grading with this roster from the start, every review decision
+    /// carries over (a re-run that contradicts a reviewer's student raises SYS-032 and keeps
+    /// it) and a release is superseded. Audited by the run's store stage, in one decision with
+    /// the identity run that names it: the roster snapshot (its parent the roster it replaces)
+    /// and `RosterReplaced` (row count and hashes, no student data). The exam row keeps the
+    /// identity mode it was created with; the roster in force is the latest identity run's.
+    /// Refused while the key read from key sheets waits for confirmation; a refused roster, or
+    /// a run that fails or is cancelled, leaves the exam and its definition as they were and
+    /// records no roster.
+    pub fn set_roster(
+        &mut self,
+        rows: Vec<crate::exam::RosterStudent>,
+        opts: &GradeOptions,
+        progress: &(dyn Fn(&Progress) + Sync),
+    ) -> Result<crate::append::RosterReport, AppError> {
+        if self.session.key_unconfirmed() {
+            return Err(AppError::Review(
+                "the key read from the key sheets is not confirmed: confirm it first (omr key \
+                 confirm), or give the key as a file (omr key replace), then add the roster"
+                    .into(),
+            ));
+        }
+        let Some(st) = self.store.as_mut() else {
+            return Err(AppError::Store(
+                "this exam was opened read-only; open it for writing to add the roster".into(),
+            ));
+        };
+        let mut def = self.session.definition.clone();
+        // Student numbers masked: the notes reach logs and the status line.
+        let warnings: Vec<String> = def
+            .import_roster(rows)?
+            .iter()
+            .map(|w| crate::export::mask_numbers(w))
+            .collect();
+        st.stage_roster(&def);
+        let report = match self.regrade(def, &[], opts, progress, "roster replaced") {
+            Ok(r) => r,
+            Err(e) => {
+                // A run that failed before its store stage recorded no roster.
+                if let Some(st) = self.store.as_mut() {
+                    st.unstage_roster();
+                }
+                return Err(e);
+            }
+        };
+        let s = &self.session;
+        let matched = s.booklets.iter().filter(|b| b.student().is_some()).count();
+        Ok(crate::append::RosterReport {
+            students: s.definition.roster.as_ref().map_or(0, Vec::len),
+            matched,
+            not_on_roster: s.booklets.len() - matched,
+            absent: self.absent_students().len(),
+            carried_over: report.carried_over,
+            conflicts: report.conflicts,
+            warnings,
+        })
     }
 
     /// Releases the results (§10.8, §13.4): refused while anything blocks release (an open

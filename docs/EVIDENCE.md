@@ -575,6 +575,21 @@ stages, never once the store stage has begun (synthetic IAU sheets;
 | Cancelled once the store stage has begun | Too late: the exam is written whole, opens and passes the audit checks | `a_cancel_once_the_store_stage_has_begun_is_too_late` |
 | A survey cancelled while it reads | Stops with `Cancelled`; a survey with a fresh token runs to its end | `a_survey_honours_the_cancel` |
 
+### 3.1.7 A roster after grading (G-3)
+
+`ExamProject::set_roster` gives a graded exam a roster (or replaces it): the rows are imported
+as `--roster` imports them, and every booklet is identified again over the stored originals,
+as an appended batch is graded again (synthetic IAU sheets and rosters;
+`omr-app/tests/roster_after_grading.rs`). The desktop's *Roster* step is the shell's part of
+G-3.
+
+| Case | What happens | Test (`roster_after_grading.rs::…`) |
+|---|---|---|
+| 8 sheets graded without a roster and reviewed, then a roster of 9 (7 of the sheets' students, 2 who handed in nothing) | 7 booklets matched, 1 not on the roster (an identity item), 2 absent; booklets, items and `results.csv`, `booklets.json`, `item_analysis.csv` byte-identical to grading with the roster from the start; a decided mark and a deferral carry over. Audited: the roster snapshot and `RosterReplaced` (row count and hashes, no student data) in one decision with the identity run that names the snapshot | `a_roster_after_grading_matches_the_students_and_keeps_the_decisions` |
+| A roster that lists a student twice; a roster whose run is cancelled, or cannot read the stored originals | Refused or failed with nothing changed: no roster, the same booklets and items, no event; the next run (a file added again) records no roster, and the next roster is the only one recorded | `a_refused_roster_changes_nothing` |
+| Released without a roster, then the roster given | The release is superseded (`ReleaseSuperseded`, "roster replaced"): no Blackboard upload until released again; then the upload lists every student who handed in a sheet by roster ID | `the_blackboard_upload_appears_after_the_roster_with_a_provided_key_and_release` |
+| Reopened after the roster; a later batch; a second roster | Opens (also read-only) and passes the audit checks; the later batch is identified against the roster in force and its identity run names it; the second snapshot's parent is the first. The exam row keeps the identity mode it was created with (`docs/IMPLEMENTATION.md`) | `an_exam_given_a_roster_reopens_clean_and_keeps_it_for_later_runs` |
+
 ### 3.2 Security and code review: what was fixed
 
 A security review and a code review of the MVP raised 26 findings above "low" (SEC-01…SEC-11,

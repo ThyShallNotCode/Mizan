@@ -169,6 +169,15 @@ expectation tied to the real exams out of the repository.
   - `omr` sets no cancel on Ctrl+C: its exit code 130 is reserved for `AppError::Cancelled`,
     which only a caller holding the token raises (the desktop's *Cancel grading*, the shell
     step of G-3 D7).
+- Parts of a roster after grading (G-3 D8; built in `omr-app`: `ExamProject::set_roster`
+  identifies a graded exam again against a roster given later, or a replacing one):
+  - the exam row's `identity_mode` stays the mode the exam was created with (`candidate_number`
+    for an exam graded without a roster): the roster given later is recorded by
+    `RosterReplaced` and by the identity runs that name its snapshot (the roster in force), and
+    the row is not projected from them (nothing decides from it);
+  - its run opens a scan batch with no scans, as an appended batch does, for the runs it
+    names; a roster cannot be removed from an exam;
+  - `omr roster set --project DIR roster.csv` (CLI parity) is not built.
 
 ## 3. Crates and ownership
 
