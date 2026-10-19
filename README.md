@@ -92,10 +92,13 @@ omr grade scans/cs211-midterm/ --template iau-ccsit-v1 --questions 30 \
   questions the exam uses.
 - `--key` is the answer key, one column per exam version (A, B): see
   [`docs/examples/key.csv`](docs/examples/key.csv). The versions come from the key file. A
-  single `key` (or `answer`) column is the key of every version, so a single-version exam
-  needs nothing more: a sheet whose version bubble is blank is graded with that key, without
+  single `key` (or `answer`) column, a column of answers alone or `1,B` rows without a header
+  are the key of every version, so a single-version exam needs nothing more: a sheet whose version bubble is blank is graded with that key, without
   review. A sheet that bubbles a version the exam does not have (C on an A, B exam; B on an
   exam with `--forms A`) is held for review and never scored until you choose its version.
+  A column named for a version is that version's key only: a key for version C alone, or
+  columns for versions the exam does not declare (`--forms A,B` with an A–D key), are refused
+  unless those columns are empty.
 - `--roster` (CSV or Excel `.xlsx`, [`example`](docs/examples/roster.csv)) and `--clo`
   ([`example`](docs/examples/clo.csv)) are optional. Without a roster, sheets are identified
   by the student number bubbled on them; without a CLO file there are no outcome tables.

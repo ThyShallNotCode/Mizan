@@ -162,6 +162,56 @@ fn c5_malformed_key_files_fail_with_the_line_and_what_to_change() {
     );
 }
 
+#[test]
+fn a_key_labelled_with_one_version_is_never_copied_to_another() {
+    let two = forms(&["A", "B"]);
+    // A key that names no version is every version's (identical versions).
+    for (what, bytes) in [
+        ("question,key header", &b"question,key\n1,B\n2,C\n"[..]),
+        ("answer header", b"Q,Answer\n1,B\n2,C\n"),
+        ("headerless rows", b"1,B\n2,C\n"),
+        ("single column", b"B\nC\n"),
+        ("a * row", b"form,Q1,Q2\n*,B,C\n"),
+    ] {
+        let k = keys(bytes, &["A", "B"], 2);
+        assert_eq!(answers(&k), vec![vec!["B", "C"]; 2], "{what}");
+    }
+    // A key for version C only, on an exam declaring A and B: refused, never copied to them.
+    let c_only = b"question,C\n1,B\n2,C\n";
+    let m = err(read_key_file(c_only, &two, 2, 5));
+    assert!(
+        m.contains("key for version C only") && m.contains("declares versions A, B"),
+        "{m}"
+    );
+    // ... and the one version's key on an exam declaring that version.
+    assert_eq!(answers(&keys(c_only, &["C"], 2)), vec![vec!["B", "C"]]);
+    // Versions A–D on an exam declaring A and B: refused naming C and D, never dropped.
+    let abcd = b"question,A,B,C,D\n1,A,B,C,D\n2,B,C,D,E\n";
+    let m = err(read_key_file(abcd, &two, 2, 5));
+    assert!(
+        m.contains("version C, version D") && m.contains("does not declare"),
+        "{m}"
+    );
+    let m = err(read_key_file(
+        b"version,Q1,Q2\nA,A,B\nB,B,C\nC,C,D\n",
+        &two,
+        2,
+        5,
+    ));
+    assert!(
+        m.contains("version C") && m.contains("does not declare"),
+        "{m}"
+    );
+    // A key file whose undeclared versions hold no answer (a template's spare columns) reads
+    // as the declared versions' key; declaring every version reads them all.
+    let spare = b"question,A,B,C,D\n1,A,B,,\n2,B,C,,\n";
+    assert_eq!(
+        answers(&keys(spare, &["A", "B"], 2)),
+        vec![vec!["A", "B"], vec!["B", "C"]]
+    );
+    assert_eq!(keys(abcd, &["A", "B", "C", "D"], 2).len(), 4);
+}
+
 fn roster_def() -> ExamDefinition {
     let mut d = ExamDefinition::new(
         "Quiz",

@@ -1400,7 +1400,7 @@ pub fn read_key_file_full(
                 continue;
             }
             for ((f, _), v) in cols.iter().zip(&cells) {
-                let col = if f == "*" {
+                let col = if f == SHARED_KEY {
                     format!("question {q}")
                 } else {
                     format!("question {q} form {f}")
@@ -1514,7 +1514,7 @@ pub fn read_key_file_full(
             } else if let Some(f) = points_form(&hn) {
                 form_points.push((f, i));
             } else if SHARED_KEY_HEADERS.contains(&hn.as_str()) {
-                cols.push(("*".into(), i)); // one key for every form
+                cols.push((SHARED_KEY.into(), i)); // one key for every form
             } else if !hn.is_empty() {
                 cols.push((form_label(h), i));
             }
@@ -1534,7 +1534,7 @@ pub fn read_key_file_full(
     if parse_question_number(&first[0]).is_some() && first.len() >= 2 {
         let k = rows.iter().map(|(_, r)| r.len()).max().unwrap_or(2) - 1;
         let cols: Vec<(String, usize)> = if k == 1 {
-            vec![("*".into(), 1)]
+            vec![(SHARED_KEY.into(), 1)]
         } else if k == forms.len() {
             forms.iter().cloned().zip(1..).collect()
         } else {
@@ -1562,7 +1562,7 @@ pub fn read_key_file_full(
         return Ok(KeyFile {
             forms: order_keys(
                 vec![FormKey {
-                    form: "*".into(),
+                    form: SHARED_KEY.into(),
                     answers,
                 }],
                 forms,
@@ -1670,9 +1670,17 @@ pub fn key_file_forms(bytes: &[u8]) -> Option<Vec<String>> {
     (!out.is_empty()).then_some(out)
 }
 
+/// The label of a key that names no version (a `key`/`answer` column, a single column of
+/// answers, headerless `1,B` rows or a `*` row): one key for every version.
+const SHARED_KEY: &str = "*";
+
+/// The keys read from a file in the exam's form order. Only a key that names no version is
+/// copied to every version (identical versions); a key labelled with a version is that
+/// version's key alone, so a key for a version the exam does not declare is refused, never
+/// copied to another version or dropped while it holds answers (an empty column of an
+/// undeclared version, as a template's spare `C,D` columns, is left out).
 fn order_keys(keys: Vec<FormKey>, forms: &[String]) -> Result<Vec<FormKey>, AppError> {
-    // A single unlabeled key applies to every form (identical forms).
-    if keys.len() == 1 && !forms.contains(&keys[0].form) {
+    if keys.len() == 1 && keys[0].form == SHARED_KEY {
         return Ok(forms
             .iter()
             .map(|f| FormKey {
@@ -1680,6 +1688,33 @@ fn order_keys(keys: Vec<FormKey>, forms: &[String]) -> Result<Vec<FormKey>, AppE
                 answers: keys[0].answers.clone(),
             })
             .collect());
+    }
+    let label = |f: &str| {
+        if f == SHARED_KEY {
+            "every version (a key or answer column)".to_string()
+        } else {
+            format!("version {f}")
+        }
+    };
+    let extra: Vec<&FormKey> = keys
+        .iter()
+        .filter(|k| !forms.contains(&k.form) && k.answers.iter().any(|a| !a.trim().is_empty()))
+        .collect();
+    if let [only] = keys.as_slice()
+        && !extra.is_empty()
+    {
+        return Err(AppError::Input(format!(
+            "the key file has a key for {} only; this exam declares {} {}: declare the \
+             version the key is for (--forms {}), or give a key for every declared version",
+            label(&only.form),
+            if forms.len() == 1 {
+                "version"
+            } else {
+                "versions"
+            },
+            forms.join(", "),
+            only.form
+        )));
     }
     let mut out = Vec::new();
     for f in forms {
@@ -1696,6 +1731,19 @@ fn order_keys(keys: Vec<FormKey>, forms: &[String]) -> Result<Vec<FormKey>, AppE
                 )));
             }
         }
+    }
+    if !extra.is_empty() {
+        return Err(AppError::Input(format!(
+            "the key file also has a key for {}, which this exam does not declare (versions \
+             {}); declare every version the file has (--forms), or remove the other columns or \
+             rows",
+            extra
+                .iter()
+                .map(|k| label(&k.form))
+                .collect::<Vec<_>>()
+                .join(", "),
+            forms.join(", ")
+        )));
     }
     Ok(out)
 }
