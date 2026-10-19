@@ -324,6 +324,12 @@ impl StoreWriter {
         self.project.paths().cache.clone()
     }
 
+    /// The object store's folder, to read originals from another thread
+    /// ([`ObjectStore::read_verified`](omr_store::objects::ObjectStore::read_verified)).
+    pub fn objects(&self) -> omr_store::objects::ObjectStore {
+        self.project.objects().clone()
+    }
+
     /// Reads an original by its BLAKE3 address (verified).
     pub fn read_object(&self, blake3: &str, sha384: &str) -> Result<Vec<u8>, AppError> {
         self.project

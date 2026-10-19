@@ -36,6 +36,8 @@ const THUMBS: usize = 30;
 const MIN_IDENTITY_SUGGESTION: f32 = 0.5;
 /// Width of a page thumbnail in pixels (the tile is about 100 px wide at 1440 px).
 const THUMB_WIDTH: usize = 120;
+/// Page thumbnails kept (about 40 kB each): the Scan screens of several exams.
+const THUMB_CACHE: usize = 256;
 
 // ------------------------------------------------------------------------------------ grading
 
@@ -222,10 +224,77 @@ struct Entry {
     page_stage_ms: f64,
 }
 
-/// Page thumbnails by project folder and page ID, decoded from the stored originals at first
-/// sight. A stored page never changes, and the cache outlives the project's reopening after an
-/// added batch, so the pages already shown are not decoded again (about 28 ms each).
-type Thumbs = RefCell<BTreeMap<(PathBuf, String), Option<b::CropImage>>>;
+/// A page thumbnail's key: its project folder and page ID (a stored page never changes).
+type ThumbKey = (PathBuf, String);
+
+/// Page thumbnails of the projects opened, decoded from the stored originals at first sight
+/// (about 28 ms a page). With the binary's spawner the decoding runs on its threads, so the
+/// first look at a Scan screen does not wait for it: a page shows the placeholder until its
+/// thumbnail arrives through [`Backend::pump`]. Without one (headless use) a page is decoded
+/// when it is first shown. The cache outlives the project's reopening after an added batch and
+/// keeps the [`THUMB_CACHE`] thumbnails shown last.
+#[derive(Default)]
+struct Thumbs {
+    /// Decoded thumbnails (`None`: the page has no image to show), with when each was last
+    /// shown.
+    done: BTreeMap<ThumbKey, (u64, Option<b::CropImage>)>,
+    /// The use counter of `done`.
+    clock: u64,
+    /// Decode on the spawner's threads (the binary gave one).
+    background: bool,
+    /// Pages shown without a thumbnail and not handed to a worker yet: key and page index.
+    wanted: Vec<(ThumbKey, usize)>,
+    /// Pages being decoded (in `wanted` or in a job).
+    pending: BTreeSet<ThumbKey>,
+    jobs: Vec<ThumbJob>,
+}
+
+/// A decode job on the spawner's threads: its pages in order, and the channel each thumbnail
+/// comes back on with its position.
+struct ThumbJob {
+    keys: Vec<ThumbKey>,
+    rx: Receiver<(usize, Option<b::CropImage>)>,
+}
+
+impl Thumbs {
+    /// The thumbnail of `key` if it was decoded (`Some(None)`: there is no image).
+    fn get(&mut self, key: &ThumbKey) -> Option<Option<b::CropImage>> {
+        self.clock += 1;
+        let clock = self.clock;
+        self.done.get_mut(key).map(|(used, image)| {
+            *used = clock;
+            image.clone()
+        })
+    }
+
+    /// Keeps a decoded thumbnail, dropping the ones shown longest ago beyond [`THUMB_CACHE`].
+    fn put(&mut self, key: ThumbKey, image: Option<b::CropImage>) {
+        self.clock += 1;
+        self.pending.remove(&key);
+        self.done.insert(key, (self.clock, image));
+        while self.done.len() > THUMB_CACHE {
+            let oldest = self
+                .done
+                .iter()
+                .min_by_key(|(_, (used, _))| *used)
+                .map(|(k, _)| k.clone());
+            match oldest {
+                Some(k) => self.done.remove(&k),
+                None => break,
+            };
+        }
+    }
+}
+
+/// A page thumbnail, from the page's whole view at [`THUMB_WIDTH`]
+/// (`omr_app::crops::thumbnail`).
+fn thumb_of(c: omr_app::crops::Crop) -> b::CropImage {
+    b::CropImage {
+        width: c.width,
+        height: c.height,
+        rgba: c.rgba,
+    }
+}
 
 /// An opened project and the derived view-models cached until its next change.
 struct Opened {
@@ -237,7 +306,7 @@ struct Opened {
     results: RefCell<Option<Option<b::Results>>>,
     outcomes: RefCell<Option<Option<b::Outcomes>>>,
     /// The backend's page thumbnails (see [`Thumbs`]).
-    thumbs: Rc<Thumbs>,
+    thumbs: Rc<RefCell<Thumbs>>,
     /// Key-sheet files read for this exam and not confirmed yet (nothing in the exam changes
     /// until the confirmation replaces its key).
     preview: Option<Preview>,
@@ -265,7 +334,12 @@ struct Preview {
 }
 
 impl Opened {
-    fn new(p: ExamProject, dir: PathBuf, read_only: Option<String>, thumbs: Rc<Thumbs>) -> Self {
+    fn new(
+        p: ExamProject,
+        dir: PathBuf,
+        read_only: Option<String>,
+        thumbs: Rc<RefCell<Thumbs>>,
+    ) -> Self {
         Self {
             p,
             read_only,
@@ -322,7 +396,7 @@ pub struct AppBackend {
     /// A Remark import read on the New-exam form and not used yet (§3.5).
     remark_new: Option<HeldImport>,
     /// Page thumbnails of every project opened (shared with each [`Opened`]).
-    thumbs: Rc<Thumbs>,
+    thumbs: Rc<RefCell<Thumbs>>,
 }
 
 struct StabilityJob {
@@ -372,9 +446,11 @@ impl AppBackend {
         }
     }
 
-    /// Lets the backend start background work (adding scans) on threads the caller owns.
+    /// Lets the backend start background work (adding scans, flag stability, page thumbnails)
+    /// on threads the caller owns.
     pub fn set_spawner(&mut self, spawn: Spawn) {
         self.spawn = Some(spawn);
+        self.thumbs.borrow_mut().background = true;
     }
 
     /// True while `exam`'s project is closed for an added batch.
@@ -880,6 +956,126 @@ impl AppBackend {
             }
         }
         self.stability_jobs.borrow_mut().extend(still);
+        changed
+    }
+
+    /// The batch view of `exam`: a grading run's live view, or the finished batch from the
+    /// session.
+    fn batch_view(&self, exam: &ExamId) -> Option<b::BatchProgress> {
+        if let Some(j) = self.job.as_ref().filter(|j| &j.exam == exam) {
+            let opened = self.opened.borrow();
+            return Some(match (opened.get(exam), &j.outcome) {
+                // finished and open: the whole batch from the session (codes, reconciliation,
+                // timings), after the run's own activity lines (a refused added batch leaves
+                // the exam as it was, with the reason on top)
+                (Some(o), Some(_)) => {
+                    let mut b = o.batch(exam);
+                    let mut activity = j.activity.clone();
+                    activity.append(&mut b.activity);
+                    b.activity = activity;
+                    b
+                }
+                (o, _) => job_batch(j, o),
+            });
+        }
+        self.with(exam, |o| o.batch(exam))
+    }
+
+    /// Hands the pages shown without a thumbnail to a worker, one job per project: it reads,
+    /// verifies and decodes their stored originals ([`omr_app::pages::PageBatch`]) and sends each
+    /// thumbnail back as it is made. A project that can no longer be read (closed, or open
+    /// read-only) shows no image for them; if no thread can be started they are decoded here.
+    fn decode_thumbs(&self) {
+        let wanted = std::mem::take(&mut self.thumbs.borrow_mut().wanted);
+        let mut by_dir: BTreeMap<PathBuf, Vec<(ThumbKey, usize)>> = BTreeMap::new();
+        for (key, page) in wanted {
+            by_dir.entry(key.0.clone()).or_default().push((key, page));
+        }
+        for (dir, wanted) in by_dir {
+            let (keys, pages): (Vec<ThumbKey>, Vec<usize>) = wanted.into_iter().unzip();
+            let batch = || {
+                self.opened
+                    .borrow()
+                    .values()
+                    .find(|o| o.dir == dir)
+                    .and_then(|o| o.p.page_batch(&pages))
+            };
+            let Some(work) = batch() else {
+                let mut t = self.thumbs.borrow_mut();
+                for key in keys {
+                    t.put(key, None);
+                }
+                continue;
+            };
+            let (tx, rx) = std::sync::mpsc::channel();
+            let job: Box<dyn FnOnce() + Send> = Box::new(move || {
+                work.decode(|i, img| {
+                    // the window may be gone: nobody waits for the rest
+                    let thumb = img
+                        .ok()
+                        .map(|g| thumb_of(omr_app::crops::thumbnail(&g, THUMB_WIDTH)));
+                    let _ = tx.send((i, thumb));
+                });
+            });
+            if let Some(spawn) = &self.spawn
+                && spawn(job).is_ok()
+            {
+                self.thumbs.borrow_mut().jobs.push(ThumbJob { keys, rx });
+                continue;
+            }
+            // no thread to run it on: here
+            let mut made: Vec<Option<b::CropImage>> = vec![None; keys.len()];
+            if let Some(work) = batch() {
+                work.decode(|i, img| {
+                    made[i] = img
+                        .ok()
+                        .map(|g| thumb_of(omr_app::crops::thumbnail(&g, THUMB_WIDTH)));
+                });
+            }
+            let mut t = self.thumbs.borrow_mut();
+            for (key, image) in keys.into_iter().zip(made) {
+                t.put(key, image);
+            }
+        }
+    }
+
+    /// Folds the thumbnails decoded meanwhile (`wait`: blocks until every running job is done);
+    /// returns true when any arrived.
+    fn drain_thumbs(&self, wait: bool) -> bool {
+        let mut t = self.thumbs.borrow_mut();
+        let jobs = std::mem::take(&mut t.jobs);
+        let mut changed = false;
+        for job in jobs {
+            let ended = loop {
+                let got = if wait {
+                    job.rx.recv().map_err(|_| TryRecvError::Disconnected)
+                } else {
+                    job.rx.try_recv()
+                };
+                match got {
+                    Ok((i, image)) => {
+                        if let Some(key) = job.keys.get(i) {
+                            t.put(key.clone(), image);
+                            changed = true;
+                        }
+                    }
+                    Err(TryRecvError::Empty) => break false,
+                    Err(TryRecvError::Disconnected) => break true,
+                }
+            };
+            if !ended {
+                t.jobs.push(job);
+                continue;
+            }
+            // a job that stopped short (it died): its other pages show no image, never
+            // decoded again in a loop
+            for key in job.keys {
+                if t.pending.contains(&key) {
+                    t.put(key, None);
+                    changed = true;
+                }
+            }
+        }
         changed
     }
 
@@ -1938,24 +2134,31 @@ impl Opened {
             .map(|(_, r)| r.clone())
     }
 
-    /// A page thumbnail (decoded from the stored original once, then cached).
+    /// A page thumbnail (decoded from the stored original once, then cached; see [`Thumbs`]).
+    /// `None` while it is decoded in the background, or when the page has no image.
     fn thumbnail(&self, page: usize) -> Option<b::CropImage> {
         let key = (
             self.dir.clone(),
             self.p.session.pages.get(page)?.page_id.clone(),
         );
-        if let Some(hit) = self.thumbs.borrow().get(&key) {
-            return hit.clone();
-        }
-        let made = self.p.page_image(page).ok().map(|img| {
-            let c = omr_app::crops::thumbnail(&img, THUMB_WIDTH);
-            b::CropImage {
-                width: c.width,
-                height: c.height,
-                rgba: c.rgba,
+        {
+            let mut t = self.thumbs.borrow_mut();
+            if let Some(hit) = t.get(&key) {
+                return hit;
             }
-        });
-        self.thumbs.borrow_mut().insert(key, made.clone());
+            if t.background {
+                if t.pending.insert(key.clone()) {
+                    t.wanted.push((key, page));
+                }
+                return None;
+            }
+        }
+        let made = self
+            .p
+            .page_image(page)
+            .ok()
+            .map(|img| thumb_of(omr_app::crops::thumbnail(&img, THUMB_WIDTH)));
+        self.thumbs.borrow_mut().put(key, made.clone());
         made
     }
 
@@ -4250,23 +4453,10 @@ impl Backend for AppBackend {
     }
 
     fn batch_progress(&self, exam: &ExamId) -> Option<b::BatchProgress> {
-        if let Some(j) = self.job.as_ref().filter(|j| &j.exam == exam) {
-            let opened = self.opened.borrow();
-            return Some(match (opened.get(exam), &j.outcome) {
-                // finished and open: the whole batch from the session (codes, reconciliation,
-                // timings), after the run's own activity lines (a refused added batch leaves
-                // the exam as it was, with the reason on top)
-                (Some(o), Some(_)) => {
-                    let mut b = o.batch(exam);
-                    let mut activity = j.activity.clone();
-                    activity.append(&mut b.activity);
-                    b.activity = activity;
-                    b
-                }
-                (o, _) => job_batch(j, o),
-            });
-        }
-        self.with(exam, |o| o.batch(exam))
+        let batch = self.batch_view(exam);
+        // the thumbnails it lacks are decoded off this thread
+        self.decode_thumbs();
+        batch
     }
 
     fn review_queue(&self, exam: &ExamId, lane: b::Lane) -> b::ReviewQueue {
@@ -5069,11 +5259,13 @@ impl Backend for AppBackend {
 
     fn pump(&mut self) -> bool {
         let analysed = self.drain_stability(false);
-        self.drain_job() || analysed
+        let thumbs = self.drain_thumbs(false);
+        self.drain_job() || analysed || thumbs
     }
 
     fn settle(&mut self) -> bool {
-        self.drain_stability(true)
+        let analysed = self.drain_stability(true);
+        self.drain_thumbs(true) || analysed
     }
 
     fn take_reloaded(&mut self) -> Vec<ExamId> {
@@ -5085,6 +5277,27 @@ impl Backend for AppBackend {
 mod tests {
     use super::*;
     use omr_app::exam::TemplateChoice;
+
+    #[test]
+    fn the_thumbnail_cache_keeps_the_ones_shown_last() {
+        // The cache was never trimmed: every page of every exam shown stayed in memory.
+        let key = |i: usize| (PathBuf::from("exam"), format!("p{i:04}"));
+        let mut t = Thumbs::default();
+        for i in 0..THUMB_CACHE {
+            t.put(key(i), None);
+        }
+        // page 0 is shown again: the oldest is now page 1
+        assert_eq!(t.get(&key(0)), Some(None));
+        t.put(key(THUMB_CACHE), None);
+        assert_eq!(t.done.len(), THUMB_CACHE);
+        assert!(t.get(&key(0)).is_some());
+        assert!(t.get(&key(1)).is_none(), "the one shown longest ago goes");
+        for i in 0..THUMB_CACHE {
+            t.put(key(1000 + i), None);
+        }
+        assert_eq!(t.done.len(), THUMB_CACHE);
+        assert!(t.get(&key(0)).is_none());
+    }
 
     #[test]
     fn long_paths_keep_their_last_folders_on_every_os() {

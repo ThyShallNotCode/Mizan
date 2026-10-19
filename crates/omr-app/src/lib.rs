@@ -31,6 +31,7 @@ pub mod keys;
 pub mod keysheet;
 pub mod model;
 pub mod outcomes;
+pub mod pages;
 pub mod parallel;
 pub mod pipeline;
 pub mod remark;

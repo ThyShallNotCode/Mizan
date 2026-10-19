@@ -137,7 +137,6 @@ pub fn scan_paths(text: &str) -> Vec<std::path::PathBuf> {
         .collect()
 }
 
-/// A blank sheet for a thumbnail whose page image is not available (never an invented scan).
 /// True when 1-based question `q` is in `ranges` (`1-8,11,13-14`).
 fn in_ranges(ranges: &str, q: usize) -> bool {
     ranges.split(',').any(|r| {
@@ -150,6 +149,8 @@ fn in_ranges(ranges: &str, q: usize) -> bool {
     })
 }
 
+/// A blank sheet for a thumbnail whose page image is not available, or not decoded yet (the
+/// neutral placeholder while it is decoded in the background; never an invented scan).
 fn blank_sheet() -> Image {
     let mut px = SharedPixelBuffer::<Rgba8Pixel>::new(1, 1);
     px.make_mut_slice()[0] = Rgba8Pixel {

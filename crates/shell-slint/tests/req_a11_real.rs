@@ -1687,3 +1687,69 @@ fn req_a11_real_backend_reads_a_key_from_answer_sheets_in_setup() {
         }
     }
 }
+
+/// The Scan screen's tile images that are page thumbnails (wider than the 1 × 1 placeholder).
+fn shown_thumbnails(ui: &AppWindow) -> usize {
+    let images = ui.global::<ScanVM>().get_thumb_images();
+    images.iter().filter(|i| i.size().width > 1).count()
+}
+
+#[test]
+fn req_a11_real_scan_thumbnails_are_decoded_off_the_ui_thread() {
+    // The first look at Scan decoded every page thumbnail on the UI thread (about 850 ms on a
+    // 60-sheet exam), and so did the end of a grading run with Scan on show. With the binary's
+    // spawner a worker decodes them: the screen shows at once with placeholders, and the
+    // thumbnails arrive through the pump.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let spec = synth::Spec {
+        sheets: 6,
+        folder: "thumbs",
+        ..MIDTERM
+    };
+    let built = synth::build(&spec, dir.path());
+    let (spawn, held) = held_spawner();
+    let mut app = AppBackend::project(&built.project, "principal:a11").expect("open");
+    app.set_spawner(spawn);
+    let h = harness(app);
+    let ui = &h.ui;
+    tab(ui, "Scan").invoke_accessible_default_action();
+    let tiles = ui.global::<ScanVM>().get_thumbs().row_count();
+    assert_eq!(tiles, 6);
+    assert_eq!(
+        shown_thumbnails(ui),
+        0,
+        "placeholders while the worker decodes"
+    );
+    assert_eq!(held.borrow().len(), 1, "one decode job for the screen");
+    // shown again before the worker is done: nothing is asked twice
+    h.shell.navigate(Page::Scan);
+    assert_eq!(held.borrow().len(), 1);
+    assert!(!h.shell.pump(), "nothing has arrived");
+    // the worker runs on its own thread; the pump fills the tiles in
+    let work = held.borrow_mut().pop().expect("the decode job");
+    std::thread::spawn(work).join().expect("worker");
+    assert!(h.shell.pump());
+    assert_eq!(shown_thumbnails(ui), tiles);
+    // the thumbnails the worker made are those of the pages, as the UI thread made them
+    let batch = h.app.borrow().batch_progress(&h.exam).expect("batch");
+    let pages: Vec<Vec<u8>> = h
+        .app
+        .borrow()
+        .with_project(&h.exam, |p| {
+            (0..p.session.pages.len())
+                .map(|i| {
+                    let img = p.page_image(i).expect("page image");
+                    omr_app::crops::thumbnail(&img, 120).rgba.to_vec()
+                })
+                .collect()
+        })
+        .expect("project");
+    for t in &batch.thumbnails {
+        let rgba = &t.image.as_ref().expect("a thumbnail").rgba;
+        assert!(pages.iter().any(|p| p[..] == rgba[..]), "{}", t.serial);
+    }
+    // cached: shown again, nothing more to decode
+    h.shell.navigate(Page::Scan);
+    assert!(held.borrow().is_empty());
+    assert_eq!(shown_thumbnails(ui), tiles);
+}
