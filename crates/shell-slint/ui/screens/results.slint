@@ -27,8 +27,15 @@ component ExportBar inherits Rectangle {
     init => {
         all.focus();
     }
-    // An overlay: a press on its background must not reach the page underneath.
+    property <bool> focus-inside: all.has-focus || column.has-focus || blackboard.has-focus || close.has-focus;
+    // An overlay: a press on its background must not reach the page underneath. A click on it
+    // gives the bar the keyboard back (for Escape) unless a control inside has it.
     TouchArea {
+        clicked => {
+            if (!root.focus-inside) {
+                all.focus();
+            }
+        }
         scroll-event(event) => {
             return accept;
         }
@@ -74,7 +81,7 @@ component ExportBar inherits Rectangle {
                     color: Theme.ink;
                     vertical-alignment: center;
                 }
-                TextField {
+                column := TextField {
                     width: 230px;
                     label: "Blackboard column ID (optional)";
                     placeholder: "Column ID, e.g. 835932 (optional)";
@@ -83,7 +90,7 @@ component ExportBar inherits Rectangle {
                     enabled: ResultsVM.blackboard-ready;
                 }
                 Centered {
-                    SecondaryButton {
+                    blackboard := SecondaryButton {
                         text: "Write Blackboard CSV";
                         enabled: ResultsVM.blackboard-ready;
                         accessible-description: ResultsVM.blackboard-note;
@@ -96,7 +103,7 @@ component ExportBar inherits Rectangle {
                     horizontal-stretch: 1;
                 }
                 Centered {
-                    GhostButton {
+                    close := GhostButton {
                         text: "Close";
                         clicked => {
                             ResultsVM.export-open = false;
@@ -127,8 +134,15 @@ component ReleaseBar inherits Rectangle {
     init => {
         cancel.focus();
     }
-    // An overlay: a press on its background must not reach the page underneath.
+    property <bool> focus-inside: release.has-focus || cancel.has-focus;
+    // An overlay: a press on its background must not reach the page underneath. A click on it
+    // gives the bar the keyboard back (for Escape) unless a control inside has it.
     TouchArea {
+        clicked => {
+            if (!root.focus-inside) {
+                cancel.focus();
+            }
+        }
         scroll-event(event) => {
             return accept;
         }
@@ -162,7 +176,7 @@ component ReleaseBar inherits Rectangle {
                     horizontal-stretch: 1;
                 }
                 Centered {
-                    PrimaryButton {
+                    release := PrimaryButton {
                         text: "Release";
                         icon: Icons.release;
                         accessible-description: "Releases the results and writes the Blackboard upload";

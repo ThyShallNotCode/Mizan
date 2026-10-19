@@ -418,6 +418,7 @@ component FormField inherits VerticalLayout {
     in property <string> placeholder;
     in property <bool> mono: true;
     in-out property <string> text;
+    out property <bool> has-focus: field.has-focus;
     callback accepted(string);
     forward-focus: field;
     spacing: 2px;
@@ -454,8 +455,17 @@ component NewExamBar inherits Rectangle {
     init => {
         scans.focus();
     }
-    // An overlay: a press on its background must not reach the page underneath.
+    property <bool> focus-inside: scans.has-focus || title.has-focus || course.has-focus || sheet.has-focus || questions.has-focus || options.has-focus || forms.has-focus || key-file.has-focus || roster.has-focus || clo.has-focus || key-sheets.has-focus || import.has-focus || cancel.has-focus || grade.has-focus || (RemarkVM.new-using && root.clear-focused);
+    // the "Clear the Remark import" button has the keyboard (reset when the button is made)
+    property <bool> clear-focused;
+    // An overlay: a press on its background must not reach the page underneath. A click on it
+    // gives the form the keyboard back (for Escape) unless a control inside has it.
     TouchArea {
+        clicked => {
+            if (!root.focus-inside) {
+                scans.focus();
+            }
+        }
         scroll-event(event) => {
             return accept;
         }
@@ -498,14 +508,14 @@ component NewExamBar inherits Rectangle {
             }
             HorizontalLayout {
                 spacing: Theme.space-md;
-                FormField {
+                title := FormField {
                     horizontal-stretch: 2;
                     label: "Exam title";
                     placeholder: "e.g. Midterm 1";
                     mono: false;
                     text <=> ExamsVM.new-title;
                 }
-                FormField {
+                course := FormField {
                     horizontal-stretch: 1;
                     label: "Course code";
                     placeholder: "e.g. CS 211";
@@ -515,25 +525,25 @@ component NewExamBar inherits Rectangle {
             }
             HorizontalLayout {
                 spacing: Theme.space-md;
-                FormField {
+                sheet := FormField {
                     horizontal-stretch: 3;
                     label: "Sheet template or spec file";
                     placeholder: "iau-ccsit-v1, or the spec file of your own sheet";
                     text <=> ExamsVM.new-sheet;
                 }
-                FormField {
+                questions := FormField {
                     horizontal-stretch: 1;
                     label: "Number of questions";
                     placeholder: "e.g. 30";
                     text <=> ExamsVM.new-questions;
                 }
-                FormField {
+                options := FormField {
                     horizontal-stretch: 1;
                     label: "Options per question";
                     placeholder: "sheet's";
                     text <=> ExamsVM.new-options;
                 }
-                FormField {
+                forms := FormField {
                     horizontal-stretch: 1;
                     label: "Form letters";
                     placeholder: "from key";
@@ -564,6 +574,12 @@ component NewExamBar inherits Rectangle {
                     }
                     Centered {
                         GhostButton {
+                            init => {
+                                root.clear-focused = false;
+                            }
+                            changed has-focus => {
+                                root.clear-focused = self.has-focus;
+                            }
                             text: "Clear the Remark import";
                             accessible-description: "The form no longer uses the import: give a key file, key sheets or no key";
                             clicked => {
@@ -575,19 +591,19 @@ component NewExamBar inherits Rectangle {
             }
             HorizontalLayout {
                 spacing: Theme.space-md;
-                FormField {
+                key-file := FormField {
                     horizontal-stretch: 1;
                     label: "Answer key file";
                     placeholder: "key.csv; blank: infer a provisional key";
                     text <=> ExamsVM.new-key;
                 }
-                FormField {
+                roster := FormField {
                     horizontal-stretch: 1;
                     label: "Roster file";
                     placeholder: "roster.csv or .xlsx (optional)";
                     text <=> ExamsVM.new-roster;
                 }
-                FormField {
+                clo := FormField {
                     horizontal-stretch: 1;
                     label: "CLO mapping file";
                     placeholder: "clo.csv (optional)";
@@ -596,7 +612,7 @@ component NewExamBar inherits Rectangle {
             }
             HorizontalLayout {
                 spacing: Theme.space-md;
-                FormField {
+                key-sheets := FormField {
                     horizontal-stretch: 1;
                     label: "Key sheets";
                     placeholder: "the instructor's filled answer sheets, ; between several (optional; confirmed in Setup)";
@@ -605,7 +621,7 @@ component NewExamBar inherits Rectangle {
             }
             HorizontalLayout {
                 spacing: Theme.space-md;
-                SecondaryButton {
+                import := SecondaryButton {
                     text: "Import from Remark export…";
                     enabled: RemarkVM.can-new;
                     accessible-description: "Reads Remark's graded Excel exports: the key with exact points per version and the learning objectives, shown for your review before the form uses them";
@@ -616,13 +632,13 @@ component NewExamBar inherits Rectangle {
                 Rectangle {
                     horizontal-stretch: 1;
                 }
-                GhostButton {
+                cancel := GhostButton {
                     text: "Cancel";
                     clicked => {
                         ExamsVM.new-open = false;
                     }
                 }
-                PrimaryButton {
+                grade := PrimaryButton {
                     text: "Grade exam";
                     enabled: root.ready;
                     clicked => {
@@ -646,8 +662,19 @@ component RemarkNewPanel inherits Rectangle {
     drop-shadow-offset-y: Theme.shadow-2-offset;
     drop-shadow-color: Theme.shadow-2-color;
     in property <length> summary-h: 340px;
-    // An overlay: a press on its background must not reach the page underneath.
+    property <bool> focus-inside: fields.has-focus || back.has-focus || use.has-focus || (RemarkVM.context == 1 && RemarkVM.refused && root.refusal-focused) || (RemarkVM.context == 1 && RemarkVM.has && (root.card-focused || root.aside-focused));
+    // controls made and unmade with the import have the keyboard (each reset when made)
+    property <bool> refusal-focused;
+    property <bool> card-focused;
+    property <bool> aside-focused;
+    // An overlay: a press on its background must not reach the page underneath. A click on it
+    // gives the panel the keyboard back (for Escape) unless a control inside has it.
     TouchArea {
+        clicked => {
+            if (!root.focus-inside) {
+                fields.focus();
+            }
+        }
         scroll-event(event) => {
             return accept;
         }
@@ -683,8 +710,14 @@ component RemarkNewPanel inherits Rectangle {
                     wrap: word-wrap;
                 }
             }
-            RemarkFields { }
+            fields := RemarkFields { }
             if RemarkVM.context == 1 && RemarkVM.refused: RemarkRefusal {
+                init => {
+                    root.refusal-focused = false;
+                }
+                changed has-focus => {
+                    root.refusal-focused = self.has-focus;
+                }
                 message: RemarkVM.refusal;
                 remedy: RemarkVM.remedy;
                 suggestion: RemarkVM.suggestion;
@@ -696,6 +729,12 @@ component RemarkNewPanel inherits Rectangle {
                 height: root.summary-h;
                 spacing: Theme.space-md;
                 RemarkImportCard {
+                    init => {
+                        root.card-focused = false;
+                    }
+                    changed has-focus => {
+                        root.card-focused = self.has-focus;
+                    }
                     horizontal-stretch: 1;
                     compact: true;
                     elevated: false;
@@ -714,20 +753,26 @@ component RemarkNewPanel inherits Rectangle {
             HorizontalLayout {
                 spacing: Theme.space-md;
                 alignment: end;
-                GhostButton {
+                back := GhostButton {
                     text: "Back to the form";
                     clicked => {
                         RemarkVM.new-panel = false;
                     }
                 }
                 if RemarkVM.context == 1 && RemarkVM.has: GhostButton {
+                    init => {
+                        root.aside-focused = false;
+                    }
+                    changed has-focus => {
+                        root.aside-focused = self.has-focus;
+                    }
                     text: "Put the import aside";
                     accessible-description: "Drops the import; the form is unchanged";
                     clicked => {
                         RemarkVM.discard();
                     }
                 }
-                PrimaryButton {
+                use := PrimaryButton {
                     text: "Use this import";
                     enabled: RemarkVM.context == 1 && RemarkVM.has && RemarkVM.can-apply;
                     accessible-description: RemarkVM.applies;

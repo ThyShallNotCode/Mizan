@@ -20,8 +20,15 @@ component AddScansBar inherits Rectangle {
     init => {
         field.focus();
     }
-    // An overlay: a press on its background must not reach the page underneath.
+    property <bool> focus-inside: field.has-focus || add.has-focus || cancel.has-focus;
+    // An overlay: a press on its background must not reach the page underneath. A click on it
+    // gives the bar the keyboard back (for Escape) unless a control inside has it.
     TouchArea {
+        clicked => {
+            if (!root.focus-inside) {
+                field.focus();
+            }
+        }
         scroll-event(event) => {
             return accept;
         }
@@ -66,7 +73,7 @@ component AddScansBar inherits Rectangle {
                     }
                 }
                 Centered {
-                    PrimaryButton {
+                    add := PrimaryButton {
                         text: "Add and regrade";
                         key-hint: "Enter";
                         enabled: ScanVM.can-add && ScanVM.add-path != "";
@@ -76,7 +83,7 @@ component AddScansBar inherits Rectangle {
                     }
                 }
                 Centered {
-                    GhostButton {
+                    cancel := GhostButton {
                         text: "Cancel";
                         clicked => {
                             ScanVM.add-open = false;

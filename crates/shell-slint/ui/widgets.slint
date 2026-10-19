@@ -181,6 +181,7 @@ export component Segment inherits Rectangle {
     in property <string> text;
     in property <string> label: self.text;
     in property <bool> selected;
+    out property <bool> has-focus: fs.has-focus;
     callback clicked();
     height: 28px;
     min-width: seg-text.preferred-width + 2 * Theme.space-md;
@@ -640,6 +641,7 @@ export component TextField inherits Rectangle {
     in property <bool> mono;
     in property <bool> arabic;
     in property <bool> enabled: true;
+    out property <bool> has-focus: input.has-focus;
     callback accepted(string);
     height: Theme.control-height;
     border-radius: Theme.radius-md;

@@ -507,6 +507,7 @@ export component Chip inherits Rectangle {
     in property <string> text;
     in property <string> count;
     in property <bool> selected;
+    out property <bool> has-focus: fs.has-focus;
     callback clicked();
     height: 28px;
     width: max(Theme.target-min, chip-layout.preferred-width);

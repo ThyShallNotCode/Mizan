@@ -1648,3 +1648,123 @@ fn req_a11_a_code_pressed_during_a_refresh_opens_the_code_pressed() {
     let code = b.borrow().review_item(&cs211(), item).expect("item").code;
     assert_eq!(code, first.code.as_str());
 }
+
+/// A spot of a floating bar's background: the middle of the gap between two of its controls.
+fn gap_between(ui: &AppWindow, left: &str, right: &str) -> (f32, f32) {
+    let (l, r) = (one(ui, left), one(ui, right));
+    let (lp, ls, rp) = (l.absolute_position(), l.size(), r.absolute_position());
+    assert!(lp.x + ls.width < rp.x, "{left} is left of {right}");
+    ((lp.x + ls.width + rp.x) / 2.0, lp.y + ls.height / 2.0)
+}
+
+#[test]
+fn req_a11_a_click_on_a_bar_gives_it_the_keyboard_back() {
+    // The floating bars' Escape scopes no longer take the focus on a press (so a field being
+    // typed in keeps it), and nothing else did: after a click elsewhere, a click on the bar
+    // left the keyboard outside it, and Escape did nothing.
+    let h = harness();
+    let ui = &h.ui;
+    let ex = ui.global::<ExamsVM>();
+    let rs = ui.global::<shell_slint::ui::ResultsVM>();
+    let rm = ui.global::<shell_slint::ui::RemarkVM>();
+    let sc = ui.global::<ScanVM>();
+    type Bar<'a> = (
+        &'a str,
+        Page,
+        &'a str,
+        Box<dyn Fn(bool) + 'a>,
+        Box<dyn Fn() -> bool + 'a>,
+        (&'a str, &'a str),
+    );
+    let bars: Vec<Bar> = vec![
+        (
+            "New exam",
+            Page::Exams,
+            "Exams",
+            Box::new(|v| ex.set_new_open(v)),
+            Box::new(|| ex.get_new_open()),
+            ("Import from Remark export…", "Cancel"),
+        ),
+        (
+            "Import from Remark export",
+            Page::Exams,
+            "Exams",
+            Box::new(|v| {
+                ex.set_new_open(v);
+                rm.set_new_panel(v);
+            }),
+            Box::new(|| rm.get_new_panel()),
+            ("Back to the form", "Use this import"),
+        ),
+        (
+            "Exports",
+            Page::Results,
+            "Results",
+            Box::new(|v| rs.set_export_open(v)),
+            Box::new(|| rs.get_export_open()),
+            ("Write Blackboard CSV", "Close"),
+        ),
+        (
+            "Release",
+            Page::Results,
+            "Results",
+            Box::new(|v| rs.set_release_open(v)),
+            Box::new(|| rs.get_release_open()),
+            ("Release", "Cancel"),
+        ),
+        (
+            "Compare with Remark",
+            Page::Results,
+            "Results",
+            Box::new(|v| rm.set_cmp_bar(v)),
+            Box::new(|| rm.get_cmp_bar()),
+            ("Compare", "Cancel"),
+        ),
+        (
+            "Add scans",
+            Page::Scan,
+            "Scan",
+            Box::new(|v| {
+                // the demo adds no scans; the bar's field takes the keyboard when it can
+                sc.set_can_add(true);
+                sc.set_add_open(v);
+            }),
+            Box::new(|| sc.get_add_open()),
+            ("Add and regrade", "Cancel"),
+        ),
+    ];
+    for (name, page, tab_label, open, is_open, (left, right)) in bars {
+        h.shell.navigate(page);
+        open(true);
+        slint::platform::update_timers_and_animations();
+        assert!(is_open(), "{name} opens");
+        let (x, y) = gap_between(ui, left, right);
+        // the keyboard goes elsewhere (the screen's own tab), then the bar is clicked
+        click(ui, &tab(ui, tab_label));
+        assert!(is_open(), "{name} stays open");
+        click_at(ui, x, y);
+        special(ui, Key::Escape);
+        assert!(!is_open(), "Escape closes {name} after a click on it");
+        open(false);
+    }
+}
+
+#[test]
+fn req_a11_a_click_on_a_bar_leaves_the_keyboard_in_its_field() {
+    // A click on the bar's background gives the keyboard to its first control only when no
+    // control inside has it: the field being typed in keeps it.
+    let h = harness();
+    let ui = &h.ui;
+    let ex = ui.global::<ExamsVM>();
+    ex.set_new_open(true);
+    slint::platform::update_timers_and_animations();
+    click(ui, &one(ui, "Exam title"));
+    type_text(ui, "Mid");
+    let (x, y) = gap_between(ui, "Import from Remark export…", "Cancel");
+    click_at(ui, x, y);
+    type_text(ui, "term");
+    assert_eq!(ex.get_new_title(), "Midterm");
+    assert_eq!(ex.get_new_scans(), "");
+    special(ui, Key::Escape);
+    assert!(!ex.get_new_open());
+}
