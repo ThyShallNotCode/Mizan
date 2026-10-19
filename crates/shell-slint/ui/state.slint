@@ -773,8 +773,9 @@ export global ResultsVM {
     callback export-blackboard(string);
     in-out property <bool> show-key;
     in-out property <bool> grade-table;
-    in property <int> selected-item: -1;
-    callback select-item(int);
+    // the item row selected, by its question label ("Q03", "B-Q03"; "" none)
+    in property <string> selected-q;
+    callback select-item(string);
     callback release();
     callback what-if();
     callback check-action(int);

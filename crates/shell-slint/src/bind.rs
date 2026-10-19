@@ -624,10 +624,13 @@ impl Shell {
     }
 
     /// Makes `exam` the current exam (breadcrumbs, setup, scan, review, results, outcomes).
+    /// Another exam opens with none of the last one's open bars, typed paths, notes or status
+    /// line; the same exam chosen again keeps them.
     pub fn select_exam(&self, exam: &ExamId) {
-        {
+        let changed = {
             let mut st = self.st.borrow_mut();
-            if st.exam.as_ref() != Some(exam) {
+            let changed = st.exam.as_ref() != Some(exam);
+            if changed {
                 st.item = None;
                 st.current = None;
                 st.pending = None;
@@ -637,17 +640,54 @@ impl Shell {
                 st.ks_version = 0;
                 st.ks_picks.clear();
                 st.remark_version = 0;
-                self.ui().global::<s::SetupVM>().set_ks_open(false);
-                let ui = self.ui();
-                let rm = ui.global::<s::RemarkVM>();
-                rm.set_setup_open(false);
-                rm.set_cmp_open(false);
-                rm.set_cmp_bar(false);
             }
             st.exam = Some(exam.clone());
+            changed
+        };
+        if changed {
+            self.clear_exam_inputs();
+            // the last exam's last action ("Results released …") is not this exam's
+            self.say("", s::Tone::Neutral);
         }
         self.refresh_all();
         self.restart_review();
+    }
+
+    /// Closes the bars and empties the fields that belong to one exam: a Blackboard column is
+    /// one exam's Grade Center column, and a typed key, scans or CLO file is meant for the exam
+    /// it was typed on. The Remark import fields are shared with the New-exam form's import:
+    /// they are emptied only when they hold the current exam's (Setup) import.
+    fn clear_exam_inputs(&self) {
+        let ui = self.ui();
+        let rs = ui.global::<s::ResultsVM>();
+        rs.set_export_open(false);
+        rs.set_release_open(false);
+        rs.set_blackboard_column(SharedString::new());
+        rs.set_selected_q(SharedString::new());
+        let su = ui.global::<s::SetupVM>();
+        su.set_ks_open(false);
+        su.set_key_open(false);
+        su.set_key_path(SharedString::new());
+        su.set_ks_bar_open(false);
+        su.set_ks_path(SharedString::new());
+        su.set_clo_path(SharedString::new());
+        let sc = ui.global::<s::ScanVM>();
+        sc.set_add_open(false);
+        sc.set_add_path(SharedString::new());
+        let rm = ui.global::<s::RemarkVM>();
+        rm.set_setup_open(false);
+        rm.set_setup_bar(false);
+        rm.set_cmp_open(false);
+        rm.set_cmp_bar(false);
+        rm.set_cmp_path(SharedString::new());
+        rm.set_save_path(SharedString::new());
+        if rm.get_context() == 2 {
+            rm.set_path(SharedString::new());
+            rm.set_points_path(SharedString::new());
+        }
+        let rv = ui.global::<s::ReviewVM>();
+        rv.set_note(SharedString::new());
+        rv.set_student_entry(SharedString::new());
     }
 
     /// Refreshes what every screen shares (the dashboard and the chrome, the Remark context) and
@@ -911,9 +951,10 @@ impl Shell {
         // results
         let rs = ui.global::<s::ResultsVM>();
         let weak = ui.as_weak();
-        rs.on_select_item(move |i| {
+        rs.on_select_item(move |q| {
+            // by question: the row pressed, wherever a refresh (flag stability) moves it
             if let Some(ui) = weak.upgrade() {
-                ui.global::<s::ResultsVM>().set_selected_item(i);
+                ui.global::<s::ResultsVM>().set_selected_q(q);
             }
         });
         let me = self.clone();
@@ -1815,10 +1856,13 @@ impl Shell {
     /// Shows item `id` (or nothing) in the review frame.
     pub fn select_item(&self, id: Option<ItemId>) {
         if self.st.borrow().item != id {
-            // a number typed for another booklet never carries over
-            self.ui()
-                .global::<s::ReviewVM>()
-                .set_student_entry(SharedString::new());
+            // a number or a note typed for another booklet never carries over (a note is
+            // personal data: saved with this item's decision, it would sit in another student's
+            // record); the same item refreshed keeps what is being typed
+            let ui = self.ui();
+            let rv = ui.global::<s::ReviewVM>();
+            rv.set_student_entry(SharedString::new());
+            rv.set_note(SharedString::new());
         }
         let exam = self.exam();
         let item = match (exam, id) {
@@ -3458,6 +3502,14 @@ impl Shell {
             let mut st = self.st.borrow_mut();
             st.order = order;
             st.queue_ids = queue_ids;
+            // a closed exam (an added batch being graded, a failed grading) has no item to
+            // decide: the canvas says why, and the item IDs change when the project reloads
+            if q.unavailable.is_some() {
+                st.item = None;
+                st.current = None;
+                st.pending = None;
+                st.reason = None;
+            }
         }
         self.push_item();
     }

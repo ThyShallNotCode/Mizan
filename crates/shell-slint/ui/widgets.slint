@@ -51,10 +51,14 @@ export component SectionLabel inherits Text {
 
 // Theme switch for every top bar (one per visible screen, so the label stays unique).
 export component ThemeToggle inherits IconButton {
+    // after the switch: a screen whose keys live in a focus scope of their own (Review) takes
+    // the keyboard back
+    callback toggled();
     icon: Theme.dark ? Icons.sun : Icons.moon;
     label: Theme.dark ? "Light theme" : "Dark theme";
     clicked => {
         Theme.dark = !Theme.dark;
+        root.toggled();
     }
 }
 

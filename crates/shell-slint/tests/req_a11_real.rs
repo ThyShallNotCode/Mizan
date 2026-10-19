@@ -655,13 +655,14 @@ fn req_a11_real_backend_adds_scans_from_the_scan_screen() {
         h.app.borrow().dashboard().exams[0].status,
         shell_slint::backend::ExamStatus::Scanning
     );
-    // the review screen says why its queue is empty (never "no open items")
+    // the review screen says why its queue is empty (never "no open items"), and the item
+    // open before the batch is gone: nothing of the closed exam is offered for a decision
     h.shell.navigate(Page::Review);
-    assert!(
-        ui.global::<ReviewVM>()
-            .get_empty_text()
-            .contains("being graded")
-    );
+    let rv = ui.global::<ReviewVM>();
+    assert!(rv.get_empty_text().contains("being graded"));
+    assert!(!rv.get_has_item(), "{}", rv.get_caption());
+    assert!(with_prefix(ui, "Accept").is_empty());
+    assert!(shown(ui, "Nothing to review"));
     tab(ui, "Scan").invoke_accessible_default_action();
     run_held(&h, &held);
 

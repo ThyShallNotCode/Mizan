@@ -13,7 +13,8 @@ use shell_slint::bind::Shell;
 use shell_slint::demo::{CS211, DemoBackend, MATH101};
 use shell_slint::screenshot;
 use shell_slint::ui::{
-    App, AppWindow, ExamsVM, MarkState, OutcomesVM, Page, ReviewVM, ScanVM, SetupVM, Theme,
+    App, AppWindow, ExamsVM, MarkState, OutcomesVM, Page, ResultsVM, ReviewVM, ScanVM, SetupVM,
+    Theme,
 };
 use slint::platform::{Key, WindowEvent};
 use slint::{ComponentHandle, Model};
@@ -691,6 +692,180 @@ fn req_a11_shift_and_the_arrows_in_a_key_cell_are_no_key_entries() {
     assert_eq!(key_answers(&h, 2)[0], "D");
     assert_eq!(su.get_error(), "");
     assert_eq!(ui.global::<App>().get_message(), "Key Q03 version A: D");
+}
+
+// ------------------------------------------------------------------------------------ review
+
+#[test]
+fn req_a11_a_reviewer_note_stays_with_its_booklet() {
+    // The note field kept its text when another item was opened (only a typed student number
+    // was cleared), and Accept saved it with that item's decision: one student's personal note
+    // in another student's record. Another exam showed it too.
+    let h = harness();
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Review, 30 open"));
+    assert_eq!(selected_queue_row(ui), "Q17 Form B, booklet 0412, MRK-001");
+    let rv = ui.global::<ReviewVM>();
+    click(ui, &one(ui, "Reviewer note (personal data, PDPL)"));
+    type_text(ui, "seen ill");
+    assert_eq!(rv.get_note(), "seen ill");
+    click(ui, &one(ui, "Q17 Form B, booklet 0377, MRK-001"));
+    assert_eq!(selected_queue_row(ui), "Q17 Form B, booklet 0377, MRK-001");
+    assert_eq!(rv.get_note(), "");
+    click(ui, &one(ui, "Accept suggestion"));
+    let (action, serial, _) = last_action(&h);
+    assert_eq!(serial, "0377");
+    assert!(
+        matches!(&action, ReviewAction::Resolve { note, .. } if note.is_empty()),
+        "{action:?}"
+    );
+    // a note being typed survives a refresh of the item it is typed for
+    click(ui, &one(ui, "Reviewer note (personal data, PDPL)"));
+    type_text(ui, "x");
+    h.shell.navigate(Page::Review);
+    assert_eq!(rv.get_note(), "x");
+    // another exam never shows it
+    h.shell.select_exam(&ExamId(MATH101.into()));
+    assert_eq!(rv.get_note(), "");
+}
+
+/// The number of decisions recorded on the demo exam.
+fn decisions(h: &Harness) -> usize {
+    h.demo.borrow().review_history(&cs211()).len()
+}
+
+#[test]
+fn req_a11_a_click_on_a_view_control_leaves_enter_to_the_decision() {
+    // The view chips, the group headers and the contact tiles kept the keyboard after a
+    // click: Enter then zoomed, toggled or collapsed instead of committing the decision.
+    let h = harness();
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Review, 30 open"));
+    let rv = ui.global::<ReviewVM>();
+    let first = |prefix: &str, role: AccessibleRole| {
+        with_prefix(ui, prefix)
+            .into_iter()
+            .map(|(_, e)| e)
+            .find(|e| e.accessible_role() == Some(role))
+            .unwrap_or_else(|| panic!("a control labelled {prefix:?}…"))
+    };
+    let controls = [
+        "Open booklet ",
+        "MRK-001 ",
+        "Zoom ",
+        "Overlay, Space",
+        "Registered, F2",
+    ];
+    for prefix in controls {
+        let n = decisions(&h);
+        let control = first(prefix, AccessibleRole::Button);
+        click(ui, &control);
+        if prefix == "MRK-001 " {
+            // collapsed, then expanded again
+            click(ui, &first(prefix, AccessibleRole::Button));
+        }
+        let (zoom, overlay) = (rv.get_zoom(), rv.get_overlay());
+        key(ui, "d");
+        assert_eq!(h.shell.pending(), Some(Decision::Option(3)), "{prefix}");
+        special(ui, Key::Return);
+        assert_eq!(
+            decisions(&h),
+            n + 1,
+            "Enter decides after a click on {prefix}…"
+        );
+        assert_eq!(
+            (rv.get_zoom(), rv.get_overlay()),
+            (zoom, overlay),
+            "{prefix}"
+        );
+    }
+}
+
+#[test]
+fn req_a11_after_a_click_on_the_top_bar_or_a_row_the_review_keys_work() {
+    // The top bar sits outside the review canvas: after a click on Help or the theme switch,
+    // the review keys went to the window and did nothing. A click on a queue row moved no
+    // focus, so a key typed after a note went into the note.
+    let h = harness();
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Review, 30 open"));
+    click(ui, &one(ui, "Help for MRK-001 (F1)"));
+    assert!(ui.global::<ReviewVM>().get_help_open());
+    key(ui, "d");
+    assert_eq!(h.shell.pending(), Some(Decision::Option(3)));
+    special(ui, Key::F1);
+    assert!(
+        !ui.global::<ReviewVM>().get_help_open(),
+        "F1 closes the help"
+    );
+    click(ui, &one(ui, "Dark theme"));
+    key(ui, "b");
+    assert_eq!(h.shell.pending(), Some(Decision::Option(1)));
+    click(ui, &one(ui, "Light theme"));
+    // the note, then another row: the next key decides, never types
+    click(ui, &one(ui, "Reviewer note (personal data, PDPL)"));
+    type_text(ui, "x");
+    click(ui, &one(ui, "Q17 Form B, booklet 0377, MRK-001"));
+    key(ui, "d");
+    assert_eq!(h.shell.pending(), Some(Decision::Option(3)));
+    assert_eq!(ui.global::<ReviewVM>().get_note(), "");
+}
+
+// ------------------------------------------------------------------------------------ exams
+
+#[test]
+fn req_a11_another_exam_opens_without_the_last_exams_drafts() {
+    // The Blackboard column ID, typed paths, open bars and the status line stayed when another
+    // exam was chosen: Write Blackboard CSV then wrote exam B's grades into exam A's column.
+    let h = harness();
+    let ui = &h.ui;
+    let rs = ui.global::<ResultsVM>();
+    let su = ui.global::<SetupVM>();
+    let sc = ui.global::<ScanVM>();
+    click(ui, &tab(ui, "Results"));
+    click(ui, &one(ui, "Export…"));
+    assert!(rs.get_export_open());
+    // the column of a written upload (the demo's field is disabled: it writes no upload)
+    rs.set_blackboard_column("835932".into());
+    su.set_key_open(true);
+    su.set_key_path("/exams/a/key-A.csv".into());
+    su.set_ks_bar_open(true);
+    su.set_ks_path("/exams/a/key-sheets".into());
+    su.set_clo_path("/exams/a/clos.csv".into());
+    sc.set_add_open(true);
+    sc.set_add_path("/scans/a".into());
+    // exam A's last action on the status line
+    ui.global::<App>()
+        .set_message("Results released (key version 1) and exported".into());
+    // the same exam chosen again keeps them
+    click(ui, &tab(ui, "Exams"));
+    let ex = ui.global::<ExamsVM>();
+    let rows = ex.get_rows();
+    let row = |i: usize| rows.row_data(i).expect("row");
+    let current = row(ex.get_selected() as usize);
+    let (x, y) = left_of(&one(ui, &current.label));
+    click_at(ui, x, y);
+    assert_eq!(rs.get_blackboard_column(), "835932");
+    assert!(sc.get_add_open());
+    // another exam
+    let other = (0..rows.row_count())
+        .map(row)
+        .find(|r| r.id != current.id)
+        .expect("a second exam");
+    let (x, y) = left_of(&one(ui, &other.label));
+    click_at(ui, x, y);
+    assert_eq!(row(ex.get_selected() as usize).id, other.id);
+    assert!(!rs.get_export_open());
+    assert_eq!(rs.get_blackboard_column(), "");
+    assert!(!rs.get_release_open());
+    assert!(!su.get_key_open());
+    assert_eq!(su.get_key_path(), "");
+    assert!(!su.get_ks_bar_open());
+    assert_eq!(su.get_ks_path(), "");
+    assert_eq!(su.get_clo_path(), "");
+    assert!(!sc.get_add_open());
+    assert_eq!(sc.get_add_path(), "");
+    assert_eq!(ui.global::<App>().get_message(), "");
 }
 
 #[test]
@@ -1480,8 +1655,8 @@ fn req_a11_opening_an_exam_does_the_work_of_the_screen_on_show_only() {
 
 /// The demo backend with what a test changes behind the shell: key sheets for one exam
 /// (confirmed or pending), the CLO approval (none yet) and file, and a background job whose every `pump`
-/// reverses the exams table and the Scan screen's tiles and codes (an exam whose batch ends
-/// moves to the top).
+/// reverses the exams table, the Scan screen's tiles and codes (an exam whose batch ends
+/// moves to the top) and the Results item rows (their flags drop, as a stability report reorders them).
 #[derive(Default)]
 struct Hooked {
     demo: DemoBackend,
@@ -1575,7 +1750,14 @@ impl Backend for Hooked {
         self.demo.review_history(exam)
     }
     fn results(&self, exam: &ExamId) -> Option<shell_slint::backend::Results> {
-        self.demo.results(exam)
+        let mut r = self.demo.results(exam)?;
+        if self.reversed {
+            // no flag rank any more: the rows fall back to question order
+            for it in &mut r.items {
+                it.flags.clear();
+            }
+        }
+        Some(r)
     }
     fn outcomes(&self, exam: &ExamId) -> Option<shell_slint::backend::Outcomes> {
         self.demo.outcomes(exam)
@@ -1793,6 +1975,74 @@ fn req_a11_a_code_pressed_during_a_refresh_opens_the_code_pressed() {
     let item = shell.current_item().expect("an item of the code");
     let code = b.borrow().review_item(&cs211(), item).expect("item").code;
     assert_eq!(code, first.code.as_str());
+}
+
+/// The labels of the selected rows on show (exam rows, item rows, queue rows).
+fn selected_rows(ui: &AppWindow) -> Vec<String> {
+    let rows: std::collections::BTreeSet<String> = ElementQuery::from_root(ui)
+        .match_descendants()
+        .match_accessible_role(AccessibleRole::ListItem)
+        .find_all()
+        .into_iter()
+        .filter(|e| e.accessible_item_selected() == Some(true))
+        .filter_map(|e| e.accessible_label().map(|l| l.to_string()))
+        .collect();
+    rows.into_iter().collect()
+}
+
+#[test]
+fn req_a11_a_results_row_stays_selected_when_the_rows_move() {
+    // Item rows were selected by their index: a refresh that reordered them (the flag
+    // stability job reporting) highlighted whichever question moved into the row, and the
+    // next exam's row at that index showed selected too.
+    let (ui, b, shell) = hooked(Hooked::default());
+    // tall enough for every item row (a list shows only the rows on screen)
+    ui.window()
+        .set_size(slint::LogicalSize::new(1600.0, 4000.0));
+    slint::platform::update_timers_and_animations();
+    click(&ui, &tab(&ui, "Results"));
+    // the question of each selected row ("Q12, p 0.21, …" → "Q12")
+    let selected = |ui: &AppWindow| -> Vec<String> {
+        selected_rows(ui)
+            .iter()
+            .filter_map(|l| l.split(',').next())
+            .map(str::to_string)
+            .collect()
+    };
+    let row = |i: usize| {
+        ui.global::<ResultsVM>()
+            .get_items()
+            .row_data(i)
+            .expect("a row")
+    };
+    assert!(ui.global::<ResultsVM>().get_items().row_count() > 2);
+    let it = row(0);
+    click(&ui, &one(&ui, &it.label));
+    assert_eq!(selected(&ui), [it.q.to_string()]);
+    b.borrow_mut().reorders = true;
+    assert!(shell.pump(), "the job reorders the rows");
+    assert_ne!(row(0).q, it.q, "another question is in the row clicked");
+    assert_eq!(selected(&ui), [it.q.to_string()]);
+    // pressed while a refresh moves the rows: the question pressed is selected
+    let other = row(1);
+    let (x, y) = left_of(&one(&ui, &other.label));
+    press_at(&ui, x, y);
+    assert!(shell.pump());
+    assert_ne!(row(1).q, other.q);
+    release_at(&ui, x, y);
+    assert_eq!(selected(&ui), [other.q.to_string()]);
+    // another exam opens with no item row selected
+    b.borrow_mut().reorders = false;
+    let ex = ui.global::<ExamsVM>();
+    let rows = ex.get_rows();
+    let next = (0..rows.row_count())
+        .filter_map(|i| rows.row_data(i))
+        .find(|r| r.id.as_str() != CS211)
+        .expect("a second exam");
+    ex.invoke_select(next.id);
+    shell.navigate(Page::Results);
+    assert!(ui.global::<ResultsVM>().get_items().row_count() > 2);
+    assert_eq!(selected(&ui), Vec::<String>::new());
 }
 
 /// A spot of a floating bar's background: the middle of the gap between two of its controls.

@@ -885,13 +885,16 @@ export component ResultsScreen inherits Rectangle {
                             }
                             ListView {
                                 vertical-stretch: ResultsVM.items.length == 0 ? 0 : 1;
-                                for it[i] in ResultsVM.items: ItemTableRow {
+                                for it in ResultsVM.items: ItemTableRow {
                                     height: 40px;
                                     narrow: root.narrow;
                                     data: it;
-                                    selected: i == ResultsVM.selected-item;
-                                    clicked => {
-                                        ResultsVM.select-item(i);
+                                    // by question: a refresh during a press (flag stability
+                                    // reorders the rows) selects the row pressed
+                                    key: it.q;
+                                    selected: it.q == ResultsVM.selected-q;
+                                    picked(q) => {
+                                        ResultsVM.select-item(q);
                                     }
                                 }
                             }
