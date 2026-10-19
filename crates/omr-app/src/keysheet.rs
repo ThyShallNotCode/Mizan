@@ -95,7 +95,7 @@ pub fn stack_markers(def: &ExamDefinition, digits: usize) -> (Vec<u8>, Vec<Strin
         .stack_markers(digits, &def.id_scheme.scheme(), def.roster.as_deref())
 }
 
-fn page_label(sources: &[SourceInfo], p: &PageState) -> String {
+pub(crate) fn page_label(sources: &[SourceInfo], p: &PageState) -> String {
     let name = sources
         .get(p.source)
         .map(|s| {

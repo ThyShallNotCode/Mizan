@@ -33,10 +33,12 @@ pub mod model;
 pub mod outcomes;
 pub mod parallel;
 pub mod pipeline;
+pub mod propose;
 pub mod remark;
 pub mod review;
 pub mod score;
 pub mod store;
+pub mod survey;
 pub mod vm;
 pub mod xlsx;
 
