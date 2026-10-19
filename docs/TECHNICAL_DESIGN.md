@@ -3050,7 +3050,7 @@ pub struct Exception {
 
 **Group key:** `group_key = H(code, sub_reason, item/field, suggested value, feature bucket)`.
 
-**Batch confirm** (`Shift+Enter`) requires a shared group key with every member within tolerance, no `UNREADABLE` bubble, no BLOCKER, and the reviewer having seen a contact sheet of every member crop, with the count. Identity batch confirm also requires every applicable channel and any AI signal to agree, and the check digit to pass (§9.7, §9.8).
+**Batch confirm** (`Shift+Enter`) requires a shared group key with every member within tolerance, no `UNREADABLE` bubble, no BLOCKER, and the reviewer having seen a contact sheet of every member crop, with the count. Identity batch confirm also requires every applicable channel and any AI signal to agree, and the check digit to pass (§9.7, §9.8). Form (version) batch confirm also requires every member's inference margin to be ≥ 10 nats and refuses a sheet bubbling a version the exam does not declare (SCO-005 `undeclared_version`, §10.3).
 
 **Prefetch.** Tiles for the next 5 and previous 5 items are prefetched at P0 (§4.5, §4.7), so the next item appears within 50 ms. Server mode leases the current item plus the next 5 (§15.3).
 
