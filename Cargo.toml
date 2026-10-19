@@ -17,6 +17,7 @@ members = [
     "crates/omr-sim",
     "crates/shell-slint",
     "crates/omr-archtest",
+    "crates/omr-winres",
 ]
 
 [workspace.package]
@@ -42,6 +43,7 @@ omr-store = { path = "crates/omr-store" }
 omr-report = { path = "crates/omr-report" }
 omr-app = { path = "crates/omr-app" }
 omr-sim = { path = "crates/omr-sim" }
+omr-winres = { path = "crates/omr-winres" }
 # serialization and errors
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["float_roundtrip"] }

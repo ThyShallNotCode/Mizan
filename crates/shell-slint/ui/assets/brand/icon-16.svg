@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <title>Mizan</title>
+  <!-- 16 px: drawn on the pixel grid (no lattice or shadow) for crisp small icons; the 48 px and
+       larger icons render ../icon.svg. -->
+  <defs>
+    <linearGradient id="bgS16" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#14735F"/>
+      <stop offset="1" stop-color="#0C463F"/>
+    </linearGradient>
+    <radialGradient id="glowS16" cx="0.3" cy="0.12" r="0.75">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="goldS16" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#EDC979"/>
+      <stop offset="1" stop-color="#C38F3A"/>
+    </linearGradient>
+    <radialGradient id="panS16" cx="0.36" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#F6DA97"/>
+      <stop offset="0.55" stop-color="#EDC979"/>
+      <stop offset="1" stop-color="#C38F3A"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="16" height="16" rx="3.5" fill="url(#bgS16)"/>
+  <rect x="0" y="0" width="16" height="16" rx="3.5" fill="url(#glowS16)"/>
+  <rect x="0.5" y="0.5" width="15" height="15" rx="3.0" fill="none" stroke="#2A8A7C" stroke-width="1"/>
+  <rect x="2.0" y="5.0" width="12.0" height="1.5" rx="0.75" fill="url(#goldS16)"/>
+  <rect x="7.0" y="5.0" width="2" height="7.0" fill="url(#goldS16)"/>
+  <rect x="5.0" y="12.0" width="6.0" height="1.5" rx="1.0" fill="url(#goldS16)"/>
+  <rect x="3.5" y="5.0" width="1" height="2.0" fill="url(#goldS16)"/>
+  <rect x="11.5" y="5.0" width="1" height="2.0" fill="url(#goldS16)"/>
+  <circle cx="4.0" cy="9.0" r="2.5" fill="url(#panS16)"/>
+  <circle cx="12.0" cy="9.0" r="2.5" fill="url(#panS16)"/>
+</svg>

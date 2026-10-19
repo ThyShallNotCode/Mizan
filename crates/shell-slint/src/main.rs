@@ -16,6 +16,9 @@
 //! this binary has no generated code, so it forbids unsafe code outright. File reads of the
 //! definition inputs and the grading worker thread live here (rule R4: binaries may).
 #![forbid(unsafe_code)]
+// Windows release builds are GUI programs: no console window opens behind the app. Messages a
+// user must see also go to a small window (`tell`); debug builds keep the console.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 use omr_app::GradeOptions;
 use omr_app::define;
@@ -304,6 +307,7 @@ fn operator(a: &Args) -> String {
         .operator
         .clone()
         .or_else(|| std::env::var("USER").ok())
+        .or_else(|| std::env::var("USERNAME").ok()) // Windows sets USERNAME, not USER
         .filter(|n| !n.trim().is_empty())
         .unwrap_or_else(|| "operator".into());
     if name.starts_with("principal:") {
@@ -448,25 +452,45 @@ fn backend(a: &Args) -> Result<(Built, bool), String> {
     })
 }
 
+/// Prints `text` to stderr and, in a Windows release build (no console), also shows it in a
+/// window, so a user who started Mizan from the Start menu or Explorer sees why it stopped.
+fn tell(heading: &str, text: &str) {
+    eprintln!("{text}");
+    if cfg!(all(windows, not(debug_assertions))) {
+        let Ok(w) = shell_slint::ui::ErrorWindow::new() else {
+            return;
+        };
+        w.set_heading(heading.into());
+        w.set_message(text.into());
+        let weak = w.as_weak();
+        w.on_close(move || {
+            if let Some(w) = weak.upgrade() {
+                let _ = w.hide();
+            }
+        });
+        let _ = w.run();
+    }
+}
+
 fn main() -> ExitCode {
     let args = match parse(std::env::args().skip(1)) {
         Ok(a) => a,
+        Err(e) if e.is_empty() => {
+            tell("Mizan", USAGE);
+            return ExitCode::SUCCESS;
+        }
         Err(e) => {
-            if !e.is_empty() {
-                eprintln!("omr-desktop: {e}");
-            }
-            eprintln!("{USAGE}");
-            return if e.is_empty() {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(2)
-            };
+            tell(
+                "Mizan cannot start",
+                &format!("omr-desktop: {e}\n\n{USAGE}"),
+            );
+            return ExitCode::from(2);
         }
     };
     let (built, live) = match backend(&args) {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("omr-desktop: {e}");
+            tell("Mizan cannot start", &format!("omr-desktop: {e}"));
             return ExitCode::FAILURE;
         }
     };
@@ -578,6 +602,8 @@ fn run_windowed(
     live: bool,
 ) -> Result<(), slint::PlatformError> {
     let ui = AppWindow::new()?;
+    // the Wayland app id and X11 class, matched by packaging/linux/mizan.desktop (its icon)
+    let _ = slint::set_xdg_app_id("mizan");
     ui.global::<Theme>().set_dark(dark);
     let shell = Shell::bind(&ui, backend);
     if live {

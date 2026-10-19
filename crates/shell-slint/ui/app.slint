@@ -5,7 +5,7 @@
 // as a binding: `win-w: root.width` would close a loop (the window's layout constraints depend on
 // the screens, whose layout depends on the width), which Slint 1.18 deprecates and may panic on.
 
-import { Theme, Tone, NavRail, NavItem } from "theme.slint";
+import { Theme, Tone, NavRail, NavItem, PrimaryButton } from "theme.slint";
 import { App, ExamsVM, SetupVM, ScanVM, ReviewVM, ResultsVM, OutcomesVM, RemarkVM, Page } from "state.slint";
 import { Icons } from "widgets.slint";
 import { ExamsScreen } from "screens/exams.slint";
@@ -21,7 +21,7 @@ export { Theme, App, ExamsVM, SetupVM, ScanVM, ReviewVM, ResultsVM, OutcomesVM, 
 
 export component AppWindow inherits Window {
     title: "Mizan";
-    icon: @image-url("assets/icon.png");
+    icon: @image-url("assets/icon.svg");
     preferred-width: 1440px;
     preferred-height: 900px;
     min-width: 1280px;
@@ -194,6 +194,48 @@ export component AppWindow inherits Window {
                 horizontal-stretch: 1;
                 win-w: root.win-w;
                 win-h: root.win-h;
+            }
+        }
+    }
+}
+
+// Shown instead of the main window when Mizan cannot start: the Windows release build has no
+// console window to print the reason to.
+export component ErrorWindow inherits Window {
+    in property <string> heading: "Mizan cannot start";
+    in property <string> message;
+    callback close();
+    title: "Mizan";
+    icon: @image-url("assets/icon.svg");
+    preferred-width: 600px;
+    min-width: 420px;
+    default-font-family: Theme.font-sans;
+    default-font-size: Theme.text-md;
+    background: Theme.surface;
+
+    VerticalLayout {
+        padding: 24px;
+        spacing: 16px;
+        Text {
+            text: root.heading;
+            font-size: Theme.text-lg;
+            font-weight: Theme.weight-semibold;
+            color: Theme.ink;
+            accessible-role: AccessibleRole.text;
+        }
+        Text {
+            text: root.message;
+            wrap: word-wrap;
+            color: Theme.ink-2;
+            accessible-role: AccessibleRole.text;
+        }
+        HorizontalLayout {
+            alignment: end;
+            PrimaryButton {
+                text: "Close";
+                clicked => {
+                    root.close();
+                }
             }
         }
     }

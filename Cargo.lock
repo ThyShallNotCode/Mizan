@@ -4645,6 +4645,7 @@ dependencies = [
  "omr-model",
  "omr-recog",
  "omr-sim",
+ "omr-winres",
  "rand 0.10.3",
  "rayon",
  "rust_xlsxwriter",
@@ -4839,6 +4840,10 @@ dependencies = [
  "thiserror 2.0.21",
  "uuid",
 ]
+
+[[package]]
+name = "omr-winres"
+version = "0.1.0"
 
 [[package]]
 name = "once_cell"
@@ -6147,14 +6152,17 @@ dependencies = [
  "omr-recog",
  "omr-scoring",
  "omr-sim",
+ "omr-winres",
  "rand 0.10.3",
  "rand_chacha 0.10.0",
+ "resvg 0.48.1",
  "rust_xlsxwriter",
  "serde_json",
  "slint",
  "slint-build",
  "tempfile",
  "tiny-skia 0.12.0",
+ "usvg 0.48.1",
 ]
 
 [[package]]

@@ -105,13 +105,11 @@ expectation tied to the real exams out of the repository.
 - Typst rendering (§6.2): the MVP renders through SVG behind the same API.
 - TWAIN/eSCL capture agents (§7.1) and hot-folder watching; the MVP imports files and folders (`omr grade`, `omr add`, the desktop's New exam and Add scans).
 - SVG and PNG sheet output (§6.2); `omr sheet render` writes PDF.
-- Packaging, installers and the macOS build (§24). The desktop app has run headless (testing backend and software-rendered screenshots), never in a real window.
+- Packaging, installers and the macOS build (§24). The desktop app has run headless (testing backend and software-rendered screenshots), never in a real window. Built so far: the app icon and version resource in both Windows executables (`omr-winres`, no resource compiler), a GUI-subsystem release build of `omr-desktop.exe` that shows startup errors in a window instead of a console, the operator name from `USERNAME` on Windows, and a Linux desktop entry with its icon in the release archive.
 - The Windows platform layer. Windows is built and tested in CI on Windows Server 2025 (MSVC), but these are deferred:
   - the §14.2 Windows signals (`GetDriveTypeW`, the file-system type, Cloud Files sync roots, which include OneDrive Known Folder Move);
   - owner-only ACLs (§19.3);
   - keys protected with DPAPI in the local, not roaming, profile (§19.2);
-  - the audit principal from `USERNAME`;
-  - a GUI-subsystem desktop app with a native error dialog;
   - cross-OS decision identity through a pure-Rust `libm` (§9.4);
   - path identity by canonical path (the exam registry compares `std::path::absolute` forms, so another case or an 8.3 short name of the same folder counts as another project).
 - The C runtime: the executables link it statically (`.cargo/config.toml`, `+crt-static`) instead of the app-local MSVC runtime of §24.1 and §22.6 row 15; the MSI work (§24.1) settles which one ships.

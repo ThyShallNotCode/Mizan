@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Mizan
+GenericName=Exam correction
+Comment=Grade answer-sheet exams and build course-outcome evidence
+Exec=omr-desktop
+Icon=mizan
+Terminal=false
+Categories=Education;Office;
+StartupWMClass=mizan

@@ -1,0 +1,8 @@
+[package]
+name = "omr-winres"
+description = "Build-time Windows resources for the Mizan executables: the app icon and version information, written as a .res (MSVC) or COFF object (GNU) without a resource compiler."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true

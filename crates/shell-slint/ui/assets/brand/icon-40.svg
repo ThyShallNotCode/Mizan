@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40">
+  <title>Mizan</title>
+  <!-- 40 px: drawn on the pixel grid (no lattice or shadow) for crisp small icons; the 48 px and
+       larger icons render ../icon.svg. -->
+  <defs>
+    <linearGradient id="bgS40" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#14735F"/>
+      <stop offset="1" stop-color="#0C463F"/>
+    </linearGradient>
+    <radialGradient id="glowS40" cx="0.3" cy="0.12" r="0.75">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="goldS40" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#EDC979"/>
+      <stop offset="1" stop-color="#C38F3A"/>
+    </linearGradient>
+    <radialGradient id="panS40" cx="0.36" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#F6DA97"/>
+      <stop offset="0.55" stop-color="#EDC979"/>
+      <stop offset="1" stop-color="#C38F3A"/>
+    </radialGradient>
+  </defs>
+  <rect x="1" y="1" width="38" height="38" rx="9.0" fill="url(#bgS40)"/>
+  <rect x="1" y="1" width="38" height="38" rx="9.0" fill="url(#glowS40)"/>
+  <rect x="1.5" y="1.5" width="37" height="37" rx="8.5" fill="none" stroke="#2A8A7C" stroke-width="1"/>
+  <rect x="5.5" y="13.0" width="29.0" height="2" rx="1.0" fill="url(#goldS40)"/>
+  <rect x="19.0" y="13.0" width="2" height="17.0" fill="url(#goldS40)"/>
+  <rect x="12.5" y="30.0" width="15.0" height="4.0" rx="2.0" fill="url(#goldS40)"/>
+  <rect x="10.0" y="15.0" width="1" height="2.5" fill="url(#goldS40)"/>
+  <rect x="29.0" y="15.0" width="1" height="2.5" fill="url(#goldS40)"/>
+  <circle cx="10.5" cy="23.0" r="6.0" fill="url(#panS40)"/>
+  <circle cx="29.5" cy="23.0" r="6.0" fill="url(#panS40)"/>
+  <path d="M20.00,8.00 L21.76,9.76 L24.24,9.76 L24.24,12.24 L26.00,14.00 L24.24,15.76 L24.24,18.24 L21.76,18.24 L20.00,20.00 L18.24,18.24 L15.76,18.24 L15.76,15.76 L14.00,14.00 L15.76,12.24 L15.76,9.76 L18.24,9.76 Z" fill="url(#goldS40)"/>
+</svg>

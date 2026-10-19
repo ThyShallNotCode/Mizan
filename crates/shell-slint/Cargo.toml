@@ -42,9 +42,14 @@ image.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
 tempfile.workspace = true
+# examples/brand_icons.rs renders the app icon's SVG sources to the .ico and Linux PNGs. Dev-only.
+resvg.workspace = true
+usvg.workspace = true
 # Synthetic Remark Office OMR graded workbooks (tests/support/synthetic_remark.rs): invented
 # rows in the documented export layout, never a real export. R8: dev-only.
 rust_xlsxwriter.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true
+# The app icon and version resource in omr-desktop.exe (no resource compiler needed).
+omr-winres.workspace = true

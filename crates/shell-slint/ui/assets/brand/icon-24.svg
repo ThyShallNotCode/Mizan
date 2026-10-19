@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <title>Mizan</title>
+  <!-- 24 px: drawn on the pixel grid (no lattice or shadow) for crisp small icons; the 48 px and
+       larger icons render ../icon.svg. -->
+  <defs>
+    <linearGradient id="bgS24" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#14735F"/>
+      <stop offset="1" stop-color="#0C463F"/>
+    </linearGradient>
+    <radialGradient id="glowS24" cx="0.3" cy="0.12" r="0.75">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="goldS24" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#EDC979"/>
+      <stop offset="1" stop-color="#C38F3A"/>
+    </linearGradient>
+    <radialGradient id="panS24" cx="0.36" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#F6DA97"/>
+      <stop offset="0.55" stop-color="#EDC979"/>
+      <stop offset="1" stop-color="#C38F3A"/>
+    </radialGradient>
+  </defs>
+  <rect x="1" y="1" width="22" height="22" rx="5.0" fill="url(#bgS24)"/>
+  <rect x="1" y="1" width="22" height="22" rx="5.0" fill="url(#glowS24)"/>
+  <rect x="1.5" y="1.5" width="21" height="21" rx="4.5" fill="none" stroke="#2A8A7C" stroke-width="1"/>
+  <rect x="3.5" y="8.0" width="17.0" height="2" rx="1.0" fill="url(#goldS24)"/>
+  <rect x="11.0" y="8.0" width="2" height="10.0" fill="url(#goldS24)"/>
+  <rect x="7.5" y="18.0" width="9.0" height="2.0" rx="1.0" fill="url(#goldS24)"/>
+  <rect x="6.0" y="10.0" width="1" height="1.0" fill="url(#goldS24)"/>
+  <rect x="17.0" y="10.0" width="1" height="1.0" fill="url(#goldS24)"/>
+  <circle cx="6.5" cy="14.0" r="3.5" fill="url(#panS24)"/>
+  <circle cx="17.5" cy="14.0" r="3.5" fill="url(#panS24)"/>
+  <path d="M12.00,5.50 L13.03,6.53 L14.47,6.53 L14.47,7.97 L15.50,9.00 L14.47,10.03 L14.47,11.47 L13.03,11.47 L12.00,12.50 L10.97,11.47 L9.53,11.47 L9.53,10.03 L8.50,9.00 L9.53,7.97 L9.53,6.53 L10.97,6.53 Z" fill="url(#goldS24)"/>
+</svg>
