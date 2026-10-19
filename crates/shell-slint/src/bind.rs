@@ -557,6 +557,9 @@ impl Shell {
                     self.refresh_review();
                 }
             }
+            // the exams table and drawer: a change made on another screen may not have
+            // refreshed them
+            s::Page::Exams => self.refresh_dashboard(),
             page => self.refresh_page(page),
         }
     }
@@ -579,7 +582,8 @@ impl Shell {
     }
 
     /// Refreshes `page` when it is on show. A screen off show needs nothing: `navigate`
-    /// refreshes every screen it shows, so what changed meanwhile is read then.
+    /// refreshes the screen it shows (Exams: the dashboard), so what changed meanwhile is read
+    /// then. The dashboard and the chrome are on every screen: changes refresh them directly.
     fn refresh_if_shown(&self, page: s::Page) {
         if self.shown() == page {
             self.refresh_page(page);
@@ -2244,6 +2248,7 @@ impl Shell {
                 self.say(what, s::Tone::Success);
                 self.refresh_setup();
                 self.refresh_if_shown(s::Page::Outcomes);
+                self.refresh_dashboard();
             }
             Err(e) => self.say(e.to_string(), s::Tone::Warning),
         }
@@ -2260,6 +2265,7 @@ impl Shell {
                 self.say(what, s::Tone::Success);
                 self.refresh_setup();
                 self.refresh_if_shown(s::Page::Outcomes);
+                self.refresh_dashboard();
             }
             Err(e) => self.say(e.to_string(), s::Tone::Warning),
         }
@@ -4794,11 +4800,17 @@ impl Shell {
         self.compare_remark(compare_request(workbooks));
     }
 
-    /// Shows (or hides) Setup's key summary of the key read from key sheets.
+    /// Shows (or hides) Setup's key summary of the key read from key sheets. Asks the backend
+    /// whether the current exam has one (Setup's view-model is read only when Setup is shown),
+    /// and counts as the exam's first look at it, so Setup does not open the summary on its
+    /// own when it is shown next.
     pub fn show_key_sheets(&self, open: bool) {
-        let ui = self.ui();
-        let su = ui.global::<s::SetupVM>();
-        su.set_ks_open(open && su.get_has_keysheets());
+        let exam = self.exam();
+        let has = exam
+            .as_ref()
+            .is_some_and(|e| self.backend.borrow().key_sheets(e).is_some());
+        self.st.borrow_mut().ks_seen = exam;
+        self.ui().global::<s::SetupVM>().set_ks_open(open && has);
     }
 
     pub fn set_lane(&self, lane: Lane) {

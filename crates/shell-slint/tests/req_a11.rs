@@ -11,6 +11,7 @@ use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use shell_slint::backend::{Backend, Decision, ExamId, Lane, ReviewAction};
 use shell_slint::bind::Shell;
 use shell_slint::demo::{CS211, DemoBackend, MATH101};
+use shell_slint::screenshot;
 use shell_slint::ui::{
     App, AppWindow, ExamsVM, MarkState, OutcomesVM, Page, ReviewVM, ScanVM, SetupVM, Theme,
 };
@@ -1329,4 +1330,217 @@ fn req_a11_opening_an_exam_does_the_work_of_the_screen_on_show_only() {
     click(&ui, &review);
     assert!(calls().2 > 0, "Review opens the first item");
     assert!(shell.current_item().is_some());
+}
+
+/// The demo backend with what a test changes behind the shell: key sheets for one exam
+/// (confirmed or pending), the CLO approval (none yet) and file.
+#[derive(Default)]
+struct Hooked {
+    demo: DemoBackend,
+    key_sheets: Option<(ExamId, bool)>,
+    approved: bool,
+    clos_replaced: bool,
+}
+
+impl Backend for Hooked {
+    fn dashboard(&self) -> shell_slint::backend::Dashboard {
+        let mut d = self.demo.dashboard();
+        for e in &mut d.exams {
+            e.mapping_approval = self.approved;
+            if self.clos_replaced {
+                e.mapped_items = 0;
+            }
+        }
+        d
+    }
+    fn default_exam(&self) -> Option<ExamId> {
+        self.demo.default_exam()
+    }
+    fn exam_setup(&self, exam: &ExamId) -> Option<shell_slint::backend::ExamSetup> {
+        self.demo.exam_setup(exam)
+    }
+    fn set_key(
+        &mut self,
+        exam: &ExamId,
+        version: usize,
+        question: u32,
+        answer: &str,
+    ) -> Result<(), shell_slint::backend::BackendError> {
+        self.demo.set_key(exam, version, question, answer)
+    }
+    fn set_mapping_weight(
+        &mut self,
+        exam: &ExamId,
+        question: u32,
+        clo: usize,
+        weight: Option<f64>,
+    ) -> Result<(), shell_slint::backend::BackendError> {
+        self.demo.set_mapping_weight(exam, question, clo, weight)
+    }
+    fn set_mapping_note(
+        &mut self,
+        exam: &ExamId,
+        question: u32,
+        clo: usize,
+        note: &str,
+    ) -> Result<(), shell_slint::backend::BackendError> {
+        self.demo.set_mapping_note(exam, question, clo, note)
+    }
+    fn batch_progress(&self, exam: &ExamId) -> Option<shell_slint::backend::BatchProgress> {
+        self.demo.batch_progress(exam)
+    }
+    fn review_queue(&self, exam: &ExamId, lane: Lane) -> shell_slint::backend::ReviewQueue {
+        self.demo.review_queue(exam, lane)
+    }
+    fn review_item(
+        &self,
+        exam: &ExamId,
+        item: shell_slint::backend::ItemId,
+    ) -> Option<shell_slint::backend::ReviewItem> {
+        self.demo.review_item(exam, item)
+    }
+    fn apply(
+        &mut self,
+        exam: &ExamId,
+        item: shell_slint::backend::ItemId,
+        action: ReviewAction,
+    ) -> Result<shell_slint::backend::ApplyOutcome, shell_slint::backend::BackendError> {
+        self.demo.apply(exam, item, action)
+    }
+    fn undo(
+        &mut self,
+        exam: &ExamId,
+    ) -> Result<Option<shell_slint::backend::ItemId>, shell_slint::backend::BackendError> {
+        self.demo.undo(exam)
+    }
+    fn review_history(&self, exam: &ExamId) -> Vec<shell_slint::backend::DecisionRecord> {
+        self.demo.review_history(exam)
+    }
+    fn results(&self, exam: &ExamId) -> Option<shell_slint::backend::Results> {
+        self.demo.results(exam)
+    }
+    fn outcomes(&self, exam: &ExamId) -> Option<shell_slint::backend::Outcomes> {
+        self.demo.outcomes(exam)
+    }
+    fn key_sheets(&self, exam: &ExamId) -> Option<shell_slint::backend::KeySheetSummary> {
+        let (with, pending) = self.key_sheets.as_ref()?;
+        (exam == with).then(|| shell_slint::backend::KeySheetSummary {
+            source: "Key sheets graded with the exam".into(),
+            preview: false,
+            pending: *pending,
+            superseded: false,
+            versions: Vec::new(),
+            unusable: Vec::new(),
+            other_versions: Vec::new(),
+            consequence: String::new(),
+            notes: Vec::new(),
+        })
+    }
+    fn approve_mappings(
+        &mut self,
+        _: &ExamId,
+    ) -> Result<String, shell_slint::backend::BackendError> {
+        self.approved = true;
+        Ok("Mapping approved".into())
+    }
+    fn replace_clos(
+        &mut self,
+        _: &ExamId,
+        _: &std::path::Path,
+    ) -> Result<String, shell_slint::backend::BackendError> {
+        self.clos_replaced = true;
+        Ok("CLOs replaced".into())
+    }
+}
+
+fn hooked(backend: Hooked) -> (AppWindow, Rc<RefCell<Hooked>>, Rc<Shell>) {
+    i_slint_backend_testing::init_no_event_loop();
+    another_hooked(backend)
+}
+
+/// [`hooked`], for a test's second window (the platform is set once per test thread).
+fn another_hooked(backend: Hooked) -> (AppWindow, Rc<RefCell<Hooked>>, Rc<Shell>) {
+    let ui = AppWindow::new().expect("window");
+    ui.global::<Theme>().set_reduce_motion(true);
+    let b = Rc::new(RefCell::new(backend));
+    let dynamic: Rc<RefCell<dyn Backend>> = b.clone();
+    let shell = Shell::bind(&ui, dynamic);
+    ui.show().expect("show");
+    (ui, b, shell)
+}
+
+#[test]
+fn req_a11_screenshots_show_the_key_summary_their_shot_names() {
+    // Staging a shot read Setup's "has key sheets" flag, which only a Setup refresh sets:
+    // with Setup no longer refreshed off show, the key-sheet shot lost its summary. And the
+    // summary's first-show opening overrode a shot that wanted the matrix.
+    let default = DemoBackend::new().default_exam().expect("an exam");
+    i_slint_backend_testing::init_no_event_loop();
+    for (exam, pending) in [
+        (ExamId(MATH101.into()), false),
+        (ExamId(MATH101.into()), true),
+        (default.clone(), true),
+    ] {
+        assert_ne!(ExamId(MATH101.into()), default);
+        let (ui, b, shell) = another_hooked(Hooked {
+            key_sheets: Some((exam.clone(), pending)),
+            ..Hooked::default()
+        });
+        let shots = screenshot::real_shots(&*b.borrow());
+        assert!(shots.iter().any(|s| s.keysheet), "a key-sheet shot");
+        // both themes: the same shots twice
+        for _ in 0..2 {
+            for shot in &shots {
+                screenshot::stage(&shell, &*b, shot);
+                if shot.page == Page::Setup {
+                    assert_eq!(
+                        ui.global::<SetupVM>().get_ks_open(),
+                        shot.keysheet,
+                        "{} with the key sheets of {exam} (pending: {pending})",
+                        shot.name
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn req_a11_approving_the_clo_mapping_shows_in_the_exams_drawer() {
+    // The drawer is filled with the dashboard, which approving the mapping in Setup did not
+    // refresh: the drawer still said "mapped" when the instructor went back to it.
+    let (ui, _, shell) = hooked(Hooked::default());
+    let drawer = || ui.global::<ExamsVM>().get_drawer();
+    assert!(ui.global::<ExamsVM>().get_drawer_open());
+    assert_eq!(drawer().mapped_word, "mapped");
+    shell.navigate(Page::Setup);
+    ui.global::<SetupVM>().invoke_approve_mappings();
+    assert_eq!(drawer().mapped_word, "approved");
+}
+
+#[test]
+fn req_a11_replacing_the_clos_shows_in_the_exams_drawer() {
+    // Replacing the CLOs in Setup did not refresh the dashboard either.
+    let (ui, _, shell) = hooked(Hooked::default());
+    let drawer = || ui.global::<ExamsVM>().get_drawer();
+    assert!(drawer().mapped > 0);
+    shell.navigate(Page::Setup);
+    ui.global::<SetupVM>().invoke_replace_clos("clo.csv".into());
+    assert_eq!(drawer().mapped, 0);
+}
+
+#[test]
+fn req_a11_showing_the_exams_screen_reads_the_dashboard() {
+    // Showing the Exams screen refreshed nothing: a change the shell did not make itself (a
+    // finished job, another program) stayed out of the table and the drawer.
+    let (ui, b, shell) = hooked(Hooked {
+        clos_replaced: true,
+        ..Hooked::default()
+    });
+    let drawer = || ui.global::<ExamsVM>().get_drawer();
+    assert_eq!(drawer().mapped, 0);
+    shell.navigate(Page::Setup);
+    b.borrow_mut().clos_replaced = false;
+    click(&ui, &tab(&ui, "Exams"));
+    assert!(drawer().mapped > 0);
 }
