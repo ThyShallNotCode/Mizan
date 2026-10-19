@@ -7,8 +7,9 @@
 use crate::AppError;
 use crate::exam::{
     self, ExamDefinition, FormKey, IdSchemeChoice, KeySheetRule, KeySource, MultiReviewPolicy,
-    TemplateChoice,
+    RosterStudent, SetupField, TemplateChoice,
 };
+use crate::remark::RemarkImport;
 use omr_model::CancelMode;
 use std::path::{Path, PathBuf};
 
@@ -34,7 +35,7 @@ impl Sheet {
 }
 
 /// What the instructor gives for a new exam; `None` takes the sheet's default.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Inputs {
     /// The printed sheet.
     pub sheet: Sheet,
@@ -70,6 +71,15 @@ pub struct Inputs {
     /// How key sheets are told apart from the students' (markers, detection in the stack;
     /// default: [`KeySheetRule::default`]), as `omr grade --key-sheet-marker` sets it.
     pub key_sheets: Option<KeySheetRule>,
+    /// The key file's version labels read as the exam's versions (`1` → `A`, or a key
+    /// version given to another letter), as the instructor answered the New-exam proposal.
+    pub key_versions: Vec<(String, String)>,
+    /// A Remark import (§3.5): its keys, exact points per version and learning objectives
+    /// are the exam's (never with a key file, an inferred key or a CLO file).
+    pub remark: Option<Box<RemarkImport>>,
+    /// Where each value came from (the New-exam proposal's fields, counts only), recorded with
+    /// the exam's setup ([`ExamDefinition::provenance`]).
+    pub provenance: Vec<SetupField>,
 }
 
 impl Inputs {
@@ -92,30 +102,57 @@ impl Inputs {
             high_stakes: false,
             id_scheme: None,
             key_sheets: None,
+            key_versions: Vec::new(),
+            remark: None,
+            provenance: Vec::new(),
         }
     }
 }
 
-fn read(p: &Path, what: &str) -> Result<Vec<u8>, AppError> {
-    std::fs::read(p).map_err(|e| {
-        AppError::Input(format!(
-            "{} ({what}): {e}; check the path of the file",
-            p.display()
-        ))
-    })
+/// What a sheet prints: the bounds of every exam on it and its own conventions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PrintedSheet {
+    /// The template.
+    pub template: TemplateChoice,
+    /// Questions printed (100 on the IAU sheet).
+    pub questions: u16,
+    /// Options per question printed (A–E on the IAU sheet).
+    pub options: u8,
+    /// Versions printed (bubbles A–D on the IAU sheet; an own sheet's forms).
+    pub versions: Vec<String>,
+    /// Its marking convention (§6.5): `erase_only` on the IAU sheet, an own sheet's spec's;
+    /// `None` when the spec sets none (lint L14).
+    pub cancel_mode: Option<CancelMode>,
+    /// Columns of its student-number grid (0: none).
+    pub id_digits: usize,
+    /// An own sheet's page-code key (hex).
+    pub key_hex: Option<String>,
 }
 
-/// The validated definition, with its warnings: answer-key rows beyond the question count
-/// (never graded, named so a count typed too low is seen) and the roster import's (student
-/// numbers masked: they reach logs and the status line).
-pub fn define(i: &Inputs) -> Result<(ExamDefinition, Vec<String>), AppError> {
-    let (template, options, default_forms, key_hex) = match &i.sheet {
-        Sheet::Template(t) => (
-            TemplateChoice::Legacy(t.clone()),
-            5,
-            vec!["A".to_string(), "B".to_string()],
-            None,
-        ),
+/// Reads what `sheet` prints: a bundled template by name, or an own sheet's spec file.
+pub fn printed(sheet: &Sheet) -> Result<PrintedSheet, AppError> {
+    match sheet {
+        Sheet::Template(t) => {
+            if !exam::LEGACY_TEMPLATES.iter().any(|(n, _)| n == t) {
+                return Err(AppError::Definition(format!(
+                    "unknown legacy template `{t}`; known: {} (or give an own sheet's spec file)",
+                    exam::LEGACY_TEMPLATES
+                        .iter()
+                        .map(|(n, _)| *n)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+            Ok(PrintedSheet {
+                template: TemplateChoice::Legacy(t.clone()),
+                questions: 100,
+                options: 5,
+                versions: ["A", "B", "C", "D"].map(String::from).to_vec(),
+                cancel_mode: Some(CancelMode::EraseOnly),
+                id_digits: 10,
+                key_hex: None,
+            })
+        }
         Sheet::Spec(p) => {
             let v: serde_json::Value =
                 serde_json::from_slice(&read(p, "sheet spec")?).map_err(|e| {
@@ -145,23 +182,66 @@ pub fn define(i: &Inputs) -> Result<(ExamDefinition, Vec<String>), AppError> {
                     "a spec file is a generated sheet".into(),
                 ));
             };
-            let forms = (0..spec.forms)
-                .map(|f| char::from(b'A' + f.min(25) as u8).to_string())
-                .collect();
-            let opts = spec.options.max();
-            (choice, opts, forms, key)
+            Ok(PrintedSheet {
+                questions: spec.questions,
+                options: spec.options.max(),
+                versions: (0..spec.forms)
+                    .map(|f| char::from(b'A' + f.min(25) as u8).to_string())
+                    .collect(),
+                cancel_mode: spec.cancel_mode,
+                id_digits: usize::from(spec.id_digits),
+                template: choice,
+                key_hex: key,
+            })
         }
+    }
+}
+
+fn read(p: &Path, what: &str) -> Result<Vec<u8>, AppError> {
+    std::fs::read(p).map_err(|e| {
+        AppError::Input(format!(
+            "{} ({what}): {e}; check the path of the file",
+            p.display()
+        ))
+    })
+}
+
+/// The validated definition, with its warnings: answer-key rows beyond the question count
+/// (never graded, named so a count typed too low is seen) and the roster import's (student
+/// numbers masked: they reach logs and the status line).
+pub fn define(i: &Inputs) -> Result<(ExamDefinition, Vec<String>), AppError> {
+    let sheet = printed(&i.sheet)?;
+    let (template, options, key_hex) = (sheet.template, sheet.options, sheet.key_hex);
+    // `omr grade`'s default for the IAU sheet stays A,B (changing the CLI's defaults is
+    // deferred); the desktop's New exam always gives the versions its proposal found.
+    let default_forms = match &template {
+        TemplateChoice::Legacy(_) => vec!["A".to_string(), "B".to_string()],
+        TemplateChoice::Generated(_) => sheet.versions,
     };
     let key_bytes = i
         .key
         .as_deref()
         .map(|p| read(p, "answer key"))
         .transpose()?;
-    let forms = i
+    // A version label of the key file as the exam's version, and back.
+    let as_version = |l: String| {
+        i.key_versions
+            .iter()
+            .find(|(from, _)| *from == l)
+            .map_or(l, |(_, to)| to.clone())
+    };
+    let remark_forms = i.remark.as_ref().map(|r| r.forms());
+    let forms: Vec<String> = i
         .forms
         .clone()
         .filter(|f| !f.is_empty())
-        .or_else(|| key_bytes.as_deref().and_then(exam::key_file_forms))
+        .or_else(|| remark_forms.clone())
+        .or_else(|| {
+            key_bytes
+                .as_deref()
+                .and_then(exam::key_file_forms)
+                .map(|f| f.into_iter().map(as_version).collect())
+        })
         .unwrap_or(default_forms)
         .into_iter()
         .map(|f| f.trim().to_uppercase())
@@ -245,41 +325,73 @@ pub fn define(i: &Inputs) -> Result<(ExamDefinition, Vec<String>), AppError> {
         };
     }
     let mut warnings = Vec::new();
-    match (&key_bytes, i.infer_key) {
-        (Some(_), true) => {
+    match (&key_bytes, i.infer_key, &i.remark) {
+        (Some(_), true, _) => {
             return Err(AppError::Definition(
                 "give an answer key file or infer the key, not both".into(),
             ));
         }
-        (Some(bytes), false) => {
-            let k = exam::read_key_file_full(bytes, &d.forms, d.questions, d.options)?;
+        (_, _, Some(imp)) => {
+            if key_bytes.is_some() || i.infer_key {
+                return Err(AppError::Definition(
+                    "the key comes from the Remark import: give no key file and infer no key"
+                        .into(),
+                ));
+            }
+            if imp.questions != d.questions {
+                return Err(AppError::Definition(format!(
+                    "the Remark export has {} questions, not {}",
+                    imp.questions, d.questions
+                )));
+            }
+            if remark_forms.as_ref() != Some(&d.forms) {
+                return Err(AppError::Definition(format!(
+                    "the Remark export gives versions {}, not {}",
+                    imp.forms().join(", "),
+                    d.forms.join(", ")
+                )));
+            }
+            if i.clo.is_some() && imp.versions.iter().any(|v| !v.groups.is_empty()) {
+                return Err(AppError::Definition(
+                    "the learning objectives come from the Remark import: give no CLO file".into(),
+                ));
+            }
+            d.key = KeySource::Provided {
+                forms: imp.form_keys(),
+            };
+            d.set_key_points(&imp.key_points());
+            d.outcomes = imp.outcome_setup();
+        }
+        (Some(bytes), false, None) => {
+            // Read under the file's own labels, then named as the exam's versions.
+            let labels: Vec<String> = d
+                .forms
+                .iter()
+                .map(|f| {
+                    i.key_versions
+                        .iter()
+                        .find(|(_, to)| to == f)
+                        .map_or_else(|| f.clone(), |(from, _)| from.clone())
+                })
+                .collect();
+            let mut k = exam::read_key_file_full(bytes, &labels, d.questions, d.options)?;
+            for key in &mut k.forms {
+                key.form = as_version(std::mem::take(&mut key.form));
+            }
+            k.points.per_form = std::mem::take(&mut k.points.per_form)
+                .into_iter()
+                .map(|(f, p)| (as_version(f), p))
+                .collect();
             warnings.extend(k.ignored_warning(d.questions));
             d.key = KeySource::Provided { forms: k.forms };
             d.set_key_points(&k.points);
         }
-        (None, true) => d.key = KeySource::Inferred,
-        (None, false) => {}
+        (None, true, None) => d.key = KeySource::Inferred,
+        (None, false, None) => {}
     }
     if let Some(r) = &i.roster {
-        let ext = r
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if ext == "xlsm" || ext == "xls" {
-            return Err(AppError::Input(format!(
-                "{}: .{ext} workbooks are not read; save the roster as .xlsx or CSV UTF-8",
-                r.display()
-            )));
-        }
-        let bytes = read(r, "roster")?;
-        let rows = if ext == "xlsx" {
-            exam::read_roster_xlsx(&bytes)
-        } else {
-            exam::read_roster_csv(&bytes)
-        }?;
         warnings.extend(
-            d.import_roster(rows)?
+            d.import_roster(read_roster_path(r)?)?
                 .iter()
                 .map(|w| crate::export::mask_numbers(w)),
         );
@@ -287,9 +399,31 @@ pub fn define(i: &Inputs) -> Result<(ExamDefinition, Vec<String>), AppError> {
     if let Some(c) = &i.clo {
         d.outcomes = Some(exam::read_clo_csv(&read(c, "CLO mapping")?, d.questions)?);
     }
+    d.provenance = i.provenance.clone();
     d.exam_id = d.derived_exam_id();
     d.validate()?;
     Ok((d, warnings))
+}
+
+/// The roster rows of a CSV or `.xlsx` file (before the exam's scheme repairs them).
+pub fn read_roster_path(r: &Path) -> Result<Vec<RosterStudent>, AppError> {
+    let ext = r
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext == "xlsm" || ext == "xls" {
+        return Err(AppError::Input(format!(
+            "{}: .{ext} workbooks are not read; save the roster as .xlsx or CSV UTF-8",
+            r.display()
+        )));
+    }
+    let bytes = read(r, "roster")?;
+    if ext == "xlsx" {
+        exam::read_roster_xlsx(&bytes)
+    } else {
+        exam::read_roster_csv(&bytes)
+    }
 }
 
 /// A replacement answer key read from `path` for the exam `def` (the same reading as the key
