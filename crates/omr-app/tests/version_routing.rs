@@ -432,3 +432,77 @@ fn identical_versions_score_an_undeclared_sheet_under_the_shared_key_without_rev
     assert_eq!(inferred, 2);
     p.close().unwrap();
 }
+
+/// The open Scoring-lane form items of booklets whose sheets are `stems`.
+fn form_items(p: &ExamProject, stems: &[&str]) -> Vec<u64> {
+    p.queue(Some(Lane::Scoring))
+        .iter()
+        .filter(|i| i.kind == ItemKind::Form)
+        .filter(|i| stems.contains(&SHEETS[sheet_no(p, i.booklet.unwrap())].0))
+        .map(|i| i.id)
+        .collect()
+}
+
+fn apply_to_group(p: &mut ExamProject, id: u64) -> Result<usize, String> {
+    p.apply(
+        id,
+        Action::ApplyToGroup {
+            decision: Decision::Form(0),
+        },
+    )
+    .map(|o| o.affected.len())
+    .map_err(|e| e.to_string())
+}
+
+#[test]
+fn versions_are_confirmed_as_a_group_only_by_a_10_nat_margin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scans = write_stack(&tmp.path().join("scans"));
+    let inputs = only(&scans, &["a", "b", "blank", "unclear"]);
+    // Identical keys in a definition saved before the backstops: the answers cannot tell the
+    // versions apart (margin 0), so the two inferred versions are one group that is refused.
+    let mut p = grade(
+        &identical_exam(&["A", "B"], false),
+        &inputs,
+        &tmp.path().join("tied"),
+        2,
+    );
+    let ids = form_items(&p, &["blank", "unclear"]);
+    assert_eq!(ids.len(), 2);
+    let e = apply_to_group(&mut p, ids[0]).unwrap_err();
+    assert!(e.contains("10 nats") && e.contains("on its own"), "{e}");
+    assert_eq!(
+        form_items(&p, &["blank", "unclear"]).len(),
+        2,
+        "nothing changed"
+    );
+    p.close().unwrap();
+    // Versions whose keys differ: the answers single out version A by far more than 10 nats.
+    let mut p = grade(
+        &exam(&["A", "B"], false),
+        &inputs,
+        &tmp.path().join("clear"),
+        2,
+    );
+    let ids = form_items(&p, &["blank", "unclear"]);
+    assert_eq!(ids.len(), 2);
+    assert_eq!(apply_to_group(&mut p, ids[0]), Ok(2));
+    assert!(form_items(&p, &["blank", "unclear"]).is_empty());
+    p.close().unwrap();
+    // A sheet bubbling a version the exam does not declare is decided on its own, whatever
+    // its margin: C and D (no suggestion), and C answering A's key (suggested A).
+    let mut p = grade(
+        &exam(&["A", "B"], true),
+        std::slice::from_ref(&scans),
+        &tmp.path().join("held"),
+        2,
+    );
+    let held = form_items(&p, &["c", "d", "c-answers-a"]);
+    assert_eq!(held.len(), 3);
+    for id in held {
+        let e = apply_to_group(&mut p, id).unwrap_err();
+        assert!(e.contains("does not declare"), "{e}");
+    }
+    assert_eq!(form_items(&p, &["c", "d", "c-answers-a"]).len(), 3);
+    p.close().unwrap();
+}

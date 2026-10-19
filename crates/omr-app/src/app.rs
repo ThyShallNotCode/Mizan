@@ -876,6 +876,31 @@ impl ExamProject {
                             m.id
                         )));
                     }
+                    // §10.3: forms are confirmed as a group only where the answers single the
+                    // version out by 10 nats, and never for a sheet bubbling a version the
+                    // exam does not declare.
+                    if m.kind == ItemKind::Form {
+                        if m.sub_reason.as_deref() == Some(crate::infer::UNDECLARED_VERSION) {
+                            return Err(AppError::Review(format!(
+                                "item {} is a sheet bubbling a version this exam does not \
+                                 declare: decide its version on its own (§10.3)",
+                                m.id
+                            )));
+                        }
+                        let confident = m
+                            .booklet
+                            .and_then(|b| self.session.booklets[b].inference.as_ref())
+                            .is_some_and(crate::infer::confident);
+                        if !confident {
+                            return Err(AppError::Review(format!(
+                                "item {}: the answers fit its suggested version by less than \
+                                 {} nats, so it is not confirmed as a group; decide it on its \
+                                 own (§10.3)",
+                                m.id,
+                                crate::infer::DELTA_LL_NATS
+                            )));
+                        }
+                    }
                 }
                 for m in &members {
                     match self.resolve_one(m, decision, given.as_ref()) {

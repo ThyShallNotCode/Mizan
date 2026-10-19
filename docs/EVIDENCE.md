@@ -511,6 +511,19 @@ every gated real-data test was rerun in release on the fixed code (aggregates on
 | C11 (low) | README, crate READMEs and IMPLEMENTATION described the second round's state | Updated: key sheets, the mis-key decision, photos to review, the known limits | — |
 | C12 (low) | Exports printed Rust enum names (`ProbableMiskey`, `Low`), had no flag order, and the SCO-023 note (small N: item statistics below N = 30, with bootstrap CIs and low-confidence badges) was missing from the summary | The §12.2 messages, `normal` / `low (proposed)` / `possible, insufficient data`, a *Flag order* column (rank, then stability), and the SCO-018 / SCO-023 notes in `summary.json` and `report.html` | `omr-report` `items::tests`; golden `items.csv`, `report.html` |
 
+### 3.1.4 Version and key backstops (G-3)
+
+Checks below the New-exam form, so a wrong default or a hurried click never scores a sheet
+against a key the evidence does not support (synthetic IAU sheets; `omr-app/tests`). The
+version rows apply to exams created since the backstops (definitions with
+`hold_undeclared_versions`); older projects keep their routing (§7).
+
+| Case | What happens now | Test |
+|---|---|---|
+| A sheet bubbles a version the exam does not declare (C on an A, B exam; B on a one-version exam) | Held: SCO-005 `undeclared_version` (ERROR, a Form item naming the letter), no version, out of the score run and the exports until a reviewer chooses its version; the answers suggest a version only by 10 nats. **Was:** given a provisional version by key likelihood, or silently scored as the one version | `version_routing.rs::every_version_set_routes_every_bubble_and_holds_undeclared_letters` (versions [A], [C], [A,B], [A,B,C,D] × bubbles A–D, blank, unclear), `…::a_reviewer_gives_a_held_sheet_its_version_and_it_is_scored`, `…::a_definition_saved_before_the_backstop_keeps_its_routing_and_bytes` |
+| A blank version bubble when every version has the same key, points and mapping | Scored under the shared key, SCO-005 `identical_forms` (INFO, not queued); "version not declared" in the results' Form column. **Was:** SCO-005 `inferred` ERROR with margin 0 on every such sheet (CR-16) | `version_routing.rs::identical_versions_score_an_undeclared_sheet_under_the_shared_key_without_review` |
+| *Apply to group* on version (Form) items | Refused when an item's margin is under 10 nats or it bubbles an undeclared version; nothing changes. **Was:** a tied group (margin 0) was confirmed in one keystroke | `version_routing.rs::versions_are_confirmed_as_a_group_only_by_a_10_nat_margin` |
+
 ### 3.2 Security and code review: what was fixed
 
 A security review and a code review of the MVP raised 26 findings above "low" (SEC-01…SEC-11,
