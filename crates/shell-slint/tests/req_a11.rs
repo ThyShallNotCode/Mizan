@@ -547,6 +547,152 @@ fn req_a11_the_selection_follows_the_focus_past_an_edit() {
     assert_eq!(setup_cell(&h, 1, 0).weight, Some(0.5));
 }
 
+/// The window loses and regains the focus (an alt-tab), with an event-loop turn after each: the
+/// change handlers see the cell lose the focus and take it again.
+fn switch_window_away_and_back(ui: &AppWindow) {
+    ui.window()
+        .dispatch_event(WindowEvent::WindowActiveChanged(false));
+    slint::platform::update_timers_and_animations();
+    ui.window()
+        .dispatch_event(WindowEvent::WindowActiveChanged(true));
+    slint::platform::update_timers_and_animations();
+}
+
+#[test]
+fn req_a11_a_window_switch_keeps_what_was_typed_in_a_cell() {
+    // A cell selected all of its text whenever it took the focus, the window becoming active
+    // again too: what was typed after an alt-tab replaced what was typed before it. And a click
+    // inside a note to add to it selected the whole note.
+    let h = harness();
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Setup"));
+    click(ui, &one(ui, "Q03 CLO2 weight"));
+    click(ui, &one(ui, "Note of Q03 × CLO2"));
+    type_text(ui, "abc");
+    switch_window_away_and_back(ui);
+    type_text(ui, "def");
+    special(ui, Key::Return);
+    assert_eq!(setup_cell(&h, 2, 1).note, "abcdef");
+    // a click at the end of a saved note puts the caret there: typing adds to the note
+    click(ui, &one(ui, "Q03 CLO2 weight"));
+    let note = one(ui, "Note of Q03 × CLO2");
+    let (p, s) = (note.absolute_position(), note.size());
+    click_at(ui, p.x + s.width - 10.0, p.y + s.height / 2.0);
+    type_text(ui, "!");
+    special(ui, Key::Return);
+    assert_eq!(setup_cell(&h, 2, 1).note, "abcdef!");
+    // a weight cell alike
+    click(ui, &one(ui, "Q02 CLO1 weight"));
+    type_text(ui, "0.2");
+    switch_window_away_and_back(ui);
+    type_text(ui, "5");
+    special(ui, Key::Return);
+    assert_eq!(setup_cell(&h, 1, 0).weight, Some(0.25));
+}
+
+#[test]
+fn req_a11_a_pointer_that_moves_during_a_click_still_replaces_the_weight() {
+    // A click selected the cell's value only when the cell took the focus, after the press: a
+    // pointer that moved a pixel before the release dragged the caret back and undid the
+    // selection, so 0.5 typed into a cell holding 1 saved 0.51.
+    let h = harness();
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Setup"));
+    let cell = one(ui, "Q02 CLO1 weight");
+    assert_eq!(cell.accessible_value().as_deref(), Some("1"));
+    let (p, s) = (cell.absolute_position(), cell.size());
+    let (x, y) = (p.x + s.width / 2.0, p.y + s.height / 2.0);
+    press_at(ui, x, y);
+    ui.window().dispatch_event(WindowEvent::PointerMoved {
+        position: slint::LogicalPosition::new(x + 1.0, y),
+    });
+    release_at(ui, x + 1.0, y);
+    type_text(ui, "0.5");
+    special(ui, Key::Return);
+    assert_eq!(setup_cell(&h, 1, 0).weight, Some(0.5));
+    assert_eq!(ui.global::<App>().get_message(), "Weight Q02 × CLO1: 0.5");
+}
+
+#[test]
+fn req_a11_the_cell_editor_shows_a_weight_saved_as_it_took_the_focus() {
+    // The matrix cell left behind saves its weight after the editor beside the matrix has the
+    // focus; the editor, focused, kept showing the old value, and Enter saved it back.
+    let h = harness();
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Setup"));
+    click(ui, &one(ui, "Q03 CLO2 weight"));
+    click(ui, &one(ui, "Q02 CLO1 weight"));
+    type_text(ui, "0.5");
+    click(ui, &one(ui, "Weight of Q02 × CLO1"));
+    slint::platform::update_timers_and_animations();
+    assert_eq!(setup_cell(&h, 1, 0).weight, Some(0.5));
+    assert_eq!(
+        one(ui, "Weight of Q02 × CLO1")
+            .accessible_value()
+            .as_deref(),
+        Some("0.5")
+    );
+    special(ui, Key::Return);
+    assert_eq!(setup_cell(&h, 1, 0).weight, Some(0.5));
+    // the value shown is selected: typing replaces it
+    type_text(ui, "0.25");
+    special(ui, Key::Return);
+    assert_eq!(setup_cell(&h, 1, 0).weight, Some(0.25));
+}
+
+/// The answers of question `row` (0-based) in each key version.
+fn key_answers(h: &Harness, row: usize) -> Vec<String> {
+    let setup = h.demo.borrow().exam_setup(&cs211()).unwrap();
+    setup.keys.iter().map(|k| k.answers[row].clone()).collect()
+}
+
+#[test]
+fn req_a11_a_weight_typed_into_a_key_cell_never_changes_the_key() {
+    // Tab from a row's last weight cell reaches the next row's key cells, and a key cell took
+    // any character: a weight typed there set the key by position (1 = A), a published key
+    // change.
+    let h = harness();
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Setup"));
+    let before = key_answers(&h, 2);
+    click(ui, &one(ui, "Q02 CLO5 weight"));
+    type_text(ui, "0.5");
+    special(ui, Key::Tab);
+    assert_eq!(setup_cell(&h, 1, 4).weight, Some(0.5));
+    type_text(ui, "1");
+    special(ui, Key::Tab);
+    type_text(ui, "0.5");
+    assert_eq!(key_answers(&h, 2), before, "Q03's key is unchanged");
+    let msg = ui.global::<App>().get_message().to_string();
+    assert!(msg.contains("type a key letter"), "{msg}");
+    // a letter still sets the key in the cell with the focus
+    type_text(ui, "c");
+    assert_eq!(key_answers(&h, 2)[1], "C");
+}
+
+#[test]
+fn req_a11_shift_and_the_arrows_in_a_key_cell_are_no_key_entries() {
+    // A key cell sent Shift, the arrows and Escape to the backend as key entries: an error
+    // showed while typing a capital and stayed after Shift+Tab.
+    let h = harness();
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Setup"));
+    click(ui, &one(ui, "Q02 CLO5 weight"));
+    special(ui, Key::Tab);
+    type_text(ui, "c");
+    assert_eq!(key_answers(&h, 2)[0], "C");
+    let su = ui.global::<SetupVM>();
+    assert_eq!(su.get_error(), "");
+    for k in [Key::Shift, Key::RightArrow, Key::CapsLock, Key::Escape] {
+        special(ui, k);
+        assert_eq!(su.get_error(), "", "{k:?} is no key entry");
+    }
+    chord(ui, Key::Shift, "d");
+    assert_eq!(key_answers(&h, 2)[0], "D");
+    assert_eq!(su.get_error(), "");
+    assert_eq!(ui.global::<App>().get_message(), "Key Q03 version A: D");
+}
+
 #[test]
 fn req_a11_queue_rows_outlive_a_refresh() {
     // A refresh replaced the queue's model, so Slint rebuilt every row: hover, a press in

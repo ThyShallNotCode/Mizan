@@ -137,6 +137,16 @@ pub fn digit(text: &str) -> Option<u32> {
     }
 }
 
+/// Whether a produced text is something typed (a letter, digit or sign), not the text Slint
+/// gives a key that types nothing: a control character (Escape, Backspace, a lone Shift, Caps
+/// Lock or Meta press) or a private-use code (the arrows, Home, the function keys).
+pub fn typed_entry(text: &str) -> bool {
+    !text.is_empty()
+        && text
+            .chars()
+            .all(|c| !c.is_control() && !('\u{F700}'..='\u{F8FF}').contains(&c))
+}
+
 /// Option position selected by a produced text, for an item with `options` options.
 pub fn option_for(text: &str, options: usize) -> Option<u8> {
     let within = |i: usize| (i < options).then_some(i as u8);
@@ -486,6 +496,27 @@ mod tests {
         let notice = |t: &str| review_key(t, false, false, false, KeyContext::Notice, true);
         assert_eq!(notice("a"), None);
         assert_eq!(notice(&k(Key::Return)), Some(ReviewKey::Accept));
+    }
+
+    #[test]
+    fn only_typed_characters_are_entries() {
+        for key in [
+            Key::Shift,
+            Key::ShiftR,
+            Key::CapsLock,
+            Key::Meta,
+            Key::Escape,
+            Key::RightArrow,
+            Key::UpArrow,
+            Key::Home,
+            Key::F1,
+        ] {
+            assert!(!typed_entry(&k(key)), "{key:?}");
+        }
+        for text in ["b", "B", "*", "د", "3", "٣", "لا"] {
+            assert!(typed_entry(text), "{text}");
+        }
+        assert!(!typed_entry(""));
     }
 
     #[test]

@@ -754,7 +754,14 @@ impl Shell {
         let me = self.clone();
         su.on_ks_discard(move || me.discard_key_sheets());
         let me = self.clone();
-        su.on_set_key(move |row, v, t| me.set_key(row as usize, v as usize, &t));
+        su.on_set_key(move |row, v, t| {
+            // a key that types nothing (Shift, an arrow, Escape) is no key entry
+            if !t.is_empty() && !keymap::typed_entry(&t) {
+                return false;
+            }
+            me.set_key(row as usize, v as usize, &t);
+            true
+        });
         let me = self.clone();
         su.on_set_weight(move |row, c, t| me.set_weight(row as usize, c as usize, &t));
         let me = self.clone();
@@ -2194,6 +2201,33 @@ impl Shell {
         let Some((exam, setup, q)) = self.setup_row(row) else {
             return;
         };
+        let v = setup
+            .keys
+            .get(version)
+            .map(|k| k.version.clone())
+            .unwrap_or_default();
+        // Tab from a row's last weight reaches the next row's key cells: a weight typed there
+        // (a digit, a decimal point) is never a key change, unless the options are digits
+        let options = &setup.template.option_labels;
+        let digits = options
+            .iter()
+            .all(|o| o.chars().all(|c| c.is_ascii_digit()));
+        let weightlike =
+            text.chars().all(|c| c == '.' || c == ',') || keymap::digit(text).is_some();
+        if !text.is_empty() && weightlike && !digits {
+            self.say(
+                format!(
+                    "Q{q:02} version {v} key: digits type weights, in the weight cells; type a \
+                     key letter ({}) here",
+                    match (options.first(), options.last()) {
+                        (Some(a), Some(z)) => format!("{a}–{z}"),
+                        _ => "a letter".into(),
+                    }
+                ),
+                s::Tone::Warning,
+            );
+            return;
+        }
         // typed key letters follow the label set; Arabic letters map by position (§20.2)
         let answer = if text.is_empty() {
             String::new()
@@ -2207,11 +2241,6 @@ impl Shell {
             .backend
             .borrow_mut()
             .set_key(&exam, version, q, &answer);
-        let v = setup
-            .keys
-            .get(version)
-            .map(|k| k.version.clone())
-            .unwrap_or_default();
         self.after_setup_edit(
             r,
             format!(

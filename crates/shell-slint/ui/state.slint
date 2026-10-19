@@ -292,7 +292,9 @@ export global SetupVM {
     callback ks-confirm(bool);
     callback ks-discard();
     callback cycle-key(int, int);
-    callback set-key(int, int, string);
+    // row, version, the typed key (empty clears it); false when the text is no key entry (a
+    // key that types nothing), so the key goes on to the screen
+    callback set-key(int, int, string) -> bool;
     callback set-weight(int, int, string);
     callback set-note(int, int, string);
     // imported item → CLO rows waiting for approval (§11.2), and a CLO file to replace them

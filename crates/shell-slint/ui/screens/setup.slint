@@ -20,7 +20,8 @@ component KeyCell inherits Rectangle {
     in property <string> letter;
     in property <string> label;
     callback cycle();
-    callback set(string);
+    // false: the text is no key entry (a key that types nothing)
+    callback set(string) -> bool;
     width: 28px;
     height: 24px;
     border-radius: Theme.radius-sm;
@@ -54,9 +55,9 @@ component KeyCell inherits Rectangle {
                 root.set("");
                 return accept;
             }
+            // Shift, the arrows and Escape go on to the screen: Rust tells typed text apart
             if (!event.modifiers.control && !event.modifiers.alt && event.text.character-count == 1 && event.text != Key.Tab) {
-                root.set(event.text);
-                return accept;
+                return root.set(event.text) ? accept : reject;
             }
             return reject;
         }
@@ -105,7 +106,7 @@ component MappingRow inherits Rectangle {
                         SetupVM.cycle-key(root.index, v);
                     }
                     set(t) => {
-                        SetupVM.set-key(root.index, v, t);
+                        return SetupVM.set-key(root.index, v, t);
                     }
                 }
             }
@@ -479,6 +480,8 @@ component CellCard inherits Card {
             label: "Note of " + SetupVM.sel-title;
             text: SetupVM.sel-note;
             placeholder: "Why this item evidences the CLO";
+            // free text: a click puts the caret where it lands, to add to the note
+            select-on-click: false;
             mono: false;
             arabic: true;
             align: left;

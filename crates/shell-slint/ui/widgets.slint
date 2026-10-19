@@ -563,6 +563,9 @@ export component EditCell inherits Rectangle {
     in property <bool> invalid;
     in property <bool> highlighted;
     in property <TextHorizontalAlignment> align: right;
+    // A click on the cell selects its value, so what is typed replaces it, as in a spreadsheet
+    // (weights). Off for free text (a note), where a click puts the caret where it lands.
+    in property <bool> select-on-click: true;
     callback committed(string);
     callback focused();
     property <bool> editing: input.has-focus;
@@ -570,16 +573,28 @@ export component EditCell inherits Rectangle {
     // Leaving commits what was typed since: compared with this, never with `text`, which may
     // already show another cell (the Setup cell editor follows the selection).
     property <string> started;
+    // Whether anything was typed since the cell took the focus or last committed.
+    property <bool> typed;
     // Commits, then shows the backend's canonical value (a refused edit snaps back).
     function commit(v: string) {
         root.committed(v);
         input.text = root.text;
         root.started = input.text;
+        root.typed = false;
     }
-    // The view-model is the source of truth: follow it unless the user is typing.
+    // The view-model is the source of truth: follow it unless the user is typing. A focused
+    // cell with nothing typed follows it too: the cell left behind saves after this one took
+    // the focus (the Setup cell editor shows the cell being saved), and Enter must save what is
+    // shown, never the value from before.
     changed text => {
         if (!input.has-focus) {
             input.text = root.text;
+        } else if (!root.typed && input.text != root.text) {
+            input.text = root.text;
+            root.started = root.text;
+            if (root.select-on-click) {
+                input.select-all();
+            }
         }
     }
     height: 26px;
@@ -598,12 +613,17 @@ export component EditCell inherits Rectangle {
     }
     accessible-action-default => {
         input.focus();
+        if (root.select-on-click) {
+            input.select-all();
+        }
         root.focused();
     }
+    // a click beside the text (the cell's padding) edits the cell too; the text input reports
+    // the focus (`changed has-focus`), after the cell left behind has saved
     TouchArea {
+        mouse-cursor: MouseCursor.text;
         clicked => {
             input.focus();
-            root.focused();
         }
     }
     if input.text == "" && !root.editing: Text {
@@ -631,21 +651,36 @@ export component EditCell inherits Rectangle {
         vertical-alignment: center;
         selection-background-color: Theme.primary-soft;
         accessible-role: none;
+        // Never selects on its own: Tab selects all by itself, and a window or popup made
+        // active again gives the focus back with the caret where it was (what is typed next
+        // adds to what was typed before).
         changed has-focus => {
             if (self.has-focus) {
-                // what is typed replaces the value, as in a spreadsheet: a click would leave the
-                // caret where it landed, inside the old value (Tab selects all by itself)
-                self.select-all();
                 root.started = self.text;
                 root.focused();
             } else if (self.text != root.started) {
                 root.commit(self.text);
             } else {
                 self.text = root.text;
+                root.typed = false;
             }
+        }
+        edited => {
+            root.typed = true;
         }
         accepted => {
             root.commit(self.text);
+        }
+    }
+    // A click on a cell not being edited selects its value. Over the text input, so the press
+    // never reaches it: a pointer that moves a pixel before the release would drag the caret
+    // and undo the selection. Disabled while editing: clicks then place the caret.
+    TouchArea {
+        enabled: root.select-on-click && !root.editing;
+        mouse-cursor: MouseCursor.text;
+        clicked => {
+            input.focus();
+            input.select-all();
         }
     }
 }
