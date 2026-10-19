@@ -177,6 +177,9 @@ pub struct ExamSummary {
     pub open_exceptions: SeverityCounts,
     /// e.g. "Key v2 · published".
     pub key_status: String,
+    /// True when a key is in force: supplied (or confirmed from key sheets), neither inferred
+    /// from the students' answers nor waiting for its confirmation.
+    pub key_ok: bool,
     /// Items with at least one approved CLO mapping, of `total_items` (every mapped item when
     /// `mapping_approval` is false).
     pub mapped_items: u32,
@@ -259,9 +262,9 @@ pub enum CancelMode {
 impl CancelMode {
     pub fn label(self) -> &'static str {
         match self {
-            Self::EraseOnly => "erase_only",
-            Self::CrossCancels => "cross_cancels",
-            Self::FillCancelsCheck => "fill_cancels_check",
+            Self::EraseOnly => "Erasures cancel",
+            Self::CrossCancels => "Crosses cancel",
+            Self::FillCancelsCheck => "Fill cancels a check",
         }
     }
 }
@@ -799,6 +802,10 @@ pub struct ReviewItem {
     /// Registered crop: the answer row (mark items), the ID grid (identity items) or the page
     /// (notice items).
     pub crop: CropImage,
+    /// False for an item with no scan behind it (an exam-level notice such as an inferred key,
+    /// a page that could not be read): `crop` is then a blank placeholder, and the frame shows
+    /// no scan, view chips or rescan action.
+    pub has_scan: bool,
     /// The same region in the original (unregistered) scan, for `F2`.
     pub original: Option<CropImage>,
     pub bubbles: Vec<BubbleView>,
@@ -1306,7 +1313,7 @@ pub struct KeyRowDecision {
 
 /// A new exam as typed in the New-exam form (plain text; the backend validates it with the
 /// same rules as `omr grade`). Blank optional fields take the sheet's defaults; a blank key
-/// file means the key is inferred (provisional, never releasable, replaceable from Setup).
+/// file means the key is inferred (provisional, not releasable until replaced from Setup).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NewExam {
     pub title: String,
@@ -1808,6 +1815,14 @@ pub trait Backend {
     /// for the confirmation), with what to do; `None` when nothing holds it.
     fn hold(&self, exam: &ExamId) -> Option<String> {
         let _ = exam;
+        None
+    }
+
+    /// What to do about an exception code, in the reviewer's words (the core's remedy), for
+    /// the code help of a code the shell has no help of its own for; `None` when the core has
+    /// none.
+    fn remedy(&self, code: &str) -> Option<String> {
+        let _ = code;
         None
     }
 

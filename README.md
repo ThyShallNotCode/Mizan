@@ -112,7 +112,8 @@ omr grade scans/cs211-midterm/ --template iau-ccsit-v1 --questions 30 --infer-ke
 ```
 
 Each version's key is then inferred from the most common confident answers. Every output is
-marked INFERRED and can never be released. When the real key arrives:
+marked INFERRED and is not releasable while the key is inferred. When the real key arrives
+(or in the desktop app, Setup › Replace key…):
 
 ```sh
 omr key replace --project "$HOME/OMR Exams/cs211-midterm-1" --key key.csv

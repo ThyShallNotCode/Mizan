@@ -788,7 +788,7 @@ impl ExamDefinition {
         Ok(notes)
     }
 
-    /// True when the key is inferred from the sheets (never releasable).
+    /// True when the key is inferred from the sheets (not releasable until replaced).
     pub fn key_inferred(&self) -> bool {
         matches!(self.key, KeySource::Inferred)
     }

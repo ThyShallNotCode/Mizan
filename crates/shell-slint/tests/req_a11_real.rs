@@ -492,6 +492,17 @@ fn req_a11_real_backend_review_flow_rescores_results() {
     one(ui, "Release").invoke_accessible_default_action();
     let msg = ui.global::<App>().get_message().to_string();
     assert!(msg.contains("Results released"), "{msg}");
+    // the drawer of a released exam: no second person signs a later change here (the
+    // two-person rule is off); release again after one. The key in force is a check.
+    h.shell.refresh_all();
+    let drawer = ui.global::<ExamsVM>().get_drawer();
+    assert_eq!(drawer.callout_title, "Released");
+    assert!(
+        !drawer.callout_text.contains("four-eyes") && drawer.callout_text.contains("release again"),
+        "{}",
+        drawer.callout_text
+    );
+    assert!(drawer.key_ok, "{}", drawer.key_status);
     assert!(built.exam_dir.join("blackboard_grade_center.csv").exists());
     // exports from Results: the Blackboard grade-center upload into an existing column,
     // then every export; only usernames and scores leave, never names
@@ -1439,6 +1450,10 @@ fn req_a11_real_backend_creates_an_exam_from_the_new_exam_form() {
         results.key_label
     );
     assert!(h.app.borrow().can_create_exam(), "the next exam can start");
+    // an inferred key is no key in force: the drawer's key row is a warning, not a check
+    h.shell.refresh_all();
+    let drawer = ui.global::<ExamsVM>().get_drawer();
+    assert!(!drawer.key_ok, "{}", drawer.key_status);
 }
 
 /// C7: the New exam form's *Key sheets* field. The instructor's key sheets named there are read
@@ -1589,6 +1604,21 @@ fn req_a11_real_backend_confirms_the_key_from_key_sheets() {
     );
     one(ui, "Confirm the key in Setup").invoke_accessible_default_action();
     assert_eq!(ui.global::<App>().get_page(), Page::Setup);
+    // the exams drawer says the same: the key waits (the hold is no ERROR exception that a
+    // review decision lifts), the key row is no check, and its action leads to Setup
+    click(ui, &tab(ui, "Exams"));
+    let drawer = ui.global::<ExamsVM>().get_drawer();
+    assert_eq!(drawer.callout_title, "Key waits for confirmation");
+    assert!(
+        drawer.callout_text.contains("confirm it in Setup")
+            && !drawer.callout_text.contains("ERROR exception"),
+        "{}",
+        drawer.callout_text
+    );
+    assert!(!drawer.key_ok, "{}", drawer.key_status);
+    click(ui, &one(ui, "Confirm the key in Setup"));
+    assert_eq!(ui.global::<App>().get_page(), Page::Setup);
+    assert!(ui.global::<SetupVM>().get_ks_open());
 
     // Scan: the two key sheets are listed as key sheets, never as students
     h.shell.navigate(Page::Scan);
@@ -2012,6 +2042,168 @@ fn req_a11_real_scan_thumbnails_are_decoded_off_the_ui_thread() {
     h.shell.navigate(Page::Scan);
     assert!(held.borrow().is_empty());
     assert_eq!(shown_thumbnails(ui), tiles);
+}
+
+/// Fails, naming the screen and the text, when the screen, the status line or the code help
+/// shows one of `words`.
+fn assert_never_shown(ui: &AppWindow, words: &[&str], screen: &str) {
+    let mut texts = all_texts(ui);
+    texts.push(ui.global::<App>().get_message().to_string());
+    texts.push(ui.global::<ReviewVM>().get_help_text().to_string());
+    for t in texts {
+        if let Some(w) = words.iter().find(|w| t.contains(*w)) {
+            panic!("{screen} shows {w:?} in {t:?}");
+        }
+    }
+}
+
+/// A real session's exam graded without a key (the key is inferred), opened in a tall window.
+fn inferred_key_exam(dir: &Path) -> Harness {
+    let built = synth::build(&synth::BARE, dir);
+    let h = harness(AppBackend::project(&built.project, "principal:a11").expect("open"));
+    h.ui.window()
+        .set_size(slint::LogicalSize::new(1600.0, 1100.0));
+    h
+}
+
+/// G-2: a real session shows no control that only answers "not built yet" or names a command
+/// line, on any screen or chord: the What-if, Queue filter and Rescan pull list are the demo's;
+/// the Exams search filters the table; a sheet read automatically says there is nothing to
+/// review.
+#[test]
+fn req_a11_real_backend_shows_no_control_that_is_not_built() {
+    const STUB: [&str; 5] = [
+        "not built yet",
+        "not in the desktop shell",
+        "hat-if",
+        "`omr",
+        "omr-desktop --",
+    ];
+    let dir = tempfile::tempdir().expect("temp dir");
+    let h = inferred_key_exam(dir.path());
+    let ui = &h.ui;
+    for p in PAGES {
+        h.shell.navigate(p);
+        assert_never_shown(ui, &STUB, &format!("{p:?}"));
+        for c in ["Filter the queue", "Rescan pull list", "What-if preview"] {
+            assert!(by_label(ui, c).is_empty(), "{p:?} offers {c}");
+        }
+        // every screen chord, on every screen
+        for c in ["k", "n", "r", "p", " "] {
+            support::a11::chord(ui, slint::platform::Key::Control, c);
+            assert_never_shown(ui, &STUB, &format!("{p:?} after Ctrl+{c:?}"));
+            h.shell.navigate(p);
+        }
+    }
+    // the search on Exams filters the table
+    h.shell.navigate(Page::Exams);
+    let ex = ui.global::<ExamsVM>();
+    one(ui, "Search exams and courses").set_accessible_value("zzz");
+    support::a11::chord(ui, slint::platform::Key::Control, "k");
+    key(ui, "\n");
+    assert_eq!(ex.get_rows().row_count(), 0);
+    assert!(shown(ui, "No exams match"));
+    one(ui, "Search exams and courses").set_accessible_value("cs213");
+    key(ui, "\n");
+    assert_eq!(ex.get_rows().row_count(), 1);
+    assert_never_shown(ui, &STUB, "Exams searched");
+    // a sheet read automatically: nothing to review, said so
+    h.shell.navigate(Page::Scan);
+    let auto = with_prefix(ui, "Sheet ")
+        .into_iter()
+        .find(|(l, _)| l.ends_with("auto-accepted"))
+        .expect("an auto-accepted sheet");
+    click(ui, &auto.1);
+    let msg = ui.global::<App>().get_message().to_string();
+    assert!(msg.contains("nothing to review"), "{msg}");
+    assert_never_shown(ui, &STUB, "Scan after a sheet");
+    // Roster search: with an exam only, and a number on an item that is no identity item says
+    // what a number decides
+    h.shell.navigate(Page::Review);
+    let search = by_label(ui, "Roster search")
+        .into_iter()
+        .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::TextInput))
+        .expect("the roster search field");
+    search.set_accessible_value("2021001234");
+    click(ui, &search);
+    key(ui, "\n");
+    let msg = ui.global::<App>().get_message().to_string();
+    assert!(msg.contains("decides an identity item"), "{msg}");
+}
+
+/// The code help (F1) of every item of a real session says what to do in this window, never
+/// "see Appendix A of the specification"; the inferred key's SCO-003 says Replace key…. Its
+/// notice has no scan: no paper, view chips or rescan action.
+#[test]
+fn req_a11_real_backend_code_help_and_notices_without_a_scan() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let h = inferred_key_exam(dir.path());
+    let ui = &h.ui;
+    h.shell.navigate(Page::Review);
+    let mut seen_sco003 = false;
+    for lane in Lane::ALL {
+        h.shell.set_lane(lane);
+        let q = h.app.borrow().review_queue(&h.exam, lane);
+        for id in q.groups.iter().flat_map(|g| &g.items).map(|i| i.id) {
+            h.shell.select_item(Some(id));
+            assert_never_shown(
+                ui,
+                &["Appendix", "specification"],
+                &format!("Review item {id}"),
+            );
+            if h.item(id).code != "SCO-003" {
+                continue;
+            }
+            seen_sco003 = true;
+            support::a11::special(ui, slint::platform::Key::F1);
+            let rv = ui.global::<ReviewVM>();
+            assert!(rv.get_help_open());
+            assert!(
+                rv.get_help_text().contains("Replace key"),
+                "{}",
+                rv.get_help_text()
+            );
+            assert!(with_prefix(ui, "Scan crop").is_empty());
+            for chrome in [
+                "Add to rescan list",
+                "Zoom ",
+                "Registered, F2",
+                "Original, F2",
+            ] {
+                assert!(with_prefix(ui, chrome).is_empty(), "{chrome}");
+            }
+            support::a11::special(ui, slint::platform::Key::F1);
+        }
+    }
+    assert!(seen_sco003, "the inferred key's notice is queued");
+}
+
+/// The texts of a real session name no crate, CLI flag, backticked identifier or engine
+/// method: Results speaks of Setup's Replace key…, the Setup template card of its options in
+/// words.
+#[test]
+fn req_a11_real_backend_texts_name_no_command_or_identifier() {
+    const NAMES: [&str; 6] = [
+        "`",
+        "--",
+        "omr-scoring",
+        "erase_only",
+        "fiducials",
+        "DIGITS",
+    ];
+    let dir = tempfile::tempdir().expect("temp dir");
+    let h = inferred_key_exam(dir.path());
+    let ui = &h.ui;
+    for p in [Page::Setup, Page::Scan, Page::Results] {
+        h.shell.navigate(p);
+        assert_never_shown(ui, &NAMES, &format!("{p:?}"));
+    }
+    let rs = ui.global::<ResultsVM>();
+    assert!(
+        rs.get_blackboard_note().contains("Replace key"),
+        "{}",
+        rs.get_blackboard_note()
+    );
 }
 
 /// A click on a Scan tile opens the item of that sheet, not the first item of its code in the

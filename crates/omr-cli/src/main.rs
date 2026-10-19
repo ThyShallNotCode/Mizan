@@ -216,7 +216,8 @@ struct GradeArgs {
     /// Answer key CSV (`question,A,B[,points]` or `form,Q1,Q2,…`).
     #[arg(long, conflicts_with = "infer_key")]
     key: Option<PathBuf>,
-    /// Infer each form's key from the modal confident responses (never releasable).
+    /// Infer each form's key from the modal confident responses (not releasable until the real
+    /// key replaces it: omr key replace).
     #[arg(long)]
     infer_key: bool,
     /// A teacher-filled key sheet (scan or PDF; repeat for each file): read by the same

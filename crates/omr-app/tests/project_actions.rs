@@ -172,7 +172,24 @@ fn c5_the_real_key_replaces_an_inferred_key_and_the_blocker_clears() {
     let input = scans(dir.path());
     let out = dir.path().join("out");
     let mut p = grade(&definition(KeySource::Inferred, true), &[input], &out, 2);
-    assert!(p.session.release_blocked().unwrap().contains("INFERRED"));
+    // the block and the notice name the remedy: an inferred key is replaceable, never final
+    let blocked = p.session.release_blocked().unwrap();
+    assert!(blocked.contains("INFERRED"), "{blocked}");
+    assert!(
+        blocked.contains("Replace key") && !blocked.contains("never"),
+        "{blocked}"
+    );
+    let detail = p
+        .session
+        .exam_exceptions
+        .iter()
+        .find(|e| e.sub_reason.as_deref() == Some("inferred_key"))
+        .map(|e| e.detail.clone())
+        .expect("the inferred-key notice");
+    assert!(
+        detail.contains("Replace key") && !detail.contains("never"),
+        "{detail}"
+    );
     assert!(out.join("results-INFERRED.csv").exists());
     let sco003 = p
         .queue(Some(Lane::Scoring))

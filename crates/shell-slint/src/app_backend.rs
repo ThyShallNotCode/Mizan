@@ -1550,8 +1550,33 @@ fn same_entry(a: &str, b: &str) -> bool {
     norm(a) == norm(b)
 }
 
+/// A note of the key-sheet summary in this window's words: the core writes for the command
+/// line ("name key sheets with --key-sheet", "the DIGITS10 student-ID scheme").
+fn key_sheet_note(note: &str) -> String {
+    let mut n = note.to_string();
+    if let Some(at) = n.find("under the DIGITS") {
+        let rest = &n[at + "under the DIGITS".len()..];
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        if let Some(end) = rest.find(" student-ID scheme") {
+            let tail = rest[end + " student-ID scheme".len()..].to_string();
+            n = format!("{}with {digits}-digit student numbers{tail}", &n[..at]);
+        }
+    }
+    n.replace(
+        "(name key sheets with --key-sheet)",
+        "(give the key sheets in the Key sheets field, or Read key from answer sheets… in \
+         Setup)",
+    )
+}
+
+/// The catalogue title of a code, in words a reviewer reads: the catalogue keeps a few
+/// identifiers (MRK-016 `calibration_fallback`) that the window says in words.
 fn title_of(code: &str) -> String {
-    omr_model::exceptions::lookup(code).map_or_else(String::new, |d| d.title.to_string())
+    match code {
+        "MRK-016" => "Calibration fallback (small batch)".to_string(),
+        _ => omr_model::exceptions::lookup(code)
+            .map_or_else(String::new, |d| d.title.replace('`', "")),
+    }
 }
 
 /// An exact rational of the outcome engine (`Ratio<i128>`) as `f64`, for display only.
@@ -1913,7 +1938,12 @@ impl Opened {
                     omr_model::CancelMode::FillCancelsCheck => b::CancelMode::FillCancelsCheck,
                 },
                 dpi: v.template.dpi,
-                page_identity: v.template.page_identity.clone(),
+                // what identifies a page, in words (the core names its methods)
+                page_identity: if v.template.legacy {
+                    "Bubble grid (no corner marks)".into()
+                } else {
+                    "Page code and corner tags".into()
+                },
                 digest: v.template.digest.clone(),
             },
             keys: v
@@ -2096,7 +2126,15 @@ impl Opened {
             unusable: sum.unusable.iter().map(scan).collect(),
             other_versions: sum.other_versions.clone(),
             consequence,
-            notes: sum.notes.clone(),
+            notes: {
+                // the key sheets were named: a marker left out of the stack changes nothing
+                let named = !p.session.definition.key_sheets.declared.is_empty();
+                sum.notes
+                    .iter()
+                    .filter(|n| !(named && n.contains("--key-sheet")))
+                    .map(|n| key_sheet_note(n))
+                    .collect()
+            },
         })
     }
 
@@ -2885,6 +2923,9 @@ impl Opened {
             page: v.page,
             dpi: v.dpi,
             crop: crop(&v.crop),
+            // an item without a crop (an exam-level notice, an unreadable page) gets the core's
+            // 1 × 1 placeholder: no scan to show
+            has_scan: v.crop.width > 1 && v.crop.height > 1,
             original: None,
             bubbles,
             threshold: v.threshold,
@@ -3099,7 +3140,7 @@ impl Opened {
                 sem: sem_pct,
             },
             scale_label: format!(
-                "Saudi grade scale (omr-scoring) · pass mark {} %",
+                "Saudi grade scale · pass mark {} %",
                 trim(pass_mark(&v.grades))
             ),
             grades: v
@@ -3126,12 +3167,13 @@ impl Opened {
             blackboard_blocked: if s.key.as_ref().is_none_or(|k| k.inferred) {
                 Some(
                     "The key is inferred from the sheets: grades are pushed only with a supplied \
-                     key. Replace it (omr key replace) first"
+                     key. Replace the key in Setup (Replace key…) first"
                         .into(),
                 )
             } else if def.roster.is_none() {
                 Some(
-                    "No roster: results without a roster are never pushed. Grade with --roster"
+                    "No roster: results without a roster are never pushed. Grade the exam again \
+                     with a roster (New exam, Roster file)"
                         .into(),
                 )
             } else if self.p.scoring.as_ref().is_none_or(|sc| sc.run.is_err()) {
@@ -3347,6 +3389,7 @@ fn summary_of(v: &vm::ExamSummary, snapshot_utc: &str) -> b::ExamSummary {
         sheets_expected: v.sheets_expected,
         open_exceptions: counts(v.open_exceptions),
         key_status: v.key_status.clone(),
+        key_ok: v.key_in_force,
         mapped_items: v.mapped_items,
         // omr-app has no approval step: every mapping of the definition is in force
         mapping_approval: false,
@@ -3390,6 +3433,8 @@ fn job_summary(j: &Job, d: &ExamDefinition) -> b::ExamSummary {
             omr_app::KeySource::Inferred => "Key · INFERRED (after grading)".into(),
             omr_app::KeySource::Provided { .. } => "Key v1 · draft".into(),
         },
+        // nothing is in force before the run publishes the key
+        key_ok: false,
         mapped_items: d.outcomes.as_ref().map_or(0, |o| {
             o.mapping
                 .iter()
@@ -4730,6 +4775,10 @@ impl Backend for AppBackend {
 
     fn key_sheets(&self, exam: &ExamId) -> Option<b::KeySheetSummary> {
         self.with(exam, Opened::key_summary).flatten()
+    }
+
+    fn remedy(&self, code: &str) -> Option<String> {
+        omr_app::review::remedy(code).map(str::to_string)
     }
 
     fn closed(&self, exam: &ExamId) -> Option<String> {

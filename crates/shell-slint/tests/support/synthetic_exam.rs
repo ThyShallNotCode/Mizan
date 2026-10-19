@@ -50,7 +50,7 @@ pub struct Spec {
     /// Sheets scanned (the roster has two more students, who are absent).
     pub sheets: usize,
     pub seed: u64,
-    /// Provided keys (else the key is inferred, never releasable).
+    /// Provided keys (else the key is inferred, not releasable until replaced).
     pub keyed: bool,
     /// A roster and CLOs (else the exam has neither: no identities to match, no outcomes).
     pub roster_and_clos: bool,

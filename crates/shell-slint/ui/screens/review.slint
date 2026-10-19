@@ -52,7 +52,8 @@ component QueuePane inherits Rectangle {
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
-            Centered {
+            // the demo only: in a real session the lane chips filter the queue
+            if App.demo: Centered {
                 IconButton {
                     icon: Icons.filter;
                     label: "Filter the queue";
@@ -270,7 +271,7 @@ component ItemCanvas inherits Rectangle {
         padding: Theme.space-xl;
         padding-top: Theme.space-lg;
         spacing: Theme.space-lg;
-        HorizontalLayout {
+        if ReviewVM.has-scan: HorizontalLayout {
             spacing: Theme.space-sm;
             Rectangle {
                 horizontal-stretch: 1;
@@ -340,7 +341,9 @@ component ItemCanvas inherits Rectangle {
         paper-box := Rectangle {
             min-width: 0px;
             preferred-width: 0px;
-            height: paper.height;
+            // an item with no scan (an exam-level notice) shows no blank paper
+            visible: ReviewVM.has-scan;
+            height: ReviewVM.has-scan ? paper.height : 0px;
             paper := ScanPaper {
                 x: (parent.width - self.width) / 2;
                 y: 0;
@@ -352,7 +355,7 @@ component ItemCanvas inherits Rectangle {
                 // blind items show no overlays (§13.4); overlays follow the registered geometry
                 show-overlays: ReviewVM.overlay && ReviewVM.registered && ReviewVM.kind != 1;
                 caption: ReviewVM.caption;
-                image-label: "Scan crop: " + ReviewVM.caption;
+                image-label: ReviewVM.has-scan ? "Scan crop: " + ReviewVM.caption : "";
             }
         }
         if ReviewVM.kind == 0: HorizontalLayout {
@@ -956,7 +959,8 @@ component DecisionPane inherits Rectangle {
                     root.refocus();
                 }
             }
-            GhostButton {
+            // a sheet can be rescanned; an exam-level notice has none
+            if ReviewVM.has-scan: GhostButton {
                 text: "Add to rescan list";
                 key-hint: "Ctrl+R";
                 icon: Icons.rescan;
@@ -1033,10 +1037,6 @@ export component ReviewScreen inherits VerticalLayout {
     in property <length> win-h: 900px;
     property <bool> narrow: root.win-w < 1400px;
     property <bool> short: root.win-h < 880px;
-    property <int> search-request: ReviewVM.search-request;
-    changed search-request => {
-        search.focus();
-    }
     init => {
         keys.focus();
     }
@@ -1089,9 +1089,14 @@ export component ReviewScreen inherits VerticalLayout {
         }
         HorizontalLayout {
             spacing: Theme.space-sm;
-            Centered {
-                // a number typed here decides the identity item on screen; the canvas then
-                // takes the keys again, so Enter accepts it
+            // a number typed here decides the identity item on screen; the canvas then takes
+            // the keys again, so Enter accepts it (no exam: no roster to search)
+            if App.has-exam: Centered {
+                // "/" or Ctrl+F (ReviewVM.search-request) puts the keyboard in the field
+                property <int> search-request: ReviewVM.search-request;
+                changed search-request => {
+                    search.focus();
+                }
                 search := SearchField {
                     placeholder: "Roster search";
                     width: 200px;

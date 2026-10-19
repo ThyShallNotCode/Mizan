@@ -251,8 +251,8 @@ job has reported the release checklist reads "Mis-key check … computing…". I
 letter keys change the key to that option, `M` accepts the key or the flagged option, and `A`
 keeps the key, asking for a reason code and a note (voiding is done with `omr review resolve
 --decision void` or by setting the key entry to `*` in Setup).
-The what-if preview stays as before: the SCO-001 help and *What-if preview* (Ctrl+P) point to a
-key change in Setup, which can be undone there.
+A real session has no what-if preview: the SCO-001 help points to a key change in Setup, which
+can be undone there (the demo keeps its *What-if preview* button and Ctrl+P, which say so).
 
 **Page notices**: pages read turned (REG-002: portrait scans of the landscape form, pages fed
 upside down) and blank backs dropped (CAP-012) never reach the queue; the finished batch lists
@@ -310,9 +310,16 @@ drawer "mapped", the outcomes footnote names every mapping of the definition), r
 the write-in boxes and seat-map identity channels (left out), national IDs (left out), a
 separate unregistered crop (F2 has nothing to switch to; the caption says "scan"), L6 status
 counts (none), two-person rule (off), Hijri dates (empty). Thumbnails without a page image
-are blank sheets. The What-if, Stop, Queue filter and Rescan pull list buttons say that they are
-not built yet and name the command that does it (`omr review list --lane capture`, …); New exam
-on demo data says how to open real exams; the TP-154 button writes the exam's exports
+are blank sheets. A control with nothing behind it is not shown in a real session: the What-if
+preview, Queue filter and Rescan pull list buttons (and Ctrl+P, Ctrl+R) are the demo's only, where
+they say that they are not built yet and name the command that does it (`omr review list --lane
+capture`, …), and the Settings keymap lists them there only. No message of a real session ends in
+a command line. The Exams search filters the table (course code, titles or assessment); Roster
+search takes a student number on an identity item and says so otherwise, and shows only with an
+exam open. A click on a sheet read automatically says there is nothing to review; a sheet with an
+open item opens that item, never the first item of its code (another student's). The code help
+(F1) of a code with no help of its own is its catalogue title and the core's remedy. New exam on
+demo data says how to open real exams; the TP-154 button writes the exam's exports
 (`ExamProject::export`) next to its project.
 
 ## Contract highlights

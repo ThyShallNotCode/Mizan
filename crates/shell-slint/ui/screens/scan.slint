@@ -706,7 +706,8 @@ export component ScanScreen inherits Rectangle {
                             tone: kv.tone;
                             mono: true;
                         }
-                        HorizontalLayout {
+                        // the demo's capture agent only: a real session has no pull list yet
+                        if App.demo: HorizontalLayout {
                             alignment: start;
                             SecondaryButton {
                                 text: "Rescan pull list";

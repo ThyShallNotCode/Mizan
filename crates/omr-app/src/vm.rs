@@ -71,6 +71,9 @@ pub struct ExamSummary {
     pub open_exceptions: SeverityCounts,
     /// e.g. "Key v1 · INFERRED".
     pub key_status: String,
+    /// A key is in force: supplied or confirmed, neither inferred nor waiting for its
+    /// confirmation.
+    pub key_in_force: bool,
     /// Items with an approved CLO mapping.
     pub mapped_items: u32,
     /// Items.
@@ -737,6 +740,7 @@ impl ExamProject {
                 .map_or(s.booklets.len() as u32, |r| r.len() as u32),
             open_exceptions: oc,
             key_status: key_label(self),
+            key_in_force: s.key.as_ref().is_some_and(|k| !k.inferred) && !s.key_unconfirmed(),
             mapped_items: def.outcomes.as_ref().map_or(0, |o| {
                 let mut q: Vec<u16> = o.mapping.iter().map(|m| m.question).collect();
                 q.sort_unstable();

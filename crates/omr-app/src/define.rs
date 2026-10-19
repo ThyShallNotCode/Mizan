@@ -45,7 +45,7 @@ pub struct Inputs {
     pub forms: Option<Vec<String>>,
     /// The answer key file (CSV or Excel-saved CSV).
     pub key: Option<PathBuf>,
-    /// No key: infer a provisional one from the answers (never releasable).
+    /// No key: infer a provisional one from the answers (not releasable until replaced).
     pub infer_key: bool,
     /// The roster (CSV or .xlsx).
     pub roster: Option<PathBuf>,

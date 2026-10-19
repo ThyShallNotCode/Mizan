@@ -163,7 +163,7 @@ export component SettingsScreen inherits VerticalLayout {
                 KeyLine { narrow: root.narrow; action: "Next / previous"; keys: "↓ ↑ · J K"; note: "J and K only when no option uses them"; }
                 KeyLine { narrow: root.narrow; action: "Blank"; keys: "Backspace"; note: ""; }
                 KeyLine { narrow: root.narrow; action: "Multiple marks"; keys: "Ctrl+M"; note: "Invalid response"; }
-                KeyLine { narrow: root.narrow; action: "Unreadable"; keys: "Ctrl+U"; note: "Rescan needed; never EMPTY"; }
+                KeyLine { narrow: root.narrow; action: "Unreadable"; keys: "Ctrl+U"; note: "Rescan needed; never Blank"; }
                 KeyLine { narrow: root.narrow; action: "Defer · Escalate · Rescan list"; keys: "Ctrl+D · E · R"; note: ""; }
                 KeyLine { narrow: root.narrow; action: "Undo"; keys: "Ctrl+Z"; note: "Compensating event; the log is never rewritten"; }
                 KeyLine { narrow: root.narrow; action: "Overlay · Original"; keys: "Space · F2"; note: ""; }
@@ -171,8 +171,9 @@ export component SettingsScreen inherits VerticalLayout {
                 KeyLine { narrow: root.narrow; action: "Identity: candidate · N · D"; keys: "1–3 · N · D"; note: "Not on roster · duplicate"; }
                 KeyLine { narrow: root.narrow; action: "Screens"; keys: "Ctrl+1 … Ctrl+6"; note: "Exams … Outcomes; Ctrl+comma opens Settings"; }
                 KeyLine { narrow: root.narrow; action: "Exams: search · new exam"; keys: "Ctrl+K · N"; note: "↑ ↓ move table rows, Enter opens the drawer"; }
-                KeyLine { narrow: root.narrow; action: "Scan: pause · rescan list"; keys: "Ctrl+Space · R"; note: ""; }
-                KeyLine { narrow: root.narrow; action: "Results: what-if preview"; keys: "Ctrl+P"; note: ""; }
+                // the demo's capture agent and previews only: a real session has neither
+                if App.demo: KeyLine { narrow: root.narrow; action: "Scan: pause · rescan list"; keys: "Ctrl+Space · R"; note: ""; }
+                if App.demo: KeyLine { narrow: root.narrow; action: "Results: what-if preview"; keys: "Ctrl+P"; note: ""; }
             }
             Rectangle {
                 vertical-stretch: 1;

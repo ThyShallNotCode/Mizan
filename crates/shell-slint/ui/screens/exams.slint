@@ -290,7 +290,23 @@ component Drawer inherits Rectangle {
                         color: Theme.ink;
                         wrap: word-wrap;
                     }
-                    if ExamsVM.drawer.can-review: PrimaryButton {
+                    if ExamsVM.drawer.to-setup: PrimaryButton {
+                        text: "Confirm the key in Setup";
+                        icon: Icons.setup;
+                        clicked => {
+                            ExamsVM.confirm-key();
+                        }
+                    }
+                    // the key comes first while it waits: the review is the second action then
+                    if ExamsVM.drawer.can-review && !ExamsVM.drawer.to-setup: PrimaryButton {
+                        text: ExamsVM.drawer.review-label;
+                        icon: Icons.review;
+                        key-hint: "Ctrl+4";
+                        clicked => {
+                            ExamsVM.open(Page.review);
+                        }
+                    }
+                    if ExamsVM.drawer.can-review && ExamsVM.drawer.to-setup: SecondaryButton {
                         text: ExamsVM.drawer.review-label;
                         icon: Icons.review;
                         key-hint: "Ctrl+4";
@@ -303,14 +319,24 @@ component Drawer inherits Rectangle {
             SectionLabel {
                 text: "CONFIGURATION";
             }
+            // a check only for a key in force; an inferred key, one waiting for its
+            // confirmation or none at all is a warning (shape and colour, WCAG 1.4.1)
             HorizontalLayout {
                 spacing: Theme.space-sm;
                 Centered {
-                    Image {
+                    if ExamsVM.drawer.key-ok: Image {
                         source: Icons.check;
                         width: 16px;
                         height: 16px;
                         colorize: Theme.success;
+                    }
+                    if !ExamsVM.drawer.key-ok: Rectangle {
+                        width: 16px;
+                        height: 16px;
+                        SeverityGlyph {
+                            severity: Severity.warn;
+                            size: 12px;
+                        }
                     }
                 }
                 Text {
@@ -323,7 +349,7 @@ component Drawer inherits Rectangle {
                 Centered {
                     Tag {
                         text: ExamsVM.drawer.key-status;
-                        tone: Tone.primary;
+                        tone: ExamsVM.drawer.key-ok ? Tone.primary : Tone.warning;
                     }
                 }
             }
@@ -829,8 +855,9 @@ export component ExamsScreen inherits Rectangle {
                         placeholder: "Search exams and courses";
                         key-hint: "Ctrl+K";
                         width: root.narrow ? 220px : 280px;
+                        text <=> ExamsVM.search-text;
                         accepted(t) => {
-                            App.request("Search for \"" + t + "\"");
+                            ExamsVM.search(t);
                         }
                     }
                 }
@@ -1048,13 +1075,15 @@ export component ExamsScreen inherits Rectangle {
                                 }
                             }
                         }
-                        // exams the status filter hides
+                        // exams the status filter or the search hides
                         if ExamsVM.rows.length == 0 && ExamsVM.filters[0].count > 0: EmptyState {
                             vertical-stretch: 1;
-                            title: "No exams with this status";
+                            title: ExamsVM.search-applied != "" ? "No exams match \"" + ExamsVM.search-applied + "\"" : "No exams with this status";
                             GhostButton {
                                 text: "Show all exams";
                                 clicked => {
+                                    ExamsVM.search-text = "";
+                                    ExamsVM.search("");
                                     ExamsVM.set-filter(0);
                                 }
                             }

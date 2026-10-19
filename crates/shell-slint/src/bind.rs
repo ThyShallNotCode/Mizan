@@ -311,8 +311,11 @@ fn reason_words(code: &str) -> String {
         .unwrap_or_default()
 }
 
-fn help_for(code: &str) -> &'static str {
-    match code {
+/// The code help (F1) of an item: what the code means and what to do, in the reviewer's words.
+/// A code without help of its own is described by its catalogue title and, when the core has
+/// one, its remedy: never by a pointer to a document the reviewer does not have.
+fn help_for(code: &str, title: &str, remedy: Option<&str>) -> String {
+    let own = match code {
         "MRK-001" => {
             "MRK-001 Low-confidence mark: the bubble's darkness falls in the hysteresis band or the engine's stages disagree. Decide what is marked from the paper, not from the key (no key is shown)."
         }
@@ -320,13 +323,19 @@ fn help_for(code: &str) -> &'static str {
             "MRK-002 Multiple marks: two or more bubbles read as filled. Choose Multi unless one mark is clearly an erasure or a stray."
         }
         "MRK-003" => {
-            "MRK-003 Eraser residue: an erased mark next to a firm one (cancel mode erase_only). The firm mark usually stands; residue alone is not an answer."
+            "MRK-003 Eraser residue: an erased mark next to a firm one (erasures cancel). The firm mark usually stands; residue alone is not an answer."
         }
         "MRK-005" => {
             "MRK-005 Tick, X or circled letter instead of a fill: in fill-only mode a tick is reviewed; record the option it clearly designates, or Unreadable."
         }
         "MRK-010" => {
             "MRK-010 Stain, smudge or crease: the decision flips under perturbation. If the mark cannot be read with confidence, choose Unreadable (rescan); never Blank."
+        }
+        "MRK-015" => {
+            "MRK-015 Blank section or booklet: no answer was read in a whole section. Check the paper: acknowledge a booklet left blank; a faint pencil or a misread page is rescanned."
+        }
+        "MRK-017" => {
+            "MRK-017 Validation rule failed: an answer breaks a rule of the form. Decide the answer from the paper."
         }
         "REG-003" => {
             "REG-003 High residual (fold, curl): the row may be displaced. Check the overlays sit on the printed bubbles before deciding; F2 shows the original."
@@ -336,6 +345,9 @@ fn help_for(code: &str) -> &'static str {
         }
         "VERIFY" => {
             "Blind verify sample: an auto-accepted question drawn at random. Enter what is marked; the engine's reading is withheld so your answer is an independent label."
+        }
+        "IDN-003" => {
+            "IDN-003 Version unclear: the version bubbles are blank, doubly marked or disagree with the page. Choose the version from the paper, or accept the suggestion inferred from the answers."
         }
         "IDN-004" => {
             "IDN-004 Identity unresolved: compare the grid, the write-in boxes, the name and the seat map. Keys 1–3 choose a candidate, N = not on roster, D = duplicate."
@@ -347,18 +359,49 @@ fn help_for(code: &str) -> &'static str {
             "IDN-007 Provisional student: results stay provisional until the registrar matches the record; acknowledging keeps them so."
         }
         "CAP-002" => {
-            "CAP-002 Effective DPI too low: below 100 dpi the page is not graded. Acknowledge to put it on the rescan pull list."
+            "CAP-002 Effective DPI too low: below 100 dpi the page is not graded. Rescan the sheet at 200–300 dpi and add the new scan on the Scan screen (Add scans…); Add to rescan list marks it until then."
         }
         "COL-005" => {
             "COL-005 Batch count mismatch: the header sheet's expected count differs from the sheets scanned. Reconcile against the absent list or rescan."
         }
         "SCO-001" => {
-            "SCO-001 Probable mis-key: the key has negative discrimination while a distractor is positive. Use Results to preview a key change (what-if) before deciding."
+            "SCO-001 Probable mis-key: the key has negative discrimination while a distractor is positive. Check the key against the paper: change it in Setup to rescore (undo it there), or keep the key and acknowledge this with a note."
         }
         "SCO-002" => {
-            "SCO-002 Possibly flawed item: the top group prefers a distractor. Review the item text; void or re-key from Results."
+            "SCO-002 Possibly flawed item: the top group prefers a distractor. Review the item text; if the key is wrong, change it in Setup (a key cell, or Replace key…)."
         }
-        _ => "Help for this code is in Appendix A of the specification.",
+        "SCO-003" => {
+            "SCO-003 Key inferred from the students' answers: no answer key was supplied, so the results are provisional and cannot be released while the key is inferred. Load the instructor's key in Setup › Replace key…: that resolves this item and rescores the exam."
+        }
+        "SCO-005" => {
+            "SCO-005 Version not identified: the version bubbles are blank or unclear, or the answers fit no version's key. Choose the version from the paper, or accept the suggestion inferred from the answers."
+        }
+        "SYS-032" => {
+            "SYS-032 Grading again disagrees with a decision: the new run read this differently from what a reviewer decided before. The decision stands until changed: confirm it, or decide again from the paper."
+        }
+        _ => "",
+    };
+    if !own.is_empty() {
+        return own.to_string();
+    }
+    let head = if title.is_empty() {
+        code.to_string()
+    } else {
+        format!("{code} {title}.")
+    };
+    match remedy.map(str::trim).filter(|r| !r.is_empty()) {
+        Some(r) => {
+            let mut chars = r.chars();
+            let first: String = chars
+                .next()
+                .into_iter()
+                .flat_map(char::to_uppercase)
+                .collect();
+            format!("{head} {first}{}.", chars.as_str().trim_end_matches('.'))
+        }
+        None => format!(
+            "{head} The details beside the scan say what was found: decide from the paper sheet, or acknowledge it."
+        ),
     }
 }
 
@@ -368,6 +411,8 @@ struct State {
     exam: Option<ExamId>,
     exam_rows: Vec<ExamId>,
     exam_filter: usize,
+    /// The exams search applied to the table ("" none).
+    exam_search: String,
     drawer_open: bool,
     lane: Lane,
     /// Lanes as the backend lists them (the role may see only some), indexed like the chips.
@@ -440,6 +485,7 @@ impl Shell {
                 exam,
                 exam_rows: Vec::new(),
                 exam_filter: 0,
+                exam_search: String::new(),
                 drawer_open: true,
                 lane: Lane::Marks,
                 lanes: Lane::ALL.to_vec(),
@@ -777,6 +823,13 @@ impl Shell {
         let me = self.clone();
         ex.on_open(move |p| me.navigate(p));
         let me = self.clone();
+        ex.on_confirm_key(move || me.open_code("SCO-003"));
+        let me = self.clone();
+        ex.on_search(move |t| {
+            me.st.borrow_mut().exam_search = t.trim().to_string();
+            me.refresh_dashboard();
+        });
+        let me = self.clone();
         ex.on_close_drawer(move || {
             me.st.borrow_mut().drawer_open = false;
             me.refresh_dashboard();
@@ -940,24 +993,40 @@ impl Shell {
         rv.on_use_student(move |t| me.use_student(&t));
         let me = self.clone();
         rv.on_search(move |t| {
-            // a typed number decides an identity item; a name search is not built yet
+            // a typed number decides an identity item; anything else says what the field takes
             let is_number = !t.trim().is_empty()
-                && t.chars().all(|c| c.is_ascii_digit() || c == ' ' || c == '-');
+                && t.chars()
+                    .all(|c| c.is_ascii_digit() || c == ' ' || c == '-');
             let identity = me
                 .st
                 .borrow()
                 .current
                 .as_ref()
                 .is_some_and(|c| c.kind == ReviewKind::Identity);
+            let code = me
+                .st
+                .borrow()
+                .current
+                .as_ref()
+                .map(|c| c.code.clone())
+                .unwrap_or_default();
             if is_number && identity {
                 me.use_student(&t);
+            } else if is_number {
+                me.say(
+                    if code.is_empty() {
+                        "A student number decides an identity item; none is open".to_string()
+                    } else {
+                        format!("A student number decides an identity item; this one is {code}")
+                    },
+                    s::Tone::Info,
+                );
             } else {
                 me.say(
-                    format!(
-                        "Roster search by name (\"{t}\") is not built yet: type the student number, choose a candidate (1–3) or N (not on roster)"
-                    ),
+                    "The roster is searched by student number: type the number on an identity \
+                     item, or choose a candidate (1–3) or N (not on roster)",
                     s::Tone::Info,
-                )
+                );
             }
         });
         let me = self.clone();
@@ -1046,29 +1115,34 @@ impl Shell {
         self.push_item();
     }
 
+    /// A command the window offers but this backend does not model. Only the demo has such
+    /// controls (a real session hides them): it says so, with the command line that does it.
+    /// A real session hears why New exam cannot start, never a command line.
     fn request(&self, what: &str) {
         if what == "New exam" && self.backend.borrow().can_create_exam() {
             self.ui().global::<s::ExamsVM>().set_new_open(true);
             return;
         }
+        if !self.backend.borrow().is_demo() {
+            let why = match what {
+                "New exam" => "New exam: not available now; exams are graded one at a time, \
+                               into an exams folder"
+                    .to_string(),
+                "Stop the batch" => "Stop the batch: a running batch grades to the end".to_string(),
+                w => format!("{w}: not available in this session"),
+            };
+            self.say(why, s::Tone::Info);
+            return;
+        }
         let how = match what {
-            "New exam" if self.backend.borrow().is_demo() => {
+            "New exam" => {
                 "this window shows invented demo data. Start `omr-desktop` without --demo (it \
                  opens ~/OMR Exams) or with --workspace <your exams folder>, then New exam grades \
                  your scans"
             }
-            "New exam" => {
-                "grade the scans with `omr-desktop --grade <scans…> --template iau-ccsit-v1 \
-                 --questions N --key key.csv --workspace <this folder>` (or `omr grade`), and the \
-                 exam opens here"
-            }
             "Stop the batch" => "a running batch grades to the end",
             "Rescan pull list" => "`omr review list --lane capture` lists the pages to rescan",
             "Queue filter" => "`omr review list --lane marks` lists one lane",
-            w if w.starts_with("Search for") => {
-                "the table lists every exam of this folder; narrow it with the filter chips above \
-                 it"
-            }
             _ => "the `omr` command line has every command (`omr --help`)",
         };
         self.say(
@@ -1652,9 +1726,11 @@ impl Shell {
         }
     }
 
+    /// The demo's What-if preview button (a real session has none).
     fn what_if(&self) {
         self.say(
-            "What-if preview is not built yet: change the key in Setup to rescore, then undo it there",
+            "What-if preview: not in the desktop shell yet; change the key in Setup to rescore, \
+             then undo it there",
             s::Tone::Info,
         );
     }
@@ -1756,8 +1832,13 @@ impl Shell {
                 ex.set_search_request(ex.get_search_request().wrapping_add(1));
             }
             (s::Page::Scan, Chord::Space) => self.toggle_pause(),
-            (s::Page::Scan, Chord::Letter('r')) => self.request("Rescan pull list"),
-            (s::Page::Results, Chord::Letter('p')) => self.what_if(),
+            // the pull list and the what-if preview are the demo's only (their buttons too)
+            (s::Page::Scan, Chord::Letter('r')) if self.backend.borrow().is_demo() => {
+                self.request("Rescan pull list")
+            }
+            (s::Page::Results, Chord::Letter('p')) if self.backend.borrow().is_demo() => {
+                self.what_if()
+            }
             _ => return false,
         }
         true
@@ -1784,6 +1865,26 @@ impl Shell {
         let Some(cmd) = keymap::review_key(text, ctrl, shift, alt, context, single_key) else {
             return false;
         };
+        // an item with no scan (an exam-level notice) has no view to change and no sheet to
+        // rescan
+        let has_scan = self
+            .st
+            .borrow()
+            .current
+            .as_ref()
+            .is_some_and(|c| c.has_scan);
+        if !has_scan
+            && matches!(
+                cmd,
+                ReviewKey::ToggleOverlay
+                    | ReviewKey::ToggleOriginal
+                    | ReviewKey::ZoomIn
+                    | ReviewKey::ZoomOut
+                    | ReviewKey::Rescan
+            )
+        {
+            return false;
+        }
         let mark_ctx = matches!(context, KeyContext::Mark { .. });
         match cmd {
             ReviewKey::Option(i) => self.choose(Decision::Option(i)),
@@ -2513,16 +2614,36 @@ impl Shell {
                 })
                 .collect(),
         ));
-        let (filter, current, drawer_open) = {
+        let (filter, current, drawer_open, search) = {
             let st = self.st.borrow();
-            (st.exam_filter, st.exam.clone(), st.drawer_open)
+            (
+                st.exam_filter,
+                st.exam.clone(),
+                st.drawer_open,
+                st.exam_search.clone(),
+            )
         };
         ex.set_filter(filter as i32);
+        ex.set_search_applied(ss(&search));
         let wanted = statuses.get(filter).and_then(|x| x.1);
+        // the search: course code, titles or assessment containing it ("cs211" finds "CS 211")
+        let squash = |t: &str| t.to_lowercase().replace(' ', "");
+        let needle = squash(&search);
+        let found = |e: &b::ExamSummary| {
+            needle.is_empty()
+                || [
+                    &e.course_code,
+                    &e.course_title,
+                    &e.course_title_ar,
+                    &e.assessment,
+                ]
+                .iter()
+                .any(|f| squash(f).contains(&needle))
+        };
         let shown: Vec<&b::ExamSummary> = d
             .exams
             .iter()
-            .filter(|e| wanted.is_none_or(|w| e.status == w))
+            .filter(|e| wanted.is_none_or(|w| e.status == w) && found(e))
             .collect();
         let rows: Vec<s::ExamRow> = shown
             .iter()
@@ -2593,28 +2714,43 @@ impl Shell {
             app.set_term(ss(&e.term.label));
             app.set_term_gregorian(ss(&e.term.gregorian));
             let open = e.open_exceptions;
-            let review_open: u32 = self.lane_total(&e.id);
+            let q = self.backend.borrow().review_queue(&e.id, Lane::Marks);
+            let review_open: u32 = q.lanes.iter().map(|l| l.open).sum();
             app.set_review_open(review_open as i32);
-            let (title, text, t) = match e.status {
-                b::ExamStatus::InReview if open.blocking() > 0 => (
+            // A key read from key sheets that waits for its confirmation holds the exam: it
+            // counts as a blocker, but nothing in Review lifts it (Setup does).
+            let hold = self.backend.borrow().hold(&e.id);
+            let blocking = open.blocking().saturating_sub(u32::from(hold.is_some()));
+            let plural =
+                |n: u32, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+            let (title, text, t) = match (e.status, &hold) {
+                (s, Some(why)) if s != b::ExamStatus::Released => (
+                    "Key waits for confirmation".to_string(),
+                    if review_open > 0 {
+                        format!(
+                            "{why}. {} open in Review as well.",
+                            plural(review_open, "item is", "items are")
+                        )
+                    } else {
+                        format!("{why}.")
+                    },
+                    b::Tone::Warning,
+                ),
+                (b::ExamStatus::InReview, _) if blocking > 0 => (
                     "Review required".to_string(),
                     format!(
-                        "{} ERROR exception{} block{} release, and {} warning{} need{} a look.",
-                        open.blocking(),
-                        if open.blocking() == 1 { "" } else { "s" },
-                        if open.blocking() == 1 { "s" } else { "" },
-                        open.warn,
-                        if open.warn == 1 { "" } else { "s" },
-                        if open.warn == 1 { "s" } else { "" },
+                        "{} release, and {} a look.",
+                        plural(blocking, "ERROR exception blocks", "ERROR exceptions block"),
+                        plural(open.warn, "warning needs", "warnings need"),
                     ),
                     b::Tone::Warning,
                 ),
-                b::ExamStatus::InReview => (
+                (b::ExamStatus::InReview, _) => (
                     "Review in progress".into(),
                     "Only warnings remain open.".into(),
                     b::Tone::Warning,
                 ),
-                b::ExamStatus::Scanning => (
+                (b::ExamStatus::Scanning, _) => (
                     "Scanning in progress".into(),
                     format!(
                         "{} of {} sheets recognised; exceptions reach the review queue as they appear.",
@@ -2623,18 +2759,26 @@ impl Shell {
                     ),
                     b::Tone::Info,
                 ),
-                b::ExamStatus::Ready => (
+                (b::ExamStatus::Ready, _) => (
                     "Ready to release".into(),
                     "No ERROR exceptions are open. Release is a deliberate act of the instructor."
                         .into(),
                     b::Tone::Success,
                 ),
-                b::ExamStatus::Released => (
+                // a second person signs a later change only where the two-person rule is on
+                (b::ExamStatus::Released, _) if q.two_person_rule => (
                     "Released".into(),
                     "Results were released; later changes need four-eyes approval.".into(),
                     b::Tone::Success,
                 ),
-                b::ExamStatus::Setup => (
+                (b::ExamStatus::Released, _) => (
+                    "Released".into(),
+                    "Results were released. A later change (a review decision, a key change, \
+                     added scans) supersedes the release; release again then."
+                        .into(),
+                    b::Tone::Success,
+                ),
+                (b::ExamStatus::Setup, _) => (
                     "Setup in progress".into(),
                     "Publish the key and approve the CLO mapping before scanning.".into(),
                     b::Tone::Neutral,
@@ -2652,7 +2796,9 @@ impl Shell {
                 callout_tone: tone(t),
                 review_label: ss(format!("Continue review ({review_open})")),
                 can_review: review_open > 0,
+                to_setup: hold.is_some() && e.status != b::ExamStatus::Released,
                 key_status: ss(&e.key_status),
+                key_ok: e.key_ok,
                 mapped: e.mapped_items as i32,
                 mapped_word: ss(if e.mapping_approval {
                     "approved"
@@ -3604,7 +3750,10 @@ impl Shell {
             return;
         };
         rv.set_has_item(true);
-        rv.set_help_text(ss(help_for(&c.code)));
+        let remedy = self.backend.borrow().remedy(&c.code);
+        rv.set_help_text(ss(help_for(&c.code, &c.code_title, remedy.as_deref())));
+        // an item with no scan (an exam-level notice): no paper, view chips or rescan
+        rv.set_has_scan(c.has_scan);
         let kind = match c.kind {
             // a form item is decided in the mark frame: its options are the version bubbles
             ReviewKind::Mark | ReviewKind::Form => 0,
@@ -5145,6 +5294,23 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_code_has_help_in_the_reviewers_words() {
+        // the fallback named "Appendix A of the specification", a document reviewers do not have
+        for def in omr_model::catalogue::CATALOGUE {
+            for remedy in [None, Some("rescan the sheet and add it")] {
+                let help = help_for(def.code, def.title, remedy);
+                assert!(help.starts_with(def.code), "{help}");
+                for w in ["Appendix", "specification", "§"] {
+                    assert!(!help.contains(w), "{}: {help}", def.code);
+                }
+            }
+        }
+        let fallback = help_for("REG-004", "Print scale off", Some("rescan it flat"));
+        assert_eq!(fallback, "REG-004 Print scale off. Rescan it flat.");
+        assert!(help_for("SCO-003", "", None).contains("Replace key"));
+    }
 
     #[test]
     fn weights_parse_in_latin_and_arabic_digits() {

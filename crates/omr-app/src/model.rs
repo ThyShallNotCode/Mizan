@@ -200,7 +200,7 @@ impl Booklet {
 pub struct EffectiveKey {
     /// Key version number (1 = first).
     pub version: u32,
-    /// True when inferred from the sheets (never releasable).
+    /// True when inferred from the sheets (not releasable until the real key replaces it).
     pub inferred: bool,
     /// Entries per form, per question.
     pub forms: Vec<Vec<KeyCell>>,
@@ -552,7 +552,11 @@ impl Session {
             );
         }
         if self.key.as_ref().is_some_and(|k| k.inferred) {
-            why.push("key INFERRED from the sheets (SCO-003): never releasable".to_string());
+            why.push(
+                "key INFERRED from the sheets (SCO-003): not releasable until the real key \
+                 replaces it (Setup › Replace key…, or omr key replace)"
+                    .to_string(),
+            );
         }
         let open = self.open_blocking();
         if open > 0 {

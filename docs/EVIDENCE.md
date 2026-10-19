@@ -561,7 +561,8 @@ certifies an error bound on agent labels alone (§23.1).
 
 **Answer keys were inferred in this run.** The answer keys had not been supplied when it was
 made, so these runs use `--infer-key`: each version's key is the most common confident answer
-per question. Every output of such a run is marked INFERRED and can never be released. Accuracy
+per question. Every output of such a run is marked INFERRED and is not releasable until the real
+key replaces the inferred one. Accuracy
 below is measured against the reference labels (what the student marked), which does not depend
 on the key. Scoring with the real keys, supplied later, is §4.1.
 

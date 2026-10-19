@@ -344,8 +344,8 @@ is rarely bubbled); a question without one is voided. It never pretends to be
 a key:
 - the run raises **SCO-003** (BLOCKER, Exam, sub-reason `inferred_key`): Appendix A's "key
   missing or incomplete" fits, because the real key is missing; BLOCKER/Exam blocks release
-  for every student, and `Session::release_blocked` reports "key INFERRED … never releasable"
-  even after the item is acknowledged;
+  for every student, and `Session::release_blocked` reports "key INFERRED … not releasable until
+  the real key replaces it" even after the item is acknowledged (replacing the key clears it);
 - every output says so: an extra first header row in every CSV, the title of every XLSX and
   HTML document plus a banner, a `banner` member in every JSON, `-INFERRED` in every file
   name, `key_status` "Key v1 · INFERRED" in the view-models;

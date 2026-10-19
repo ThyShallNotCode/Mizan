@@ -1029,7 +1029,9 @@ impl ExamProject {
             .map(|(_, v)| {
                 let from = match &def.key {
                     KeySource::Provided { .. } => "the key file",
-                    KeySource::Inferred => "INFERRED from the sheets (never releasable)",
+                    KeySource::Inferred => {
+                        "INFERRED from the sheets (not releasable until replaced)"
+                    }
                     KeySource::None => "no key yet (omr key set / omr key replace)",
                 };
                 (v.clone(), from.to_string())

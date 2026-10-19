@@ -332,13 +332,15 @@ impl Scoring {
 }
 
 /// The exam-scope exception of an inferred key (SCO-003 BLOCKER, `inferred_key`): the key is a
-/// stand-in, so release is refused for every student (Appendix A: key missing).
+/// stand-in, so release is refused for every student until the real key replaces it (Appendix
+/// A: key missing).
 pub fn inferred_key_exception() -> Exception {
     Exception::must("SCO-003", Severity::Blocker, Scope::Exam)
         .with_sub_reason("inferred_key")
         .with_target(Target::default())
         .with_detail(
             "INFERRED KEY: no answer key was supplied; each form's key is the modal confident \
-             response per question. Results are provisional and can never be released.",
+             response per question. Results are provisional and not releasable while the key is \
+             inferred: replace the key in Setup (Replace key…, or omr key replace).",
         )
 }

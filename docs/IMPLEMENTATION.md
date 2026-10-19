@@ -75,10 +75,10 @@ expectation tied to the real exams out of the repository.
 - Image ingest (JPEG/PNG/TIFF) and PDF image-XObject extraction (§7.3).
 - The recognition pipeline (§8.2–§8.8), classical cascade (see the deferred list for the CNN).
 - Bubbled-ID identity with roster reconciliation (§9.2, §9.5–§9.6, Saudi rules).
-- Scoring (§10.1–§10.6), with key sources: a key file, an inferred key (never releasable) and
-  teacher-filled key sheets (§10.1: read by the same recognizer, named with `--key-sheet` or
-  found in the stack by their marker student number, held until the instructor confirms the
-  rendered key summary).
+- Scoring (§10.1–§10.6), with key sources: a key file, an inferred key (not releasable until the
+  real key replaces it) and teacher-filled key sheets (§10.1: read by the same recognizer, named
+  with `--key-sheet` or found in the stack by their marker student number, held until the
+  instructor confirms the rendered key summary).
 - CLO engine (§11.1–§11.4, §11.7 tables).
 - CTT item analysis (§12.1–§12.2) with flag stability (§12.2–§12.3: bootstrap shares and
   percentile CIs of r_ir below N = 1,000, Fisher-z above); a probable mis-key at normal

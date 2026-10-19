@@ -86,7 +86,11 @@ export struct ExamDrawer {
     callout-tone: Tone,
     review-label: string,
     can-review: bool,
+    // the key read from key sheets waits for its confirmation: the call-out leads to Setup
+    to-setup: bool,
     key-status: string,
+    // a key is in force (supplied or confirmed, not inferred): the key row shows a check
+    key-ok: bool,
     mapped: int,
     mapped-word: string,
     total: int,
@@ -119,6 +123,11 @@ export global ExamsVM {
     in property <string> term-label;
     // incremented by Rust on Ctrl+K: the dashboard focuses its search field
     in property <int> search-request;
+    // the search field (Enter applies it: the table lists the exams whose course code, title or
+    // assessment contains it), and the search the table applies ("" none)
+    in-out property <string> search-text;
+    in property <string> search-applied;
+    callback search(string);
     // select the exam with this ID and open the drawer (click, Enter); an ID, not a row: a
     // refresh during a press may move another exam into the row pressed
     callback select(string);
@@ -127,6 +136,8 @@ export global ExamsVM {
     callback set-filter(int);
     // open the selected exam on a page
     callback open(Page);
+    // Setup, on the key summary that confirms a key read from key sheets
+    callback confirm-key();
     callback close-drawer();
     // the New-exam form (CR-04): what the instructor types; Rust validates and grades it
     in-out property <bool> new-open;
@@ -591,6 +602,9 @@ export global ReviewVM {
     in property <[QueueEntry]> queue;
     in property <length> selected-y;
     in property <bool> has-item;
+    // false for an item with no scan behind it (an exam-level notice): no paper, view chips or
+    // rescan action
+    in property <bool> has-scan: true;
     // item: 0 mark, 1 blind verify, 2 identity, 3 notice
     in property <int> kind;
     in property <string> code;
