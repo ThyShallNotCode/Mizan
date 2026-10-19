@@ -27,8 +27,16 @@ component ExportBar inherits Rectangle {
     init => {
         all.focus();
     }
+    // An overlay: a press on its background must not reach the page underneath.
+    TouchArea {
+        scroll-event(event) => {
+            return accept;
+        }
+    }
     // Escape closes the bar from anywhere inside it
     FocusScope {
+        // the fields inside keep focus when the bar's background is clicked
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Escape) {
                 ResultsVM.export-open = false;
@@ -119,7 +127,15 @@ component ReleaseBar inherits Rectangle {
     init => {
         cancel.focus();
     }
+    // An overlay: a press on its background must not reach the page underneath.
+    TouchArea {
+        scroll-event(event) => {
+            return accept;
+        }
+    }
     FocusScope {
+        // the fields inside keep focus when the bar's background is clicked
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Escape) {
                 ResultsVM.release-open = false;

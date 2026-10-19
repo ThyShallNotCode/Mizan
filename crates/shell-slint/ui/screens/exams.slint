@@ -171,6 +171,13 @@ component Drawer inherits Rectangle {
     drop-shadow-blur: Theme.shadow-2-blur;
     drop-shadow-offset-x: -2px;
     drop-shadow-color: Theme.shadow-2-color;
+    // Below 1420 px the drawer lies over the table: a press on its background must not select
+    // the row underneath.
+    TouchArea {
+        scroll-event(event) => {
+            return accept;
+        }
+    }
     Rectangle {
         x: 0;
         width: 1px;
@@ -447,7 +454,15 @@ component NewExamBar inherits Rectangle {
     init => {
         scans.focus();
     }
+    // An overlay: a press on its background must not reach the page underneath.
+    TouchArea {
+        scroll-event(event) => {
+            return accept;
+        }
+    }
     FocusScope {
+        // the fields inside keep focus when the bar's background is clicked
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Escape) {
                 ExamsVM.new-open = false;
@@ -631,7 +646,15 @@ component RemarkNewPanel inherits Rectangle {
     drop-shadow-offset-y: Theme.shadow-2-offset;
     drop-shadow-color: Theme.shadow-2-color;
     in property <length> summary-h: 340px;
+    // An overlay: a press on its background must not reach the page underneath.
+    TouchArea {
+        scroll-event(event) => {
+            return accept;
+        }
+    }
     FocusScope {
+        // the fields inside keep focus when the bar's background is clicked
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Escape) {
                 RemarkVM.new-panel = false;

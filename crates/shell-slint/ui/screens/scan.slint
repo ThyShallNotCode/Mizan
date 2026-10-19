@@ -20,8 +20,16 @@ component AddScansBar inherits Rectangle {
     init => {
         field.focus();
     }
+    // An overlay: a press on its background must not reach the page underneath.
+    TouchArea {
+        scroll-event(event) => {
+            return accept;
+        }
+    }
     // Escape closes the bar from anywhere inside it
     FocusScope {
+        // the fields inside keep focus when the bar's background is clicked
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Escape) {
                 ScanVM.add-open = false;

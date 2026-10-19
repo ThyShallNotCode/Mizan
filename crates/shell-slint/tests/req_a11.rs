@@ -20,7 +20,8 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use support::a11::{
-    by_label, chord, click, key, one, selected_queue_row, special, tab, with_prefix,
+    by_label, chord, click, click_at, key, one, selected_queue_row, special, tab, type_text,
+    with_prefix,
 };
 
 struct Harness {
@@ -216,6 +217,105 @@ fn req_a11_one_mouse_click_activates_each_tab_and_button() {
     // a Button (the exam drawer's), not only the rail
     click(ui, &one(ui, "Open results"));
     assert_eq!(ui.global::<App>().get_page(), Page::Results);
+}
+
+/// The exam rows on screen: (row index, top, height, right edge).
+fn exam_rows(ui: &AppWindow) -> Vec<(usize, f32, f32, f32)> {
+    let rows = ui.global::<ExamsVM>().get_rows();
+    (0..rows.row_count())
+        .filter_map(|i| {
+            let e = by_label(ui, &rows.row_data(i)?.label).into_iter().next()?;
+            let (p, s) = (e.absolute_position(), e.size());
+            Some((i, p.y, s.height, p.x + s.width))
+        })
+        .collect()
+}
+
+/// The minimum window, where the exam drawer lies over the table.
+fn minimum_window(h: &Harness) {
+    h.ui.window()
+        .set_size(slint::LogicalSize::new(1280.0, 800.0));
+    slint::platform::update_timers_and_animations();
+}
+
+#[test]
+fn req_a11_a_click_on_the_narrow_drawer_stays_in_the_drawer() {
+    // Under 1420 px the drawer covers the right of the table, and a press on its background
+    // went through to the row underneath and changed the exam.
+    let h = harness();
+    let ui = &h.ui;
+    minimum_window(&h);
+    let ex = ui.global::<ExamsVM>();
+    assert!(
+        ex.get_drawer_open(),
+        "the drawer of the current exam is open"
+    );
+    let selected = ex.get_selected();
+    let (_, top, height, right) = exam_rows(ui)
+        .into_iter()
+        .find(|r| r.0 as i32 != selected)
+        .expect("a row other than the selected one");
+    // the drawer's right margin, beside no control, over the right end of that row
+    let x = right - 16.0;
+    assert!(
+        x > one(ui, "Open results").absolute_position().x,
+        "the spot is on the drawer"
+    );
+    click_at(ui, x, top + height / 2.0);
+    assert_eq!(
+        ex.get_selected(),
+        selected,
+        "the exam behind stays unselected"
+    );
+    assert!(ex.get_drawer_open());
+}
+
+#[test]
+fn req_a11_a_click_between_the_new_exam_buttons_reaches_nothing_behind() {
+    // The New-exam form floats over the table: a press between its buttons took focus from
+    // the field being typed in, and the next one selected the exam behind the form.
+    let h = harness();
+    let ui = &h.ui;
+    minimum_window(&h);
+    let ex = ui.global::<ExamsVM>();
+    ex.set_new_open(true);
+    slint::platform::update_timers_and_animations();
+    let left = one(ui, "Import from Remark export…");
+    let right = one(ui, "Cancel");
+    let (lp, ls, rp) = (
+        left.absolute_position(),
+        left.size(),
+        right.absolute_position(),
+    );
+    let (gx, gy) = ((lp.x + ls.width + rp.x) / 2.0, lp.y + ls.height / 2.0);
+    let rows = exam_rows(ui);
+    let behind = rows
+        .iter()
+        .find(|r| gy >= r.1 && gy < r.1 + r.2)
+        .map(|r| r.0)
+        .expect("an exam row behind the gap");
+    // make another exam current, so a press that falls through would show
+    let other = rows
+        .iter()
+        .find(|r| r.0 != behind)
+        .expect("a second exam")
+        .0;
+    ex.invoke_select(other as i32);
+    ex.set_new_open(true);
+    slint::platform::update_timers_and_animations();
+    assert_eq!(ex.get_selected(), other as i32);
+    // the form opens with the focus in its first field
+    type_text(ui, "a");
+    click_at(ui, gx, gy);
+    type_text(ui, "b");
+    click_at(ui, gx, gy);
+    assert_eq!(
+        ex.get_selected(),
+        other as i32,
+        "the exam behind the form stays unselected"
+    );
+    assert!(ex.get_new_open(), "the form stays open");
+    assert_eq!(ex.get_new_scans(), "ab", "the field kept the focus");
 }
 
 #[test]

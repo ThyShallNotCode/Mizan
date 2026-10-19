@@ -100,7 +100,13 @@ pub fn chord(ui: &AppWindow, modifier: Key, text: &str) {
 pub fn click(ui: &AppWindow, e: &ElementHandle) {
     let p = e.absolute_position();
     let s = e.size();
-    let position = slint::LogicalPosition::new(p.x + s.width / 2.0, p.y + s.height / 2.0);
+    click_at(ui, p.x + s.width / 2.0, p.y + s.height / 2.0);
+}
+
+/// One left click at a window position (for a spot that is no control, such as an overlay's
+/// background).
+pub fn click_at(ui: &AppWindow, x: f32, y: f32) {
+    let position = slint::LogicalPosition::new(x, y);
     let w = ui.window();
     w.dispatch_event(WindowEvent::PointerMoved { position });
     w.dispatch_event(WindowEvent::PointerPressed {
@@ -111,4 +117,11 @@ pub fn click(ui: &AppWindow, e: &ElementHandle) {
         position,
         button: PointerEventButton::Left,
     });
+}
+
+/// Types `text` one key at a time into whatever has focus, as a keyboard does.
+pub fn type_text(ui: &AppWindow, text: &str) {
+    for ch in text.chars() {
+        key(ui, &ch.to_string());
+    }
 }
