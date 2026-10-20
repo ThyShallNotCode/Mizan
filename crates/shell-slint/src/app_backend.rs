@@ -4947,6 +4947,22 @@ impl Backend for AppBackend {
             .collect()
     }
 
+    fn set_operator(&mut self, name: &str) -> Result<String, BackendError> {
+        let op = omr_app::app::operator_principal(name).map_err(|e| match e {
+            AppError::Input(m) => BackendError::Invalid(format!("Your name: {m}")),
+            e => app_err(e),
+        })?;
+        for o in self.opened.borrow_mut().values_mut() {
+            o.p.set_actor(&op, "Instructor");
+        }
+        let shown = op.trim_start_matches("principal:").to_string();
+        self.operator = op;
+        Ok(format!(
+            "Your name in the audit trail is {shown}: every decision, key change and release from \
+             now on records it; earlier events keep their name"
+        ))
+    }
+
     fn can_create_exam(&self) -> bool {
         self.workspace.is_some() && self.spawn.is_some() && !self.grading_in_progress()
     }

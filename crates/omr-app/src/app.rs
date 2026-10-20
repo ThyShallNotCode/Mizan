@@ -3169,3 +3169,81 @@ fn refuse_per_version_mapping_edit(def: &crate::exam::ExamDefinition) -> Result<
     }
     Ok(())
 }
+
+/// The longest operator name recorded in the audit trail, in characters.
+pub const OPERATOR_NAME_MAX: usize = 64;
+
+/// The audit-trail principal (`principal:<name>`) of the name an operator gives for themself:
+/// trimmed, inner runs of spaces collapsed to one, 1 to [`OPERATOR_NAME_MAX`] characters, with
+/// no control character (a tab, a line break) and no `:` (the principal's own separator). A name
+/// given as a principal (`principal:Huda A`) is read as the name after the prefix. Shells and the
+/// command line record decisions under what this returns, so every event names its actor alike.
+pub fn operator_principal(name: &str) -> Result<String, AppError> {
+    let name = name.trim();
+    let name = name.strip_prefix("principal:").unwrap_or(name);
+    if name.chars().any(char::is_control) {
+        return Err(AppError::Input(
+            "a name cannot hold a tab, a line break or another control character".into(),
+        ));
+    }
+    let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    if name.is_empty() {
+        return Err(AppError::Input(format!(
+            "type the name to record (1 to {OPERATOR_NAME_MAX} characters)"
+        )));
+    }
+    if name.contains(':') {
+        return Err(AppError::Input(
+            "a name cannot hold a colon (:); it separates the parts of the recorded actor".into(),
+        ));
+    }
+    let n = name.chars().count();
+    if n > OPERATOR_NAME_MAX {
+        return Err(AppError::Input(format!(
+            "a name has at most {OPERATOR_NAME_MAX} characters; this one has {n}"
+        )));
+    }
+    Ok(format!("principal:{name}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operator_names_become_principals_or_are_refused() {
+        let ok = |n: &str| operator_principal(n).expect(n);
+        assert_eq!(ok("Huda A"), "principal:Huda A");
+        assert_eq!(
+            ok("  Huda   A  "),
+            "principal:Huda A",
+            "trimmed, spaces collapsed"
+        );
+        assert_eq!(
+            ok("principal:Huda A"),
+            "principal:Huda A",
+            "a principal is its name"
+        );
+        assert_eq!(ok("هدى العتيبي"), "principal:هدى العتيبي");
+        assert_eq!(ok("Dr. O'Neil-Smith"), "principal:Dr. O'Neil-Smith");
+        let longest = "x".repeat(OPERATOR_NAME_MAX);
+        assert_eq!(ok(&longest), format!("principal:{longest}"));
+        // 64 characters, not bytes: an Arabic name of 64 letters is 128 bytes
+        assert!(operator_principal(&"ه".repeat(OPERATOR_NAME_MAX)).is_ok());
+        for bad in [
+            "",
+            "   ",
+            "principal:",
+            "Huda: A",
+            "principal:engine:recog",
+            "Huda\tA",
+            "Huda\u{7}",
+            "Huda\nA",
+        ] {
+            let e = operator_principal(bad).expect_err(bad);
+            assert!(matches!(e, AppError::Input(_)), "{bad:?}: {e}");
+        }
+        let e = operator_principal(&"x".repeat(OPERATOR_NAME_MAX + 1)).unwrap_err();
+        assert!(e.to_string().contains("this one has 65"), "{e}");
+    }
+}

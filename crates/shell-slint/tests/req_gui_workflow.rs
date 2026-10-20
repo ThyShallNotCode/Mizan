@@ -1,5 +1,5 @@
 //! The desktop workflow without the command line (G-3): file dialogs on every path field,
-//! opening another exams folder and showing folders in the file manager. The
+//! opening another exams folder, the file manager, and the settings kept between starts. The
 //! window gets what the binary supplies from the operating system through a fake host (it
 //! records each dialog asked for and answers from a queue, each folder shown and each save of
 //! the preferences), and is driven as a user does: real pointer clicks and typed keys, on
@@ -12,7 +12,7 @@ mod support;
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use omr_app::ExamProject;
 use shell_slint::app_backend::AppBackend;
-use shell_slint::backend::Backend;
+use shell_slint::backend::{Backend, ExamId};
 use shell_slint::host::{PickKind, PickTarget, Prefs};
 use shell_slint::ui::{App, AppWindow, ExamsVM, RemarkVM, ResultsVM, ScanVM, SetupVM, Theme};
 use slint::ComponentHandle;
@@ -674,6 +674,21 @@ fn last_saved(host: &FakeHost) -> Prefs {
     saved.expect("the preferences were saved")
 }
 
+/// The exam's last event recorded by a person (engines record their own work after it).
+fn last_actor(h: &Harness, exam: &ExamId) -> String {
+    h.app
+        .borrow()
+        .with_project(exam, |p| {
+            let events = p.store().expect("a store").events().expect("events");
+            let last = events
+                .iter()
+                .rev()
+                .find(|e| !e.actor_id.starts_with("engine:"));
+            last.map(|e| e.actor_id.clone()).unwrap_or_default()
+        })
+        .expect("the exam is open")
+}
+
 /// D3: Open folder… (and Ctrl+O) chooses another exams folder in the folder dialog: its exams
 /// are listed, the first one selected, and it is the folder opened next time.
 #[test]
@@ -1132,6 +1147,8 @@ fn folder_and_settings_controls_fit_the_smallest_window() {
         click(ui, &tab(ui, "Settings"));
         let reveal = ui.global::<App>().get_reveal_label().to_string();
         for l in [
+            "Your name in the audit trail",
+            "Save your name",
             "Change the exams folder…",
             reveal.as_str(),
             "Show blank-bubble overlays",
@@ -1147,4 +1164,146 @@ fn folder_and_settings_controls_fit_the_smallest_window() {
             );
         }
     }
+}
+
+// ------------------------------------------------------------------ settings (D9)
+
+/// Clicks into the field labelled `label`, selects what it holds and types `text` over it.
+fn retype(ui: &AppWindow, label: &str, text: &str) {
+    click(ui, &one(ui, label));
+    chord(ui, Key::Control, "a");
+    special(ui, Key::Backspace);
+    type_text(ui, text);
+}
+
+/// D9: the name given in Settings is recorded on the next decision (in the exam open now and
+/// in exams opened later) and kept for the next start.
+#[test]
+fn operator_name_is_recorded_on_the_next_decision() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let ws = exams_folder(&dir.path().join("exams"), &[&QUIZ_1]);
+    let other = exams_folder(&dir.path().join("other"), &[&QUIZ_9]);
+    let (h, _held, host) = window_on(&ws);
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Settings"));
+    let app = ui.global::<App>();
+    assert_eq!(app.get_operator_name(), "a11", "the name recorded now");
+    retype(ui, "Your name in the audit trail", "  Huda   A ");
+    press(ui, "Save your name");
+    let msg = message(ui);
+    assert!(
+        msg.contains("Huda A") && msg.contains("from now on"),
+        "{msg}"
+    );
+    assert_eq!(app.get_user_name(), "Huda A");
+    assert_eq!(app.get_user_initials(), "HA");
+    assert_eq!(app.get_operator_name(), "Huda A", "as recorded");
+    assert_eq!(last_saved(&host).operator.as_deref(), Some("Huda A"));
+
+    click(ui, &tab_of(ui, "Review"));
+    press(ui, "Accept suggestion");
+    assert_eq!(last_actor(&h, &h.exam), "principal:Huda A");
+
+    // an exam opened after the change records it too; Enter in the field saves as well
+    host.will_pick(&[&other]);
+    click(ui, &tab(ui, "Exams"));
+    press(ui, "Open folder…");
+    let exam = h.app.borrow().default_exam().expect("an exam");
+    click(ui, &tab_of(ui, "Review"));
+    press(ui, "Accept suggestion");
+    assert_eq!(last_actor(&h, &exam), "principal:Huda A");
+    click(ui, &tab(ui, "Settings"));
+    retype(ui, "Your name in the audit trail", "هدى");
+    special(ui, Key::Return);
+    assert_eq!(app.get_user_name(), "هدى");
+    assert_eq!(last_saved(&host).operator.as_deref(), Some("هدى"));
+}
+
+/// D9: a name that is empty, too long or holds a colon is refused and changes nothing.
+#[test]
+fn bad_operator_names_are_refused() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let ws = exams_folder(&dir.path().join("exams"), &[&QUIZ_1]);
+    let (h, _held, host) = window_on(&ws);
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Settings"));
+    for (name, why) in [
+        ("Huda: A", "colon"),
+        ("   ", "type the name"),
+        (&"x".repeat(65), "at most 64 characters"),
+    ] {
+        retype(ui, "Your name in the audit trail", name);
+        press(ui, "Save your name");
+        let msg = message(ui);
+        assert!(
+            msg.starts_with("Your name: ") && msg.contains(why),
+            "{name:?}: {msg}"
+        );
+        assert_eq!(
+            ui.global::<App>().get_message_tone(),
+            shell_slint::ui::Tone::Warning
+        );
+        assert_eq!(ui.global::<App>().get_user_name(), "a11", "{name:?}");
+    }
+    assert!(host.saved.borrow().is_empty(), "nothing saved");
+    click(ui, &tab_of(ui, "Review"));
+    press(ui, "Accept suggestion");
+    assert_eq!(last_actor(&h, &h.exam), "principal:a11");
+}
+
+/// D9: the theme, reduced motion, one-key review and the blank-bubble overlays are saved as
+/// they are changed, and the next start applies them.
+#[test]
+fn theme_choice_is_saved() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let host = FakeHost::new();
+    w.h.shell.set_host(host.host(Prefs::default()));
+    let theme = ui.global::<Theme>();
+    let app = ui.global::<App>();
+    click(ui, &tab(ui, "Settings"));
+    press(ui, "Dark theme setting");
+    assert!(theme.get_dark());
+    assert_eq!(last_saved(&host).theme.as_deref(), Some("dark"));
+    // the top bar's switch saves too
+    press(ui, "Light theme");
+    assert!(!theme.get_dark());
+    assert_eq!(last_saved(&host).theme.as_deref(), Some("light"));
+    press(ui, "Dark theme");
+    assert_eq!(last_saved(&host).theme.as_deref(), Some("dark"));
+
+    assert!(theme.get_reduce_motion(), "the harness reduces motion");
+    press(ui, "Reduce motion");
+    assert!(!theme.get_reduce_motion());
+    assert!(!last_saved(&host).reduce_motion);
+    press(ui, "Reduce motion");
+    assert!(last_saved(&host).reduce_motion);
+    press(ui, "Single-key shortcuts");
+    assert!(!app.get_single_key());
+    assert!(!last_saved(&host).single_key);
+    press(ui, "Show blank-bubble overlays");
+    assert!(app.get_show_all_default());
+    let saved = last_saved(&host);
+    assert!(saved.show_all_default);
+    assert_eq!(
+        (
+            saved.theme.as_deref(),
+            saved.reduce_motion,
+            saved.single_key
+        ),
+        (Some("dark"), true, false)
+    );
+
+    // the next start: the window as it opens, given these preferences
+    theme.set_dark(false);
+    theme.set_reduce_motion(false);
+    app.set_single_key(true);
+    app.set_show_all_default(false);
+    w.h.shell.set_host(FakeHost::new().host(saved));
+    assert!(theme.get_dark() && theme.get_reduce_motion());
+    assert!(!app.get_single_key() && app.get_show_all_default());
+    w.h.shell.set_host(FakeHost::new().host(Prefs::default()));
+    assert!(theme.get_dark(), "no theme saved: the window keeps its own");
+    assert!(app.get_single_key());
 }

@@ -52,7 +52,8 @@ const USAGE: &str = "usage: omr-desktop [--demo | --project <dir> | --workspace 
          [--title T] [--course C] [--term T] [--cancel-mode erase_only|cross_cancels|fill_cancels_check]
          [--multi-review never|always|high_stakes] [--high-stakes] [--id-scheme iau|pnu|ksu|digits:N]
          [--out DIR] (default: a new folder named after the course and title) [--threads N]
-  --operator <name>    reviewer recorded in the audit events (default: $USER)
+  --operator <name>    reviewer recorded in the audit events (default: the name saved in
+                       Settings, else $USER)
   --screenshot <dir>   render every screen headlessly (software renderer, 1440x900) to PNGs
   --size <WxH>         screenshot window size, e.g. 1280x800 (the smallest supported)
   --shots <names>      only these screens, e.g. review,results
@@ -305,19 +306,33 @@ fn out_dir(g: &Grade, d: &ExamDefinition, workspace: Option<&Path>) -> Result<Pa
     Ok(define::new_exam_dir(&base, d))
 }
 
-fn operator(a: &Args) -> String {
-    let name = a
-        .operator
-        .clone()
-        .or_else(|| std::env::var("USER").ok())
-        .or_else(|| std::env::var("USERNAME").ok()) // Windows sets USERNAME, not USER
-        .filter(|n| !n.trim().is_empty())
-        .unwrap_or_else(|| "operator".into());
-    if name.starts_with("principal:") {
-        name
-    } else {
-        format!("principal:{name}")
+/// The principal recorded in the audit trail: `--operator`, else the name saved in Settings,
+/// else the system's user name (`USER`; Windows sets `USERNAME`), else "operator". The core
+/// validates each (`omr_app::app::operator_principal`): a bad `--operator` is refused, a saved
+/// or system name that is no valid name is passed over.
+fn operator_principal(
+    flag: Option<&str>,
+    saved: Option<&str>,
+    user: Option<String>,
+    username: Option<String>,
+) -> Result<String, String> {
+    if let Some(f) = flag {
+        return omr_app::app::operator_principal(f).map_err(|e| format!("--operator: {e}"));
     }
+    Ok([saved.map(str::to_string), user, username]
+        .into_iter()
+        .flatten()
+        .find_map(|n| omr_app::app::operator_principal(&n).ok())
+        .unwrap_or_else(|| "principal:operator".to_string()))
+}
+
+fn operator(a: &Args, prefs: &Prefs) -> Result<String, String> {
+    operator_principal(
+        a.operator.as_deref(),
+        prefs.operator.as_deref(),
+        std::env::var("USER").ok(),
+        std::env::var("USERNAME").ok(),
+    )
 }
 
 enum Built {
@@ -404,7 +419,7 @@ fn default_workspace(prefs: &Prefs) -> Result<PathBuf, String> {
 }
 
 fn backend(a: &Args, prefs: &mut Prefs) -> Result<(Built, bool), String> {
-    let op = operator(a);
+    let op = operator(a, prefs)?;
     Ok(match &a.source {
         Source::Demo => (
             Built::Demo(Rc::new(RefCell::new(DemoBackend::new()))),
@@ -520,7 +535,7 @@ fn main() -> ExitCode {
     if let Some(dir) = &args.screenshot {
         return screenshots(&args, dir, &built);
     }
-    match run_windowed(args.theme.unwrap_or(false), built.dynamic(), live, prefs) {
+    match run_windowed(args.theme, built.dynamic(), live, prefs) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             // R10: the windowing system is missing (no display, no X11 or Wayland session)
@@ -700,9 +715,10 @@ fn host(ui: &AppWindow, prefs: Prefs) -> Host {
 }
 
 /// Runs the window until it is closed; then every exam open is saved and closed (each writes
-/// its signed checkpoint).
+/// its signed checkpoint). `theme` is `--theme` (dark when true), which wins over the theme
+/// saved in Settings.
 fn run_windowed(
-    dark: bool,
+    theme: Option<bool>,
     backend: Rc<RefCell<dyn Backend>>,
     live: bool,
     prefs: Prefs,
@@ -710,9 +726,12 @@ fn run_windowed(
     let ui = AppWindow::new()?;
     // the Wayland app id and X11 class, matched by packaging/linux/mizan.desktop (its icon)
     let _ = slint::set_xdg_app_id("mizan");
-    ui.global::<Theme>().set_dark(dark);
     let shell = Shell::bind(&ui, backend.clone());
+    // the saved preferences apply first (the theme among them), the flags after
     shell.set_host(host(&ui, prefs));
+    if let Some(dark) = theme {
+        ui.global::<Theme>().set_dark(dark);
+    }
     if live {
         shell.navigate(Page::Scan);
     }
@@ -722,4 +741,48 @@ fn run_windowed(
         eprintln!("omr-desktop: not saved and closed properly: {e}");
     }
     ran
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operator_precedence() {
+        let name = |flag: Option<&str>,
+                    saved: Option<&str>,
+                    user: Option<&str>,
+                    username: Option<&str>| {
+            operator_principal(flag, saved, user.map(Into::into), username.map(Into::into))
+        };
+        let all = (
+            Some("Flag Name"),
+            Some("Saved Name"),
+            Some("user"),
+            Some("username"),
+        );
+        assert_eq!(
+            name(all.0, all.1, all.2, all.3).unwrap(),
+            "principal:Flag Name"
+        );
+        assert_eq!(
+            name(Some("principal:a11-instructor"), None, None, None).unwrap(),
+            "principal:a11-instructor",
+            "a principal is taken as its name"
+        );
+        assert_eq!(
+            name(None, all.1, all.2, all.3).unwrap(),
+            "principal:Saved Name"
+        );
+        assert_eq!(name(None, None, all.2, all.3).unwrap(), "principal:user");
+        assert_eq!(name(None, None, None, all.3).unwrap(), "principal:username");
+        assert_eq!(name(None, None, None, None).unwrap(), "principal:operator");
+        // a saved or system name that is no valid name is passed over; a bad flag is refused
+        assert_eq!(
+            name(None, Some("bad: name"), Some(""), all.3).unwrap(),
+            "principal:username"
+        );
+        let e = name(Some("a:b"), all.1, all.2, all.3).unwrap_err();
+        assert!(e.starts_with("--operator: ") && e.contains("colon"), "{e}");
+    }
 }

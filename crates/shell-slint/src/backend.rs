@@ -1807,6 +1807,16 @@ pub trait Backend {
         Vec::new()
     }
 
+    /// Sets the name recorded on every decision, key change and release from now on, in the
+    /// exams open now and those opened later (earlier events keep theirs). The core validates
+    /// it: returns what happened, or why the name was refused. The default refuses.
+    fn set_operator(&mut self, name: &str) -> Result<String, BackendError> {
+        let _ = name;
+        Err(BackendError::Denied(
+            "The demo records nothing: start omr-desktop without --demo to record your name".into(),
+        ))
+    }
+
     /// True when a new exam can be graded from the New-exam form (a workspace to grade into,
     /// and no other run in progress).
     fn can_create_exam(&self) -> bool {

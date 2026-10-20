@@ -581,6 +581,8 @@ impl Shell {
         } else {
             "Show folder"
         }));
+        let name = shell.backend.borrow().dashboard().user.name;
+        app.set_operator_name(ss(name));
         shell
     }
 
@@ -610,11 +612,25 @@ impl Shell {
     /// Hands the shell what the binary supplies from the operating system: file dialogs (the
     /// path fields then offer Browse…), the file manager, and the preferences with a way to
     /// save them. Without it every path field takes typed paths alone.
+    ///
+    /// The preferences saved last time apply now: the theme (when one was chosen), reduced
+    /// motion (when switched on here), one-key review and the blank-bubble overlays.
     pub fn set_host(&self, host: Host) {
         let ui = self.ui();
         let app = ui.global::<s::App>();
         app.set_can_browse(host.pick.is_some());
         app.set_can_reveal(host.reveal.is_some());
+        let p = &host.prefs;
+        let theme = ui.global::<s::Theme>();
+        if let Some(t) = &p.theme {
+            theme.set_dark(t == "dark");
+        }
+        if p.reduce_motion {
+            theme.set_reduce_motion(true);
+        }
+        self.st.borrow_mut().single_key = p.single_key;
+        app.set_single_key(p.single_key);
+        app.set_show_all_default(p.show_all_default);
         *self.host.borrow_mut() = host;
     }
 
@@ -872,21 +888,28 @@ impl Shell {
         let me = self.clone();
         app.on_refresh(move || me.refresh_folder());
         let me = self.clone();
+        app.on_set_operator(move |name| me.set_operator(&name));
+        // the settings apply at once and are saved for the next start
+        let me = self.clone();
         app.on_set_single_key(move |v| {
             me.st.borrow_mut().single_key = v;
             me.ui().global::<s::App>().set_single_key(v);
+            me.save_prefs(|p| p.single_key = v);
         });
-        let weak = ui.as_weak();
+        let me = self.clone();
+        app.on_set_show_all_default(move |v| {
+            me.ui().global::<s::App>().set_show_all_default(v);
+            me.save_prefs(|p| p.show_all_default = v);
+        });
+        let me = self.clone();
         app.on_set_dark(move |v| {
-            if let Some(ui) = weak.upgrade() {
-                ui.global::<s::Theme>().set_dark(v);
-            }
+            me.ui().global::<s::Theme>().set_dark(v);
+            me.save_prefs(|p| p.theme = Some(if v { "dark" } else { "light" }.into()));
         });
-        let weak = ui.as_weak();
+        let me = self.clone();
         app.on_set_reduce_motion(move |v| {
-            if let Some(ui) = weak.upgrade() {
-                ui.global::<s::Theme>().set_reduce_motion(v);
-            }
+            me.ui().global::<s::Theme>().set_reduce_motion(v);
+            me.save_prefs(|p| p.reduce_motion = v);
         });
 
         // exams
@@ -1558,6 +1581,21 @@ impl Shell {
                 format!("Cannot show the folder: {e}. It is {}", dir.display()),
                 s::Tone::Warning,
             ),
+        }
+    }
+
+    /// Records `name` on every decision from now on (Settings); saved for the next start.
+    fn set_operator(&self, name: &str) {
+        let r = self.backend.borrow_mut().set_operator(name);
+        match r {
+            Ok(what) => {
+                let shown = self.backend.borrow().dashboard().user.name;
+                self.save_prefs(|p| p.operator = Some(shown.clone()));
+                self.ui().global::<s::App>().set_operator_name(ss(&shown));
+                self.refresh_dashboard();
+                self.say(what, s::Tone::Success);
+            }
+            Err(e) => self.say(e.to_string(), s::Tone::Warning),
         }
     }
 

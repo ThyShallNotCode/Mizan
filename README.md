@@ -330,6 +330,8 @@ omr-desktop --demo                            # invented demo data, marked DEMO 
   proposal, Ctrl+Z undoes; F1 lists every key.
 - **Results** shows scores and grades; **Release results…** releases them and writes the
   Blackboard upload. **Outcomes** shows CLO attainment and the TP-154 tables.
+- **Settings** records your name in the audit trail (on every decision from then on), changes
+  or shows the exams folder, and keeps the theme and the review settings for the next start.
 - **From Remark Office OMR:** **Import from Remark export…** on the New exam form (or in Setup,
   to replace a graded exam's key) reads Remark's graded `.xlsx` exports and shows the import for
   review before anything changes; a refusal says what to do and can offer the suggested points.

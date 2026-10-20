@@ -58,7 +58,8 @@ export component ThemeToggle inherits IconButton {
     icon: Theme.dark ? Icons.sun : Icons.moon;
     label: Theme.dark ? "Light theme" : "Dark theme";
     clicked => {
-        Theme.dark = !Theme.dark;
+        // applied and saved by Rust (the next start opens in it)
+        App.set-dark(!Theme.dark);
         root.toggled();
     }
 }

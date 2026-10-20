@@ -27,7 +27,8 @@ cargo test -p shell-slint                                      # unit + A11 test
 `--options`, `--forms`, `--key`/`--infer-key`, `--roster`, `--clo`, `--title`, `--course`,
 `--term`, `--cancel-mode`, `--multi-review`, `--id-scheme`, `--threads`); `--out` defaults to a
 new folder named after the course and title below `--workspace` (or the current folder).
-`--operator` names the reviewer in the audit events (default `$USER`). Every failure prints what
+`--operator` names the reviewer in the audit events (default: the name saved in Settings, else
+`$USER`, else `USERNAME`), validated by `omr_app::app::operator_principal`. Every failure prints what
 to do (R10), a launch without a display included (run from a desktop session, or use
 `--screenshot`).
 
@@ -56,9 +57,11 @@ folder holding one exam opens the folder above it with that exam selected
 folder (`refresh_workspace`); an exam open here stays even if its folder is gone. The drawer's
 *Open exam folder*, Results' *Open exports folder* and Settings' folder button show a folder
 the backend names (`exam_folder`, `workspace_dir`) in the file manager, never a typed path or a
-file; every folder opened is saved in the preferences as the one to open next time. With
-`--project`, the exams folder is the folder above the exam's, so a new exam is graded beside
-it.
+file. Settings records the operator's name (`set_operator`: validated by omr-app, set on every
+open project), and every setting (the name, the theme, reduced motion, one-key review, the
+blank-bubble overlays, the exams folder) is saved in the preferences and applied at the next
+start (`--theme` wins over the saved theme). With `--project`, the exams folder is the folder
+above the exam's, so a new exam is graded beside it.
 Setup's *Replace key…* loads a key
 file (`ExamProject::replace_key`, a new key version, rescored); the key reads "Key vN · in
 force" or "· released", never "draft". Results' *Release results…* asks for confirmation and

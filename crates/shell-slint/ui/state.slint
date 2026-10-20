@@ -39,13 +39,18 @@ export global App {
     in property <string> reveal-label: "Show folder";
     // an exams folder is open (Settings shows it, with Change… and the file manager)
     in property <bool> has-workspace;
-    // settings
+    // settings: each applies at once and is saved for the next start
     in-out property <bool> single-key: true;
     in-out property <bool> show-all-default: false;
+    // the name recorded in the audit trail (Settings, the field shows it until saved)
+    in-out property <string> operator-name;
     callback navigate(Page);
     callback set-dark(bool);
     callback set-reduce-motion(bool);
     callback set-single-key(bool);
+    callback set-show-all-default(bool);
+    // validated by the core; recorded on every decision from now on
+    callback set-operator(string);
     // shows a folder in the system's file manager: "exam" (the current exam's folder),
     // "exports" (the same folder, where its exports are written) or "workspace"
     callback reveal(string);

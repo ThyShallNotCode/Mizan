@@ -113,7 +113,8 @@ expectation tied to the real exams out of the repository.
   - Exams folders: another folder (or one exam's folder) opened from the Exams screen or
     Settings, the folder read again (F5), the exams open saved and closed on a switch and when
     the window closes, an exam's folder and its exports shown in the file manager (Explorer,
-    `xdg-open`, `open`).
+    `xdg-open`, `open`). Settings keeps the operator's name (validated in `omr-app`, recorded
+    from then on), the theme and the review settings for the next start.
 
 **Deferred, with the spec section that owns each:**
 - The CNN/conformal stage of the cascade (§8.7 steps 3–6); the MVP uses calibrated classical features plus hysteresis.
@@ -186,7 +187,7 @@ expectation tied to the real exams out of the repository.
 - Parts of the exams folder (G-3 D3, D9): a menu of the recent folders (the preferences keep
   the last five); Explorer selecting the results file (`explorer /select`); opening a large
   folder reads every exam on the UI thread, twice (the listing and the dashboard row), not on
-  a worker with a progress line.
+  a worker with a progress line; the operator's role in the audit trail stays "Instructor".
 - Parts of cancelling a run (G-3 D7; built in `omr-app`: `Cancel` stops a new exam's grading
   or a survey before anything is stored):
   - a cancelled run keeps nothing and cannot be resumed (§22.4 keeps the completed pages and

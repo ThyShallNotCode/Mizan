@@ -1,5 +1,6 @@
-// Settings: theme, motion, the single-key shortcut switch (WCAG 2.1.4), the exams folder and
-// the review keymap.
+// Settings: the name recorded in the audit trail, theme, motion, the single-key shortcut switch
+// (WCAG 2.1.4), the exams folder and the review keymap. Each setting applies at once and is
+// saved for the next start (Rust saves them).
 
 import {
     Theme, Tone, Card, TopBar, StatusBar, StatusPill, Tag, Keycap, GirihDivider, SecondaryButton,
@@ -8,6 +9,7 @@ import {
 import { App } from "../state.slint";
 import {
     ThemeToggle, Centered, StatusText, Switch, Segment, SegmentGroup, SectionLabel, KVLine, MessageText,
+    TextField,
 } from "../widgets.slint";
 
 component KeyLine inherits HorizontalLayout {
@@ -89,7 +91,7 @@ export component SettingsScreen inherits VerticalLayout {
                             label: "Light theme setting";
                             selected: !Theme.dark;
                             clicked => {
-                                Theme.dark = false;
+                                App.set-dark(false);
                             }
                         }
                         Segment {
@@ -97,7 +99,7 @@ export component SettingsScreen inherits VerticalLayout {
                             label: "Dark theme setting";
                             selected: Theme.dark;
                             clicked => {
-                                Theme.dark = true;
+                                App.set-dark(true);
                             }
                         }
                     }
@@ -107,13 +109,45 @@ export component SettingsScreen inherits VerticalLayout {
                     description: "Every transition runs in 0 ms; also follows the OS preference";
                     checked: Theme.reduce-motion;
                     toggled(v) => {
-                        Theme.reduce-motion = v;
+                        App.set-reduce-motion(v);
                     }
                 }
             }
             Card {
                 title: "Review";
                 vertical-stretch: 0;
+                // the name recorded in the audit trail (saved, and kept for the next start)
+                VerticalLayout {
+                    spacing: Theme.space-xs;
+                    HorizontalLayout {
+                        spacing: Theme.space-sm;
+                        TextField {
+                            horizontal-stretch: 1;
+                            label: "Your name in the audit trail";
+                            placeholder: "Your name in the audit trail";
+                            text <=> App.operator-name;
+                            mono: false;
+                            accepted(v) => {
+                                App.set-operator(v);
+                            }
+                        }
+                        Centered {
+                            SecondaryButton {
+                                text: "Save";
+                                accessible-label: "Save your name";
+                                clicked => {
+                                    App.set-operator(App.operator-name);
+                                }
+                            }
+                        }
+                    }
+                    Text {
+                        text: "Your name, recorded on every decision from now on";
+                        font-size: Theme.text-xs;
+                        color: Theme.ink-2;
+                        wrap: word-wrap;
+                    }
+                }
                 Switch {
                     label: "Single-key shortcuts";
                     description: "Option letters, digits, / and +/− act only while the review canvas has focus; turn off to use Ctrl chords and arrows only";
@@ -127,7 +161,7 @@ export component SettingsScreen inherits VerticalLayout {
                     description: "By default only filled, ambiguous and unreadable bubbles get overlays";
                     checked: App.show-all-default;
                     toggled(v) => {
-                        App.show-all-default = v;
+                        App.set-show-all-default(v);
                     }
                 }
             }
