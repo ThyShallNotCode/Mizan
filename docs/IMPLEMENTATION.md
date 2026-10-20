@@ -115,8 +115,9 @@ expectation tied to the real exams out of the repository.
     the window closes, an exam's folder and its exports shown in the file manager (Explorer,
     `xdg-open`, `open`). Settings keeps the operator's name (validated in `omr-app`, recorded
     from then on), the theme and the review settings for the next start.
-  - After a run (G-3 D6, D7): grading and an added batch write the exports on their worker as
-    `omr grade` does (Settings: *Write exports after grading*, on by
+  - After a run (G-3 D6–D8): grading, an added batch and a roster given in Setup (step 4,
+    `ExamProject::set_roster` on a worker, the file read and checked first) write the exports
+    on their worker as `omr grade` does (Settings: *Write exports after grading*, on by
     default; a key read from key sheets holds them until it is confirmed), and a notice on
     every screen says how the run ended with its next steps (review, results, the exports
     folder, confirming or replacing the key, the card again). A new exam's grading is
@@ -193,8 +194,7 @@ expectation tied to the real exams out of the repository.
   - the IAU student-ID scheme accepts intake years up to 2030 only (§9.2).
 - Parts of the file dialogs (G-3 D2): drag-and-drop of files onto the window (it needs an
   unstable Slint feature and works on X11 and Windows only); a Folder… button for Remark's
-  workbooks (the import reads named files only: the dialog picks several); the roster bar in
-  Setup takes its Browse button with that step.
+  workbooks (the import reads named files only: the dialog picks several).
 - Parts of the end of a run (G-3 D6): Export… and Release… in Results still write on the UI
   thread (a worker needs the project closed and reopened, as an added batch does: a run kind
   of their own); Results does not say when the exports are older than the latest decisions;
@@ -214,8 +214,8 @@ expectation tied to the real exams out of the repository.
     same files again adds each page once (it keeps the stopped batch's ID), never refuses it;
   - `omr` sets no cancel on Ctrl+C: its exit code 130 is reserved for `AppError::Cancelled`,
     which only a caller holding the token raises (the desktop's *Cancel grading*);
-  - the desktop's Scan screen cancels a new exam's grading only; an added batch is cancelled
-    only by closing the window while it runs (it ends as described above).
+  - the desktop's Scan screen cancels a new exam's grading only; an added batch or a roster
+    run is cancelled only by closing the window while it runs (it ends as described above).
 - Parts of a roster after grading (G-3 D8; built in `omr-app`: `ExamProject::set_roster`
   identifies a graded exam again against a roster given later, or a replacing one):
   - the exam row's `identity_mode` stays the mode the exam was created with (`candidate_number`

@@ -34,6 +34,8 @@ pub enum PickTarget {
     SetupKey,
     SetupKeySheets,
     SetupClo,
+    /// Setup: the roster given to a graded exam.
+    SetupRoster,
     /// Scan: a later batch of scan files, or a folder of them.
     AddScans,
     AddScanFolder,
@@ -51,7 +53,7 @@ pub enum PickTarget {
 const SCANS: &[&str] = omr_app::ingest::EXTENSIONS;
 
 impl PickTarget {
-    pub const ALL: [PickTarget; 18] = [
+    pub const ALL: [PickTarget; 19] = [
         PickTarget::NewScans,
         PickTarget::NewScanFolder,
         PickTarget::NewKey,
@@ -63,6 +65,7 @@ impl PickTarget {
         PickTarget::SetupKey,
         PickTarget::SetupKeySheets,
         PickTarget::SetupClo,
+        PickTarget::SetupRoster,
         PickTarget::AddScans,
         PickTarget::AddScanFolder,
         PickTarget::RemarkBooks,
@@ -86,6 +89,7 @@ impl PickTarget {
             PickTarget::SetupKey => "setup-key",
             PickTarget::SetupKeySheets => "setup-key-sheets",
             PickTarget::SetupClo => "setup-clo",
+            PickTarget::SetupRoster => "setup-roster",
             PickTarget::AddScans => "add-scans",
             PickTarget::AddScanFolder => "add-scan-folder",
             PickTarget::RemarkBooks => "remark-books",
@@ -143,6 +147,7 @@ impl PickTarget {
             | PickTarget::NewSpec
             | PickTarget::SetupKey
             | PickTarget::SetupClo
+            | PickTarget::SetupRoster
             | PickTarget::RemarkPoints => PickKind::File,
         }
     }
@@ -156,7 +161,7 @@ impl PickTarget {
             PickTarget::NewKeySheets | PickTarget::SetupKeySheets => {
                 "Choose the scans of the filled key sheets"
             }
-            PickTarget::NewRoster => "Choose the roster",
+            PickTarget::NewRoster | PickTarget::SetupRoster => "Choose the roster",
             PickTarget::NewClo | PickTarget::SetupClo => "Choose the CLO mapping file",
             PickTarget::NewSpec => "Choose the spec file of your sheet",
             PickTarget::NewOut => "Choose the folder for the new exam",
@@ -188,7 +193,9 @@ impl PickTarget {
             PickTarget::NewKey | PickTarget::SetupKey => {
                 vec![one("Key file", &["csv", "tsv", "txt"]), all]
             }
-            PickTarget::NewRoster => vec![one("Roster", &["csv", "xlsx"]), all],
+            PickTarget::NewRoster | PickTarget::SetupRoster => {
+                vec![one("Roster", &["csv", "xlsx"]), all]
+            }
             PickTarget::NewClo | PickTarget::SetupClo => vec![one("CLO file", &["csv"]), all],
             PickTarget::NewSpec => vec![one("Sheet spec", &["json"]), all],
             // only the graded exports: Remark's own files are never opened

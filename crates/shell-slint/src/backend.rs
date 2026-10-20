@@ -1806,6 +1806,8 @@ pub enum JobOutcome {
     Graded,
     /// A later batch of scans added to a graded exam.
     Added,
+    /// A roster given to a graded exam.
+    Roster,
     Failed,
     /// Cancelled by the operator: a new exam stored nothing.
     Cancelled,
@@ -2339,14 +2341,14 @@ pub trait Backend {
         ))
     }
 
-    /// Writes the exports when a grading run or an added batch ends, as `omr grade`
+    /// Writes the exports when a grading run, an added batch or a roster ends, as `omr grade`
     /// does (Settings; on unless switched off). The default writes none.
     fn set_auto_export(&mut self, on: bool) {
         let _ = on;
     }
 
-    /// How the last background run ended (graded, scans added, failed or cancelled), once:
-    /// the completion notice. `None` while it runs, after it was handed
+    /// How the last background run ended (graded, scans added, roster given, failed or
+    /// cancelled), once: the completion notice. `None` while it runs, after it was handed
     /// over, and for a backend without background runs.
     fn take_completed(&mut self) -> Option<JobDone> {
         None
@@ -2371,6 +2373,28 @@ pub trait Backend {
     /// happened. The default has nothing to cancel.
     fn cancel_job(&mut self) -> Result<String, BackendError> {
         Err(BackendError::Invalid("Nothing is being graded".into()))
+    }
+
+    /// True when a roster can be given to `exam` now ([`Backend::set_roster`]).
+    fn can_set_roster(&self, exam: &ExamId) -> bool {
+        let _ = exam;
+        false
+    }
+
+    /// Gives `exam` the roster in the file `path` (or replaces its roster): the file is read
+    /// and checked first (a refused roster changes nothing), then every booklet is identified
+    /// again in the background, review decisions carried over; progress and the end arrive
+    /// through [`Backend::pump`] as for an added batch. Returns what was started. The default
+    /// refuses.
+    fn set_roster(
+        &mut self,
+        exam: &ExamId,
+        path: &std::path::Path,
+    ) -> Result<String, BackendError> {
+        let _ = (exam, path);
+        Err(BackendError::Denied(
+            "The demo records nothing: start omr-desktop without --demo to add a roster".into(),
+        ))
     }
 
     // ---- live updates

@@ -2340,3 +2340,161 @@ fn closing_the_window_while_grading_asks_and_cancels() {
     assert!(!ui.window().is_visible(), "closed once the run stopped");
     assert!(!w.ws.join("cs-213-quiz-1").exists(), "nothing half-saved");
 }
+
+// ------------------------------------------------------------------ roster after grading (D8)
+
+/// The roster CSV of the synthetic exam `spec` (`sheets + 2` students, two absent), with a
+/// student listed twice when `duplicate`.
+fn roster_file(spec: &synth::Spec, path: &Path, duplicate: bool) {
+    let mut csv = "student_id,name,section\n".to_string();
+    let rows = synth::roster(spec);
+    for r in &rows {
+        csv.push_str(&format!("{},{},{}\n", r.id, r.name, r.section));
+    }
+    if duplicate {
+        csv.push_str(&format!("{},Someone Else,171\n", rows[0].id));
+    }
+    std::fs::write(path, csv).expect("roster file");
+}
+
+/// D8: Setup's step 4 Roster opens the roster bar; the roster chosen in the dialog is checked,
+/// then every booklet is matched again in the background, as a run on the Scan screen; when it
+/// ends the exam has its roster, the step is done and the notice says what was matched.
+#[test]
+fn setup_roster_step_adds_a_roster_in_the_background() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let ws = exams_folder(&dir.path().join("exams"), &[&QUIZ_1]);
+    let roster = dir.path().join("roster.csv");
+    roster_file(&QUIZ_1, &roster, false);
+    let (h, held, host) = window_on(&ws);
+    let ui = &h.ui;
+    let su = ui.global::<SetupVM>();
+    click(ui, &tab(ui, "Setup"));
+    assert!(!su.get_has_roster());
+    let step = one(ui, "4 Roster, warnings");
+    assert!(
+        step.accessible_description()
+            .unwrap_or_default()
+            .starts_with("No roster"),
+        "{:?}",
+        step.accessible_description()
+    );
+    click(ui, &step);
+    assert!(su.get_roster_open());
+    smallest_window(ui);
+    for l in [
+        "4 Roster, warnings",
+        "Roster file",
+        "Browse for Roster file",
+        "Add roster and match students",
+        "Replace key…",
+    ] {
+        fits(ui, l);
+    }
+    host.will_pick(&[&roster]);
+    press(ui, "Browse for Roster file");
+    let req = host.last_request();
+    assert_eq!(
+        (req.target, req.kind),
+        (PickTarget::SetupRoster, PickKind::File)
+    );
+    assert_eq!(
+        req.filters[0],
+        ("Roster".to_string(), texts(&["csv", "xlsx"]))
+    );
+    assert_eq!(su.get_roster_path(), roster.to_str().unwrap());
+    press(ui, "Add roster and match students");
+    assert!(
+        message(ui).starts_with("Adding the roster (8 students)"),
+        "{}",
+        message(ui)
+    );
+    assert_eq!(ui.global::<App>().get_page(), shell_slint::ui::Page::Scan);
+    assert!(h.app.borrow().grading_in_progress());
+    assert!(
+        ui.global::<ScanVM>()
+            .get_batch_label()
+            .ends_with("matching students to the roster"),
+        "{}",
+        ui.global::<ScanVM>().get_batch_label()
+    );
+    assert!(
+        by_label(ui, "Cancel grading…").is_empty(),
+        "a graded exam's run"
+    );
+    run_held(&h, &held);
+
+    let exam = h.app.borrow().default_exam().expect("the exam");
+    let (students, matched) = h
+        .app
+        .borrow()
+        .with_project(&exam, |p| {
+            (
+                p.session.definition.roster.as_ref().map_or(0, Vec::len),
+                p.session
+                    .booklets
+                    .iter()
+                    .filter(|b| b.student().is_some())
+                    .count(),
+            )
+        })
+        .expect("reopened");
+    assert_eq!(students, 8);
+    assert!(matched >= 4, "{matched} booklets matched");
+    let (title, text, steps) = notice(ui);
+    assert_eq!(title, "Roster added to CS 213 Quiz 1");
+    assert!(
+        text.starts_with(&format!(
+            "8 students on the roster · {matched} booklets matched · "
+        )),
+        "{text}"
+    );
+    assert!(text.contains("exports in "), "{text}");
+    assert!(steps.contains(&"Open results".to_string()), "{steps:?}");
+    // the step is done
+    click(ui, &tab(ui, "Setup"));
+    assert!(su.get_has_roster());
+    let step = one(ui, "4 Roster, done");
+    assert!(
+        step.accessible_description()
+            .unwrap_or_default()
+            .starts_with("Roster: 8 students"),
+        "{:?}",
+        step.accessible_description()
+    );
+}
+
+/// D8: a roster the core refuses (a student number listed twice) is refused at once, in the
+/// status line, with nothing started and the exam as it was; the bar stays open to fix it.
+#[test]
+fn a_refused_roster_changes_nothing() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let ws = exams_folder(&dir.path().join("exams"), &[&QUIZ_1]);
+    let roster = dir.path().join("roster.csv");
+    roster_file(&QUIZ_1, &roster, true);
+    let (h, held, _host) = window_on(&ws);
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Setup"));
+    press(ui, "4 Roster, warnings");
+    type_into(ui, "Roster file", roster.to_str().unwrap());
+    press(ui, "Add roster and match students");
+    let msg = message(ui);
+    assert!(
+        msg.starts_with("roster refused") && msg.contains("appears 2 times"),
+        "{msg}"
+    );
+    assert!(held.borrow().is_empty(), "nothing started");
+    assert!(!h.app.borrow().grading_in_progress());
+    assert_eq!(ui.global::<App>().get_page(), shell_slint::ui::Page::Setup);
+    assert!(
+        ui.global::<SetupVM>().get_roster_open(),
+        "the bar stays to fix it"
+    );
+    let exam = h.app.borrow().default_exam().expect("the exam");
+    let roster_now = h
+        .app
+        .borrow()
+        .with_project(&exam, |p| p.session.definition.roster.is_some())
+        .expect("still open");
+    assert!(!roster_now);
+}

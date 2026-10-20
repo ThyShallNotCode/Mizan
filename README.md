@@ -322,7 +322,7 @@ omr-desktop --demo                            # invented demo data, marked DEMO 
   key is given, the card asks, with one-click answers (a key inferred from the answers is used
   only if you choose it, and cannot be released); **Grade exam** waits until nothing is left
   to answer and grades exactly what the card shows.
-- When grading ends (or added scans), the exports are written into the exam's
+- When grading ends (or added scans, or a roster), the exports are written into the exam's
   folder as `omr grade` writes them (Settings › **Write exports after grading**; a key read from
   key sheets holds them until you confirm it), and a notice on every screen says how it went,
   with the next step: **Review N items**, **Open results**, **Open exports folder**, **Confirm
@@ -339,7 +339,9 @@ omr-desktop --demo                            # invented demo data, marked DEMO 
 - **Setup** shows the key, versions and CLO mapping; **Replace key…** loads the real key from
   a file and rescores; **Read key from answer sheet…** reads the instructor's key sheets, shows
   the key summary and, once you confirm, adds them to the exam (stored and audited like key
-  sheets graded with it). New exam also takes key sheets.
+  sheets graded with it). New exam also takes key sheets. Step **4 Roster** adds a roster to
+  an exam graded without one (or replaces it): every student is matched again in the
+  background and your review decisions carry over.
 - **Scan** follows grading live; **Add scans…** adds a later batch.
 - **Review** is keyboard-first: the number or letter keys choose an answer, Enter accepts the
   proposal, Ctrl+Z undoes; F1 lists every key.

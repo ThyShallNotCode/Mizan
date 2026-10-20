@@ -56,8 +56,8 @@ checked or not checked, an open question); `create_exam` grades the proposal's `
 exactly (with each value's provenance) into the proposal's folder, and refuses a form changed
 since the card was shown (the card is proposed again first). The demo shows an invented card.
 The Scan screen follows the run and the exam opens when it finishes. Each worker (a new exam,
-added scans) writes the exports when its run ends, as `omr grade` does
-(`GradeRequest`/`AppendRequest::export_to`, from Settings' *Write exports after
+added scans, a roster) writes the exports when its run ends, as `omr grade` does
+(`GradeRequest`/`AppendRequest`/`RosterRequest::export_to`, from Settings' *Write exports after
 grading*, `Backend::set_auto_export`; a key read from key sheets holds them until it is
 confirmed), and reports how it ended once (`Backend::take_completed`, a `JobDone`): a notice
 floats above the status bar of every screen with what happened, what waits and the next steps
@@ -67,8 +67,12 @@ another screen. A new exam being graded is cancelled from the Scan screen (*Canc
 then the confirmation; `cancel_job` sets the run's `omr_app::Cancel`): nothing is saved, no
 folder is left, and *Edit and grade again* refills the card. Closing the window while a run
 is in progress asks first (`Shell::close_requested`, wired to the window's close request):
-kept, it runs on; cancelled, the window closes once the run has stopped. Every path field
-(`PathField`) has *Browse…* beside it, and *Folder…* for scans, when the window has file dialogs: the binary hands
+kept, it runs on; cancelled, the window closes once the run has stopped. Setup's step *4
+Roster* opens the roster bar: `set_roster` reads and checks the file on the UI thread
+(`define::read_roster_path`, a dry `import_roster`), then `run_set_roster` identifies every
+booklet again on the spawner (`ExamProject::set_roster`, decisions carried over) as a run the
+Scan screen follows. Every path field (`PathField`) has
+*Browse…* beside it, and *Folder…* for scans, when the window has file dialogs: the binary hands
 the shell a `host::Host` (`Shell::set_host`) with native dialogs (`rfd`, parented to the
 window), the file manager and the preferences; the library only describes each dialog
 (`PickRequest`: kind, title, filters, the folder it opens in). Paths a dialog picked are used

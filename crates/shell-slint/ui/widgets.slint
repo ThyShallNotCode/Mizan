@@ -286,6 +286,61 @@ export component StepIndicator inherits HorizontalLayout {
 }
 
 // Status bar text helpers.
+// A step of a stepper that opens what the step needs (the roster bar): a button that reads as
+// its step ("4 Roster, warnings").
+export component StepButton inherits Rectangle {
+    in property <int> number;
+    in property <string> text;
+    in property <int> state;
+    in property <bool> compact;
+    in property <string> description;
+    in property <bool> active;
+    callback clicked();
+    border-radius: Theme.radius-sm;
+    background: root.active ? Theme.surface-pressed : ta.has-hover ? Theme.surface-hover : transparent;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.number + " " + root.text + (root.state == 1 ? ", done" : root.state == 2 ? ", warnings" : ", to do");
+    accessible-description: root.description;
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            fs.focus();
+            root.clicked();
+        }
+    }
+    fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    HorizontalLayout {
+        padding-left: Theme.space-xs;
+        padding-right: Theme.space-xs;
+        StepIndicator {
+            number: root.number;
+            text: root.text;
+            state: root.state;
+            compact: root.compact;
+            // the button reads as the step
+            accessible-role: none;
+            accessible-label: "";
+        }
+    }
+    FocusRing {
+        active: fs.has-focus;
+        corner: Theme.radius-sm;
+    }
+}
+
 export component StatusText inherits Text {
     in property <bool> mono;
     font-family: root.mono ? Theme.font-mono : Theme.font-sans;

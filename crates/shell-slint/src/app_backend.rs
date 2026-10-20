@@ -12,12 +12,13 @@
 //! does both); [`Backend::pump`] drains the worker's [`JobEvent`]s without blocking. Adding a
 //! later batch to an open exam runs [`run_append`] on a thread the binary's [`Spawn`] starts:
 //! the project is saved and closed on the UI thread, regraded with the new scans on the worker
-//! and reopened when the worker reports. Each worker writes the exports when its run ends, as
+//! and reopened when the worker reports. A roster given to a graded exam runs
+//! [`run_set_roster`] the same way. Each worker writes the exports when its run ends, as
 //! `omr grade` and `omr add` do, and a run can be cancelled through its [`Cancel`] token.
 
 use crate::backend::{self as b, Backend, BackendError, ExamId, ItemId};
 use omr_app::define::Sheet;
-use omr_app::exam::{DomainLetter, ExamDefinition};
+use omr_app::exam::{DomainLetter, ExamDefinition, RosterStudent};
 use omr_app::model::{PageStatus, ResponseStatus};
 use omr_app::propose::{Answer, ChoiceAction, Context, FieldId, Given, Proposal, RecentExam};
 use omr_app::review::{
@@ -52,7 +53,7 @@ pub enum JobEvent {
     Progress(Progress),
     /// A line for the batch activity log.
     Note(String),
-    /// What the run changed, in one line (an added batch): logged, and said again
+    /// What the run changed, in one line (an added batch, a roster): logged, and said again
     /// when the run ends.
     Summary(String),
     /// What became of the exports the run writes when it ends: written, or why not (the key
@@ -201,6 +202,57 @@ pub fn run_append(req: AppendRequest, tx: Sender<JobEvent>) {
             }
             let closed = p.close();
             match (added, closed) {
+                (Err(AppError::Cancelled), _) => {
+                    let _ = tx.send(JobEvent::Cancelled);
+                    return;
+                }
+                (Ok(_), Ok(())) => Ok(req.project.clone()),
+                (Err(e), _) | (Ok(_), Err(e)) => Err(fail(e)),
+            }
+        }
+    };
+    let _ = tx.send(JobEvent::Finished(outcome));
+}
+
+/// A roster to give to a graded exam: its project package, the roster's rows (read and checked
+/// on the UI thread first) and the pipeline options (`threads`, `operator`, `cancel`).
+#[derive(Debug, Clone)]
+pub struct RosterRequest {
+    pub project: PathBuf,
+    pub rows: Vec<RosterStudent>,
+    pub options: GradeOptions,
+    /// Where the exports are written when the run ends (`None`: not written).
+    pub export_to: Option<PathBuf>,
+}
+
+/// The body of a roster worker thread: opens the project, identifies every booklet again
+/// against the roster ([`ExamProject::set_roster`]), writes the exports (`export_to`), saves and
+/// closes it, and reports progress, a summary line and the outcome on `tx`. A refused roster
+/// leaves the exam as it was: the shell reopens it either way.
+pub fn run_set_roster(req: RosterRequest, tx: Sender<JobEvent>) {
+    let progress_tx = tx.clone();
+    let progress = move |p: &Progress| {
+        let _ = progress_tx.send(JobEvent::Progress(p.clone()));
+    };
+    let fail = |e: AppError| {
+        format!(
+            "{e} (exit code {}). The exam is as it was: no roster was added",
+            e.exit_code()
+        )
+    };
+    let outcome = match ExamProject::open(&req.project, &req.options.operator) {
+        Err(e) => Err(fail(e)),
+        Ok(mut p) => {
+            let set = p.set_roster(req.rows, &req.options, &progress);
+            if let Ok(r) = &set {
+                let _ = tx.send(JobEvent::Summary(roster_summary(r)));
+                for w in &r.warnings {
+                    let _ = tx.send(JobEvent::Note(format!("roster: {w}")));
+                }
+                export_after(&mut p, req.export_to.as_deref(), &tx);
+            }
+            let closed = p.close();
+            match (set, closed) {
                 (Err(AppError::Cancelled), _) => {
                     let _ = tx.send(JobEvent::Cancelled);
                     return;
@@ -377,6 +429,26 @@ fn append_summary(r: &omr_app::append::AppendReport) -> String {
     parts.join(" · ")
 }
 
+/// "142 students on the roster · 138 booklets matched · 4 not on the roster · 6 absent · 3
+/// decisions kept".
+fn roster_summary(r: &omr_app::append::RosterReport) -> String {
+    let mut parts = vec![
+        format!("{} on the roster", plural(r.students, "student")),
+        format!("{} matched", plural(r.matched, "booklet")),
+        format!("{} not on the roster", r.not_on_roster),
+        format!("{} absent", r.absent),
+        format!(
+            "{} decision{} kept",
+            r.carried_over,
+            if r.carried_over == 1 { "" } else { "s" }
+        ),
+    ];
+    if r.conflicts > 0 {
+        parts.push(format!("{} reread differently (SYS-032)", r.conflicts));
+    }
+    parts.join(" · ")
+}
+
 fn plural(n: usize, word: &str) -> String {
     format!("{n} {word}{}", if n == 1 { "" } else { "s" })
 }
@@ -387,6 +459,9 @@ enum JobKind {
     Grade { definition: Box<ExamDefinition> },
     /// A later batch added to an existing project, reopened from `project` when done.
     Append { project: PathBuf, batch: u32 },
+    /// A roster given to an existing project (every booklet identified again, as a new batch
+    /// of the same scans), reopened from `project` when done.
+    Roster { project: PathBuf, batch: u32 },
 }
 
 struct Job {
@@ -403,7 +478,7 @@ struct Job {
     cancel: Cancel,
     /// What became of the exports written when the run ended (`None`: none were asked for).
     exports: Option<Result<Exported, String>>,
-    /// The run's summary line (an added batch), for the completion notice.
+    /// The run's summary line (an added batch, a roster), for the completion notice.
     summary: Option<String>,
     /// The run ended cancelled.
     cancelled: bool,
@@ -430,9 +505,10 @@ impl Job {
         self.outcome.is_none()
     }
 
-    /// The run holds an existing project (closed here until it reports): an added batch.
+    /// The run holds an existing project (closed here until it reports): an added batch or a
+    /// roster.
     fn is_append(&self) -> bool {
-        matches!(self.kind, JobKind::Append { .. })
+        matches!(self.kind, JobKind::Append { .. } | JobKind::Roster { .. })
     }
 
     fn sheet_counts(&self) -> b::SheetCounts {
@@ -1111,7 +1187,7 @@ impl AppBackend {
         };
         match &j.kind {
             JobKind::Grade { definition } => named(&definition.course_code, &definition.title),
-            JobKind::Append { .. } => self
+            JobKind::Append { .. } | JobKind::Roster { .. } => self
                 .entries
                 .iter()
                 .find(|e| e.id == j.exam)
@@ -1646,6 +1722,9 @@ impl AppBackend {
                         JobKind::Append { .. } => {
                             "cancelled: the exam's results are as they were; nothing was added"
                         }
+                        JobKind::Roster { .. } => {
+                            "cancelled: the exam is as it was; no roster was added"
+                        }
                     }
                     .to_string()));
                     break;
@@ -1678,10 +1757,12 @@ impl AppBackend {
         }
         job.outcome = Some(r.clone());
         job.cancelled = cancelled;
-        // a new project opens on success; an added batch reopens its project either way (a
-        // refused or cancelled batch leaves the exam as it was)
+        // a new project opens on success; an added batch or a roster reopens its project
+        // either way (a refused or cancelled run leaves the exam as it was)
         let dir = match (&job.kind, r) {
-            (JobKind::Append { project, .. }, _) => Some(project.clone()),
+            (JobKind::Append { project, .. } | JobKind::Roster { project, .. }, _) => {
+                Some(project.clone())
+            }
             (JobKind::Grade { .. }, Ok(dir)) => Some(dir),
             (JobKind::Grade { .. }, Err(_)) => None,
         };
@@ -1762,6 +1843,11 @@ impl AppBackend {
                         .to_string(),
                     vec![S::ScanLog],
                 ),
+                JobKind::Roster { .. } => (
+                    format!("The roster of {name} was not added"),
+                    "Cancelled: the exam is as it was.".to_string(),
+                    vec![S::ScanLog],
+                ),
             };
             return Some(done(
                 b::JobOutcome::Cancelled,
@@ -1776,6 +1862,7 @@ impl AppBackend {
             let title = match j.kind {
                 JobKind::Grade { .. } => format!("Grading {name} failed"),
                 JobKind::Append { .. } => format!("Adding scans to {name} failed"),
+                JobKind::Roster { .. } => format!("The roster of {name} was not added"),
             };
             let steps = if new_exam {
                 vec![S::GradeAgain, S::ScanLog]
@@ -1833,6 +1920,7 @@ impl AppBackend {
             JobKind::Grade { .. } if held => (b::JobOutcome::Graded, format!("{name} is read")),
             JobKind::Grade { .. } => (b::JobOutcome::Graded, format!("{name} is graded")),
             JobKind::Append { .. } => (b::JobOutcome::Added, format!("Scans added to {name}")),
+            JobKind::Roster { .. } => (b::JobOutcome::Roster, format!("Roster added to {name}")),
         };
         match &j.summary {
             Some(line) => parts.push(line.clone()),
@@ -1950,8 +2038,8 @@ impl AppBackend {
         ))
     }
 
-    /// Saves and closes `exam`'s project for a worker that grades it again (an added batch),
-    /// once `check` accepts it: returns its package, the number of the batch the run
+    /// Saves and closes `exam`'s project for a worker that grades it again (an added batch, a
+    /// roster), once `check` accepts it: returns its package, the number of the batch the run
     /// adds and the threads it was graded on. A project that cannot be closed is reopened as it
     /// was.
     fn close_for_worker(
@@ -1978,6 +2066,77 @@ impl AppBackend {
             return Err(app_err(e));
         }
         Ok((project, batch, threads))
+    }
+
+    /// Starts giving `exam` the roster in `path` (see [`Backend::set_roster`]).
+    fn start_roster(&mut self, exam: &ExamId, path: &Path) -> Result<String, BackendError> {
+        if let Some(j) = self.job.as_ref().filter(|j| j.running()) {
+            return Err(BackendError::Denied(format!(
+                "{} is being graded: add the roster when the Scan screen says it is complete",
+                self.job_name(j)
+            )));
+        }
+        if self.spawn.is_none() {
+            return Err(BackendError::Denied(
+                "This window cannot start background work".into(),
+            ));
+        }
+        // read and checked here first, as the run imports it: a refused roster changes nothing
+        let rows = omr_app::define::read_roster_path(path).map_err(app_err)?;
+        let (project, batch, threads) = self.close_for_worker(exam, |p| {
+            if p.session.key_unconfirmed() {
+                return Err(BackendError::Invalid(
+                    "The key read from the key sheets waits for your confirmation: confirm it in \
+                     Setup (Forms and key), then add the roster"
+                        .into(),
+                ));
+            }
+            let mut def = p.session.definition.clone();
+            def.import_roster(rows.clone()).map_err(app_err)?;
+            Ok(())
+        })?;
+        let students = rows.len();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = Cancel::default();
+        let req = RosterRequest {
+            project: project.clone(),
+            rows,
+            options: GradeOptions {
+                threads,
+                project_dir: None,
+                snapshot_utc: None,
+                operator: self.operator.clone(),
+                max_pages: None,
+                cancel: cancel.clone(),
+            },
+            export_to: self
+                .auto_export
+                .then(|| project.parent().map(Path::to_path_buf))
+                .flatten(),
+        };
+        let started = (self.spawn.as_ref().expect("checked above"))(Box::new(move || {
+            run_set_roster(req, tx)
+        }));
+        if let Err(e) = started {
+            self.with(exam, |_| ());
+            return Err(BackendError::Denied(format!(
+                "Cannot start the grading worker ({e}); no roster was added. Close other \
+                 programs and try again"
+            )));
+        }
+        let now = snapshot_label(&omr_app::pipeline::now_utc());
+        let mut job = Job::new(exam.clone(), JobKind::Roster { project, batch }, rx, cancel);
+        job.activity.push(format!(
+            "{now} · batch-{batch} · roster {} ({}): every booklet is matched again",
+            file_label(path),
+            plural(students, "student")
+        ));
+        self.job = Some(job);
+        Ok(format!(
+            "Adding the roster ({}): every booklet's student number is matched again in the \
+             background; your review decisions carry over",
+            plural(students, "student")
+        ))
     }
 
     /// Lists the exams below `dir` in place of the folder open (see
@@ -3963,8 +4122,9 @@ impl Opened {
                 )
             } else if def.roster.is_none() {
                 Some(
-                    "No roster: results without a roster are never pushed. Grade the exam again \
-                     with a roster (New exam, Roster file)"
+                    "No roster: results without a roster are never pushed. Add the roster in \
+                     Setup (step 4, Roster): every student is matched again, your decisions \
+                     carry over"
                         .into(),
                 )
             } else if self.p.scoring.as_ref().is_none_or(|sc| sc.run.is_err()) {
@@ -4293,12 +4453,15 @@ fn job_batch(j: &Job, opened: Option<&Opened>) -> b::BatchProgress {
     let failed = matches!(j.outcome, Some(Err(_)));
     let n = match j.kind {
         JobKind::Grade { .. } => 1,
-        JobKind::Append { batch, .. } => batch,
+        JobKind::Append { batch, .. } | JobKind::Roster { batch, .. } => batch,
     };
     b::BatchProgress {
         exam: j.exam.clone(),
         batch_label: match (&j.outcome, &j.kind) {
             (None, JobKind::Append { .. }) => format!("Batch {n} of {n} · adding scans"),
+            (None, JobKind::Roster { .. }) => {
+                format!("Batch {n} of {n} · matching students to the roster")
+            }
             (None, _) => format!("Batch {n} of {n}"),
             (Some(Ok(_)), _) => format!("Batch {n} of {n} · complete"),
             (Some(Err(_)), _) if j.cancelled => format!("Batch {n} of {n} · cancelled"),
@@ -6275,6 +6438,7 @@ impl Backend for AppBackend {
         Some(match j.kind {
             JobKind::Grade { .. } => format!("{name} is being graded"),
             JobKind::Append { .. } => format!("Scans are being added to {name}"),
+            JobKind::Roster { .. } => format!("The roster of {name} is being matched"),
         })
     }
 
@@ -6304,6 +6468,16 @@ impl Backend for AppBackend {
             _ => "Cancelling: the run stops after the pages being read; the exam stays as it was",
         }
         .into())
+    }
+
+    fn can_set_roster(&self, exam: &ExamId) -> bool {
+        self.spawn.is_some()
+            && !self.job.as_ref().is_some_and(Job::running)
+            && self.with(exam, |o| o.read_only.is_none()).unwrap_or(false)
+    }
+
+    fn set_roster(&mut self, exam: &ExamId, path: &Path) -> Result<String, BackendError> {
+        self.start_roster(exam, path)
     }
 
     fn pump(&mut self) -> bool {

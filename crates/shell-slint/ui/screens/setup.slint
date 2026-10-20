@@ -11,7 +11,7 @@ import {
 } from "remark.slint";
 import {
     Icons, ThemeToggle, Centered, SectionLabel, StatusText, KVLine, EditCell, StepIndicator,
-    EmptyState, NoExamState, MessageText, PathField, Segment, SegmentGroup,
+    StepButton, EmptyState, NoExamState, MessageText, PathField, Segment, SegmentGroup,
 } from "../widgets.slint";
 import { ListView, ScrollView } from "std-widgets.slint";
 
@@ -251,6 +251,7 @@ component MatrixCard inherits Card {
                     accessible-description: "Reads the key from the instructor's filled answer sheets and shows it for your confirmation";
                     clicked => {
                         SetupVM.key-open = false;
+                        SetupVM.roster-open = false;
                         SetupVM.ks-bar-open = !SetupVM.ks-bar-open;
                     }
                 }
@@ -674,6 +675,81 @@ component KeyBar inherits Rectangle {
     }
 }
 
+
+// A roster for the graded exam (§9.1, §9.6): every booklet's student number is matched again in
+// the background and the review decisions carry over. The Blackboard upload needs one.
+component RosterBar inherits Rectangle {
+    background: Theme.surface-raised;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    init => {
+        field.focus();
+    }
+    FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                SetupVM.roster-open = false;
+                return accept;
+            }
+            return reject;
+        }
+        VerticalLayout {
+            padding-left: Theme.space-xl;
+            padding-right: Theme.space-xl;
+            padding-top: Theme.space-sm;
+            padding-bottom: Theme.space-sm;
+            spacing: Theme.space-xs;
+            HorizontalLayout {
+                spacing: Theme.space-md;
+                Text {
+                    text: "Roster";
+                    font-size: Theme.text-md;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                }
+                field := PathField {
+                    horizontal-stretch: 1;
+                    label: "Roster file";
+                    placeholder: "The class list, CSV or Excel: a student-number column, and names and sections";
+                    text <=> SetupVM.roster-path;
+                    target: "setup-roster";
+                    enabled: SetupVM.can-set-roster;
+                    accepted(v) => {
+                        if (SetupVM.can-set-roster && v != "") {
+                            SetupVM.set-roster(v);
+                        }
+                    }
+                }
+                Centered {
+                    PrimaryButton {
+                        text: "Add roster and match students";
+                        key-hint: "Enter";
+                        enabled: SetupVM.can-set-roster && SetupVM.roster-path != "";
+                        accessible-description: "Every booklet's student number is matched again in the background; your review decisions carry over";
+                        clicked => {
+                            SetupVM.set-roster(SetupVM.roster-path);
+                        }
+                    }
+                }
+                Centered {
+                    GhostButton {
+                        text: "Cancel";
+                        clicked => {
+                            SetupVM.roster-open = false;
+                        }
+                    }
+                }
+            }
+            Text {
+                text: SetupVM.roster-status + ". Every booklet's student number is matched again and your review decisions carry over; it takes about as long as grading.";
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
 
 // Read the key from the instructor's filled answer sheets (§10.1): key-sheet files, read by the
 // same recognizer as the students' sheets and shown for confirmation; nothing changes until then.
@@ -1210,12 +1286,27 @@ export component SetupScreen inherits VerticalLayout {
                 compact: root.compact-bar;
                 state: !SetupVM.available ? 0 : SetupVM.lints.length > 0 || SetupVM.clos.length == 0 ? 2 : 1;
             }
-            // without a roster no identity is matched: shown as a warning, never as done
-            StepIndicator {
+            // without a roster no identity is matched: shown as a warning, never as done; the
+            // step opens the roster bar (a roster can be given after grading)
+            if SetupVM.available: StepButton {
                 number: 4;
                 text: "Roster";
                 compact: root.compact-bar;
-                state: !SetupVM.available ? 0 : SetupVM.has-roster ? 1 : 2;
+                state: SetupVM.has-roster ? 1 : 2;
+                active: SetupVM.roster-open;
+                description: SetupVM.roster-status;
+                clicked => {
+                    SetupVM.key-open = false;
+                    SetupVM.ks-bar-open = false;
+                    RemarkVM.setup-bar = false;
+                    SetupVM.roster-open = !SetupVM.roster-open;
+                }
+            }
+            if !SetupVM.available: StepIndicator {
+                number: 4;
+                text: "Roster";
+                compact: root.compact-bar;
+                state: 0;
             }
             StepIndicator {
                 number: 5;
@@ -1242,6 +1333,7 @@ export component SetupScreen inherits VerticalLayout {
                     clicked => {
                         SetupVM.key-open = false;
                         SetupVM.ks-bar-open = false;
+                        SetupVM.roster-open = false;
                         RemarkVM.setup-bar = !RemarkVM.setup-bar;
                     }
                 }
@@ -1254,6 +1346,7 @@ export component SetupScreen inherits VerticalLayout {
                     clicked => {
                         SetupVM.ks-bar-open = false;
                         RemarkVM.setup-bar = false;
+                        SetupVM.roster-open = false;
                         SetupVM.key-open = !SetupVM.key-open;
                     }
                 }
@@ -1265,6 +1358,7 @@ export component SetupScreen inherits VerticalLayout {
     }
     if SetupVM.available && SetupVM.key-open: KeyBar { }
     if SetupVM.available && SetupVM.ks-bar-open: KeySheetBar { }
+    if SetupVM.available && SetupVM.roster-open: RosterBar { }
     if SetupVM.available && RemarkVM.setup-bar: RemarkBar { }
     if !App.has-exam: NoExamState {
         vertical-stretch: 1;

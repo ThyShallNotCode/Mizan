@@ -438,6 +438,13 @@ export global SetupVM {
     callback set-key(int, int, string) -> bool;
     callback set-weight(int, int, string);
     callback set-note(int, int, string);
+    // a roster for the graded exam (step 4 Roster): every booklet is matched again in the
+    // background, review decisions carried over
+    in property <bool> can-set-roster;
+    in property <string> roster-status;
+    in-out property <bool> roster-open;
+    in-out property <string> roster-path;
+    callback set-roster(string);
     // imported item → CLO rows waiting for approval (§11.2), and a CLO file to replace them
     in property <int> mappings-proposed;
     in-out property <string> clo-path;

@@ -726,7 +726,7 @@ impl Shell {
         true
     }
 
-    /// Projects reloaded by a run that ended (grading, scans added): their review
+    /// Projects reloaded by a run that ended (grading, scans added, a roster): their review
     /// item IDs are new, so the review selection of the current exam starts again.
     fn reloaded(&self, reloaded: &[ExamId]) {
         let current = self.exam().is_some_and(|e| reloaded.contains(&e));
@@ -917,6 +917,8 @@ impl Shell {
         su.set_ks_bar_open(false);
         su.set_ks_path(SharedString::new());
         su.set_clo_path(SharedString::new());
+        su.set_roster_open(false);
+        su.set_roster_path(SharedString::new());
         let sc = ui.global::<s::ScanVM>();
         sc.set_add_open(false);
         sc.set_add_path(SharedString::new());
@@ -1104,6 +1106,8 @@ impl Shell {
         su.on_approve_mappings(move || me.approve_mappings());
         let me = self.clone();
         su.on_replace_clos(move |path| me.replace_clos(&path));
+        let me = self.clone();
+        su.on_set_roster(move |path| me.set_roster(&path));
         let me = self.clone();
         su.on_select_cell(move |row, c| me.select_cell(row.max(0) as usize, c.max(0) as usize));
 
@@ -1882,6 +1886,7 @@ impl Shell {
             PickTarget::SetupKey => su.set_key_path(text),
             PickTarget::SetupKeySheets => su.set_ks_path(text),
             PickTarget::SetupClo => su.set_clo_path(text),
+            PickTarget::SetupRoster => su.set_roster_path(text),
             PickTarget::AddScans | PickTarget::AddScanFolder => {
                 ui.global::<s::ScanVM>().set_add_path(text)
             }
@@ -2107,6 +2112,7 @@ impl Shell {
             b::NextStep::ReplaceKey => {
                 self.navigate(s::Page::Setup);
                 su.set_ks_bar_open(false);
+                su.set_roster_open(false);
                 su.set_key_open(true);
             }
             b::NextStep::ScanLog => self.navigate(s::Page::Scan),
@@ -2226,6 +2232,32 @@ impl Shell {
         let ui = self.ui();
         ui.global::<s::App>().set_close_open(false);
         let _ = ui.hide();
+    }
+
+    /// Gives the current exam the roster file (picked or typed): read and checked at once,
+    /// then every booklet is matched again in the background (the Scan screen follows it).
+    fn set_roster(&self, text: &str) {
+        let Some(exam) = self.exam() else { return };
+        let Some(path) = self.path_in(PickTarget::SetupRoster, text) else {
+            self.say(
+                "Type the roster file's path, or choose it with Browse…",
+                s::Tone::Info,
+            );
+            return;
+        };
+        let r = self.backend.borrow_mut().set_roster(&exam, &path);
+        match r {
+            Ok(what) => {
+                let ui = self.ui();
+                let su = ui.global::<s::SetupVM>();
+                su.set_roster_open(false);
+                su.set_roster_path(SharedString::new());
+                self.navigate(s::Page::Scan);
+                self.refresh_dashboard();
+                self.say(what, s::Tone::Info);
+            }
+            Err(e) => self.say(e.to_string(), s::Tone::Warning),
+        }
     }
 
     /// Records `name` on every decision from now on (Settings); saved for the next start.
@@ -3928,6 +3960,9 @@ impl Shell {
             su.set_has_keysheets(false);
             su.set_ks_open(false);
             su.set_has_roster(false);
+            su.set_can_set_roster(false);
+            su.set_roster_open(false);
+            su.set_roster_status(SharedString::new());
             su.set_key_status(SharedString::new());
             su.set_key_published(false);
             su.set_can_replace_key(false);
@@ -3992,6 +4027,17 @@ impl Shell {
             t.option_labels.iter().map(ss).collect(),
         ));
         su.set_has_roster(setup.roster_students > 0);
+        su.set_can_set_roster(self.backend.borrow().can_set_roster(&setup.exam));
+        su.set_roster_status(ss(if setup.roster_students == 0 {
+            "No roster: students are identified by the number they bubbled, and there is no \
+             Blackboard upload"
+                .to_string()
+        } else {
+            format!(
+                "Roster: {} students; a new roster replaces it",
+                thousands(setup.roster_students)
+            )
+        }));
         su.set_key_status(ss(&setup.key_status));
         su.set_key_published(setup.key_published);
         su.set_can_replace_key(self.backend.borrow().can_replace_key(&setup.exam));
