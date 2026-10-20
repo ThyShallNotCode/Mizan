@@ -1016,14 +1016,20 @@ impl AppBackend {
         self.propose_card();
     }
 
-    /// Folds in the survey's reports; when it ends, the card is proposed again with it.
-    fn drain_survey(&mut self) -> bool {
+    /// Folds in the survey's reports (`wait`: blocks until it has ended); when it ends, the
+    /// card is proposed again with it.
+    fn drain_survey(&mut self, wait: bool) -> bool {
         let Some(s) = self.card.survey.as_mut() else {
             return false;
         };
         let mut changed = false;
         while s.outcome.is_none() {
-            match s.rx.try_recv() {
+            let got = if wait {
+                s.rx.recv().map_err(|_| TryRecvError::Disconnected)
+            } else {
+                s.rx.try_recv()
+            };
+            match got {
                 // a report of any other survey is dropped
                 Ok((g, _)) if g != s.generation => {}
                 Ok((_, SurveyEvent::Pages { done, total })) => {
@@ -1087,7 +1093,12 @@ impl AppBackend {
             .map(|f| b::CardValue {
                 field: card_field(f.id),
                 label: f.id.label().into(),
-                value: f.value.clone(),
+                // where the exam goes, whole, as the card's heading writes the exams folder
+                value: if f.id == FieldId::Folder {
+                    crate::bind::home_path(Path::new(&f.value))
+                } else {
+                    f.value.clone()
+                },
                 source: f.source.text().into(),
                 detail: f.detail.clone(),
                 state: match f.state {
@@ -1750,7 +1761,7 @@ impl AppBackend {
         match (&r, cancelled) {
             (Ok(dir), _) => {
                 job.activity
-                    .insert(0, format!("{now} · saved {}", dir.display()));
+                    .insert(0, format!("{now} · saved {}", short_path(dir)));
             }
             (Err(e), true) => job.activity.insert(0, format!("{now} · {e}")),
             (Err(e), false) => job.activity.insert(0, format!("{now} · failed: {e}")),
@@ -4251,12 +4262,7 @@ impl Opened {
 /// Split on either separator and joined with the platform's, so Windows paths keep their tail.
 fn short_path(p: &Path) -> String {
     let sep = std::path::MAIN_SEPARATOR;
-    let mut text = p.display().to_string();
-    if let Some(home) = std::env::home_dir()
-        && let Ok(rest) = p.strip_prefix(&home)
-    {
-        text = format!("~{sep}{}", rest.display());
-    }
+    let text = crate::bind::home_path(p);
     if text.chars().count() <= 48 {
         return text;
     }
@@ -5419,10 +5425,10 @@ impl Backend for AppBackend {
             workspace: self
                 .workspace
                 .as_ref()
-                .map_or_else(|| "no workspace".to_string(), |w| short_path(w)),
-            data_note: "Scans, names and student numbers are read from the exam folders of this \
-                        workspace and stay on this computer (PDPL); every review action is an \
-                        audited event in the exam's project store."
+                .map_or_else(|| "no exams folder".to_string(), |w| short_path(w)),
+            data_note: "Scans, names and student numbers are read from the exams in this folder \
+                        and stay on this computer (PDPL); every review action is recorded as an \
+                        audited event in the exam's folder."
                 .into(),
         }
     }
@@ -6483,7 +6489,7 @@ impl Backend for AppBackend {
     fn pump(&mut self) -> bool {
         let analysed = self.drain_stability(false);
         let thumbs = self.drain_thumbs(false);
-        let surveyed = self.drain_survey();
+        let surveyed = self.drain_survey(false);
         let graded = self.drain_job();
         if graded && !self.grading_in_progress() {
             // the card's folder and the exams folder's last term may have changed
@@ -6494,7 +6500,8 @@ impl Backend for AppBackend {
 
     fn settle(&mut self) -> bool {
         let analysed = self.drain_stability(true);
-        self.drain_thumbs(true) || analysed
+        let surveyed = self.drain_survey(true);
+        self.drain_thumbs(true) || analysed || surveyed
     }
 
     fn take_reloaded(&mut self) -> Vec<ExamId> {

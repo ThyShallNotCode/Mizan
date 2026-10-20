@@ -793,3 +793,82 @@ pub fn build(spec: &Spec, workspace: &Path) -> Built {
     p.close().expect("close");
     Built { exam_dir, project }
 }
+
+/// The files an instructor brings for an exam not graded yet ([`write_exam_files`]).
+#[derive(Clone, Debug)]
+pub struct ExamFiles {
+    /// The folder of scans, named as instructors name it (`CS213 Quiz 1`).
+    pub scans: PathBuf,
+    /// The key, one column per version.
+    pub key: PathBuf,
+    pub roster: PathBuf,
+    /// The CLO mapping, one row per question and CLO.
+    pub clo: PathBuf,
+}
+
+/// The exam the New-exam card's screenshots grade: CS 213 Quiz 1 with its key, roster and CLOs.
+pub const NEXT: Spec = Spec {
+    keyed: true,
+    roster_and_clos: true,
+    ..BARE
+};
+
+/// Writes the files of `spec` as an instructor brings them to a new exam, all invented: the
+/// scans in a folder named after the course and the exam (`<dir>/CS213 Quiz 1`), and beside it
+/// `key.csv`, `roster.csv` and `clo.csv` (its definition's key, roster and CLO mapping).
+pub fn write_exam_files(spec: &Spec, dir: &Path) -> ExamFiles {
+    let folder = format!("{} {}", spec.course_code.replace(' ', ""), spec.title);
+    let scans = write_scans(spec, &dir.join(folder));
+    let d = definition(spec);
+    let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    let mut key = "question,A,B\n".to_string();
+    for q in 0..QUESTIONS {
+        key.push_str(&format!(
+            "{},{},{}\n",
+            q + 1,
+            char::from(b'A' + self::key(spec, 0, q)),
+            char::from(b'A' + self::key(spec, 1, q))
+        ));
+    }
+    let mut roster = "student_id,name,name_ar,section\n".to_string();
+    for r in d.roster.as_deref().unwrap_or_default() {
+        roster.push_str(&format!(
+            "{},{},{},{}\n",
+            r.id,
+            quote(&r.name),
+            quote(&r.name_ar),
+            r.section
+        ));
+    }
+    let mut clo = "clo,domain,title,title_ar,plo,questions,weight,note\n".to_string();
+    if let Some(o) = &d.outcomes {
+        for m in &o.mapping {
+            let c = o.clos.iter().find(|c| c.code == m.clo).expect("its CLO");
+            clo.push_str(&format!(
+                "{},{:?},{},{},{},{},{},{}\n",
+                c.code,
+                c.domain,
+                quote(&c.title),
+                quote(&c.title_ar),
+                c.plo,
+                m.question,
+                m.weight,
+                quote(&m.note)
+            ));
+        }
+    }
+    let files = ExamFiles {
+        scans,
+        key: dir.join("key.csv"),
+        roster: dir.join("roster.csv"),
+        clo: dir.join("clo.csv"),
+    };
+    for (path, text) in [
+        (&files.key, key),
+        (&files.roster, roster),
+        (&files.clo, clo),
+    ] {
+        std::fs::write(path, text).expect("write the exam's file");
+    }
+    files
+}

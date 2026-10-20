@@ -16,6 +16,7 @@ use omr_app::propose::{Answer, Context, Given, propose};
 use shell_slint::app_backend::AppBackend;
 use shell_slint::backend::{Backend, ExamId};
 use shell_slint::host::{PickKind, PickTarget, Prefs};
+use shell_slint::screenshot;
 use shell_slint::ui::{App, AppWindow, ExamsVM, RemarkVM, ResultsVM, ScanVM, SetupVM, Theme};
 use slint::platform::Key;
 use slint::{ComponentHandle, Model};
@@ -97,8 +98,8 @@ fn grade_with_card(h: &Harness, held: &Held, fields: &[(&str, &str)]) {
     press(ui, "Grade exam");
 }
 
-/// D1: without file dialogs (headless, screenshots) no Browse button exists and typed paths
-/// grade as before; given a host, every path field of the New-exam form has its buttons.
+/// D1: without file dialogs (headless tests) no Browse button exists and typed paths grade as
+/// before; given a host, every path field of the New-exam form has its buttons.
 #[test]
 fn no_host_hides_browse_buttons() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -542,6 +543,43 @@ fn setup_scan_and_parallel_run_fields_browse() {
     for f in omr_app::parallel::REPORT_FILES {
         assert!(reports.join(f).exists(), "{f} in the picked folder");
     }
+}
+
+/// A folder the window proposes below the home folder reads `~`, as the status bar writes it:
+/// the parallel run's report folder (read back as the same folder).
+#[test]
+fn the_proposed_report_folder_reads_a_tilde() {
+    let Some(home) = std::env::home_dir() else {
+        return;
+    };
+    let dir = tempfile::Builder::new()
+        .prefix(".mizan-test-")
+        .tempdir_in(&home)
+        .expect("temp dir in the home folder");
+    let built = synth::build(&MIDTERM, dir.path());
+    let books = remark::write_books_with(&MIDTERM, &dir.path().join("remark"), true);
+    let app = AppBackend::project(&built.exam_dir, "principal:a11-instructor").expect("open");
+    let h = harness_in(app);
+    let ui = &h.ui;
+    ui.window().set_size(slint::PhysicalSize::new(1440, 2400));
+    let host = FakeHost::new();
+    h.shell.set_host(host.host(Prefs::default()));
+    click(ui, &tab(ui, "Results"));
+    press(ui, "Compare with Remark export…");
+    let picked: Vec<&Path> = books.iter().map(PathBuf::as_path).collect();
+    host.will_pick(&picked);
+    press(ui, "Browse for Remark workbooks to compare");
+    press(ui, "Compare");
+    let rm = ui.global::<RemarkVM>();
+    assert!(rm.get_cmp_open(), "{}", message(ui));
+    let sep = std::path::MAIN_SEPARATOR;
+    let report = built.exam_dir.join("parallel-run-remark");
+    let rel = report.strip_prefix(&home).expect("below home").display();
+    assert_eq!(rm.get_save_path(), format!("~{sep}{rel}"));
+    assert_eq!(
+        shell_slint::bind::one_path(&rm.get_save_path()),
+        Some(report.clone())
+    );
 }
 
 /// Turns the mouse wheel over the element labelled `label` by `dy` logical pixels (negative:
@@ -1134,6 +1172,22 @@ fn empty_workspace_shows_no_exams_yet_with_three_actions() {
     press(ui, "Import from Remark export…");
     assert!(ex.get_new_open());
     assert!(ui.global::<RemarkVM>().get_new_panel(), "the Remark import");
+}
+
+/// D3: the Settings keymap lists the keys of the exams folder, Ctrl+O and F5, where they work,
+/// and the About card speaks of the exams folder, as the window does everywhere else.
+#[test]
+fn settings_keymap_lists_the_folder_keys() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    click(ui, &tab(ui, "Settings"));
+    one(ui, "Exams: open folder · refresh");
+    let note = ui.global::<App>().get_data_note().to_string();
+    assert!(
+        note.contains("the exams in this folder") && !note.contains("workspace"),
+        "{note}"
+    );
 }
 
 /// D4: a status filter that hides every exam says so and shows them all again in one click.
@@ -2034,6 +2088,36 @@ fn grading_writes_the_exports_like_omr_grade() {
     assert!(!ui.global::<App>().get_notice_open(), "the notice went");
 }
 
+/// D6: the Scan log names the project a run saved by its last folders, as the status bar does,
+/// not by a path longer than the log's column.
+#[test]
+fn the_scan_log_names_the_saved_project_by_its_last_folders() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let deep = dir
+        .path()
+        .join("exams of the first term 1448, computer science department");
+    let w = workspace(&deep);
+    let ui = &w.h.ui;
+    press(ui, "New exam");
+    grade_with_card(&w.h, &w.held, &quiz_1(&w.scans));
+    run_held(&w.h, &w.held);
+    let exam = w.h.app.borrow().default_exam().expect("the new exam");
+    let batch = w.h.app.borrow().batch_progress(&exam).expect("its batch");
+    let saved = batch
+        .activity
+        .iter()
+        .find(|l| l.contains(" · saved "))
+        .expect("the saved line")
+        .clone();
+    let sep = std::path::MAIN_SEPARATOR;
+    assert!(
+        saved.ends_with(&format!(
+            "saved …{sep}exams{sep}cs-213-quiz-1{sep}project.omrproj"
+        )),
+        "{saved}"
+    );
+}
+
 /// D6: a keyed exam's notice leads to its review items and its results, and shows the exports
 /// folder (the notice stays for that one); × dismisses it.
 #[test]
@@ -2497,4 +2581,182 @@ fn a_refused_roster_changes_nothing() {
         .with_project(&exam, |p| p.session.definition.roster.is_some())
         .expect("still open");
     assert!(!roster_now);
+}
+
+// ------------------------------------------------------------- the workflow's screenshots
+
+/// A spawner that starts the work on a thread at once, as the binary's does (a screenshot waits
+/// for it with `settle`).
+fn thread_spawner() -> shell_slint::app_backend::Spawn {
+    Box::new(|work| {
+        std::thread::Builder::new()
+            .spawn(work)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    })
+}
+
+/// The New-exam card's screenshots are made from an exam's files, typed as an instructor types
+/// them (`~` for the home folder), its scans checked before the capture (never "Checking…"),
+/// with the Browse buttons the app shows: with the scans alone the answer key is asked and
+/// Grade exam waits; with the key, roster and CLO files beside them nothing is asked, the title
+/// and course come from the scans' folder name and the card's folder reads `~` too.
+#[test]
+fn screenshots_make_the_card_from_an_exams_files() {
+    let Some(home) = std::env::home_dir() else {
+        return;
+    };
+    let dir = tempfile::Builder::new()
+        .prefix(".mizan-test-")
+        .tempdir_in(&home)
+        .expect("temp dir in the home folder");
+    let spec = synth::Spec {
+        sheets: 6,
+        ..synth::NEXT
+    };
+    let files = synth::write_exam_files(&spec, &dir.path().join("to-grade"));
+    let ws = dir.path().join("exams");
+    std::fs::create_dir_all(&ws).expect("workspace");
+    let mut app = AppBackend::workspace(&ws, "principal:a11");
+    app.set_spawner(thread_spawner());
+    let h = harness_in(app);
+    let ui = &h.ui;
+    let ex = ui.global::<ExamsVM>();
+    let given = screenshot::ShotFiles {
+        card: Some(screenshot::CardFiles {
+            scans: vec![files.scans.clone()],
+            key: files.key.clone(),
+            roster: files.roster.clone(),
+            clo: files.clo.clone(),
+            id_scheme: "digits:10".into(),
+        }),
+        ..Default::default()
+    };
+    let shots = screenshot::card_shots();
+    let shot = |name: &str| *shots.iter().find(|s| s.name == name).expect(name);
+    h.shell.set_host(screenshot::display_host());
+    let stage = |shot: &screenshot::Shot| {
+        screenshot::stage_with(&h.shell, &*h.app, shot, &given);
+        if h.app.borrow_mut().settle() {
+            h.shell.refresh_all();
+        }
+    };
+    let sep = std::path::MAIN_SEPARATOR;
+    let rel = dir
+        .path()
+        .strip_prefix(&home)
+        .expect("below home")
+        .display();
+
+    stage(&shot("exams-new-ask"));
+    assert!(ex.get_new_open());
+    assert_eq!(ex.get_survey_state(), 2, "{}", ex.get_survey_text());
+    assert_eq!(
+        ex.get_new_scans(),
+        format!("~{sep}{rel}{sep}to-grade{sep}CS213 Quiz 1")
+    );
+    assert_eq!(ex.get_new_key(), "", "the scans alone");
+    let asks: Vec<String> = ex
+        .get_card_asks()
+        .iter()
+        .map(|a| a.label.to_string())
+        .collect();
+    assert_eq!(asks, ["Answer key"]);
+    assert!(!enabled(ui, "Grade exam"));
+    assert!(!browse_buttons(ui).is_empty(), "the app's Browse buttons");
+
+    stage(&shot("exams-new-ready"));
+    assert_eq!(ex.get_survey_state(), 2, "{}", ex.get_survey_text());
+    assert_eq!(
+        ex.get_new_roster(),
+        format!("~{sep}{rel}{sep}to-grade{sep}roster.csv")
+    );
+    assert_eq!(ex.get_card_asks().row_count(), 0, "nothing asked");
+    assert!(enabled(ui, "Grade exam"));
+    // the scheme typed under Advanced options, open: the synthetic numbers fit it
+    assert!(ex.get_new_advanced());
+    assert!(
+        card_row(ui, "Student ID").starts_with("Student ID: digits:10 — typed"),
+        "{}",
+        card_row(ui, "Student ID")
+    );
+    for (label, value) in [
+        ("Answer key", "Answer key: key.csv — key file".to_string()),
+        ("Title", "Title: Quiz 1 — folder name".into()),
+        ("Course", "Course: CS 213 — folder name".into()),
+        (
+            "Folder",
+            format!("Folder: ~{sep}{rel}{sep}exams{sep}cs-213-quiz-1 — "),
+        ),
+    ] {
+        let row = card_row(ui, label);
+        assert!(row.starts_with(&value), "{row}");
+    }
+
+    // the card as it opens: nothing typed
+    stage(&screenshot::Shot {
+        card: 0,
+        ..shot("exams-new-ready")
+    });
+    assert_eq!(ex.get_new_scans(), "");
+    assert_eq!(ex.get_new_clo(), "");
+    assert!(!ex.get_new_advanced(), "folded again");
+    assert_eq!(ex.get_survey_state(), 0);
+}
+
+/// The notice's screenshot (a `--grade` run) shows the notice of the run that ended on its own
+/// shot only: the other shots hide it, and the next theme's shot shows it again.
+#[test]
+fn screenshots_show_the_notice_on_its_shot_only() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let app = ui.global::<App>();
+    press(ui, "New exam");
+    grade_with_card(&w.h, &w.held, &quiz_1(&w.scans));
+    // the run ends without the window taking its notice, as a screenshot run waits for it
+    let work = w.held.borrow_mut().pop().expect("the run");
+    std::thread::spawn(work).join().expect("worker");
+    let t0 = std::time::Instant::now();
+    while w.h.app.borrow().grading_in_progress() {
+        assert!(t0.elapsed() < std::time::Duration::from_secs(60));
+        w.h.app.borrow_mut().pump();
+    }
+    assert!(!app.get_notice_open());
+    let scan = screenshot::real_shots(&*w.h.app.borrow())
+        .into_iter()
+        .find(|s| s.name == "scan")
+        .expect("the scan shot");
+    let notice = screenshot::notice_shot();
+    // light, then dark
+    for _ in 0..2 {
+        screenshot::stage(&w.h.shell, &*w.h.app, &scan);
+        assert!(!app.get_notice_open(), "not on another shot");
+        screenshot::stage(&w.h.shell, &*w.h.app, &notice);
+        assert!(app.get_notice_open());
+        assert_eq!(app.get_notice_title(), "CS 213 Quiz 1 is graded");
+        assert_eq!(app.get_page(), shell_slint::ui::Page::Scan);
+    }
+}
+
+/// An exams folder with no exam has one screenshot, its empty state, with the actions the app
+/// shows (Open another folder… needs the folder dialog the screenshots show).
+#[test]
+fn screenshots_of_an_empty_folder_show_its_empty_state() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let shots = screenshot::real_shots(&*w.h.app.borrow());
+    let names: Vec<&str> = shots.iter().map(|s| s.name).collect();
+    assert_eq!(names, ["exams-empty"]);
+    w.h.shell.set_host(screenshot::display_host());
+    screenshot::stage(&w.h.shell, &*w.h.app, &shots[0]);
+    one(ui, "No exams in this folder yet");
+    for action in [
+        "New exam…",
+        "Open another folder…",
+        "Import from Remark export…",
+    ] {
+        one(ui, action);
+    }
 }

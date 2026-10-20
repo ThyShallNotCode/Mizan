@@ -10,6 +10,7 @@
 //!             [--out DIR] …                  grades in the background, live on the Scan screen
 //! any of these + --screenshot <dir> [--theme light|dark] [--size WxH] [--shots a,b]
 //!             [--remark <graded.xlsx… | folder>] [--remark-setup <…>]   the Remark screens
+//!             [--new-exam <scans folder>]    the New-exam card made from an exam's files
 //! ```
 //!
 //! The generated UI code lives in the library (`shell_slint::ui`, the audited R6 exception);
@@ -40,7 +41,8 @@ use std::rc::Rc;
 
 const USAGE: &str = "usage: omr-desktop [--demo | --project <dir> | --workspace <dir> | --grade <scans…> GRADE]
                    [--operator <name>] [--theme light|dark]
-                   [--screenshot <dir> [--size WxH] [--shots name,name] [--remark <xlsx…>]]
+                   [--screenshot <dir> [--size WxH] [--shots name,name] [--remark <xlsx…>]
+                    [--new-exam <scans folder>]]
   (no source)          the workspace used last time, else ~/OMR Exams (created, private)
   --demo               invented demo data, with a banner (nothing is read or written; the
                        default of --screenshot)
@@ -60,6 +62,9 @@ const USAGE: &str = "usage: omr-desktop [--demo | --project <dir> | --workspace 
   --remark <xlsx…>     Remark's graded workbooks (files or a folder) for the Remark screens:
                        exams-remark, setup-remark, results-remark (real exams only)
   --remark-setup <xlsx…>  other workbooks for setup-remark (the first exam they apply to)
+  --new-exam <scans>   the scans folder of an exam to grade, with key.csv, roster.csv and
+                       clo.csv beside it, for the New-exam card: exams-new-ask,
+                       exams-new-ready (real exams only; --id-scheme is typed on the ready card)
   --theme <t>          light or dark (screenshots: both when omitted)";
 
 #[derive(Default)]
@@ -106,6 +111,11 @@ struct Args {
     remark: Vec<PathBuf>,
     /// `--remark-setup`: the workbooks for Setup's import shot (the first exam they apply to).
     remark_setup: Vec<PathBuf>,
+    /// `--new-exam`: the scans folder of an exam to grade (its files beside it), for the
+    /// New-exam card's screenshots.
+    new_exam: Option<PathBuf>,
+    /// `--id-scheme` with `--new-exam`: typed on the ready card.
+    card_id_scheme: String,
     /// `--workspace` given together with `--grade`: list it beside the new exam.
     workspace: Option<PathBuf>,
 }
@@ -127,6 +137,8 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Args, String> {
         shots: None,
         remark: Vec::new(),
         remark_setup: Vec::new(),
+        new_exam: None,
+        card_id_scheme: String::new(),
         workspace: None,
     };
     let mut g = Grade::default();
@@ -239,6 +251,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Args, String> {
                     ));
                 }
             }
+            "--new-exam" => out.new_exam = Some(value("--new-exam")?.into()),
             "-h" | "--help" => return Err(String::new()),
             other => return Err(format!("unknown argument {other:?}")),
         }
@@ -247,6 +260,9 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Args, String> {
         return Err(
             "give one of --demo, --project or --grade (--workspace may join --grade)".into(),
         );
+    }
+    if out.new_exam.is_some() && !grading {
+        out.card_id_scheme = g.id_scheme.clone().unwrap_or_default();
     }
     if grading {
         out.source = Source::Grade(Box::new(g));
@@ -584,11 +600,34 @@ fn screenshots(args: &Args, dir: &Path, built: &Built) -> ExitCode {
             if !args.remark.is_empty() {
                 shots.extend(screenshot::remark_shots());
             }
+            if args.new_exam.is_some() {
+                shots.extend(screenshot::card_shots());
+            }
+            // the run that ended says so
+            if matches!(args.source, Source::Grade(_)) {
+                shots.push(screenshot::notice_shot());
+            }
             shots
         }
     };
-    let remark = match (workbooks(&args.remark), workbooks(&args.remark_setup)) {
-        (Ok(workbooks), Ok(setup)) => screenshot::RemarkFiles { workbooks, setup },
+    let card = match args
+        .new_exam
+        .as_deref()
+        .map(|d| card_files(d, &args.card_id_scheme))
+        .transpose()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("omr-desktop: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let files = match (workbooks(&args.remark), workbooks(&args.remark_setup)) {
+        (Ok(workbooks), Ok(setup)) => screenshot::ShotFiles {
+            workbooks,
+            setup,
+            card,
+        },
         (Err(e), _) | (_, Err(e)) => {
             eprintln!("omr-desktop: {e}");
             return ExitCode::FAILURE;
@@ -601,7 +640,7 @@ fn screenshots(args: &Args, dir: &Path, built: &Built) -> ExitCode {
         built.dynamic(),
         &shots,
         args.shots.as_deref(),
-        &remark,
+        &files,
     ) {
         Ok(paths) => {
             for p in paths {
@@ -644,6 +683,29 @@ fn workbooks(given: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
         }
     }
     Ok(out)
+}
+
+/// The files of `--new-exam <scans folder>`: the folder, and `key.csv`, `roster.csv` and
+/// `clo.csv` beside it; `id_scheme` is typed on the ready card.
+fn card_files(scans: &Path, id_scheme: &str) -> Result<screenshot::CardFiles, String> {
+    let beside = scans.parent().unwrap_or(Path::new("."));
+    let files = screenshot::CardFiles {
+        scans: vec![scans.to_path_buf()],
+        key: beside.join("key.csv"),
+        roster: beside.join("roster.csv"),
+        clo: beside.join("clo.csv"),
+        id_scheme: id_scheme.to_string(),
+    };
+    for f in [scans, &files.key, &files.roster, &files.clo] {
+        if !f.exists() {
+            return Err(format!(
+                "{}: not found; --new-exam takes a folder of scans with key.csv, roster.csv \
+                 and clo.csv beside it",
+                f.display()
+            ));
+        }
+    }
+    Ok(files)
 }
 
 /// Opens a native file dialog, parented to the main window, and answers on the UI thread when

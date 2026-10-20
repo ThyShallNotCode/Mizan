@@ -5,8 +5,9 @@
 //! ([`real_shots`]).
 
 use crate::backend::{Backend, Decision, ExamId, Lane};
-use crate::bind::Shell;
+use crate::bind::{Shell, home_path};
 use crate::demo::{CS211, DemoBackend, MATH101};
+use crate::host::{Host, Prefs};
 use crate::ui::{self as s, AppWindow};
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
@@ -55,6 +56,12 @@ pub struct Shot {
     /// The Remark migration (§3.5, §23.7) with the workbooks given to [`render_shots_with`]:
     /// 0 none, 1 the New-exam form's import, 2 Setup's import, 3 the parallel run in Results.
     pub remark: u8,
+    /// The New-exam card with the files of an exam to grade ([`ShotFiles::card`]), its scans
+    /// checked: 0 the card as it opens, 1 the scans only (the answer key asked), 2 the scans
+    /// with the key, roster and CLO files (nothing asked, ready to grade).
+    pub card: u8,
+    /// The completion notice of the run that ended (a `--grade` run), over the screen.
+    pub notice: bool,
 }
 
 /// Every screen, plus the identity and blind-verify review frames.
@@ -69,6 +76,8 @@ pub const SHOTS: &[Shot] = &[
         bar: false,
         keysheet: false,
         remark: 0,
+        card: 0,
+        notice: false,
     },
     Shot {
         name: "setup",
@@ -81,6 +90,8 @@ pub const SHOTS: &[Shot] = &[
         bar: false,
         keysheet: false,
         remark: 0,
+        card: 0,
+        notice: false,
     },
     Shot {
         name: "scan",
@@ -92,6 +103,8 @@ pub const SHOTS: &[Shot] = &[
         bar: false,
         keysheet: false,
         remark: 0,
+        card: 0,
+        notice: false,
     },
     Shot {
         name: "review",
@@ -103,6 +116,8 @@ pub const SHOTS: &[Shot] = &[
         bar: false,
         keysheet: false,
         remark: 0,
+        card: 0,
+        notice: false,
     },
     Shot {
         name: "review-identity",
@@ -114,6 +129,8 @@ pub const SHOTS: &[Shot] = &[
         bar: false,
         keysheet: false,
         remark: 0,
+        card: 0,
+        notice: false,
     },
     Shot {
         name: "review-blind",
@@ -125,6 +142,8 @@ pub const SHOTS: &[Shot] = &[
         bar: false,
         keysheet: false,
         remark: 0,
+        card: 0,
+        notice: false,
     },
     Shot {
         name: "results",
@@ -136,6 +155,8 @@ pub const SHOTS: &[Shot] = &[
         bar: false,
         keysheet: false,
         remark: 0,
+        card: 0,
+        notice: false,
     },
     Shot {
         name: "outcomes",
@@ -147,6 +168,8 @@ pub const SHOTS: &[Shot] = &[
         bar: false,
         keysheet: false,
         remark: 0,
+        card: 0,
+        notice: false,
     },
     Shot {
         name: "settings",
@@ -158,6 +181,8 @@ pub const SHOTS: &[Shot] = &[
         bar: false,
         keysheet: false,
         remark: 0,
+        card: 0,
+        notice: false,
     },
     // the New-exam card with an invented proposal: a question open, Grade exam waiting
     Shot {
@@ -170,13 +195,31 @@ pub const SHOTS: &[Shot] = &[
         bar: true,
         keysheet: false,
         remark: 0,
+        card: 0,
+        notice: false,
     },
 ];
 
 /// The screens of the real core: every screen, plus one review frame per lane that has open
 /// items (an empty lane would only show the empty state). There is no blind-verify frame:
-/// omr-app does not draw blind samples yet.
+/// omr-app does not draw blind samples yet. An exams folder with no exam has one shot,
+/// exams-empty: its other screens are empty states with nothing to show.
 pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
+    if backend.dashboard().exams.is_empty() {
+        return vec![Shot {
+            name: "exams-empty",
+            page: s::Page::Exams,
+            exam: None,
+            review: None,
+            cell: None,
+            override_choice: false,
+            bar: false,
+            keysheet: false,
+            remark: 0,
+            card: 0,
+            notice: false,
+        }];
+    }
     let mut shots = vec![
         Shot {
             name: "exams",
@@ -188,6 +231,8 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
             bar: false,
             keysheet: false,
             remark: 0,
+            card: 0,
+            notice: false,
         },
         Shot {
             name: "setup",
@@ -199,6 +244,8 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
             bar: false,
             keysheet: false,
             remark: 0,
+            card: 0,
+            notice: false,
         },
         Shot {
             name: "scan",
@@ -210,6 +257,8 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
             bar: false,
             keysheet: false,
             remark: 0,
+            card: 0,
+            notice: false,
         },
     ];
     let exam = backend.default_exam();
@@ -239,6 +288,8 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
                 bar: false,
                 keysheet: false,
                 remark: 0,
+                card: 0,
+                notice: false,
             });
         }
     }
@@ -253,6 +304,8 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
             bar: false,
             keysheet: false,
             remark: 0,
+            card: 0,
+            notice: false,
         });
     }
     for (name, page, bar) in [
@@ -273,6 +326,8 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
             bar,
             keysheet: false,
             remark: 0,
+            card: 0,
+            notice: false,
         });
     }
     // an exam graded with its key sheets: the key summary to confirm, and its batch
@@ -291,6 +346,8 @@ pub fn real_shots(backend: &dyn Backend) -> Vec<Shot> {
                 bar: false,
                 keysheet: true,
                 remark: 0,
+                card: 0,
+                notice: false,
             });
         }
     }
@@ -316,8 +373,51 @@ pub fn remark_shots() -> Vec<Shot> {
         bar: remark == 1,
         keysheet: false,
         remark,
+        card: 0,
+        notice: false,
     })
     .collect()
+}
+
+/// The New-exam card made from the files of an exam to grade ([`ShotFiles::card`]): with its
+/// scans only, the answer key is the question that waits (exams-new-ask); with its key, roster
+/// and CLO files (and the student-number scheme typed, when given) nothing is asked and Grade
+/// exam is ready (exams-new-ready).
+pub fn card_shots() -> Vec<Shot> {
+    [("exams-new-ask", 1), ("exams-new-ready", 2)]
+        .into_iter()
+        .map(|(name, card)| Shot {
+            name,
+            page: s::Page::Exams,
+            exam: None,
+            review: None,
+            cell: None,
+            override_choice: false,
+            bar: true,
+            keysheet: false,
+            remark: 0,
+            card,
+            notice: false,
+        })
+        .collect()
+}
+
+/// The completion notice of a grading run that ended (`--grade`), over the Scan screen that
+/// followed it.
+pub fn notice_shot() -> Shot {
+    Shot {
+        name: "scan-notice",
+        page: s::Page::Scan,
+        exam: None,
+        review: None,
+        cell: None,
+        override_choice: false,
+        bar: false,
+        keysheet: false,
+        remark: 0,
+        card: 0,
+        notice: true,
+    }
 }
 
 /// The first exam of the dashboard whose key comes from key sheets.
@@ -376,42 +476,60 @@ pub fn write_png(path: &Path, pixels: &[Rgb8Pixel], width: u32, height: u32) -> 
 
 /// Puts the shell into the state of `shot`.
 pub fn stage<B: Backend + ?Sized>(shell: &Shell, backend: &RefCell<B>, shot: &Shot) {
-    stage_with(shell, backend, shot, &RemarkFiles::default());
+    stage_with(shell, backend, shot, &ShotFiles::default());
 }
 
-/// Remark's graded workbooks for the Remark shots ([`Shot::remark`]).
+/// The files some shots read: Remark's graded workbooks ([`Shot::remark`]) and the files of an
+/// exam to grade ([`Shot::card`]).
 #[derive(Debug, Clone, Default)]
-pub struct RemarkFiles {
+pub struct ShotFiles {
     /// The New-exam form's import and the parallel run (of the default exam).
     pub workbooks: Vec<PathBuf>,
     /// Setup's import: shown for the first exam of the dashboard it applies to (else the
     /// default exam, with why it does not apply); the New-exam workbooks when empty.
     pub setup: Vec<PathBuf>,
+    /// The New-exam card's files; without them a card shot shows the card as it opens.
+    pub card: Option<CardFiles>,
 }
 
-/// [`stage`], with Remark's graded workbooks for the Remark shots ([`Shot::remark`]).
+/// The files an instructor brings to a new exam, for the New-exam card's shots.
+#[derive(Debug, Clone)]
+pub struct CardFiles {
+    /// The scans: a folder or files.
+    pub scans: Vec<PathBuf>,
+    pub key: PathBuf,
+    pub roster: PathBuf,
+    pub clo: PathBuf,
+    /// The student-number scheme typed under *Advanced options* on the ready card (the
+    /// synthetic numbers start with 9, which the IAU scheme refuses); empty: none typed.
+    pub id_scheme: String,
+}
+
+/// [`stage`], with the files the Remark and New-exam card shots read.
 pub fn stage_with<B: Backend + ?Sized>(
     shell: &Shell,
     backend: &RefCell<B>,
     shot: &Shot,
-    remark: &RemarkFiles,
+    given: &ShotFiles,
 ) {
     shell.close_remark();
-    let files = if shot.remark == 2 && !remark.setup.is_empty() {
-        &remark.setup
+    // the notice first: taking it reloads the exam it ran on, before the shot is staged
+    shell.show_notice(shot.notice);
+    let files = if shot.remark == 2 && !given.setup.is_empty() {
+        &given.setup
     } else {
-        &remark.workbooks
+        &given.workbooks
     };
-    let books = files
-        .iter()
-        .map(|p| p.display().to_string())
-        .collect::<Vec<_>>()
-        .join(";");
+    let books = files.iter().map(|p| home_path(p)).collect::<Vec<_>>();
+    let books = books.join(";");
     // Setup's import: the first exam it applies to
     let exam = (shot.remark == 2 && !files.is_empty())
         .then(|| applicable_exam(backend, files))
         .flatten();
     stage_screen(shell, backend, shot, exam);
+    if shot.bar && shot.page == s::Page::Exams && !backend.borrow().is_demo() {
+        fill_card(shell, shot.card, given.card.as_ref());
+    }
     if shot.remark > 0 && !files.is_empty() {
         match shot.remark {
             1 | 2 => shell.remark_import(&books),
@@ -419,6 +537,31 @@ pub fn stage_with<B: Backend + ?Sized>(
         }
         shell.navigate(shot.page);
     }
+}
+
+/// Types the files of an exam to grade into the New-exam card as `card` asks ([`Shot::card`]);
+/// card 0, or no files, leaves the card empty as it opens.
+fn fill_card(shell: &Shell, card: u8, files: Option<&CardFiles>) {
+    use crate::backend::CardField as F;
+    let Some(f) = files.filter(|_| card > 0) else {
+        shell.fill_card(&[]);
+        return;
+    };
+    let scans = f.scans.iter().map(|p| home_path(p)).collect::<Vec<_>>();
+    let scans = scans.join(";");
+    let (key, roster, clo) = (home_path(&f.key), home_path(&f.roster), home_path(&f.clo));
+    let mut fields = vec![(F::Scans, scans.as_str())];
+    if card > 1 {
+        fields.extend([
+            (F::Key, key.as_str()),
+            (F::Roster, roster.as_str()),
+            (F::Clo, clo.as_str()),
+        ]);
+        if !f.id_scheme.is_empty() {
+            fields.push((F::IdScheme, f.id_scheme.as_str()));
+        }
+    }
+    shell.fill_card(&fields);
 }
 
 /// The first exam of the dashboard whose key the import of `files` may replace.
@@ -468,19 +611,24 @@ fn stage_screen<B: Backend + ?Sized>(
     } else {
         None
     };
+    let bars = || {
+        shell.set_bars(
+            shot.bar && shot.page == s::Page::Scan,
+            shot.bar && shot.page == s::Page::Results,
+            shot.bar && shot.page == s::Page::Exams,
+        )
+    };
     let Some(exam) = wanted
         .or_else(|| shot.exam.map(|e| ExamId(e.into())))
         .or_else(|| backend.borrow().default_exam())
     else {
+        // an exams folder with no exam: the New-exam card still opens
+        bars();
         shell.navigate(shot.page);
         return;
     };
     shell.select_exam(&exam);
-    shell.set_bars(
-        shot.bar && shot.page == s::Page::Scan,
-        shot.bar && shot.page == s::Page::Results,
-        shot.bar && shot.page == s::Page::Exams,
-    );
+    bars();
     if let Some((lane, n)) = shot.review {
         let q = backend.borrow().review_queue(&exam, lane);
         let id = q
@@ -520,6 +668,18 @@ fn stage_screen<B: Backend + ?Sized>(
     shell.navigate(shot.page);
 }
 
+/// The window as the desktop app has it, with file dialogs and the file manager, so the shots
+/// show the Browse buttons and Open folder: neither is ever opened here, and no preference is
+/// read or saved.
+pub fn display_host() -> Host {
+    Host {
+        pick: Some(Rc::new(|_, _| {})),
+        reveal: Some(Rc::new(|_| Ok(()))),
+        save_prefs: None,
+        prefs: Prefs::default(),
+    }
+}
+
 /// Renders every screen of [`SHOTS`] in the given themes (`false` = light) into
 /// `<dir>/<screen>-<theme>.png` at 1440 × 900, returning the paths written.
 pub fn render_all(dir: &Path, themes: &[bool]) -> Result<Vec<PathBuf>, String> {
@@ -554,11 +714,11 @@ pub fn render_shots(
         backend,
         shots,
         only,
-        &RemarkFiles::default(),
+        &ShotFiles::default(),
     )
 }
 
-/// [`render_shots`], with Remark's graded workbooks for the [`remark_shots`].
+/// [`render_shots`], with the files the [`remark_shots`] and [`card_shots`] read.
 pub fn render_shots_with(
     dir: &Path,
     themes: &[bool],
@@ -566,7 +726,7 @@ pub fn render_shots_with(
     backend: Rc<RefCell<dyn Backend>>,
     shots: &[Shot],
     only: Option<&[String]>,
-    remark: &RemarkFiles,
+    files: &ShotFiles,
 ) -> Result<Vec<PathBuf>, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let window = install_platform()?;
@@ -579,13 +739,14 @@ pub fn render_shots_with(
     let ui = AppWindow::new().map_err(|e| e.to_string())?;
     ui.global::<s::Theme>().set_reduce_motion(true);
     let shell = Shell::bind(&ui, backend.clone());
+    shell.set_host(display_host());
     ui.show().map_err(|e| e.to_string())?;
     let mut written = Vec::new();
     let wanted = |name: &str| only.is_none_or(|o| o.iter().any(|n| n == name));
     for &dark in themes {
         ui.global::<s::Theme>().set_dark(dark);
         for shot in shots.iter().filter(|s| wanted(s.name)) {
-            stage_with(&shell, &*backend, shot, remark);
+            stage_with(&shell, &*backend, shot, files);
             // background analyses (flag stability) report before the capture: a screenshot
             // never catches "computing…"
             if backend.borrow_mut().settle() {

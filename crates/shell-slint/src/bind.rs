@@ -143,6 +143,17 @@ fn typed_path(text: &str) -> Option<PathBuf> {
     })
 }
 
+/// A path whole as the window writes one it proposes, `~` for the home folder (the status bar's
+/// way), so the folders below it read the same on every computer; [`one_path`] and
+/// [`scan_paths`] read it back.
+pub fn home_path(p: &Path) -> String {
+    let home = std::env::home_dir();
+    match home.as_deref().and_then(|h| p.strip_prefix(h).ok()) {
+        Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
+        None => p.display().to_string(),
+    }
+}
+
 /// The scan files or folders typed into a field that takes several: separated by `;` or new
 /// lines, each read as [`one_path`] reads one.
 pub fn scan_paths(text: &str) -> Vec<PathBuf> {
@@ -2537,7 +2548,7 @@ impl Shell {
                 if rm.get_save_path().is_empty()
                     && let Some(d) = dir
                 {
-                    rm.set_save_path(ss(d.display().to_string()));
+                    rm.set_save_path(ss(home_path(&d)));
                 }
                 self.say(msg.0, msg.1);
                 self.refresh_remark();
@@ -6361,6 +6372,55 @@ impl Shell {
         }
     }
 
+    /// Types `fields` into the New-exam card, every other text field emptied, and proposes the
+    /// card at once, as a pause in typing does (screenshots: the card of an exam to grade).
+    /// *Advanced options* are open exactly when one of their fields is typed.
+    pub fn fill_card(&self, fields: &[(b::CardField, &str)]) {
+        use b::CardField as F;
+        let ui = self.ui();
+        let ex = ui.global::<s::ExamsVM>();
+        let text = |field: F| {
+            fields
+                .iter()
+                .find(|(f, _)| *f == field)
+                .map_or_else(SharedString::new, |(_, t)| ss(t))
+        };
+        ex.set_new_title(text(F::Title));
+        ex.set_new_course(text(F::Course));
+        ex.set_new_scans(text(F::Scans));
+        ex.set_new_sheet(text(F::Sheet));
+        ex.set_new_questions(text(F::Questions));
+        ex.set_new_options(text(F::Options));
+        ex.set_new_forms(text(F::Versions));
+        ex.set_new_key(text(F::Key));
+        ex.set_new_roster(text(F::Roster));
+        ex.set_new_clo(text(F::Clo));
+        ex.set_new_key_sheets(text(F::KeySheets));
+        ex.set_new_term(text(F::Term));
+        ex.set_new_id_scheme(text(F::IdScheme));
+        ex.set_new_cancel_mode(text(F::CancelMode));
+        ex.set_new_multi_review(text(F::MultiReview));
+        ex.set_new_out(text(F::Folder));
+        ex.set_new_advanced(fields.iter().any(|(f, _)| f.advanced()));
+        // typed, not picked
+        self.st
+            .borrow_mut()
+            .picked
+            .retain(|t, _| t.card_field().is_none());
+        self.propose_card();
+    }
+
+    /// Shows the completion notice of the run that ended last, taken from the backend if the
+    /// window has not taken it yet, or hides it while keeping it for a later shot (screenshots:
+    /// one shot shows it, the others do not).
+    pub fn show_notice(&self, show: bool) {
+        if show && self.st.borrow().notice.is_none() {
+            self.pump();
+        }
+        let held = self.st.borrow().notice.is_some();
+        self.ui().global::<s::App>().set_notice_open(show && held);
+    }
+
     /// Closes the Remark panels, bars and views and clears the status line (screenshots stage
     /// each screen afresh).
     pub fn close_remark(&self) {
@@ -6472,6 +6532,19 @@ mod tests {
             assert_eq!(scan_paths(&native), vec![home.join("scans")]);
         }
         assert!(scan_paths(" ; ").is_empty());
+    }
+
+    #[test]
+    fn home_path_writes_the_home_folder_as_a_tilde() {
+        let sep = std::path::MAIN_SEPARATOR;
+        if let Some(home) = std::env::home_dir() {
+            let p = home.join("OMR Exams").join("cs-213-quiz-1");
+            assert_eq!(home_path(&p), format!("~{sep}OMR Exams{sep}cs-213-quiz-1"));
+            // read back as the same path
+            assert_eq!(one_path(&home_path(&p)), Some(p));
+        }
+        let elsewhere: PathBuf = [&sep.to_string(), "srv", "exams"].iter().collect();
+        assert_eq!(home_path(&elsewhere), elsewhere.display().to_string());
     }
 
     #[test]

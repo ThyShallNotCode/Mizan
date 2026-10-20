@@ -4,13 +4,15 @@
 //! the instructor's synthetic key sheets (held until the key summary is confirmed). Beside them,
 //! `remark-cs211-midterm-1/` and `remark-cs212-quiz-2/` hold synthetic Remark graded workbooks
 //! of the midterm's and the quiz's sheets (invented rows in the documented export layout, never
-//! a real export) for the Remark import and parallel-run screens.
+//! a real export) for the Remark import and parallel-run screens, and `new-cs213-quiz-1/` the
+//! files of an exam not graded yet (its scans, key, roster and CLOs) for the New-exam card.
 //!
 //! ```text
 //! cargo run -p shell-slint --example synthetic_exam -- <workspace-dir>
 //! omr-desktop --workspace <workspace-dir> --screenshot docs/design/screens/real \
 //!     --remark <workspace-dir>/remark-cs211-midterm-1 \
-//!     --remark-setup <workspace-dir>/remark-cs212-quiz-2
+//!     --remark-setup <workspace-dir>/remark-cs212-quiz-2 \
+//!     --new-exam "<workspace-dir>/new-cs213-quiz-1/CS213 Quiz 1"
 //! cargo run -p shell-slint --example synthetic_exam -- <dir> --bare   # CS 213 only: no roster,
 //!                                                     # no CLOs, an inferred key (edge states)
 //! ```
@@ -29,14 +31,14 @@ fn main() -> ExitCode {
     let Some(dir) = std::env::args().nth(1).map(PathBuf::from) else {
         eprintln!(
             "usage: synthetic_exam <workspace-dir> [--bare]\n  writes three graded synthetic exams \
-             (CS 211 Midterm 1, CS 212 Quiz 2, CS 214 Final with key sheets) below the folder, \
-             or with --bare only CS 213 Quiz 1 (no roster, no CLOs, an inferred key); give a new \
-             or empty folder"
+             (CS 211 Midterm 1, CS 212 Quiz 2, CS 214 Final with key sheets) below the folder \
+             and the files of CS 213 Quiz 1, not graded yet, or with --bare only CS 213 Quiz 1 \
+             graded (no roster, no CLOs, an inferred key); give a new or empty folder"
         );
         return ExitCode::from(2);
     };
-    let specs: Vec<&synthetic_exam::Spec> = if std::env::args().nth(2).as_deref() == Some("--bare")
-    {
+    let bare = std::env::args().nth(2).as_deref() == Some("--bare");
+    let specs: Vec<&synthetic_exam::Spec> = if bare {
         vec![&synthetic_exam::BARE]
     } else {
         vec![
@@ -92,5 +94,20 @@ fn main() -> ExitCode {
             );
         }
     }
+    if !bare {
+        // the next exam, not graded yet: what the New-exam card is made from
+        let spec = &synthetic_exam::NEXT;
+        let files = synthetic_exam::write_exam_files(spec, &dir.join(NEXT_FOLDER));
+        println!(
+            "{} {} · {} sheets, key, roster and CLOs, not graded → {}",
+            spec.course_code,
+            spec.title,
+            spec.sheets,
+            files.scans.display()
+        );
+    }
     ExitCode::SUCCESS
 }
+
+/// The folder of the exam not graded yet, below the workspace.
+const NEXT_FOLDER: &str = "new-cs213-quiz-1";

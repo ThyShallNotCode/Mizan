@@ -2404,10 +2404,10 @@ pub trait Backend {
         false
     }
 
-    /// Blocks until the background work that is running (flag stability, page thumbnails) has
-    /// reported and folds it, as [`Backend::pump`] does: for headless screenshots, which must not
-    /// catch "computing…" or a placeholder. Returns true when anything changed. The default has
-    /// nothing to wait for.
+    /// Blocks until the background work that is running (flag stability, page thumbnails, the
+    /// New-exam card's check of the scans) has reported and folds it, as [`Backend::pump`] does:
+    /// for headless screenshots, which must not catch "computing…" or a placeholder. Returns
+    /// true when anything changed. The default has nothing to wait for.
     fn settle(&mut self) -> bool {
         false
     }
