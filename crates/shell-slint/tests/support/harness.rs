@@ -89,6 +89,41 @@ pub fn run_held(h: &Harness, held: &Held) {
     h.shell.pump();
 }
 
+/// Lets the typing on the New-exam card pause long enough for the card to be proposed again
+/// (a survey of changed scans starts, held).
+pub fn pause_typing() {
+    i_slint_backend_testing::mock_elapsed_time(
+        shell_slint::bind::CARD_DEBOUNCE + Duration::from_millis(50),
+    );
+}
+
+/// Runs the survey the New-exam card started last (held) on a thread, and pumps the shell
+/// until the card shows its result.
+pub fn run_survey(h: &Harness, held: &Held) {
+    let work = held.borrow_mut().pop().expect("a survey was started");
+    let worker = std::thread::spawn(work);
+    let t0 = Instant::now();
+    while h.app.borrow().surveying() {
+        assert!(
+            t0.elapsed() < Duration::from_secs(300),
+            "the survey never finished"
+        );
+        h.shell.pump();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    worker.join().expect("survey worker");
+    h.shell.pump();
+}
+
+/// [`pause_typing`], then the survey it started, if any: the card as the instructor sees it
+/// once the scans are checked.
+pub fn settle_card(h: &Harness, held: &Held) {
+    pause_typing();
+    if h.app.borrow().surveying() {
+        run_survey(h, held);
+    }
+}
+
 /// Grades the synthetic exam's scans into `project` (as `omr grade` does), and closes it.
 pub fn grade(def: &omr_app::ExamDefinition, scans: &Path, project: &Path) {
     let opts = omr_app::GradeOptions {

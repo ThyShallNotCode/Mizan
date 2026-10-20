@@ -2698,9 +2698,167 @@ fn cs211_results(setup: &ExamSetup) -> (Results, Outcomes) {
 
 // ------------------------------------------------------------------------------------ trait impl
 
+/// The demo's New-exam card: an invented midterm whose key file is shorter than what the
+/// students answered, so the card asks before anything is graded.
+fn demo_card() -> NewExamCard {
+    let value =
+        |field: CardField, label: &str, value: &str, source: &str, detail: &str| CardValue {
+            field,
+            label: label.into(),
+            value: value.into(),
+            source: source.into(),
+            detail: detail.into(),
+            state: CardState::Ok,
+        };
+    let mut values = vec![
+        value(
+            CardField::Scans,
+            "Scans",
+            "2 files",
+            "typed",
+            "58 student sheets · 2 blank pages",
+        ),
+        value(
+            CardField::Sheet,
+            "Sheet",
+            "iau-ccsit-v1",
+            "the sheet",
+            "100 questions × 5 options, versions A, B, C, D · 60 of 60 pages are this sheet",
+        ),
+        value(
+            CardField::Key,
+            "Answer key",
+            "key-midterm.csv",
+            "key file",
+            "2 versions · 1 point each",
+        ),
+        value(
+            CardField::Versions,
+            "Versions",
+            "A, B",
+            "key file",
+            "key-midterm.csv names A, B · sheets A 29 · B 28 · C 1",
+        ),
+        value(
+            CardField::Questions,
+            "Questions",
+            "29",
+            "key file",
+            "29 rows in key-midterm.csv · the students answered to row 31",
+        ),
+        value(CardField::Options, "Options", "5", "the sheet", ""),
+        value(
+            CardField::CancelMode,
+            "Cancel mode",
+            "erase_only",
+            "the sheet",
+            "erasures cancel, as the IAU sheet prints",
+        ),
+        value(
+            CardField::IdScheme,
+            "Student ID",
+            "iau",
+            "the sheet",
+            "57 of 58 complete numbers fit",
+        ),
+        value(CardField::Roster, "Roster", "roster-cs211.csv", "typed", ""),
+        value(CardField::Clo, "CLO mapping", "", "default", ""),
+        value(
+            CardField::Title,
+            "Title",
+            "Midterm",
+            "the sheets",
+            "exam-type bubble Midterm on 55 of 58 sheets",
+        ),
+        value(
+            CardField::Course,
+            "Course",
+            "CS 211",
+            "folder name",
+            "CS211 Midterm scans",
+        ),
+        value(
+            CardField::Term,
+            "Term",
+            "1447-1",
+            "exams folder",
+            "the last exam graded in this exams folder (CS 212), 6 days ago",
+        ),
+        value(
+            CardField::MultiReview,
+            "Second review",
+            "never",
+            "default",
+            "",
+        ),
+        value(
+            CardField::HighStakes,
+            "High stakes",
+            "off",
+            "default",
+            "on: stricter margins and erasures to review (more items, never fewer)",
+        ),
+        value(
+            CardField::Folder,
+            "Folder",
+            "~/OMR Exams/cs-211-midterm",
+            "exams folder",
+            "a new folder for the exam and its exports",
+        ),
+    ];
+    values[3].state = CardState::Note;
+    values[4].state = CardState::Ask;
+    let ask = CardIssue {
+        field: CardField::Questions,
+        label: "Questions".into(),
+        text: "9 of 58 sheets answer rows 30–31, beyond the 29 questions of key-midterm.csv: \
+               is the exam longer?"
+            .into(),
+        choices: vec![
+            "Keep 29 questions: rows beyond are not part of the exam".into(),
+            "Choose another key file…".into(),
+        ],
+    };
+    let note = CardIssue {
+        field: CardField::Versions,
+        label: "Versions".into(),
+        text: "1 sheet bubbles version C, which this exam does not declare: it is held for \
+               review, never scored"
+            .into(),
+        choices: Vec::new(),
+    };
+    NewExamCard {
+        blocker: Some(format!("{}: {}", ask.label, ask.text)),
+        values,
+        asks: vec![ask],
+        notes: vec![note],
+        survey: SurveyState::Done {
+            pages: 60,
+            took: Duration::from_millis(2400),
+        },
+        cancel_locked: true,
+    }
+}
+
 impl Backend for DemoBackend {
     fn is_demo(&self) -> bool {
         true
+    }
+
+    fn create_exam_blocker(&self) -> Option<String> {
+        Some("The demo grades nothing: start omr-desktop without --demo to grade your scans".into())
+    }
+
+    fn new_exam_card(&self) -> NewExamCard {
+        demo_card()
+    }
+
+    fn choose_on_card(&mut self, ask: usize, choice: usize) -> Result<CardAction, BackendError> {
+        let _ = (ask, choice);
+        Err(BackendError::Denied(
+            "The demo records no answers: start omr-desktop without --demo to grade your scans"
+                .into(),
+        ))
     }
 
     fn release(&mut self, exam: &ExamId) -> Result<String, BackendError> {

@@ -159,6 +159,18 @@ pub const SHOTS: &[Shot] = &[
         keysheet: false,
         remark: 0,
     },
+    // the New-exam card with an invented proposal: a question open, Grade exam waiting
+    Shot {
+        name: "exams-new",
+        page: s::Page::Exams,
+        exam: Some(CS211),
+        review: None,
+        cell: None,
+        override_choice: false,
+        bar: true,
+        keysheet: false,
+        remark: 0,
+    },
 ];
 
 /// The screens of the real core: every screen, plus one review frame per lane that has open

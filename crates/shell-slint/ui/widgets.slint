@@ -104,6 +104,7 @@ export component Switch inherits Rectangle {
     in property <string> label;
     in property <string> description;
     in-out property <bool> checked;
+    out property <bool> has-focus: fs.has-focus;
     callback toggled(bool);
     min-height: 40px;
     accessible-role: AccessibleRole.switch;
@@ -701,21 +702,29 @@ export component TextField inherits Rectangle {
     in property <bool> mono;
     in property <bool> arabic;
     in property <bool> enabled: true;
+    // a question is open on the value (its text is shown beside the field, and read here)
+    in property <bool> invalid;
+    in property <string> description;
     out property <bool> has-focus: input.has-focus;
     callback accepted(string);
+    // the user changed the text (typed, pasted, deleted), never a change made by the app
+    callback edited(string);
     height: Theme.control-height;
     border-radius: Theme.radius-md;
     background: root.enabled ? Theme.surface-raised : Theme.surface-sunken;
-    border-width: 1px;
-    border-color: input.has-focus ? Theme.primary : Theme.border-strong;
+    border-width: root.invalid && !input.has-focus ? 2px : 1px;
+    border-color: input.has-focus ? Theme.primary : root.invalid ? Theme.error : Theme.border-strong;
     forward-focus: input;
     accessible-role: AccessibleRole.text-input;
     accessible-label: root.label;
     accessible-placeholder-text: root.placeholder;
+    accessible-description: root.description;
     accessible-value: root.text;
     accessible-enabled: root.enabled;
     accessible-action-set-value(v) => {
         root.text = v;
+        // assistive technology typed it: the user's edit
+        root.edited(v);
     }
     TouchArea {
         enabled: root.enabled;
@@ -751,6 +760,9 @@ export component TextField inherits Rectangle {
         accepted => {
             root.accepted(self.text);
         }
+        edited => {
+            root.edited(self.text);
+        }
     }
     FocusRing {
         active: input.has-focus;
@@ -771,11 +783,14 @@ export component PathField inherits HorizontalLayout {
     // the dialogs ("new-key"; "" for no button)
     in property <string> target;
     in property <string> folder-target;
+    in property <bool> invalid;
+    in property <string> description;
     out property <bool> has-focus: field.has-focus || root.browse-focused || root.folder-focused;
     // the buttons made with App.can-browse have the keyboard (each reset when made)
     property <bool> browse-focused;
     property <bool> folder-focused;
     callback accepted(string);
+    callback edited(string);
     spacing: Theme.space-sm;
     forward-focus: field;
     field := TextField {
@@ -785,8 +800,13 @@ export component PathField inherits HorizontalLayout {
         text <=> root.text;
         mono: root.mono;
         enabled: root.enabled;
+        invalid: root.invalid;
+        description: root.description;
         accepted(v) => {
             root.accepted(v);
+        }
+        edited(v) => {
+            root.edited(v);
         }
     }
     if App.can-browse && root.target != "": Centered {

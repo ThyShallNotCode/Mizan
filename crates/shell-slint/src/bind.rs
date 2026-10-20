@@ -310,6 +310,8 @@ fn decision_word(d: Decision, labels: &[String]) -> String {
 const FIRST_REASONS: usize = 4;
 /// The last reason chip: shows every code on offer, or the first ones again.
 const MORE_REASONS: &str = "\u{0}more";
+/// The New-exam card is proposed again once typing in its fields pauses this long.
+pub const CARD_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// "AMBIGUOUS_MARK" → "Ambiguous mark" (reason codes as words on the chips).
 fn reason_words(code: &str) -> String {
@@ -517,6 +519,8 @@ pub struct Shell {
     timer: RefCell<Option<slint::Timer>>,
     /// File dialogs, the file manager and the preferences, from the binary ([`Shell::set_host`]).
     host: RefCell<Host>,
+    /// Proposes the New-exam card again once typing in its fields pauses.
+    debounce: slint::Timer,
 }
 
 impl Shell {
@@ -571,6 +575,7 @@ impl Shell {
             }),
             timer: RefCell::new(None),
             host: RefCell::new(Host::default()),
+            debounce: slint::Timer::default(),
         });
         shell.wire(ui);
         shell.refresh_all();
@@ -952,6 +957,14 @@ impl Shell {
         });
         let me = self.clone();
         ex.on_create_exam(move || me.create_exam());
+        let me = self.clone();
+        ex.on_form_changed(move |_| me.form_changed());
+        let me = self.clone();
+        ex.on_choose(move |ask, choice| {
+            me.choose_on_card(ask.max(0) as usize, choice.max(0) as usize)
+        });
+        let me = self.clone();
+        ex.on_stop_survey(move || me.stop_survey());
 
         // setup
         let su = ui.global::<s::SetupVM>();
@@ -1198,11 +1211,12 @@ impl Shell {
         rm.on_clear_new(move || {
             me.st.borrow_mut().remark_new_using = None;
             me.say(
-                "The New-exam form no longer uses the Remark import: give a key file, key sheets \
-                 or no key",
+                "The New-exam card no longer uses the Remark import: give a key file or key \
+                 sheets",
                 s::Tone::Info,
             );
             me.refresh_remark();
+            me.card_inputs_changed();
         });
         let me = self.clone();
         rm.on_compare(move |books| {
@@ -1239,6 +1253,7 @@ impl Shell {
     fn request(&self, what: &str) {
         if what == "New exam" && self.backend.borrow().can_create_exam() {
             self.ui().global::<s::ExamsVM>().set_new_open(true);
+            self.propose_card();
             return;
         }
         if !self.backend.borrow().is_demo() {
@@ -1269,12 +1284,74 @@ impl Shell {
         );
     }
 
-    /// Validates the New-exam form and starts grading it; the new exam opens on the Scan
-    /// screen, which follows the run.
+    /// Grades the new exam exactly as the card shows it; the new exam opens on the Scan screen,
+    /// which follows the run. A change still waiting to be shown on the card is shown first,
+    /// and nothing is graded until the instructor sees it.
     fn create_exam(&self) {
+        if self.debounce.running() {
+            self.propose_card();
+            self.say(
+                "The card now shows your last change: check it, then Grade exam",
+                s::Tone::Info,
+            );
+            return;
+        }
+        let form = self.new_exam_form();
+        let r = self.backend.borrow_mut().create_exam(&form);
+        match r {
+            Ok((exam, what)) => {
+                let ui = self.ui();
+                let ex = ui.global::<s::ExamsVM>();
+                ex.set_new_open(false);
+                // a fresh card next time (the sheet is kept: the same sheet is usual)
+                for set in [
+                    s::ExamsVM::set_new_title,
+                    s::ExamsVM::set_new_course,
+                    s::ExamsVM::set_new_scans,
+                    s::ExamsVM::set_new_questions,
+                    s::ExamsVM::set_new_options,
+                    s::ExamsVM::set_new_forms,
+                    s::ExamsVM::set_new_key,
+                    s::ExamsVM::set_new_roster,
+                    s::ExamsVM::set_new_clo,
+                    s::ExamsVM::set_new_key_sheets,
+                    s::ExamsVM::set_new_term,
+                    s::ExamsVM::set_new_id_scheme,
+                    s::ExamsVM::set_new_cancel_mode,
+                    s::ExamsVM::set_new_multi_review,
+                    s::ExamsVM::set_new_out,
+                ] {
+                    set(&ex, SharedString::new());
+                }
+                ex.set_new_high_stakes(false);
+                ex.set_new_advanced(false);
+                ex.set_new_notes_open(false);
+                {
+                    // the import is used up: the new exam carries its key and objectives
+                    let mut st = self.st.borrow_mut();
+                    st.remark_new = None;
+                    st.remark_new_using = None;
+                    st.picked.retain(|t, _| t.card_field().is_none());
+                }
+                self.refresh_card();
+                self.select_exam(&exam);
+                self.navigate(s::Page::Scan);
+                self.say(what, s::Tone::Info);
+            }
+            Err(e) => {
+                self.refresh_card();
+                self.say(e.to_string(), s::Tone::Warning);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ the New-exam card
+
+    /// The New-exam form as it stands: the text of every field, and the files a dialog picked
+    /// for the fields that still show them (exactly).
+    fn new_exam_form(&self) -> b::NewExam {
         let ui = self.ui();
         let ex = ui.global::<s::ExamsVM>();
-        // the files a dialog picked, exactly, for the fields that still show them
         let picked = [
             ("scans", PickTarget::NewScans, ex.get_new_scans()),
             ("sheet", PickTarget::NewSpec, ex.get_new_sheet()),
@@ -1286,11 +1363,12 @@ impl Shell {
             ),
             ("roster", PickTarget::NewRoster, ex.get_new_roster()),
             ("clo", PickTarget::NewClo, ex.get_new_clo()),
+            ("out", PickTarget::NewOut, ex.get_new_out()),
         ]
         .into_iter()
         .filter_map(|(k, field, text)| Some((k.to_string(), self.picked_paths(field, &text)?)))
         .collect();
-        let form = b::NewExam {
+        b::NewExam {
             title: ex.get_new_title().to_string(),
             course: ex.get_new_course().to_string(),
             scans: ex.get_new_scans().to_string(),
@@ -1298,6 +1376,12 @@ impl Shell {
             questions: ex.get_new_questions().to_string(),
             options: ex.get_new_options().to_string(),
             forms: ex.get_new_forms().to_string(),
+            term: ex.get_new_term().to_string(),
+            id_scheme: ex.get_new_id_scheme().to_string(),
+            cancel_mode: ex.get_new_cancel_mode().to_string(),
+            multi_review: ex.get_new_multi_review().to_string(),
+            high_stakes: ex.get_new_high_stakes(),
+            out: ex.get_new_out().to_string(),
             key: ex.get_new_key().to_string(),
             roster: ex.get_new_roster().to_string(),
             clo: ex.get_new_clo().to_string(),
@@ -1309,32 +1393,257 @@ impl Shell {
                 .clone()
                 .unwrap_or_default(),
             picked,
-        };
-        let r = self.backend.borrow_mut().create_exam(&form);
-        match r {
-            Ok((exam, what)) => {
-                ex.set_new_open(false);
-                // a fresh form next time (the sheet is kept: the same sheet is usual)
-                ex.set_new_title(SharedString::new());
-                ex.set_new_course(SharedString::new());
-                ex.set_new_scans(SharedString::new());
-                ex.set_new_questions(SharedString::new());
-                ex.set_new_options(SharedString::new());
-                ex.set_new_forms(SharedString::new());
-                ex.set_new_key(SharedString::new());
-                ex.set_new_roster(SharedString::new());
-                ex.set_new_clo(SharedString::new());
-                ex.set_new_key_sheets(SharedString::new());
-                {
-                    // the import is used up: the new exam carries its key and objectives
-                    let mut st = self.st.borrow_mut();
-                    st.remark_new = None;
-                    st.remark_new_using = None;
+        }
+    }
+
+    /// A field of the card was edited: the card is proposed again once typing pauses, not on
+    /// every key.
+    fn form_changed(self: &Rc<Self>) {
+        let me = Rc::downgrade(self);
+        self.debounce
+            .start(slint::TimerMode::SingleShot, CARD_DEBOUNCE, move || {
+                if let Some(me) = me.upgrade() {
+                    me.propose_card();
                 }
-                self.select_exam(&exam);
-                self.navigate(s::Page::Scan);
-                self.say(what, s::Tone::Info);
+            });
+    }
+
+    /// Proposes the card for the form as it stands, and shows it (a survey starts in the
+    /// background when the scans changed).
+    fn propose_card(&self) {
+        self.debounce.stop();
+        let form = self.new_exam_form();
+        let card = self.backend.borrow_mut().propose_new_exam(&form);
+        self.show_card(&card);
+    }
+
+    /// The card's files changed outside its fields (the Remark import): proposed again when
+    /// the card is open.
+    fn card_inputs_changed(&self) {
+        if self.ui().global::<s::ExamsVM>().get_new_open() {
+            self.propose_card();
+        }
+    }
+
+    /// Shows the card the backend holds (the survey's progress and its end, a run that ended).
+    fn refresh_card(&self) {
+        let card = self.backend.borrow().new_exam_card();
+        self.show_card(&card);
+    }
+
+    fn show_card(&self, card: &b::NewExamCard) {
+        let ui = self.ui();
+        let ex = ui.global::<s::ExamsVM>();
+        let values: Vec<s::CardValue> = card
+            .values
+            .iter()
+            .map(|v| s::CardValue {
+                field: ss(v.field.name()),
+                label: ss(&v.label),
+                value: ss(&v.value),
+                source: ss(&v.source),
+                detail: ss(&v.detail),
+                state: match v.state {
+                    b::CardState::Ok => 0,
+                    b::CardState::Note => 1,
+                    b::CardState::Ask => 2,
+                },
+                a11y: ss(format!(
+                    "{}: {} — {}{}",
+                    v.label,
+                    if v.value.is_empty() { "none" } else { &v.value },
+                    v.source,
+                    if v.detail.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", v.detail)
+                    }
+                )),
+            })
+            .collect();
+        ex.set_card_values(sync(ex.get_card_values(), values));
+        let issue = |i: &b::CardIssue| s::CardIssue {
+            field: ss(i.field.name()),
+            label: ss(&i.label),
+            text: ss(&i.text),
+            choices: model(i.choices.iter().map(ss).collect()),
+        };
+        let keep = |o: &s::CardIssue, n: &mut s::CardIssue| adopt(&o.choices, &mut n.choices);
+        ex.set_card_asks(sync_with(
+            ex.get_card_asks(),
+            card.asks.iter().map(issue).collect(),
+            keep,
+        ));
+        ex.set_card_notes(sync_with(
+            ex.get_card_notes(),
+            card.notes.iter().map(issue).collect(),
+            keep,
+        ));
+        let (state, text, share) = match &card.survey {
+            b::SurveyState::None => (0, String::new(), 0.0),
+            b::SurveyState::Running { done, total } if *total > 0 => (
+                1,
+                format!("Checking the scans: {done} of {total} pages read"),
+                *done as f32 / *total as f32,
+            ),
+            b::SurveyState::Running { .. } => (1, "Checking the scans…".to_string(), 0.0),
+            b::SurveyState::Done { pages, took } => (
+                2,
+                format!(
+                    "Checked {} {} in {:.1} s: the card is made from them",
+                    pages,
+                    if *pages == 1 { "page" } else { "pages" },
+                    took.as_secs_f64()
+                ),
+                1.0,
+            ),
+            b::SurveyState::Failed(_) => (3, String::new(), 0.0),
+        };
+        ex.set_survey_state(state);
+        ex.set_survey_text(ss(text));
+        ex.set_survey_share(share);
+        ex.set_new_block(ss(card.blocker.clone().unwrap_or_default()));
+        ex.set_cancel_locked(card.cancel_locked);
+        // what each field proposes, and a question open on what was given in it
+        let hint = |f: b::CardField, given: &str| {
+            let proposed = card
+                .value(f)
+                .filter(|v| !v.value.is_empty())
+                .map(|v| match f {
+                    b::CardField::HighStakes => format!("{} ({}, {})", v.detail, v.value, v.source),
+                    _ => format!("{} · {}", v.value, v.source),
+                })
+                .unwrap_or_default();
+            let error = if given.trim().is_empty() {
+                String::new()
+            } else {
+                card.asks
+                    .iter()
+                    .filter(|a| a.field == f)
+                    .map(|a| a.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            };
+            s::FieldHint {
+                proposed: ss(proposed),
+                error: ss(error),
             }
+        };
+        let high = if ex.get_new_high_stakes() { "on" } else { "" };
+        ex.set_h_scans(hint(b::CardField::Scans, &ex.get_new_scans()));
+        ex.set_h_key(hint(b::CardField::Key, &ex.get_new_key()));
+        ex.set_h_key_sheets(hint(b::CardField::KeySheets, &ex.get_new_key_sheets()));
+        ex.set_h_roster(hint(b::CardField::Roster, &ex.get_new_roster()));
+        ex.set_h_clo(hint(b::CardField::Clo, &ex.get_new_clo()));
+        ex.set_h_title(hint(b::CardField::Title, &ex.get_new_title()));
+        ex.set_h_course(hint(b::CardField::Course, &ex.get_new_course()));
+        ex.set_h_questions(hint(b::CardField::Questions, &ex.get_new_questions()));
+        ex.set_h_forms(hint(b::CardField::Versions, &ex.get_new_forms()));
+        ex.set_h_options(hint(b::CardField::Options, &ex.get_new_options()));
+        ex.set_h_sheet(hint(b::CardField::Sheet, &ex.get_new_sheet()));
+        ex.set_h_term(hint(b::CardField::Term, &ex.get_new_term()));
+        ex.set_h_id_scheme(hint(b::CardField::IdScheme, &ex.get_new_id_scheme()));
+        ex.set_h_cancel_mode(hint(b::CardField::CancelMode, &ex.get_new_cancel_mode()));
+        ex.set_h_multi_review(hint(b::CardField::MultiReview, &ex.get_new_multi_review()));
+        ex.set_h_high_stakes(hint(b::CardField::HighStakes, high));
+        ex.set_h_out(hint(b::CardField::Folder, &ex.get_new_out()));
+    }
+
+    /// The answer `choice` to question `ask` of the card: recorded and the card proposed
+    /// again, or the file dialog, the field to type in or the field emptied that it asks for.
+    fn choose_on_card(self: &Rc<Self>, ask: usize, choice: usize) {
+        let r = self.backend.borrow_mut().choose_on_card(ask, choice);
+        match r {
+            Ok(b::CardAction::Done) => self.propose_card(),
+            Ok(b::CardAction::Pick(f)) => self.pick_for(f),
+            Ok(b::CardAction::Clear(f)) => {
+                self.clear_field(f);
+                self.propose_card();
+            }
+            Ok(b::CardAction::Type(f)) => self.focus_field(f),
+            Err(e) => {
+                self.refresh_card();
+                self.say(e.to_string(), s::Tone::Warning);
+            }
+        }
+    }
+
+    /// Opens what chooses a file for `f`: its file dialog (the field when the window has none),
+    /// or the Remark import.
+    fn pick_for(self: &Rc<Self>, f: b::CardField) {
+        let ui = self.ui();
+        if f == b::CardField::Remark {
+            ui.global::<s::RemarkVM>().set_new_panel(true);
+            return;
+        }
+        let target = PickTarget::ALL
+            .into_iter()
+            .find(|t| t.card_field() == Some(f) && t.kind() != PickKind::Folder)
+            .or_else(|| {
+                PickTarget::ALL
+                    .into_iter()
+                    .find(|t| t.card_field() == Some(f))
+            });
+        if f.advanced() {
+            ui.global::<s::ExamsVM>().set_new_advanced(true);
+        }
+        match target {
+            Some(t) if self.host.borrow().pick.is_some() => self.browse(t.name()),
+            _ => self.focus_field(f),
+        }
+    }
+
+    /// Puts the keyboard in the card's field `f` (Advanced options open when it is there).
+    fn focus_field(&self, f: b::CardField) {
+        let ui = self.ui();
+        let ex = ui.global::<s::ExamsVM>();
+        if f.advanced() {
+            ex.set_new_advanced(true);
+        }
+        ex.set_new_focus(ss(f.name()));
+        ex.set_new_focus_gen(ex.get_new_focus_gen() + 1);
+    }
+
+    /// Empties the card's field `f` (the Remark import: the card stops using it).
+    fn clear_field(&self, f: b::CardField) {
+        let ui = self.ui();
+        let ex = ui.global::<s::ExamsVM>();
+        let none = SharedString::new();
+        match f {
+            b::CardField::Scans => ex.set_new_scans(none),
+            b::CardField::Sheet => ex.set_new_sheet(ss("iau-ccsit-v1")),
+            b::CardField::Key => ex.set_new_key(none),
+            b::CardField::KeySheets => ex.set_new_key_sheets(none),
+            b::CardField::Remark => {
+                self.st.borrow_mut().remark_new_using = None;
+                self.refresh_remark();
+            }
+            b::CardField::Versions => ex.set_new_forms(none),
+            b::CardField::Questions => ex.set_new_questions(none),
+            b::CardField::Options => ex.set_new_options(none),
+            b::CardField::CancelMode => ex.set_new_cancel_mode(none),
+            b::CardField::IdScheme => ex.set_new_id_scheme(none),
+            b::CardField::Roster => ex.set_new_roster(none),
+            b::CardField::Clo => ex.set_new_clo(none),
+            b::CardField::Title => ex.set_new_title(none),
+            b::CardField::Course => ex.set_new_course(none),
+            b::CardField::Term => ex.set_new_term(none),
+            b::CardField::MultiReview => ex.set_new_multi_review(none),
+            b::CardField::HighStakes => ex.set_new_high_stakes(false),
+            b::CardField::Folder => ex.set_new_out(none),
+        }
+        self.st
+            .borrow_mut()
+            .picked
+            .retain(|t, _| t.card_field() != Some(f));
+    }
+
+    /// Stops checking the card's scans (Stop checking).
+    fn stop_survey(&self) {
+        let r = self.backend.borrow_mut().stop_survey();
+        self.refresh_card();
+        match r {
+            Ok(what) => self.say(what, s::Tone::Info),
             Err(e) => self.say(e.to_string(), s::Tone::Warning),
         }
     }
@@ -1435,6 +1744,10 @@ impl Shell {
         if let Some(save) = save {
             save(&prefs);
         }
+        // the card's files changed: proposed again at once (the scans are checked)
+        if field.card_field().is_some() {
+            self.propose_card();
+        }
     }
 
     /// Puts `text` into the path field `field` (see [`PickTarget::field`]).
@@ -1451,6 +1764,7 @@ impl Shell {
             PickTarget::NewRoster => ex.set_new_roster(text),
             PickTarget::NewClo => ex.set_new_clo(text),
             PickTarget::NewSpec => ex.set_new_sheet(text),
+            PickTarget::NewOut => ex.set_new_out(text),
             PickTarget::SetupKey => su.set_key_path(text),
             PickTarget::SetupKeySheets => su.set_ks_path(text),
             PickTarget::SetupClo => su.set_clo_path(text),
@@ -1514,6 +1828,8 @@ impl Shell {
         self.clear_exam_inputs();
         self.refresh_all();
         self.restart_review();
+        // the card grades into the folder opened now
+        self.card_inputs_changed();
     }
 
     /// Reads the exams folder again (Refresh, F5): exams graded meanwhile appear, exams whose
@@ -1722,6 +2038,9 @@ impl Shell {
         if target.is_some() {
             rm.set_setup_bar(false);
             rm.set_setup_open(true);
+        } else {
+            // the card no longer uses an import read before
+            self.card_inputs_changed();
         }
         self.say(msg.0, msg.1);
         self.refresh_remark();
@@ -1746,26 +2065,18 @@ impl Shell {
                 else {
                     return;
                 };
-                let ex = ui.global::<s::ExamsVM>();
-                ex.set_new_questions(ss(view.questions.to_string()));
-                ex.set_new_forms(ss(view
-                    .versions
-                    .iter()
-                    .map(|v| v.form.as_str())
-                    .collect::<Vec<_>>()
-                    .join(",")));
-                // the import is the key source: a key file or key sheets would be a second one
-                ex.set_new_key(SharedString::new());
-                ex.set_new_key_sheets(SharedString::new());
-                let objectives = view.versions.iter().any(|v| !v.objectives.is_empty());
-                if objectives {
-                    ex.set_new_clo(SharedString::new());
+                // the import is the key source: a key file or key sheets would be a second
+                // one (the card proposes its questions and versions)
+                self.clear_field(b::CardField::Key);
+                self.clear_field(b::CardField::KeySheets);
+                if view.versions.iter().any(|v| !v.objectives.is_empty()) {
+                    self.clear_field(b::CardField::Clo);
                 }
                 self.st.borrow_mut().remark_new_using = Some(view.files.join("; "));
                 rm.set_new_panel(false);
                 self.say(
                     format!(
-                        "The form uses the Remark import: {} questions, versions {}; type the \
+                        "The card uses the Remark import: {} questions, versions {}; give the \
                          scans, then Grade exam",
                         view.questions,
                         view.versions
@@ -1776,6 +2087,7 @@ impl Shell {
                     ),
                     s::Tone::Info,
                 );
+                self.card_inputs_changed();
             }
             Some(exam) => {
                 let r = self.backend.borrow_mut().apply_remark_import(&exam);
@@ -1819,6 +2131,7 @@ impl Shell {
             s::Tone::Info,
         );
         self.refresh_remark();
+        self.card_inputs_changed();
     }
 
     /// Runs the parallel run with Remark's workbooks and shows it in place of the results.
@@ -2978,14 +3291,16 @@ impl Shell {
         ex.set_can_open_workspace(self.backend.borrow().can_open_workspace());
         app.set_has_workspace(self.backend.borrow().workspace_dir().is_some());
         ex.set_new_note(ss(format!(
-            "Graded into a new folder of {}. Without a key file the key is inferred: the \
-             results stay provisional until you replace it in Setup.",
+            "Give the scans: every value is proposed from them and the files you add, with where \
+             it came from. What the card shows is what is graded, into a new folder of {}.",
             if d.workspace.is_empty() {
                 "the exams folder"
             } else {
                 d.workspace.as_str()
             }
         )));
+        // a run that started or ended changes why Grade exam waits
+        self.refresh_card();
         ex.set_term_label(ss(join(&[&d.term.label, &d.term.gregorian], " · ")));
         ex.set_sheets_week(ss(thousands(d.stats.sheets_this_week)));
         // a caption in colour only when there is something to count
@@ -5652,8 +5967,17 @@ impl Shell {
         let ui = self.ui();
         ui.global::<s::ScanVM>().set_add_open(add_scans);
         ui.global::<s::ResultsVM>().set_export_open(exports);
-        ui.global::<s::ExamsVM>()
-            .set_new_open(new_exam && self.backend.borrow().can_create_exam());
+        // the demo shows its invented card
+        let open = new_exam && {
+            let b = self.backend.borrow();
+            b.can_create_exam() || b.is_demo()
+        };
+        ui.global::<s::ExamsVM>().set_new_open(open);
+        if open && !self.backend.borrow().is_demo() {
+            self.propose_card();
+        } else {
+            self.refresh_card();
+        }
     }
 
     /// Closes the Remark panels, bars and views and clears the status line (screenshots stage

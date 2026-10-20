@@ -21,7 +21,7 @@ use slint::{ComponentHandle, Model};
 use std::path::Path;
 use std::time::{Duration, Instant};
 use support::a11::{all_texts, by_label, click, key, one, selected_queue_row, tab, with_prefix};
-use support::harness::{Harness, grade, harness, harness_for, held_spawner, run_held};
+use support::harness::{Harness, grade, harness, harness_for, held_spawner, run_held, settle_card};
 use support::synthetic_exam::{self as synth, MIDTERM};
 
 impl Harness {
@@ -940,13 +940,15 @@ fn req_a11_real_backend_never_shows_a_previous_exam_or_the_demo() {
     assert!(!ui.global::<ResultsVM>().get_release_blocked());
     assert!(!ui.global::<ReviewVM>().get_has_item());
 
-    // a new exam from the New-exam form, held while it is graded
+    // a new exam from the New-exam card, held while it is graded
     h.shell.navigate(Page::Exams);
     click(ui, &one(ui, "New exam"));
     one(ui, "Scan files or folders").set_accessible_value(scans.to_str().unwrap());
     one(ui, "Exam title").set_accessible_value("Quiz 9");
     one(ui, "Course code").set_accessible_value("MATH 299");
     one(ui, "Number of questions").set_accessible_value("30");
+    settle_card(&h, &held);
+    click(ui, &one(ui, PROVISIONAL));
     click(ui, &one(ui, "Grade exam"));
     assert!(h.app.borrow().grading_in_progress());
     for p in PAGES {
@@ -1286,9 +1288,13 @@ fn req_a11_real_backend_replaces_the_key_from_setup_and_names_a_tampered_project
     assert!(!e.contains("Close the other program"), "{e}");
 }
 
-/// CR-04: a new exam from the dashboard of a workspace ("New exam", the scans, the question
-/// count; no key file, so the key is inferred): a bad entry is refused with what to type, the
-/// run is graded in the background into a new folder of the workspace, and the exam opens.
+/// The card's answer to "no answer key" that grades without one.
+const PROVISIONAL: &str = "Grade with a provisional key (cannot be released)";
+
+/// CR-04: a new exam from the dashboard of a workspace ("New exam", the scans; no key file,
+/// so the key is inferred, as the instructor chose on the card): a bad entry is a question on
+/// its field with what to type, the run is graded in the background into a new folder of the
+/// workspace, and the exam opens.
 #[test]
 fn req_a11_real_backend_creates_an_exam_from_the_new_exam_form() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -1310,25 +1316,40 @@ fn req_a11_real_backend_creates_an_exam_from_the_new_exam_form() {
     one(ui, "Scan files or folders").set_accessible_value(scans.to_str().unwrap());
     one(ui, "Exam title").set_accessible_value(spec.title);
     one(ui, "Course code").set_accessible_value(spec.course_code);
-    // a question count that is not a number, then a key file that does not exist: refused
+    // a question count that is not a number, then a key file that does not exist: questions on
+    // their fields, and Grade exam waits with the reason
+    let ex = ui.global::<ExamsVM>();
     one(ui, "Number of questions").set_accessible_value("thirty");
-    one(ui, "Grade exam").invoke_accessible_default_action();
-    let msg = ui.global::<App>().get_message().to_string();
+    settle_card(&h, &held);
+    let field = one(ui, "Number of questions");
+    let why = field
+        .accessible_description()
+        .unwrap_or_default()
+        .to_string();
+    assert!(why.contains("not a question count"), "{why}");
     assert!(
-        msg.contains("Questions") && msg.contains("e.g. 30"),
-        "{msg}"
+        ex.get_new_block()
+            .starts_with("2 questions to answer first"),
+        "{}",
+        ex.get_new_block()
     );
+    one(ui, "Grade exam").invoke_accessible_default_action();
+    assert!(!h.app.borrow().grading_in_progress());
     one(ui, "Number of questions").set_accessible_value("30");
     one(ui, "Answer key file").set_accessible_value("/no/such/key.csv");
+    settle_card(&h, &held);
+    assert_eq!(ex.get_h_questions().error, "");
+    let why = ex.get_h_key().error.to_string();
+    assert!(why.contains("check the path"), "{why}");
     one(ui, "Grade exam").invoke_accessible_default_action();
-    let msg = ui.global::<App>().get_message().to_string();
-    assert!(msg.contains("check the path"), "{msg}");
     assert!(
-        held.borrow().is_empty(),
-        "nothing started for a refused form"
+        !h.app.borrow().grading_in_progress(),
+        "nothing graded while a question is open"
     );
-    // no key file: the key is inferred, and the message says so
+    // no key file: the card asks, and the key is inferred only as chosen
     one(ui, "Answer key file").set_accessible_value("");
+    settle_card(&h, &held);
+    click(ui, &one(ui, PROVISIONAL));
     one(ui, "Grade exam").invoke_accessible_default_action();
     let msg = ui.global::<App>().get_message().to_string();
     assert!(
@@ -1337,7 +1358,10 @@ fn req_a11_real_backend_creates_an_exam_from_the_new_exam_form() {
     );
     assert!(!ui.global::<ExamsVM>().get_new_open(), "the form closes");
     assert_eq!(ui.global::<App>().get_page(), Page::Scan);
-    assert!(!h.app.borrow().can_create_exam(), "one run at a time");
+    assert!(
+        h.app.borrow().create_exam_blocker().is_some(),
+        "one run at a time"
+    );
     // before the first page is read nothing is invented: no share, time or estimate, and the
     // run is not "complete"
     let sc = ui.global::<ScanVM>();
@@ -1370,7 +1394,11 @@ fn req_a11_real_backend_creates_an_exam_from_the_new_exam_form() {
         "{}",
         results.key_label
     );
-    assert!(h.app.borrow().can_create_exam(), "the next exam can start");
+    assert_eq!(
+        h.app.borrow().create_exam_blocker(),
+        None,
+        "the next exam can start"
+    );
     // an inferred key is no key in force: the drawer's key row is a warning, not a check
     h.shell.refresh_all();
     let drawer = ui.global::<ExamsVM>().get_drawer();
@@ -1403,13 +1431,16 @@ fn req_a11_real_backend_new_exam_reads_the_named_key_sheets() {
     one(ui, "Exam title").set_accessible_value(spec.title);
     one(ui, "Course code").set_accessible_value(spec.course_code);
     one(ui, "Number of questions").set_accessible_value("30");
-    one(ui, "Form letters").set_accessible_value("A, B");
+    one(ui, "Versions").set_accessible_value("A, B");
     let both = format!(
         "{};{}",
         keys[0].to_str().unwrap(),
         keys[1].to_str().unwrap()
     );
     one(ui, "Key sheets").set_accessible_value(&both);
+    // the key sheets give the key: no question about it
+    settle_card(&h, &held);
+    assert_eq!(ui.global::<ExamsVM>().get_new_block(), "");
     one(ui, "Grade exam").invoke_accessible_default_action();
     let msg = ui.global::<App>().get_message().to_string();
     assert!(

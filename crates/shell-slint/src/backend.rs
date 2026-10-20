@@ -1311,9 +1311,10 @@ pub struct KeyRowDecision {
     pub answer: String,
 }
 
-/// A new exam as typed in the New-exam form (plain text; the backend validates it with the
-/// same rules as `omr grade`). Blank optional fields take the sheet's defaults; a blank key
-/// file means the key is inferred (provisional, not releasable until replaced from Setup).
+/// A new exam as given on the New-exam card (plain text): the files, and the values typed over
+/// the proposed ones. A blank value takes the value the card proposes from the evidence (the
+/// key file, the key sheets, the scans, the sheet); the backend checks every value with the
+/// rules of `omr grade`, and no key is ever inferred unless the instructor chose it on the card.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NewExam {
     pub title: String,
@@ -1323,10 +1324,23 @@ pub struct NewExam {
     /// A template ID (`iau-ccsit-v1`) or the spec file of an own sheet.
     pub sheet: String,
     pub questions: String,
-    /// Options per question (blank: the sheet's).
+    /// Options per question (blank: proposed).
     pub options: String,
-    /// Form letters, e.g. `A,B` (blank: the key file's, else the sheet's).
+    /// Version letters, e.g. `A,B` (blank: proposed).
     pub forms: String,
+    /// The term (blank: proposed).
+    pub term: String,
+    /// `iau`, `pnu`, `ksu` or `digits:N` (blank: proposed).
+    pub id_scheme: String,
+    /// `erase_only`, `cross_cancels` or `fill_cancels_check` (blank: the sheet's).
+    pub cancel_mode: String,
+    /// Second review of confident double marks: `never`, `always` or `high_stakes` (blank:
+    /// proposed).
+    pub multi_review: String,
+    /// High-stakes mode switched on.
+    pub high_stakes: bool,
+    /// The exam's new folder (blank: proposed below the exams folder).
+    pub out: String,
     pub key: String,
     pub roster: String,
     pub clo: String,
@@ -1339,9 +1353,162 @@ pub struct NewExam {
     /// backend since it was read ([`Backend::read_remark_import`] with no exam).
     pub remark: String,
     /// The files a file dialog picked, by field (`scans`, `sheet`, `key`, `key_sheets`,
-    /// `roster`, `clo`), for the fields that still show them: used exactly in place of that
-    /// field's text, which shows them joined by `; ` (a `;` in a file name stays intact).
+    /// `roster`, `clo`, `out`), for the fields that still show them: used exactly in place of
+    /// that field's text, which shows them joined by `; ` (a `;` in a file name stays intact).
     pub picked: std::collections::BTreeMap<String, Vec<std::path::PathBuf>>,
+}
+
+/// A field of the New-exam card (the core's names: `scans`, `key`, `versions`, `questions` …).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CardField {
+    Scans,
+    Sheet,
+    Key,
+    KeySheets,
+    Remark,
+    Versions,
+    Questions,
+    Options,
+    CancelMode,
+    IdScheme,
+    Roster,
+    Clo,
+    Title,
+    Course,
+    Term,
+    MultiReview,
+    HighStakes,
+    Folder,
+}
+
+impl CardField {
+    /// Its name (`key-sheets`), as the window names the field.
+    pub fn name(self) -> &'static str {
+        match self {
+            CardField::Scans => "scans",
+            CardField::Sheet => "sheet",
+            CardField::Key => "key",
+            CardField::KeySheets => "key-sheets",
+            CardField::Remark => "remark",
+            CardField::Versions => "versions",
+            CardField::Questions => "questions",
+            CardField::Options => "options",
+            CardField::CancelMode => "cancel-mode",
+            CardField::IdScheme => "id-scheme",
+            CardField::Roster => "roster",
+            CardField::Clo => "clo",
+            CardField::Title => "title",
+            CardField::Course => "course",
+            CardField::Term => "term",
+            CardField::MultiReview => "multi-review",
+            CardField::HighStakes => "high-stakes",
+            CardField::Folder => "folder",
+        }
+    }
+
+    /// True for the fields under *Advanced options* on the card.
+    pub fn advanced(self) -> bool {
+        matches!(
+            self,
+            CardField::Sheet
+                | CardField::Term
+                | CardField::IdScheme
+                | CardField::CancelMode
+                | CardField::MultiReview
+                | CardField::HighStakes
+                | CardField::Folder
+        )
+    }
+}
+
+/// How a field of the card stands.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CardState {
+    #[default]
+    Ok,
+    /// A note on it.
+    Note,
+    /// A question on it is open: nothing is graded until it is answered.
+    Ask,
+}
+
+/// One value of the New-exam card: value — source (evidence), as the core proposed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CardValue {
+    pub field: CardField,
+    /// The field's label (`Versions`).
+    pub label: String,
+    /// The value graded (`A, B`; empty: none yet).
+    pub value: String,
+    /// Where it came from (`key file`, `the sheets`, `typed`, `default`).
+    pub source: String,
+    /// The evidence (`key.csv names A, B · sheets A 8 · B 8`).
+    pub detail: String,
+    pub state: CardState,
+}
+
+/// A question of the card (with one-click answers) or a note.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CardIssue {
+    pub field: CardField,
+    /// The field's label.
+    pub label: String,
+    pub text: String,
+    /// The answers' button texts (questions only), in order.
+    pub choices: Vec<String>,
+}
+
+/// The survey of the scans the card is made from: the scans are read once, counts only, before
+/// anything is graded.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum SurveyState {
+    /// No scans given yet.
+    #[default]
+    None,
+    /// Running: pages read of the pages found (0 of 0 while the files are listed).
+    Running { done: usize, total: usize },
+    /// Done for the scans given.
+    Done { pages: usize, took: Duration },
+    /// Not done: stopped by the instructor, or the scans could not be read (why).
+    Failed(String),
+}
+
+/// The New-exam card: every value of the new exam as the core proposes it from the evidence,
+/// each with its source; the questions that stop grading until they are answered, and notes.
+/// What it shows is what is graded.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NewExamCard {
+    /// Every value, in the card's order.
+    pub values: Vec<CardValue>,
+    /// Open questions, each with its answers.
+    pub asks: Vec<CardIssue>,
+    pub notes: Vec<CardIssue>,
+    pub survey: SurveyState,
+    /// Why *Grade exam* cannot start (another exam being graded, the scans being read, a
+    /// question open), `None` when it can.
+    pub blocker: Option<String>,
+    /// The printed sheet's convention cannot change (the IAU sheet: erasures cancel).
+    pub cancel_locked: bool,
+}
+
+impl NewExamCard {
+    /// The value of `field`.
+    pub fn value(&self, field: CardField) -> Option<&CardValue> {
+        self.values.iter().find(|v| v.field == field)
+    }
+}
+
+/// What an answer chosen on the card leaves the window to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardAction {
+    /// Nothing: the answer is recorded and the card proposed again.
+    Done,
+    /// Choose a file or folder for the field (its file dialog, or the Remark import).
+    Pick(CardField),
+    /// Empty the field (e.g. the key file when the Remark import gives the key).
+    Clear(CardField),
+    /// Type a value in the field.
+    Type(CardField),
 }
 
 // ------------------------------------------------------------------ Remark migration (§3.5)
@@ -1817,15 +1984,58 @@ pub trait Backend {
         ))
     }
 
-    /// True when a new exam can be graded from the New-exam form (a workspace to grade into,
-    /// and no other run in progress).
+    /// True when the New-exam card can be opened (an exams folder to grade into). It opens
+    /// while another exam is being graded too: [`Backend::create_exam_blocker`] then says why
+    /// *Grade exam* waits.
     fn can_create_exam(&self) -> bool {
         false
     }
 
-    /// Validates `form` and starts grading it in the background into a new folder of the
-    /// workspace; progress arrives through [`Backend::pump`] as for an added batch. Returns
-    /// the new exam and what was started. The default refuses.
+    /// Why a new exam cannot be graded now (another exam is being graded, no exams folder),
+    /// with what to do; `None` when it can. The default grades nothing.
+    fn create_exam_blocker(&self) -> Option<String> {
+        Some("Grading a new exam needs an exams folder: open one with Open folder…".into())
+    }
+
+    /// The New-exam card for `form`: every value proposed from the evidence with its source,
+    /// the questions and notes (see [`NewExamCard`]). Cheap: the scans are not read here. When
+    /// the scans (or the sheet, key sheets or roster) differ from those last surveyed, a new
+    /// survey starts in the background and the one running is stopped; its result arrives
+    /// through [`Backend::pump`] and [`Backend::new_exam_card`]. The default has no card.
+    fn propose_new_exam(&mut self, form: &NewExam) -> NewExamCard {
+        let _ = form;
+        self.new_exam_card()
+    }
+
+    /// The card last proposed, with the survey as it stands now.
+    fn new_exam_card(&self) -> NewExamCard {
+        NewExamCard::default()
+    }
+
+    /// The instructor's answer `choice` to question `ask` of the card last shown: an answer is
+    /// recorded and the card proposed again ([`CardAction::Done`]); choosing a file, emptying
+    /// a field or typing a value is left to the window. The default has no card.
+    fn choose_on_card(&mut self, ask: usize, choice: usize) -> Result<CardAction, BackendError> {
+        let _ = (ask, choice);
+        Err(BackendError::NotFound(
+            "That question is no longer on the card".into(),
+        ))
+    }
+
+    /// Stops the survey running for the card (nothing is kept); returns what happened.
+    fn stop_survey(&mut self) -> Result<String, BackendError> {
+        Err(BackendError::Invalid("The scans are not being read".into()))
+    }
+
+    /// Starts afresh: the card's answers and survey are dropped (a survey running is
+    /// stopped). The default has none.
+    fn reset_new_exam(&mut self) {}
+
+    /// Grades the new exam exactly as the card last shown for `form` proposes it, in the
+    /// background, into the card's folder; progress arrives through [`Backend::pump`] as for an
+    /// added batch. Refused while a question is open, the scans are being read, or the form
+    /// changed since the card was shown (the card is then proposed again). Returns the new exam
+    /// and what was started. The default refuses.
     fn create_exam(&mut self, form: &NewExam) -> Result<(ExamId, String), BackendError> {
         let _ = form;
         Err(BackendError::Denied(

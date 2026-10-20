@@ -19,7 +19,7 @@ use slint::{ComponentHandle, Model};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use support::a11::{by_label, one, tab, with_prefix};
-use support::harness::{Harness, harness_in, held_spawner, run_held};
+use support::harness::{Harness, harness_in, held_spawner, run_held, settle_card};
 use support::synthetic_exam::{self as synth, MIDTERM};
 use support::synthetic_remark as remark;
 
@@ -237,27 +237,37 @@ fn req_a11_remark_import_on_the_new_exam_form_grades_with_its_key_points_and_obj
     );
     labels_unique_and_inside(ui, "New exam · Remark import");
 
-    // use it: the form carries the questions and versions, and says where the key comes from
+    // use it: the card takes the key, the questions and the versions from it and says so
     one(ui, "Use this import").invoke_accessible_default_action();
     let ex = ui.global::<ExamsVM>();
     assert!(!rm.get_new_panel());
-    assert_eq!(ex.get_new_questions(), "30");
-    assert_eq!(ex.get_new_forms(), "A,B");
     assert!(rm.get_new_using());
     assert_eq!(with_prefix(ui, "From the Remark import").len(), 1);
     one(ui, "Scan files or folders").set_accessible_value(scans.to_str().unwrap());
     one(ui, "Exam title").set_accessible_value(spec.title);
     one(ui, "Course code").set_accessible_value(spec.course_code);
-    // a second key source is refused with what to do; nothing starts
+    settle_card(&h, &held);
+    for value in [
+        "Answer key: Remark import — Remark import",
+        "Questions: 30 — Remark import",
+        "Versions: A, B — Remark import",
+    ] {
+        assert_eq!(with_prefix(ui, value).len(), 1, "{value}");
+    }
+    assert_eq!(ex.get_new_block(), "", "nothing to answer");
+    // a second key source is a question on the card; nothing is graded until it is answered
     one(ui, "Answer key file").set_accessible_value("/tmp/key.csv");
-    one(ui, "Grade exam").invoke_accessible_default_action();
+    settle_card(&h, &held);
     assert!(
-        message(ui).contains("the key comes from the Remark import"),
+        ex.get_new_block().contains("both give the key"),
         "{}",
-        message(ui)
+        ex.get_new_block()
     );
-    assert!(held.borrow().is_empty());
-    one(ui, "Answer key file").set_accessible_value("");
+    one(ui, "Grade exam").invoke_accessible_default_action();
+    assert!(!h.app.borrow().grading_in_progress());
+    one(ui, "Use the Remark import").invoke_accessible_default_action();
+    assert_eq!(ex.get_new_key(), "", "the key file is cleared");
+    assert_eq!(ex.get_new_block(), "");
     one(ui, "Grade exam").invoke_accessible_default_action();
     assert!(
         message(ui).contains("come from the Remark import"),

@@ -126,6 +126,38 @@ export struct ExamDrawer {
     term-ar: string,
 }
 
+// One value of the New-exam card.
+export struct CardValue {
+    // the field's name (`versions`) and label (`Versions`)
+    field: string,
+    label: string,
+    value: string,
+    source: string,
+    detail: string,
+    // 0 nothing to say, 1 a note, 2 a question open
+    state: int,
+    // the row's accessible text: "Versions: A, B — key file (…)"
+    a11y: string,
+}
+
+// A question of the New-exam card (with its answers' button texts) or a note.
+export struct CardIssue {
+    field: string,
+    label: string,
+    text: string,
+    choices: [string],
+}
+
+// What the card says of a field the instructor may type in.
+export struct FieldHint {
+    // the value proposed and its source ("30 · key file"; "" none)
+    proposed: string,
+    // a question open on the field ("" none)
+    error: string,
+}
+
+// ------------------------------------------------------------------------------- setup
+
 export global ExamsVM {
     in property <[ExamRow]> rows;
     in property <[FilterChip]> filters;
@@ -165,8 +197,11 @@ export global ExamsVM {
     callback close-drawer();
     // another exams folder can be opened and the folder read again (not the demo)
     in property <bool> can-open-workspace;
-    // the New-exam form (CR-04): what the instructor types; Rust validates and grades it
+    // the New-exam card (G-3): the files the instructor gives and the values typed over the
+    // proposed ones; Rust proposes every value from the evidence, each with its source, and
+    // grades exactly what the card shows
     in-out property <bool> new-open;
+    // the card can open (an exams folder to grade into)
     in property <bool> can-create;
     in property <string> new-note;
     in-out property <string> new-title;
@@ -180,10 +215,58 @@ export global ExamsVM {
     in-out property <string> new-roster;
     in-out property <string> new-clo;
     in-out property <string> new-key-sheets;
+    in-out property <string> new-term;
+    in-out property <string> new-id-scheme;
+    in-out property <string> new-cancel-mode;
+    in-out property <string> new-multi-review;
+    in-out property <bool> new-high-stakes;
+    in-out property <string> new-out;
+    // Advanced options open (their fields exist only then), the notes unfolded
+    in-out property <bool> new-advanced;
+    in-out property <bool> new-notes-open;
+    // every value as graded: value — source (evidence); the questions that stop grading until
+    // answered (each with its one-click answers), and the notes
+    in property <[CardValue]> card-values;
+    in property <[CardIssue]> card-asks;
+    in property <[CardIssue]> card-notes;
+    // the scans being checked: 0 not yet (no scans), 1 checking, 2 checked, 3 not checked
+    in property <int> survey-state;
+    in property <string> survey-text;
+    in property <float> survey-share;
+    // why Grade exam waits ("": it can start)
+    in property <string> new-block;
+    // the printed sheet fixes how marks are cancelled (the IAU sheet: erasures cancel)
+    in property <bool> cancel-locked;
+    // per field the instructor may type in: the value proposed (its placeholder) and a question
+    // open on it (shown under the field)
+    in property <FieldHint> h-scans;
+    in property <FieldHint> h-key;
+    in property <FieldHint> h-key-sheets;
+    in property <FieldHint> h-roster;
+    in property <FieldHint> h-clo;
+    in property <FieldHint> h-title;
+    in property <FieldHint> h-course;
+    in property <FieldHint> h-questions;
+    in property <FieldHint> h-forms;
+    in property <FieldHint> h-options;
+    in property <FieldHint> h-sheet;
+    in property <FieldHint> h-term;
+    in property <FieldHint> h-id-scheme;
+    in property <FieldHint> h-cancel-mode;
+    in property <FieldHint> h-multi-review;
+    in property <FieldHint> h-high-stakes;
+    in property <FieldHint> h-out;
+    // the field the keyboard goes to (`questions`), as an answer on the card asks; each ask
+    // counts up `new-focus-gen`
+    in-out property <string> new-focus;
+    in property <int> new-focus-gen;
     callback create-exam();
+    // the instructor edited a field (its name): the card is proposed again shortly
+    callback form-changed(string);
+    // answer `choice` (index) to question `ask` (index) of the card
+    callback choose(int, int);
+    callback stop-survey();
 }
-
-// ------------------------------------------------------------------------------- setup
 
 export struct MapCell {
     text: string,

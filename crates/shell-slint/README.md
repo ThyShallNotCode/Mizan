@@ -37,12 +37,25 @@ in the preferences, `<key dir>/desktop.json`, owner-only), else `~/OMR Exams`, c
 owner-only. Demo data appears only
 with `--demo` (and for `--screenshot` without a source), and every screen then carries a DEMO
 DATA mark in the navigation rail whose label says how to open real exams. On a workspace,
-*New exam* (Ctrl+N) opens a form over the dashboard: scans, title, course, sheet
-(`iau-ccsit-v1` or an own sheet's spec file), questions, options, forms, and the key, roster
-and CLO files. `AppBackend::create_exam` validates it with `omr_app::define` (the rules and
-file readers of `omr grade`; a blank key file infers the key), checks that the scans exist,
-and starts `run_grading` on the binary's spawner into a new folder of the workspace; the Scan
-screen follows the run and the exam opens when it finishes. Every path field (`PathField`) has
+*New exam* (Ctrl+N) opens the New-exam card over the dashboard (G-3). Left, what the
+instructor gives: the scans, the key file or key sheets, the roster and CLO files, and any
+value typed over the proposed one (title, course, questions, versions, options; *Advanced
+options*, whose fields exist only once opened: sheet, output folder, term, student-ID scheme,
+cancel mode, locked on the IAU sheet, second review, high stakes). Right, what is graded:
+every value as `omr_app::propose` proposes it, "value — source (evidence)", the questions
+that stop grading with their one-click answers, and the notes, folded. The shell decides
+nothing: `Backend::propose_new_exam` takes the form, starts `run_survey` on the binary's
+spawner when the scans, sheet, key sheets or roster differ from those surveyed (stopping the
+one running; each survey has a generation and a report of another is dropped) and returns the
+`NewExamCard`; the survey's progress and end arrive through `Backend::pump`. A field edit
+proposes again after a 300 ms pause (`CARD_DEBOUNCE`), a dialog's pick at once; a choice goes
+back as `choose_on_card` (an answer is recorded; a file to pick, a field to empty or to type
+in is the window's to do); *Stop checking* is `stop_survey`. *Grade exam* is enabled only when
+the card has no blocker (`NewExamCard::blocker`: another exam being graded, the scans being
+checked or not checked, an open question); `create_exam` grades the proposal's `Inputs`
+exactly (with each value's provenance) into the proposal's folder, and refuses a form changed
+since the card was shown (the card is proposed again first). The demo shows an invented card.
+The Scan screen follows the run and the exam opens when it finishes. Every path field (`PathField`) has
 *Browse…* beside it, and *Folder…* for scans, when the window has file dialogs: the binary hands
 the shell a `host::Host` (`Shell::set_host`) with native dialogs (`rfd`, parented to the
 window), the file manager and the preferences; the library only describes each dialog
@@ -70,15 +83,15 @@ releases (`ExamProject::release`), then writes the exports with the Blackboard u
 `--screenshot` needs no display: it installs a Slint platform with the software renderer at
 1440 × 900 (or `--size`) and writes `<dir>/<screen>-<theme>.png` (`-<w>x<h>` is appended for
 other sizes). The demo screens are exams, setup, scan, review, review-identity, review-blind,
-results, outcomes and settings (`docs/design/screens/`). The real screens
+results, outcomes, settings and exams-new (the New-exam card, invented) (`docs/design/screens/`). The real screens
 (`docs/design/screens/real/`, from the synthetic workspace) are exams, setup, scan (the
 midterm's second batch, with its REG-002 and CAP-012 page notices), scan-add (the Add scans
 bar), one review frame per lane with open items (review, review-identity, review-scoring),
 review-override (an answer that overrides the suggestion, waiting for its reason), results,
-results-export (the Exports bar), outcomes, settings, exams-new (the New-exam form), and, when
+results-export (the Exports bar), outcomes, settings, exams-new (the New-exam card), and, when
 the workspace holds an exam graded with key sheets, setup-keysheet (its key summary to confirm)
 and scan-keysheet (its batch, the key sheets listed as such), and with `--remark <workbooks or
-their folder>` the Remark migration: exams-remark (the New-exam form's import for review) and
+their folder>` the Remark migration: exams-remark (the New-exam card's import for review) and
 results-remark (the parallel run) of the default exam, and setup-remark (Setup's import, of
 `--remark-setup` when given, shown for the first exam it applies to); there is no blind-verify
 frame because omr-app draws no blind sample yet. With `--grade` the shots are taken once grading has
@@ -182,7 +195,7 @@ it is read by the same key-blind recognizer and is **never** accepted on its own
 **Remark migration** (spec §3.5, PAR-09; parallel run §23.7). Only Remark Office OMR's
 documented graded Excel export is read, through omr-app (`remark::read_workbook_files`,
 `remark::import`); its `.rmx`/`.aky` files are refused unopened (§3.5: never reverse engineered).
-- *Import from Remark export…* exists on the New-exam form (a panel over the form) and in
+- *Import from Remark export…* exists on the New-exam card (a panel over the card) and in
   Setup's top bar (a bar under it). The workbooks (`;` between several) and an optional points
   file are read and the import is **shown for review, nothing changes**: per version the points'
   source, total and values, "N of N rows reproduced exactly" (every Remark total, and every
@@ -199,13 +212,14 @@ documented graded Excel export is read, through omr-app (`remark::read_workbook_
   and *Use the suggested points* gives it as the instructor's explicit choice
   (`remark::suggest_points`; the summary then reads "Points given: given by you as
   suggested…"); every total is checked again.
-- New exam: *Use this import* fills the questions and versions and clears the key file and key
-  sheets (and the CLO file when the export has objectives); a strip says where the key comes
-  from (*Clear the Remark import* undoes it). *Grade exam* applies the held import to the
-  definition as omr-app documents it (`KeySource::Provided` with its keys, `set_key_points` for
-  the exact points per version, `outcome_setup()` for the CLO rows "imported, needs review");
-  a key file, key sheets or a CLO file beside it, another question count or other versions are
-  refused naming the field. The activity log counts the import (no student value).
+- New exam: *Use this import* makes the import the card's key source and clears the key file
+  and key sheets (and the CLO file when the export has objectives); a strip says where the key
+  comes from (*Clear the Remark import* undoes it). The proposal takes the key, the versions
+  and the question count from it (source "Remark import"), and `define` applies it as omr-app
+  documents it (`KeySource::Provided` with its keys, `set_key_points` for the exact points per
+  version, `outcome_setup()` for the CLO rows "imported, needs review"); a key file or key
+  sheets beside it, another question count or other versions are questions on the card. The
+  activity log counts the import (no student value).
 - Setup: *Apply key and points* replaces the exam's key (`ExamProject::replace_key_points`,
   reason `ADJUDICATION` with a note naming the workbooks' SHA-384 prefixes, the points the
   instructor gave and the operator): a new key version, the exam rescored (an inferred key is no
@@ -402,25 +416,33 @@ real export.
 | `req_a11_real_backend_edge_projects_never_panic` | a project without roster or CLOs, graded with an inferred key: every screen and key, Blackboard disabled with the reason, no invented roster; an override with Other and its note; a typed student number; then every item settled and the empty queue (undo re-opens) |
 | `req_a11_real_backend_empty_workspace_never_panics` | an empty workspace: every screen and key, empty states |
 | `req_a11_real_backend_replaces_the_key_from_setup_and_names_a_tampered_project` | an inferred key replaced from Setup (*Replace key…*, the key file, *Replace and rescore*): the key is in force and no longer INFERRED; a snapshot edited outside the app is refused with SYS-011 and the remedy, never "close the other program" |
-| `req_a11_real_backend_creates_an_exam_from_the_new_exam_form` | *New exam* on a workspace: a question count that is not a number and a missing key file are refused with what to type, nothing started; then the scans graded with an inferred key into a new folder of the workspace, followed on the Scan screen, and the exam opens |
+| `req_a11_real_backend_creates_an_exam_from_the_new_exam_form` | *New exam* on a workspace: a question count that is not a number and a missing key file are questions on their fields (said in the field's description) and Grade exam grades nothing; then, with no key, the provisional key chosen on the card, the scans graded into a new folder of the workspace in the background; one run at a time (the next card waits until it ends) |
 | `req_a11_real_backend_new_exam_reads_the_named_key_sheets` | *New exam* with the instructor's key sheets in its *Key sheets* field: they are read with the exam as stored key sheets (six students graded, two key sheets), the run held until *Confirm every version* in Setup, then scored; the key version names both key-sheet scans (C7) |
 | `req_a11_real_backend_confirms_the_key_from_key_sheets` | the synthetic final graded with its key sheets: held (no results; Results' empty state leads to Setup); Scan lists both key sheets as key sheets, not students (thumbnail labels, reconciliation, activity); Setup opens on the summary with the three rows of version A highlighted (several marks, no mark, not read clearly) and every row's crop; *Confirm version A* stays disabled until each is decided through its labels (the intended answer, *Void*, the answer); A confirmed alone keeps the hold; *Confirm version B* publishes the key and scores the exam; both confirmations recorded with the operator and the scans; the scores equal grading the same students with the same key as a file |
 | `req_a11_real_backend_reads_a_key_from_answer_sheets_in_setup` | an inferred-key quiz: *Read key from answer sheet…* with a student's sheet gives no key (no marker) and *Put aside* leaves the key unchanged; with the two key sheets the summary is shown and nothing changes until *Confirm every version*, which puts the instructor's key in force (no longer INFERRED, every entry equal to the sheets) |
-| `req_a11_remark_import_on_the_new_exam_form_grades_with_its_key_points_and_objectives` (`req_a11_remark.rs`) | *Import from Remark export…* on the New-exam form with three synthetic workbooks (versions A and B, another section's A): the key hidden (rows carry no letter) until *Reveal key*, every question's exact points (version B's other order: Q01 0.5 points, LO2), four learning objectives "imported, needs review", the key sheet excluded (and a student with every answer right reported for a check), IDs masked; *Use this import* fills 30 questions and versions A,B; a key file beside it refused; graded: keys, points per version and the CLO rows (`Remark import`, per version) equal the workbooks'; the small class leaves learning-objective points open, so the refusal suggests the equal split and *Use the suggested points* gives it; in Setup *Approve imported mappings* records one audited approval and the TP-154 draft watermark goes |
+| `req_a11_remark_import_on_the_new_exam_form_grades_with_its_key_points_and_objectives` (`req_a11_remark.rs`) | *Import from Remark export…* on the New-exam card with three synthetic workbooks (versions A and B, another section's A): the key hidden (rows carry no letter) until *Reveal key*, every question's exact points (version B's other order: Q01 0.5 points, LO2), four learning objectives "imported, needs review", the key sheet excluded (and a student with every answer right reported for a check), IDs masked; *Use this import*: the card's key, 30 questions and versions A, B come from the import; a key file beside it is a question (*Use the Remark import* clears it); graded: keys, points per version and the CLO rows (`Remark import`, per version) equal the workbooks'; the small class leaves learning-objective points open, so the refusal suggests the equal split and *Use the suggested points* gives it; in Setup *Approve imported mappings* records one audited approval and the TP-154 draft watermark goes |
 | `req_a11_remark_import_refusals_name_the_remedy_and_the_suggested_points` | a `.rmx` file refused unopened with the remedy (and nothing to use); a version whose totals leave questions 2 and 3 open refused naming them (no `--points` in the desktop's words) with 0.75 each suggested; *Use the suggested points* imports with "given by you", 6 of 6 totals reproduced |
 | `req_a11_remark_import_in_setup_replaces_the_key` | a quiz graded with an inferred key: Setup's import of an export with other points is shown as not applicable, with why (a graded exam's points are fixed with its stored form map) and what to do, *Apply* disabled; the export with the exam's points is shown (nothing changes), back to the matrix and to the waiting import, *Apply key and points*: key version +1, no longer INFERRED, every entry equal to Remark's Answer Key rows, the message says the objectives were not applied |
 | `req_a11_parallel_run_in_results_shows_the_differences_with_crops` | the synthetic midterm beside its three workbooks: the Restricted / Q-08 banner, tiles equal to omr-app's own comparison, the settled difference Remark read otherwise first with its bubble-row crop, the booklet with no row and the row with no student number (masked), the key sheet, the other section not compared; *Save report* writes every file with the banner and the manifest; the subtitle says the comparison holds nothing, *Queue for review* queues each settled difference (open blocking items rise by as many), the button goes and the subtitle names what waits in Review; *Back to results* |
 | `req_a11_remark_states_fit_the_minimum_window_in_both_themes` | the three states at 1280 × 800, light and dark: every control labelled once and inside the window |
-| `no_host_hides_browse_buttons` (`req_gui_workflow.rs`, real clicks and typed keys, a fake host) | without a host no Browse button exists and typed paths grade; with one, every path field of the New-exam form has its buttons |
-| `browse_fills_the_scans_field_with_the_picked_files` | three scans picked (one named `batch;1.jpg`) are graded as picked; the dialog offers the scan types, opens in the exams folder, then where the scans were picked (saved in the preferences) |
+| `no_host_hides_browse_buttons` (`req_gui_workflow.rs`, real clicks and typed keys, a fake host) | without a host no Browse button exists and typed paths grade; with one, every path field of the New-exam card has its buttons (the sheet's and the output folder's under *Advanced options*) |
+| `browse_fills_the_scans_field_with_the_picked_files` | three scans picked (one named `batch;1.jpg`) are checked and graded as picked; the dialog offers the scan types, opens in the exams folder, then where the scans were picked (saved in the preferences) |
 | `a_cancelled_dialog_keeps_the_typed_text` | nothing picked leaves the typed text, says once to type the path if no dialog appeared, and the next click opens a dialog |
 | `editing_a_picked_field_falls_back_to_typed_paths` | picked files typed over with the folder: the folder is graded |
 | `browse_clicks_wait_for_the_open_dialog` | one dialog at a time; its answer fills its own field; a dialog that could not show does not block the next |
-| `roster_and_clo_browse_use_their_filters` | each New-exam file field's file types (key, roster, CLO, key sheets, spec) and the Remark panel's (graded exports only) |
+| `roster_and_clo_browse_use_their_filters` | each New-exam file field's file types (key, roster, CLO, key sheets, the sheet's spec under *Advanced options*) and the Remark panel's (graded exports only) |
 | `setup_replace_key_accepts_a_quoted_path` | Setup's key file quoted as "Copy as path" gives it, then a corrected key picked in the dialog: both in force |
 | `setup_scan_and_parallel_run_fields_browse` | Setup's CLO, key-sheet and Remark fields, Scan's added scans (files or a folder), the parallel run's workbooks (picked from a folder whose name holds a `;`) and report folder |
 | `prefs_reads_the_old_workspace_only_file`, `prefs_ignores_unknown_keys_and_bad_json`, `prefs_round_trip` (`host.rs` unit tests) | the preferences file of earlier versions (the workspace only) reads as version 1 with the defaults; unreadable, unknown or mistyped entries take their defaults; every preference survives a save and a read |
 | `browse_buttons_fit_the_smallest_window` | at 1280 × 800 in both themes, every Browse… and Folder… button (New exam, its Remark import, Setup's bars, Add scans, the comparison and the parallel run) is inside the window and leaves its field room for a path |
+| `the_survey_runs_at_once_and_fills_the_card` | a picked folder is checked at once (progress, *Stop checking*, Grade exam waiting with why); then every value shows its source and evidence, the blank fields show the value they will grade, the "no answer key" question has its four answers and blocks Grade, the notes stay folded until *Notes* |
+| `an_ask_blocks_grade_and_a_choice_unblocks_it` | a click on Grade exam while a question is open grades nothing; *Grade with a provisional key* answers it (the key "provisional — your answer"); other scans drop that answer and ask again; the exam graded has an inferred key only after the second choice |
+| `the_graded_definition_equals_the_proposals_inputs` | typed title, course, versions and (under *Advanced options*) term: the definition graded equals `define` of the inputs `propose` gives on its own for the same scans and answers, in the card's folder, with each value's source recorded |
+| `editing_the_scans_discards_the_old_survey` | a typed title reaches the card only once typing pauses, without a new survey; other scans start one, and a survey of scans no longer on the card that ends later is dropped |
+| `advanced_options_are_collapsed_until_clicked` | the sheet, output folder, term, student-ID scheme, cancel mode, second review and high-stakes fields exist only once *Advanced options* is opened (and are gone when folded); the IAU sheet's cancel mode is locked, showing "erase_only · the sheet" |
+| `the_card_opens_during_a_run_and_says_why_grade_waits` | while one exam is graded the card opens, checks its scans and says why Grade exam waits; when the run ends Grade is available, into another folder than the first exam's |
+| `stopping_the_survey_holds_grade_until_checked_again` | *Stop checking* ends the check: a question on the scans blocks Grade, the stopped worker's end changes nothing, *Check the scans again* checks them |
+| `an_invalid_value_is_marked_on_its_field` | "thirty" questions: the question shows under the field (its description) and blocks Grade; *Type the count* puts the keyboard in the field, and 30 typed there unblocks it |
 | `req_a11_demo_data_is_marked_on_every_screen` (demo file) | the DEMO DATA mark on every screen, release refused on demo data, and New exam saying how to open real exams |
 | `req_a11_blind_items_never_show_a_leaked_engine_reading` (demo file) | a backend that sends the engine's reading with blind items: the frame, the sparkline and Enter never show or commit it |
 | `req_a11.rs` (demo) | the review flow, keyboard paths, labels, layouts and screens on the demo backend |

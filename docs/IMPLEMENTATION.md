@@ -103,7 +103,7 @@ expectation tied to the real exams out of the repository.
   disagrees and gives `define` inputs only when nothing is left to ask (`omr_app::propose`,
   `omr survey`). Its thresholds are untuned (one `Thresholds` struct).
 - The `omr` CLI.
-- The Slint desktop shell (§5.2): an exams folder by default (demo data only with `--demo`, marked on every screen), a New-exam form that grades a folder of scans, setup with key replacement, live import and added batches, the review queue, results with release and exports, and outcomes.
+- The Slint desktop shell (§5.2): an exams folder by default (demo data only with `--demo`, marked on every screen), a New-exam card that checks the scans, proposes every value with its source, asks when the evidence disagrees and grades exactly what it shows, setup with key replacement, live import and added batches, the review queue, results with release and exports, and outcomes.
   - File dialogs on every path field (Browse…, and Folder… for scans): native dialogs from the
     binary through `rfd` 0.17.2 (MIT; with `pollster` 0.4, Apache-2.0/MIT; no GTK: the XDG
     desktop portal over D-Bus on Linux, zenity as its fallback), parented to the window. The
@@ -165,8 +165,11 @@ expectation tied to the real exams out of the repository.
   - `omr grade` keeps its defaults (`--cancel-mode erase_only`, versions A,B without a key
     file that names them) and does not take them from the proposal (`omr survey` prints them):
     the desktop takes an own sheet's cancel mode from its spec;
-  - the desktop's New exam does not show the proposal yet (the shell step of G-3, design-flow
-    §4): it still builds its inputs from the form, and a blank key field still infers the key;
+  - the desktop's New-exam card (G-3 D5) takes the sheet, student-number scheme, cancel mode
+    and second review as typed text (checked by the proposal), not from lists; it starts empty
+    after a failed run (no "Edit and grade again"); a survey it stops or replaces runs to its
+    next stage before it ends; `omr-desktop --grade` defines the exam from its flags, as
+    `omr grade` does, without the card;
   - the setup's provenance (each value with its source, `ExamDefinition::provenance`) is
     recorded only for exams defined from a proposal; the survey's own counts are not stored;
   - `omr grade --key` and `omr key replace` read headerless key rows that start with a letter
@@ -183,7 +186,7 @@ expectation tied to the real exams out of the repository.
 - Parts of the file dialogs (G-3 D2): drag-and-drop of files onto the window (it needs an
   unstable Slint feature and works on X11 and Windows only); a Folder… button for Remark's
   workbooks (the import reads named files only: the dialog picks several); the roster bar in
-  Setup and the output folder take their Browse buttons with those steps.
+  Setup takes its Browse button with that step.
 - Parts of the exams folder (G-3 D3, D9): a menu of the recent folders (the preferences keep
   the last five); Explorer selecting the results file (`explorer /select`); opening a large
   folder reads every exam on the UI thread, twice (the listing and the dashboard row), not on

@@ -11,16 +11,19 @@ mod support;
 
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use omr_app::ExamProject;
+use omr_app::define::Sheet;
+use omr_app::propose::{Answer, Context, Given, propose};
 use shell_slint::app_backend::AppBackend;
 use shell_slint::backend::{Backend, ExamId};
 use shell_slint::host::{PickKind, PickTarget, Prefs};
 use shell_slint::ui::{App, AppWindow, ExamsVM, RemarkVM, ResultsVM, ScanVM, SetupVM, Theme};
-use slint::ComponentHandle;
 use slint::platform::Key;
+use slint::{ComponentHandle, Model};
 use std::path::{Path, PathBuf};
 use support::a11::{by_label, chord, click, one, special, tab, type_text, with_prefix};
 use support::harness::{
-    FakeHost, Harness, Held, grade, harness, harness_in, held_spawner, run_held,
+    FakeHost, Harness, Held, grade, harness, harness_in, held_spawner, run_held, run_survey,
+    settle_card,
 };
 use support::synthetic_exam::{self as synth, MIDTERM};
 use support::synthetic_remark as remark;
@@ -79,6 +82,21 @@ fn texts(list: &[&str]) -> Vec<String> {
     list.iter().map(|e| e.to_string()).collect()
 }
 
+/// The card's answer to "no answer key" that grades without one (these exams have none).
+const PROVISIONAL: &str = "Grade with a provisional key (cannot be released)";
+
+/// Types `fields` (label, text) on the open New-exam card, lets it check the scans, answers the
+/// missing key with the provisional one and grades: the run is held.
+fn grade_with_card(h: &Harness, held: &Held, fields: &[(&str, &str)]) {
+    let ui = &h.ui;
+    for (label, text) in fields {
+        type_into(ui, label, text);
+    }
+    settle_card(h, held);
+    press(ui, PROVISIONAL);
+    press(ui, "Grade exam");
+}
+
 /// D1: without file dialogs (headless, screenshots) no Browse button exists and typed paths
 /// grade as before; given a host, every path field of the New-exam form has its buttons.
 #[test]
@@ -90,9 +108,11 @@ fn no_host_hides_browse_buttons() {
     assert!(ui.global::<ExamsVM>().get_new_open(), "the form opens");
     assert!(!ui.global::<App>().get_can_browse());
     assert_eq!(browse_buttons(ui), Vec::<String>::new());
-    type_into(ui, "Scan files or folders", w.scans.to_str().unwrap());
-    type_into(ui, "Number of questions", "30");
-    press(ui, "Grade exam");
+    grade_with_card(
+        &w.h,
+        &w.held,
+        &[("Scan files or folders", w.scans.to_str().unwrap())],
+    );
     let msg = message(ui);
     assert!(msg.contains("Grading 6 scan files"), "{msg}");
     run_held(&w.h, &w.held);
@@ -106,18 +126,24 @@ fn no_host_hides_browse_buttons() {
     assert!(ui.global::<App>().get_can_browse());
     click(ui, &tab(ui, "Exams"));
     press(ui, "New exam");
-    assert_eq!(
-        browse_buttons(ui),
-        texts(&[
-            "Browse for Answer key file",
-            "Browse for CLO mapping file",
-            "Browse for Key sheets",
-            "Browse for Roster file",
-            "Browse for Scan files or folders",
-            "Browse for Sheet template or spec file",
-            "Choose a folder for Scan files or folders",
-        ])
-    );
+    let shown = [
+        "Browse for Answer key file",
+        "Browse for CLO mapping file",
+        "Browse for Key sheets",
+        "Browse for Roster file",
+        "Browse for Scan files or folders",
+        "Choose a folder for Scan files or folders",
+    ];
+    assert_eq!(browse_buttons(ui), texts(&shown));
+    // the sheet and the exam's folder under Advanced options
+    press(ui, "Advanced options");
+    let mut all = texts(&shown);
+    all.extend(texts(&[
+        "Browse for Output folder",
+        "Browse for Sheet template or spec file",
+    ]));
+    all.sort();
+    assert_eq!(browse_buttons(ui), all);
 }
 
 /// D2: the scans picked in the dialog are graded exactly as picked, a `;` in a file name
@@ -163,9 +189,13 @@ fn browse_fills_the_scans_field_with_the_picked_files() {
         .cloned()
         .expect("preferences saved");
     assert_eq!(saved.last_dirs.get("scans"), Some(&w.scans));
+    // the picked files are checked at once, exactly as picked
+    run_survey(&w.h, &w.held);
+    assert_eq!(ui.global::<ExamsVM>().get_survey_state(), 2);
+    let scans = one(ui, "Scans: 3 files — typed (3 student sheets)");
+    assert_eq!(scans.accessible_role(), Some(AccessibleRole::Text));
 
-    type_into(ui, "Number of questions", "30");
-    press(ui, "Grade exam");
+    grade_with_card(&w.h, &w.held, &[("Number of questions", "30")]);
     let msg = message(ui);
     assert!(msg.contains("Grading 3 scan files"), "{msg}");
     run_held(&w.h, &w.held);
@@ -230,8 +260,7 @@ fn editing_a_picked_field_falls_back_to_typed_paths() {
         ui.global::<ExamsVM>().get_new_scans(),
         w.scans.to_str().unwrap()
     );
-    type_into(ui, "Number of questions", "30");
-    press(ui, "Grade exam");
+    grade_with_card(&w.h, &w.held, &[("Number of questions", "30")]);
     let msg = message(ui);
     assert!(msg.contains("Grading 6 scan files"), "{msg}");
     run_held(&w.h, &w.held);
@@ -278,6 +307,7 @@ fn roster_and_clo_browse_use_their_filters() {
     let host = FakeHost::new();
     w.h.shell.set_host(host.host(Prefs::default()));
     press(ui, "New exam");
+    press(ui, "Advanced options");
     let cases: [(&str, PickTarget, PickKind, &str, &[&str]); 5] = [
         (
             "Answer key file",
@@ -514,6 +544,19 @@ fn setup_scan_and_parallel_run_fields_browse() {
     }
 }
 
+/// Turns the mouse wheel over the element labelled `label` by `dy` logical pixels (negative:
+/// the content moves up, as scrolling down does).
+fn wheel(ui: &AppWindow, label: &str, dy: f32) {
+    let e = one(ui, label);
+    let (p, sz) = (e.absolute_position(), e.size());
+    ui.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(p.x + sz.width / 2.0, p.y + sz.height / 2.0),
+            delta_x: 0.0,
+            delta_y: dy,
+        });
+}
+
 /// Every Browse… and Folder… button on show sits inside the window, and leaves its field room
 /// for a path.
 fn buttons_inside(ui: &AppWindow, what: &str) {
@@ -572,6 +615,12 @@ fn browse_buttons_fit_the_smallest_window() {
         click(ui, &tab(ui, "Exams"));
         press(ui, "New exam");
         buttons_inside(ui, &what("New exam"));
+        press(ui, "Advanced options");
+        // the card scrolls to them in the smallest window
+        wheel(ui, "Advanced options", -2000.0);
+        buttons_inside(ui, &what("New exam, advanced options"));
+        wheel(ui, "Output folder", 2000.0);
+        press(ui, "Advanced options");
         press(ui, "Import from Remark export…");
         buttons_inside(ui, &what("New exam, Remark import"));
         rm.set_new_panel(false);
@@ -819,9 +868,11 @@ fn opening_a_folder_is_refused_while_grading() {
     let other = dir.path().join("other");
     std::fs::create_dir_all(&other).unwrap();
     press(ui, "New exam");
-    type_into(ui, "Scan files or folders", w.scans.to_str().unwrap());
-    type_into(ui, "Number of questions", "30");
-    press(ui, "Grade exam");
+    grade_with_card(
+        &w.h,
+        &w.held,
+        &[("Scan files or folders", w.scans.to_str().unwrap())],
+    );
     assert!(w.h.app.borrow().grading_in_progress());
     click(ui, &tab(ui, "Exams"));
     host.will_pick(&[&other]);
@@ -915,10 +966,14 @@ fn project_mode_grades_new_exams_beside_the_exam_not_inside_it() {
     let ui = &h.ui;
     assert!(ui.global::<App>().get_workspace().ends_with("exams"));
     press(ui, "New exam");
-    type_into(ui, "Scan files or folders", scans.to_str().unwrap());
-    type_into(ui, "Number of questions", "30");
-    type_into(ui, "Course code", "CS 299");
-    press(ui, "Grade exam");
+    grade_with_card(
+        &h,
+        &held,
+        &[
+            ("Scan files or folders", scans.to_str().unwrap()),
+            ("Course code", "CS 299"),
+        ],
+    );
     let msg = message(ui);
     assert!(msg.contains("Grading 6 scan files"), "{msg}");
     assert!(
@@ -1005,9 +1060,11 @@ fn reveal_never_receives_a_file_path() {
     w.h.shell.set_host(host.host(Prefs::default()));
     // an exam being graded: selected, but no folder to show
     press(ui, "New exam");
-    type_into(ui, "Scan files or folders", w.scans.to_str().unwrap());
-    type_into(ui, "Number of questions", "30");
-    press(ui, "Grade exam");
+    grade_with_card(
+        &w.h,
+        &w.held,
+        &[("Scan files or folders", w.scans.to_str().unwrap())],
+    );
     click(ui, &tab(ui, "Exams"));
     press(ui, "Open exam folder");
     assert!(host.revealed.borrow().is_empty());
@@ -1306,4 +1363,497 @@ fn theme_choice_is_saved() {
     w.h.shell.set_host(FakeHost::new().host(Prefs::default()));
     assert!(theme.get_dark(), "no theme saved: the window keeps its own");
     assert!(app.get_single_key());
+}
+
+// ------------------------------------------------------------------ the New-exam card (D5)
+
+/// The value of the card's row `label` ("Questions: 30 — the sheets (…)"), as read aloud (a
+/// question or note on the field starts the same, without the source).
+fn card_row(ui: &AppWindow, label: &str) -> String {
+    let rows: Vec<String> = with_prefix(ui, &format!("{label}: "))
+        .into_iter()
+        .map(|(l, _)| l)
+        .filter(|l| l.contains(" — "))
+        .collect();
+    assert_eq!(rows.len(), 1, "one card row {label}: {rows:?}");
+    rows[0].clone()
+}
+
+/// True when the button labelled `label` can be pressed.
+fn enabled(ui: &AppWindow, label: &str) -> bool {
+    one(ui, label).accessible_enabled() != Some(false)
+}
+
+/// D5: the scans picked are checked at once in the background, with progress and a way to stop;
+/// when the check ends every value of the card shows its source and evidence, the question
+/// that stops grading carries its one-click answers, and the notes stay folded until asked for.
+#[test]
+fn the_survey_runs_at_once_and_fills_the_card() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let host = FakeHost::new();
+    w.h.shell.set_host(host.host(Prefs::default()));
+    let ex = ui.global::<ExamsVM>();
+    press(ui, "New exam");
+    assert!(!enabled(ui, "Grade exam"), "nothing to grade yet");
+    host.will_pick(&[&w.scans]);
+    press(ui, "Choose a folder for Scan files or folders");
+    // checking: no pause needed, a picked folder is checked at once
+    assert!(w.h.app.borrow().surveying());
+    assert_eq!(ex.get_survey_state(), 1);
+    one(ui, "Stop checking");
+    assert!(!enabled(ui, "Grade exam"));
+    let why = one(ui, "Grade exam")
+        .accessible_description()
+        .unwrap_or_default()
+        .to_string();
+    assert!(why.starts_with("Checking the scans"), "{why}");
+    assert!(
+        card_row(ui, "Scans").contains("not checked yet"),
+        "{}",
+        card_row(ui, "Scans")
+    );
+
+    run_survey(&w.h, &w.held);
+    assert_eq!(ex.get_survey_state(), 2);
+    assert!(by_label(ui, "Stop checking").is_empty());
+    assert!(
+        ex.get_survey_text().starts_with("Checked 6 pages in "),
+        "{}",
+        ex.get_survey_text()
+    );
+    for (label, value) in [
+        ("Scans", "Scans: 6 files — typed (6 student sheets)"),
+        ("Questions", "Questions: 30 — the sheets (sheets: rows 1–30"),
+        ("Options", "Options: 5 — the sheet"),
+        ("Cancel mode", "Cancel mode: erase_only — the sheet"),
+        ("Student ID", "Student ID: iau — the sheet"),
+        ("Answer key", "Answer key: none — default"),
+    ] {
+        let row = card_row(ui, label);
+        assert!(row.starts_with(value), "{row}");
+    }
+    // the blank fields show what they will grade
+    assert_eq!(ex.get_h_questions().proposed, "30 · the sheets");
+    // the open question, its answers, and Grade exam waiting with it
+    let asks = ex.get_card_asks();
+    assert_eq!(asks.row_count(), 1);
+    let ask = asks.row_data(0).unwrap();
+    assert_eq!(ask.label, "Answer key");
+    for choice in [
+        "Choose a key file…",
+        "Import from Remark…",
+        "Key sheets…",
+        PROVISIONAL,
+    ] {
+        one(ui, choice);
+    }
+    assert!(!enabled(ui, "Grade exam"));
+    assert!(
+        ex.get_new_block().starts_with("Answer key: no answer key"),
+        "{}",
+        ex.get_new_block()
+    );
+    // the notes, folded
+    assert!(ex.get_card_notes().row_count() > 0);
+    let notes = one(ui, "Notes");
+    assert_eq!(notes.accessible_expanded(), Some(false));
+    let note = ex.get_card_notes().row_data(0).unwrap();
+    let note_text = format!("{}: {}", note.label, note.text);
+    assert!(by_label(ui, &note_text).is_empty(), "folded");
+    press(ui, "Notes");
+    one(ui, &note_text);
+}
+
+/// D5: a question blocks Grade exam (clicked or not, nothing is graded); its one-click answer
+/// unblocks it. A provisional key is used only after that explicit choice, and the choice is
+/// not carried to other scans.
+#[test]
+fn an_ask_blocks_grade_and_a_choice_unblocks_it() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let ex = ui.global::<ExamsVM>();
+    press(ui, "New exam");
+    type_into(ui, "Scan files or folders", w.scans.to_str().unwrap());
+    settle_card(&w.h, &w.held);
+    assert!(w.held.borrow().is_empty(), "the survey ran");
+    assert!(!enabled(ui, "Grade exam"));
+    press(ui, "Grade exam");
+    assert!(!w.h.app.borrow().grading_in_progress());
+    assert!(
+        w.held.borrow().is_empty(),
+        "nothing graded while a question is open"
+    );
+    assert!(card_row(ui, "Answer key").starts_with("Answer key: none — default"));
+
+    press(ui, PROVISIONAL);
+    assert_eq!(ex.get_card_asks().row_count(), 0);
+    assert_eq!(ex.get_new_block(), "");
+    assert!(enabled(ui, "Grade exam"));
+    let key = card_row(ui, "Answer key");
+    assert!(
+        key.starts_with("Answer key: provisional (inferred from the answers) — your answer"),
+        "{key}"
+    );
+
+    // other scans: a new survey, and the answer given for the old ones is gone
+    let other = synth::write_scans(
+        &synth::Spec {
+            sheets: 4,
+            ..synth::BARE
+        },
+        &dir.path().join("other scans"),
+    );
+    click(ui, &one(ui, "Scan files or folders"));
+    chord(ui, Key::Control, "a");
+    type_text(ui, other.to_str().unwrap());
+    settle_card(&w.h, &w.held);
+    assert!(card_row(ui, "Scans").starts_with("Scans: 4 files — typed (4 student sheets"));
+    assert!(card_row(ui, "Answer key").starts_with("Answer key: none — default"));
+    assert!(!enabled(ui, "Grade exam"), "asked again for these scans");
+
+    press(ui, PROVISIONAL);
+    press(ui, "Grade exam");
+    assert!(
+        message(ui).contains("Grading 4 scan files"),
+        "{}",
+        message(ui)
+    );
+    run_held(&w.h, &w.held);
+    assert_eq!(w.h.app.borrow().grading_error(), None);
+    let exam = w.h.app.borrow().default_exam().expect("the new exam");
+    let key =
+        w.h.app
+            .borrow()
+            .with_project(&exam, |p| p.session.definition.key.clone())
+            .expect("project");
+    assert_eq!(key, omr_app::exam::KeySource::Inferred);
+}
+
+/// D5, the contract: the definition graded is the one the proposal's inputs define, typed
+/// values included (one of them under Advanced options), and it records where each value came
+/// from.
+#[test]
+fn the_graded_definition_equals_the_proposals_inputs() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    press(ui, "New exam");
+    press(ui, "Advanced options");
+    for (label, text) in [
+        ("Scan files or folders", w.scans.to_str().unwrap()),
+        ("Exam title", "Quiz 7"),
+        ("Course code", "CS 213"),
+        ("Versions", "A, B"),
+        ("Term", "1447-2"),
+    ] {
+        type_into(ui, label, text);
+    }
+    settle_card(&w.h, &w.held);
+    press(ui, PROVISIONAL);
+    let folder = card_row(ui, "Folder");
+    press(ui, "Grade exam");
+    run_held(&w.h, &w.held);
+    assert_eq!(w.h.app.borrow().grading_error(), None);
+
+    // the same proposal made by the core alone
+    let mut given = Given::new(
+        Sheet::Template("iau-ccsit-v1".into()),
+        vec![w.scans.clone()],
+    );
+    given.typed.title = Some("Quiz 7".into());
+    given.typed.course = Some("CS 213".into());
+    given.typed.forms = Some("A, B".into());
+    given.typed.term = Some("1447-2".into());
+    given.answers = vec![Answer::InferKeyProvisionally];
+    let survey = omr_app::survey::survey(&given.survey_request(1), &|_| {}).expect("survey");
+    // (the exams folder now holds the new exam: the proposal is made as it was before)
+    let p = propose(&given, Some(&survey), &Context::new(&w.ws));
+    let inputs = p.inputs.expect("no question open");
+    let (expected, _) = omr_app::define::define(&inputs).expect("define");
+    assert!(folder.contains("cs-213-quiz-7 —"), "{folder}");
+    let exam = w.h.app.borrow().default_exam().expect("the new exam");
+    assert_eq!(
+        w.h.app.borrow().exam_folder(&exam),
+        Some(w.ws.join("cs-213-quiz-7")),
+        "graded into the card's folder"
+    );
+    let graded =
+        w.h.app
+            .borrow()
+            .with_project(&exam, |p| p.session.definition.clone())
+            .expect("project");
+    assert_eq!(graded, expected);
+    assert_eq!(graded.term, "1447-2");
+    assert_eq!(graded.forms, ["A", "B"]);
+    let source = |field: &str| {
+        graded
+            .provenance
+            .iter()
+            .find(|f| f.field == field)
+            .map(|f| (f.value.clone(), f.source.clone()))
+    };
+    assert_eq!(
+        source("questions"),
+        Some(("30".into(), "the sheets".into()))
+    );
+    assert_eq!(source("versions"), Some(("A, B".into(), "typed".into())));
+    assert_eq!(source("term"), Some(("1447-2".into(), "typed".into())));
+}
+
+/// D5: editing a value proposes the card again once typing pauses, without reading the scans
+/// again; other scans start a new survey, and the survey of the old scans is discarded even if
+/// it ends after the new one started.
+#[test]
+fn editing_the_scans_discards_the_old_survey() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let ex = ui.global::<ExamsVM>();
+    press(ui, "New exam");
+    type_into(ui, "Scan files or folders", w.scans.to_str().unwrap());
+    settle_card(&w.h, &w.held);
+    assert!(card_row(ui, "Scans").starts_with("Scans: 6 files"));
+
+    // a typed title: shown once typing pauses, the scans are not read again
+    type_into(ui, "Exam title", "Quiz 7");
+    assert!(
+        !card_row(ui, "Title").starts_with("Title: Quiz 7"),
+        "not on every key"
+    );
+    support::harness::pause_typing();
+    assert!(card_row(ui, "Title").starts_with("Title: Quiz 7 — typed"));
+    assert!(!w.h.app.borrow().surveying());
+    assert!(w.held.borrow().is_empty(), "no survey started");
+
+    // other scans: their survey starts; the first scans' survey (started again by another
+    // change, then left behind) never reaches the card
+    let four = synth::write_scans(
+        &synth::Spec {
+            sheets: 4,
+            ..synth::BARE
+        },
+        &dir.path().join("four"),
+    );
+    let five = synth::write_scans(
+        &synth::Spec {
+            sheets: 5,
+            ..synth::BARE
+        },
+        &dir.path().join("five"),
+    );
+    click(ui, &one(ui, "Scan files or folders"));
+    chord(ui, Key::Control, "a");
+    type_text(ui, four.to_str().unwrap());
+    support::harness::pause_typing();
+    assert_eq!(w.held.borrow().len(), 1);
+    click(ui, &one(ui, "Scan files or folders"));
+    chord(ui, Key::Control, "a");
+    type_text(ui, five.to_str().unwrap());
+    support::harness::pause_typing();
+    assert_eq!(w.held.borrow().len(), 2, "a survey for each stack");
+    // the survey of the four sheets ends: dropped
+    let stale = w.held.borrow_mut().remove(0);
+    std::thread::spawn(stale).join().expect("stale survey");
+    w.h.shell.pump();
+    assert!(w.h.app.borrow().surveying(), "still checking the five");
+    assert_eq!(ex.get_survey_state(), 1);
+    assert!(card_row(ui, "Scans").contains("not checked yet"));
+    run_survey(&w.h, &w.held);
+    assert!(card_row(ui, "Scans").starts_with("Scans: 5 files — typed (5 student sheets"));
+    assert!(card_row(ui, "Title").starts_with("Title: Quiz 7 — typed"));
+}
+
+/// D5: Advanced options are collapsed, and their fields do not exist, until clicked; the IAU
+/// sheet's cancel mode is shown locked with the value it grades.
+#[test]
+fn advanced_options_are_collapsed_until_clicked() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    press(ui, "New exam");
+    let fields = [
+        "Sheet template or spec file",
+        "Output folder",
+        "Term",
+        "Student ID scheme",
+        "Cancel mode",
+        "Second review",
+        "High-stakes exam",
+    ];
+    let advanced = one(ui, "Advanced options");
+    assert_eq!(advanced.accessible_expanded(), Some(false));
+    for f in fields {
+        assert!(
+            by_label(ui, f).is_empty(),
+            "{f} exists before Advanced options"
+        );
+    }
+    type_into(ui, "Scan files or folders", w.scans.to_str().unwrap());
+    settle_card(&w.h, &w.held);
+    press(ui, "Advanced options");
+    assert_eq!(
+        one(ui, "Advanced options").accessible_expanded(),
+        Some(true)
+    );
+    for f in fields {
+        one(ui, f);
+    }
+    let cancel = one(ui, "Cancel mode");
+    assert_eq!(
+        cancel.accessible_enabled(),
+        Some(false),
+        "the sheet fixes it"
+    );
+    assert_eq!(
+        cancel.accessible_placeholder_text().unwrap_or_default(),
+        "erase_only · the sheet"
+    );
+    let second = one(ui, "Second review");
+    assert_eq!(
+        second.accessible_placeholder_text().unwrap_or_default(),
+        "never · default"
+    );
+    press(ui, "Advanced options");
+    for f in fields {
+        assert!(by_label(ui, f).is_empty(), "{f} gone once folded");
+    }
+}
+
+/// D5: the card opens while another exam is graded; Grade exam waits and says why, and is
+/// available once the run has ended.
+#[test]
+fn the_card_opens_during_a_run_and_says_why_grade_waits() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let ex = ui.global::<ExamsVM>();
+    press(ui, "New exam");
+    grade_with_card(
+        &w.h,
+        &w.held,
+        &[
+            ("Scan files or folders", w.scans.to_str().unwrap()),
+            ("Exam title", "Quiz 1"),
+            ("Course code", "CS 213"),
+        ],
+    );
+    assert!(w.h.app.borrow().grading_in_progress());
+    click(ui, &tab(ui, "Exams"));
+    press(ui, "New exam");
+    assert!(ex.get_new_open(), "the card opens during the run");
+    assert!(!message(ui).contains("not in the desktop shell"));
+    let block = ex.get_new_block().to_string();
+    assert!(
+        block.starts_with("CS 213 Quiz 1 is being graded") && block.contains("when it finishes"),
+        "{block}"
+    );
+    // the scans are checked meanwhile; Grade still waits for the run
+    for (label, text) in [
+        ("Scan files or folders", w.scans.to_str().unwrap()),
+        ("Exam title", "Quiz 1"),
+        ("Course code", "CS 213"),
+    ] {
+        type_into(ui, label, text);
+    }
+    settle_card(&w.h, &w.held);
+    assert_eq!(ex.get_survey_state(), 2);
+    press(ui, PROVISIONAL);
+    assert!(!enabled(ui, "Grade exam"));
+    assert!(ex.get_new_block().contains("is being graded"));
+    // the run ends: Grade exam is available, into another folder than the first exam's
+    run_held(&w.h, &w.held);
+    assert_eq!(ex.get_new_block(), "", "{}", ex.get_new_block());
+    assert!(enabled(ui, "Grade exam"));
+    let folder = card_row(ui, "Folder");
+    assert!(folder.contains("cs-213-quiz-1-2 —"), "{folder}");
+}
+
+/// D5: the check of the scans can be stopped: nothing is graded until they are checked again,
+/// which the card offers as a question; a stopped survey that ends later changes nothing.
+#[test]
+fn stopping_the_survey_holds_grade_until_checked_again() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let ex = ui.global::<ExamsVM>();
+    press(ui, "New exam");
+    type_into(ui, "Scan files or folders", w.scans.to_str().unwrap());
+    support::harness::pause_typing();
+    assert!(w.h.app.borrow().surveying());
+    press(ui, "Stop checking");
+    assert!(!w.h.app.borrow().surveying());
+    assert_eq!(ex.get_survey_state(), 3);
+    assert!(
+        message(ui).starts_with("Stopped checking the scans"),
+        "{}",
+        message(ui)
+    );
+    let ask = ex.get_card_asks().row_data(0).expect("a question");
+    assert!(
+        ask.text.starts_with("You stopped checking the scans"),
+        "{}",
+        ask.text
+    );
+    assert!(!enabled(ui, "Grade exam"));
+    assert!(
+        ex.get_new_block()
+            .starts_with("Scans: You stopped checking"),
+        "{}",
+        ex.get_new_block()
+    );
+    // the stopped survey's worker ends: nothing changes
+    let stopped = w.held.borrow_mut().pop().expect("the survey");
+    std::thread::spawn(stopped).join().expect("stopped survey");
+    w.h.shell.pump();
+    assert_eq!(ex.get_survey_state(), 3);
+
+    press(ui, "Check the scans again");
+    assert!(w.h.app.borrow().surveying());
+    run_survey(&w.h, &w.held);
+    assert_eq!(ex.get_survey_state(), 2);
+    assert!(card_row(ui, "Scans").starts_with("Scans: 6 files — typed (6 student sheets"));
+    assert!(
+        ex.get_new_block().starts_with("Answer key"),
+        "{}",
+        ex.get_new_block()
+    );
+}
+
+/// D5: a value typed that is no value of the field is a question on that field, said under
+/// it, and Grade exam waits; fixed, the question goes.
+#[test]
+fn an_invalid_value_is_marked_on_its_field() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let ex = ui.global::<ExamsVM>();
+    press(ui, "New exam");
+    type_into(ui, "Scan files or folders", w.scans.to_str().unwrap());
+    type_into(ui, "Number of questions", "thirty");
+    settle_card(&w.h, &w.held);
+    press(ui, PROVISIONAL);
+    let why = one(ui, "Number of questions")
+        .accessible_description()
+        .unwrap_or_default()
+        .to_string();
+    assert!(why.contains("not a question count"), "{why}");
+    assert!(
+        ex.get_new_block().starts_with("Questions:"),
+        "{}",
+        ex.get_new_block()
+    );
+    assert!(!enabled(ui, "Grade exam"));
+    // the question's own answer puts the keyboard in the field
+    press(ui, "Type the count");
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1));
+    chord(ui, Key::Control, "a");
+    type_text(ui, "30");
+    support::harness::pause_typing();
+    assert_eq!(ex.get_new_questions(), "30");
+    assert_eq!(ex.get_h_questions().error, "");
+    assert!(enabled(ui, "Grade exam"));
+    assert!(card_row(ui, "Questions").starts_with("Questions: 30 — typed"));
 }

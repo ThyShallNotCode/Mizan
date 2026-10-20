@@ -28,6 +28,8 @@ pub enum PickTarget {
     NewClo,
     /// New exam: the spec file of an own sheet (the sheet field).
     NewSpec,
+    /// New exam: the exam's own folder (Advanced options).
+    NewOut,
     /// Setup: replace the key from a key file.
     SetupKey,
     SetupKeySheets,
@@ -49,7 +51,7 @@ pub enum PickTarget {
 const SCANS: &[&str] = omr_app::ingest::EXTENSIONS;
 
 impl PickTarget {
-    pub const ALL: [PickTarget; 17] = [
+    pub const ALL: [PickTarget; 18] = [
         PickTarget::NewScans,
         PickTarget::NewScanFolder,
         PickTarget::NewKey,
@@ -57,6 +59,7 @@ impl PickTarget {
         PickTarget::NewRoster,
         PickTarget::NewClo,
         PickTarget::NewSpec,
+        PickTarget::NewOut,
         PickTarget::SetupKey,
         PickTarget::SetupKeySheets,
         PickTarget::SetupClo,
@@ -79,6 +82,7 @@ impl PickTarget {
             PickTarget::NewRoster => "new-roster",
             PickTarget::NewClo => "new-clo",
             PickTarget::NewSpec => "new-spec",
+            PickTarget::NewOut => "new-out",
             PickTarget::SetupKey => "setup-key",
             PickTarget::SetupKeySheets => "setup-key-sheets",
             PickTarget::SetupClo => "setup-clo",
@@ -94,6 +98,21 @@ impl PickTarget {
 
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|t| t.name() == name)
+    }
+
+    /// The New-exam card's field it fills (`None`: not a field of the card).
+    pub fn card_field(self) -> Option<crate::backend::CardField> {
+        use crate::backend::CardField as F;
+        Some(match self {
+            PickTarget::NewScans | PickTarget::NewScanFolder => F::Scans,
+            PickTarget::NewKey => F::Key,
+            PickTarget::NewKeySheets => F::KeySheets,
+            PickTarget::NewRoster => F::Roster,
+            PickTarget::NewClo => F::Clo,
+            PickTarget::NewSpec => F::Sheet,
+            PickTarget::NewOut => F::Folder,
+            _ => return None,
+        })
     }
 
     /// The field it fills: a Folder… button fills the field of its Browse… button.
@@ -114,6 +133,7 @@ impl PickTarget {
             | PickTarget::RemarkBooks
             | PickTarget::CompareBooks => PickKind::Files,
             PickTarget::NewScanFolder
+            | PickTarget::NewOut
             | PickTarget::AddScanFolder
             | PickTarget::ParallelDir
             | PickTarget::Workspace => PickKind::Folder,
@@ -139,6 +159,7 @@ impl PickTarget {
             PickTarget::NewRoster => "Choose the roster",
             PickTarget::NewClo | PickTarget::SetupClo => "Choose the CLO mapping file",
             PickTarget::NewSpec => "Choose the spec file of your sheet",
+            PickTarget::NewOut => "Choose the folder for the new exam",
             PickTarget::AddScans => "Choose the scans to add",
             PickTarget::AddScanFolder => "Choose the folder of scans to add",
             PickTarget::RemarkBooks => "Choose Remark's graded Excel exports",
@@ -178,6 +199,7 @@ impl PickTarget {
                 &["xlsx", "csv"],
             )],
             PickTarget::NewScanFolder
+            | PickTarget::NewOut
             | PickTarget::AddScanFolder
             | PickTarget::ParallelDir
             | PickTarget::Workspace => Vec::new(),
@@ -193,7 +215,7 @@ impl PickTarget {
             | PickTarget::SetupKeySheets
             | PickTarget::AddScans
             | PickTarget::AddScanFolder => "scans",
-            PickTarget::ParallelDir | PickTarget::Workspace => "folders",
+            PickTarget::NewOut | PickTarget::ParallelDir | PickTarget::Workspace => "folders",
             _ => "files",
         }
     }

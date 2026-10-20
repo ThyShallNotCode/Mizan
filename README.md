@@ -311,9 +311,17 @@ omr-desktop --project "$HOME/OMR Exams/cs211-midterm-1"
 omr-desktop --demo                            # invented demo data, marked DEMO on every screen
 ```
 
-- **Exams** lists every graded exam. **New exam** (Ctrl+N) grades a folder of scans into a new
-  exam folder: the scans, the sheet (`iau-ccsit-v1`), the number of questions and, optionally,
-  the key, roster and CLO files. Without a key file the key is inferred.
+- **Exams** lists every graded exam. **New exam** (Ctrl+N) opens a card: choose the scans (and,
+  if you have them, the key file or key sheets, the roster and the CLO file). The scans are
+  checked at once in the background (a few seconds for a class; **Stop checking** stops it),
+  and the card then shows every value it will grade, each with where it came from: the
+  versions and the number of questions from the key or the sheets, the options and how marks
+  are cancelled from the sheet, the title and course from the folder name, and so on. Type
+  over any value to change it; **Advanced options** has the sheet, term, student-number
+  scheme, second review, high stakes and the exam's folder. When the evidence disagrees, or no
+  key is given, the card asks, with one-click answers (a key inferred from the answers is used
+  only if you choose it, and cannot be released); **Grade exam** waits until nothing is left
+  to answer and grades exactly what the card shows.
 - Every file or folder field has **Browse…** beside it (and **Folder…** for scans), which opens
   your system's file dialog at the folder you picked from last; typing or pasting a path still
   works.
@@ -332,7 +340,7 @@ omr-desktop --demo                            # invented demo data, marked DEMO 
   Blackboard upload. **Outcomes** shows CLO attainment and the TP-154 tables.
 - **Settings** records your name in the audit trail (on every decision from then on), changes
   or shows the exams folder, and keeps the theme and the review settings for the next start.
-- **From Remark Office OMR:** **Import from Remark export…** on the New exam form (or in Setup,
+- **From Remark Office OMR:** **Import from Remark export…** on the New exam card (or in Setup,
   to replace a graded exam's key) reads Remark's graded `.xlsx` exports and shows the import for
   review before anything changes; a refusal says what to do and can offer the suggested points.
   In Setup, **Approve imported mappings** approves the imported CLO rows and **Replace CLOs**

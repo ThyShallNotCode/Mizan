@@ -5,13 +5,13 @@ import {
     SecondaryButton, GhostButton, IconButton, Chip, StatusPill, Tag, ProgressBar, TableRow,
     TableHeaderCell, TableCell, SeverityGlyph,
 } from "../theme.slint";
-import { App, ExamsVM, ExamRow, Page, RemarkVM } from "../state.slint";
+import { App, ExamsVM, ExamRow, Page, RemarkVM, CardValue, CardIssue } from "../state.slint";
 import { RemarkFields, RemarkRefusal, RemarkImportCard, RemarkSideCard } from "remark.slint";
 import {
     Icons, ThemeToggle, Centered, KVLine, SectionLabel, StatusText, SeverityStack, SeverityCount,
-    CoverageRing, Avatar, MessageText, PathField, EmptyState,
+    CoverageRing, Avatar, MessageText, PathField, EmptyState, Switch,
 } from "../widgets.slint";
-import { ListView } from "std-widgets.slint";
+import { ListView, ScrollView } from "std-widgets.slint";
 
 component ExamTableRow inherits TableRow {
     in property <ExamRow> data;
@@ -445,20 +445,40 @@ component Drawer inherits Rectangle {
     }
 }
 
-// One labelled field of the New-exam form: the visible label above the field (the field's
+// One labelled field of the New-exam card: the visible label above the field (the field's
 // accessible label is the same text). A path field names its file dialogs (`target`,
-// `folder-target`): Browse… (and Folder…) beside it when the window has them.
+// `folder-target`): Browse… (and Folder…) beside it when the window has them. An edit by the
+// instructor is reported with the card's name of the field (`field`), and a question the card
+// has open on the value is shown under it (`error`). The card asks for the keyboard by name
+// (`ExamsVM.new-focus`).
 component FormField inherits VerticalLayout {
     in property <string> label;
     in property <string> placeholder;
     in property <bool> mono: true;
+    in property <bool> enabled: true;
     in property <string> target;
     in property <string> folder-target;
+    in property <string> field;
+    in property <string> error;
     in-out property <string> text;
-    out property <bool> has-focus: field.has-focus;
+    out property <bool> has-focus: input.has-focus;
     callback accepted(string);
-    forward-focus: field;
+    forward-focus: input;
     spacing: 2px;
+    property <int> focus-gen: ExamsVM.new-focus-gen;
+    changed focus-gen => {
+        if (ExamsVM.new-focus != "" && ExamsVM.new-focus == root.field) {
+            ExamsVM.new-focus = "";
+            input.focus();
+        }
+    }
+    // a field made by the ask (under Advanced options) takes the keyboard as it appears
+    init => {
+        if (ExamsVM.new-focus != "" && ExamsVM.new-focus == root.field) {
+            ExamsVM.new-focus = "";
+            input.focus();
+        }
+    }
     Text {
         text: root.label;
         font-size: Theme.text-xs;
@@ -466,23 +486,128 @@ component FormField inherits VerticalLayout {
         color: Theme.ink-2;
         accessible-role: none;
     }
-    field := PathField {
+    input := PathField {
         label: root.label;
         placeholder: root.placeholder;
         text <=> root.text;
         mono: root.mono;
+        enabled: root.enabled;
         target: root.target;
         folder-target: root.folder-target;
+        invalid: root.error != "";
+        description: root.error;
         accepted(v) => {
             root.accepted(v);
+        }
+        edited(v) => {
+            ExamsVM.form-changed(root.field);
+        }
+    }
+    if root.error != "": Text {
+        text: root.error;
+        font-size: Theme.text-xs;
+        color: Theme.error;
+        wrap: word-wrap;
+        // the field's description carries it
+        accessible-role: none;
+    }
+}
+
+// One value of the card: its label, the value graded, where it came from and the evidence.
+component CardRow inherits Rectangle {
+    in property <CardValue> v;
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.v.a11y;
+    height: row.preferred-height;
+    row := HorizontalLayout {
+        spacing: Theme.space-sm;
+        Text {
+            width: 104px;
+            text: root.v.label;
+            font-size: Theme.text-xs;
+            font-weight: Theme.weight-semibold;
+            color: Theme.ink-2;
+            accessible-role: none;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 1px;
+            Text {
+                text: (root.v.value == "" ? "none" : root.v.value) + "  — " + root.v.source;
+                font-size: Theme.text-xs;
+                font-weight: Theme.weight-medium;
+                color: root.v.state == 2 ? Theme.error : Theme.ink;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+            if root.v.detail != "": Text {
+                text: root.v.detail;
+                font-size: Theme.text-xs;
+                color: Theme.ink-3;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+        }
+        if root.v.state != 0: VerticalLayout {
+            alignment: start;
+            Text {
+                text: root.v.state == 2 ? "question" : "note";
+                font-size: Theme.text-xs;
+                color: root.v.state == 2 ? Theme.error : Theme.ink-2;
+                accessible-role: none;
+            }
         }
     }
 }
 
-// The New-exam form (CR-04): the scans, the sheet and the question count, with the key,
-// roster and CLO files. Rust validates it with the rules of `omr grade` and grades it in the
-// background into a new folder of the workspace; the Scan screen follows the run.
+// A question of the card: what the evidence shows and what is at stake, and its one-click
+// answers. Nothing is graded until it is answered.
+component AskCard inherits Rectangle {
+    in property <CardIssue> issue;
+    in property <int> index;
+    // a button inside has the keyboard
+    callback focused(bool);
+    background: Theme.warning-soft;
+    border-radius: Theme.radius-md;
+    border-width: 1px;
+    border-color: Theme.warning;
+    height: col.preferred-height;
+    col := VerticalLayout {
+        padding: Theme.space-sm;
+        spacing: Theme.space-xs;
+        Text {
+            text: root.issue.label + ": " + root.issue.text;
+            font-size: Theme.text-sm;
+            color: Theme.ink;
+            wrap: word-wrap;
+        }
+        for c[j] in root.issue.choices: HorizontalLayout {
+            alignment: start;
+            SecondaryButton {
+                text: c;
+                changed has-focus => {
+                    root.focused(self.has-focus);
+                }
+                clicked => {
+                    ExamsVM.choose(root.index, j);
+                }
+            }
+        }
+    }
+}
+
+// The New-exam card (G-3). Left, what the instructor gives: the scans (checked at once, in the
+// background), the key file or key sheets, and any value typed over the proposed one (each
+// field shows the proposed value until something is typed). Right, what is graded: every value
+// with its source and evidence, the questions that stop grading until they are answered, and
+// the notes. Rust proposes it all (omr-app) and grades exactly what it shows; Grade exam waits
+// with the reason beside it.
 component NewExamBar inherits Rectangle {
+    // the height the card may take (it scrolls inside beyond it)
+    in property <length> max-h: 800px;
+    // what the instructor gives takes a fixed share: the evidence's long lines never squeeze
+    // a path field
+    property <length> give-w: max(460px, (root.width - 2 * Theme.space-lg) * 0.46);
     background: Theme.surface-raised;
     border-radius: Theme.radius-lg;
     border-width: 1px;
@@ -490,13 +615,13 @@ component NewExamBar inherits Rectangle {
     drop-shadow-blur: Theme.shadow-2-blur;
     drop-shadow-offset-y: Theme.shadow-2-offset;
     drop-shadow-color: Theme.shadow-2-color;
-    property <bool> ready: ExamsVM.can-create && ExamsVM.new-scans != "" && ExamsVM.new-questions != "";
     init => {
         scans.focus();
     }
-    property <bool> focus-inside: scans.has-focus || title.has-focus || course.has-focus || sheet.has-focus || questions.has-focus || options.has-focus || forms.has-focus || key-file.has-focus || roster.has-focus || clo.has-focus || key-sheets.has-focus || import.has-focus || cancel.has-focus || grade.has-focus || (RemarkVM.new-using && root.clear-focused);
-    // the "Clear the Remark import" button has the keyboard (reset when the button is made)
-    property <bool> clear-focused;
+    property <bool> focus-inside: scans.has-focus || title.has-focus || course.has-focus || questions.has-focus || options.has-focus || forms.has-focus || key-file.has-focus || roster.has-focus || clo.has-focus || key-sheets.has-focus || advanced.has-focus || import.has-focus || cancel.has-focus || grade.has-focus || root.made-focused;
+    // a control made and unmade with the card (an answer, Stop checking, Advanced options'
+    // fields, the Remark import's Clear) has the keyboard (reset when one is made)
+    property <bool> made-focused;
     // An overlay: a press on its background must not reach the page underneath. A click on it
     // gives the form the keyboard back (for Escape) unless a control inside has it.
     TouchArea {
@@ -522,7 +647,7 @@ component NewExamBar inherits Rectangle {
         VerticalLayout {
             padding: Theme.space-lg;
             spacing: Theme.space-sm;
-            HorizontalLayout {
+            head := HorizontalLayout {
                 spacing: Theme.space-md;
                 Text {
                     text: "New exam";
@@ -540,143 +665,372 @@ component NewExamBar inherits Rectangle {
                     wrap: word-wrap;
                 }
             }
-            scans := FormField {
-                label: "Scan files or folders";
-                placeholder: "A folder or files of scans (PDF, TIFF, JPEG, PNG); separate several with ;";
-                target: "new-scans";
-                folder-target: "new-scan-folder";
-                text <=> ExamsVM.new-scans;
-            }
-            HorizontalLayout {
-                spacing: Theme.space-md;
-                title := FormField {
-                    horizontal-stretch: 2;
-                    label: "Exam title";
-                    placeholder: "e.g. Midterm 2";
-                    mono: false;
-                    text <=> ExamsVM.new-title;
-                }
-                course := FormField {
-                    horizontal-stretch: 1;
-                    label: "Course code";
-                    placeholder: "e.g. CS 101";
-                    mono: false;
-                    text <=> ExamsVM.new-course;
-                }
-            }
-            HorizontalLayout {
-                spacing: Theme.space-md;
-                sheet := FormField {
-                    horizontal-stretch: 3;
-                    label: "Sheet template or spec file";
-                    placeholder: "iau-ccsit-v1, or the spec file of your own sheet";
-                    target: "new-spec";
-                    text <=> ExamsVM.new-sheet;
-                }
-                questions := FormField {
-                    horizontal-stretch: 1;
-                    label: "Number of questions";
-                    placeholder: "e.g. 30";
-                    text <=> ExamsVM.new-questions;
-                }
-                options := FormField {
-                    horizontal-stretch: 1;
-                    label: "Options per question";
-                    placeholder: "sheet's";
-                    text <=> ExamsVM.new-options;
-                }
-                forms := FormField {
-                    horizontal-stretch: 1;
-                    label: "Form letters";
-                    placeholder: "from key";
-                    text <=> ExamsVM.new-forms;
-                }
-            }
-            // the key, its points and the learning objectives from a Remark import (§3.5)
-            if RemarkVM.new-using: Rectangle {
-                background: Theme.accent-soft;
-                border-radius: Theme.radius-md;
-                accessible-role: AccessibleRole.text;
-                accessible-label: RemarkVM.new-using-text;
-                height: using.preferred-height;
-                using := HorizontalLayout {
-                    padding-left: Theme.space-md;
-                    padding-right: Theme.space-sm;
-                    padding-top: Theme.space-xs;
-                    padding-bottom: Theme.space-xs;
-                    spacing: Theme.space-md;
-                    Text {
-                        horizontal-stretch: 1;
-                        text: RemarkVM.new-using-text;
-                        font-size: Theme.text-xs;
-                        color: Theme.ink;
-                        vertical-alignment: center;
-                        wrap: word-wrap;
-                        accessible-role: none;
+            ScrollView {
+                height: min(body.preferred-height, root.max-h - head.preferred-height - foot.preferred-height - 2 * Theme.space-lg - 2 * Theme.space-sm);
+                content-width: self.visible-width;
+                body := HorizontalLayout {
+                    padding-right: Theme.space-md;
+                    spacing: Theme.space-lg;
+                    alignment: stretch;
+                    // ---- what the instructor gives
+                    VerticalLayout {
+                        width: root.give-w;
+                        alignment: start;
+                        spacing: Theme.space-sm;
+                        scans := FormField {
+                            label: "Scan files or folders";
+                            placeholder: "A folder or files of scans (PDF, TIFF, JPEG, PNG); separate several with ;";
+                            target: "new-scans";
+                            folder-target: "new-scan-folder";
+                            field: "scans";
+                            error: ExamsVM.h-scans.error;
+                            text <=> ExamsVM.new-scans;
+                        }
+                        if ExamsVM.survey-state == 1: HorizontalLayout {
+                            spacing: Theme.space-sm;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                spacing: 3px;
+                                Text {
+                                    text: ExamsVM.survey-text;
+                                    font-size: Theme.text-xs;
+                                    color: Theme.ink-2;
+                                    wrap: word-wrap;
+                                }
+                                ProgressBar {
+                                    value: ExamsVM.survey-share;
+                                    thickness: 4px;
+                                    accessible-label: "Checking the scans";
+                                }
+                            }
+                            Centered {
+                                GhostButton {
+                                    init => {
+                                        root.made-focused = false;
+                                    }
+                                    changed has-focus => {
+                                        root.made-focused = self.has-focus;
+                                    }
+                                    text: "Stop checking";
+                                    accessible-description: "Stops reading the scans; nothing is graded until they are checked";
+                                    clicked => {
+                                        ExamsVM.stop-survey();
+                                    }
+                                }
+                            }
+                        }
+                        if ExamsVM.survey-state == 2: Text {
+                            text: ExamsVM.survey-text;
+                            font-size: Theme.text-xs;
+                            color: Theme.ink-2;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: Theme.space-md;
+                            key-file := FormField {
+                                horizontal-stretch: 1;
+                                label: "Answer key file";
+                                placeholder: ExamsVM.h-key.proposed != "" ? ExamsVM.h-key.proposed : "key.csv (optional)";
+                                target: "new-key";
+                                field: "key";
+                                error: ExamsVM.h-key.error;
+                                text <=> ExamsVM.new-key;
+                            }
+                            key-sheets := FormField {
+                                horizontal-stretch: 1;
+                                label: "Key sheets";
+                                placeholder: ExamsVM.h-key-sheets.proposed != "" ? ExamsVM.h-key-sheets.proposed : "your filled answer sheets (optional)";
+                                target: "new-key-sheets";
+                                field: "key-sheets";
+                                error: ExamsVM.h-key-sheets.error;
+                                text <=> ExamsVM.new-key-sheets;
+                            }
+                        }
+                        // the key, its points and the learning objectives from a Remark import (§3.5)
+                        if RemarkVM.new-using: Rectangle {
+                            background: Theme.accent-soft;
+                            border-radius: Theme.radius-md;
+                            accessible-role: AccessibleRole.text;
+                            accessible-label: RemarkVM.new-using-text;
+                            height: using.preferred-height;
+                            using := HorizontalLayout {
+                                padding-left: Theme.space-md;
+                                padding-right: Theme.space-sm;
+                                padding-top: Theme.space-xs;
+                                padding-bottom: Theme.space-xs;
+                                spacing: Theme.space-md;
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: RemarkVM.new-using-text;
+                                    font-size: Theme.text-xs;
+                                    color: Theme.ink;
+                                    vertical-alignment: center;
+                                    wrap: word-wrap;
+                                    accessible-role: none;
+                                }
+                                Centered {
+                                    GhostButton {
+                                        init => {
+                                            root.made-focused = false;
+                                        }
+                                        changed has-focus => {
+                                            root.made-focused = self.has-focus;
+                                        }
+                                        text: "Clear the Remark import";
+                                        accessible-description: "The card no longer uses the import: give a key file or key sheets";
+                                        clicked => {
+                                            RemarkVM.clear-new();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: Theme.space-md;
+                            title := FormField {
+                                horizontal-stretch: 2;
+                                label: "Exam title";
+                                placeholder: ExamsVM.h-title.proposed != "" ? ExamsVM.h-title.proposed : "e.g. Midterm 2";
+                                mono: false;
+                                field: "title";
+                                error: ExamsVM.h-title.error;
+                                text <=> ExamsVM.new-title;
+                            }
+                            course := FormField {
+                                horizontal-stretch: 1;
+                                label: "Course code";
+                                placeholder: ExamsVM.h-course.proposed != "" ? ExamsVM.h-course.proposed : "e.g. CS 101";
+                                mono: false;
+                                field: "course";
+                                error: ExamsVM.h-course.error;
+                                text <=> ExamsVM.new-course;
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: Theme.space-md;
+                            questions := FormField {
+                                horizontal-stretch: 1;
+                                label: "Number of questions";
+                                placeholder: ExamsVM.h-questions.proposed != "" ? ExamsVM.h-questions.proposed : "e.g. 30";
+                                field: "questions";
+                                error: ExamsVM.h-questions.error;
+                                text <=> ExamsVM.new-questions;
+                            }
+                            forms := FormField {
+                                horizontal-stretch: 1;
+                                label: "Versions";
+                                placeholder: ExamsVM.h-forms.proposed != "" ? ExamsVM.h-forms.proposed : "e.g. A, B";
+                                field: "versions";
+                                error: ExamsVM.h-forms.error;
+                                text <=> ExamsVM.new-forms;
+                            }
+                            options := FormField {
+                                horizontal-stretch: 1;
+                                label: "Options per question";
+                                placeholder: ExamsVM.h-options.proposed != "" ? ExamsVM.h-options.proposed : "the sheet's";
+                                field: "options";
+                                error: ExamsVM.h-options.error;
+                                text <=> ExamsVM.new-options;
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: Theme.space-md;
+                            roster := FormField {
+                                horizontal-stretch: 1;
+                                label: "Roster file";
+                                placeholder: "roster.csv or .xlsx (recommended)";
+                                target: "new-roster";
+                                field: "roster";
+                                error: ExamsVM.h-roster.error;
+                                text <=> ExamsVM.new-roster;
+                            }
+                            clo := FormField {
+                                horizontal-stretch: 1;
+                                label: "CLO mapping file";
+                                placeholder: "clo.csv (optional)";
+                                target: "new-clo";
+                                field: "clo";
+                                error: ExamsVM.h-clo.error;
+                                text <=> ExamsVM.new-clo;
+                            }
+                        }
+                        HorizontalLayout {
+                            alignment: start;
+                            advanced := GhostButton {
+                                text: ExamsVM.new-advanced ? "Advanced options ▾" : "Advanced options ▸";
+                                accessible-label: "Advanced options";
+                                accessible-description: "The sheet, term, student-number scheme, how marks are cancelled, second review, high stakes and the exam's folder";
+                                accessible-expandable: true;
+                                accessible-expanded: ExamsVM.new-advanced;
+                                clicked => {
+                                    ExamsVM.new-advanced = !ExamsVM.new-advanced;
+                                }
+                            }
+                        }
+                        // made only when opened: nothing of it exists before
+                        if ExamsVM.new-advanced: VerticalLayout {
+                            spacing: Theme.space-sm;
+                            HorizontalLayout {
+                                spacing: Theme.space-md;
+                                FormField {
+                                    horizontal-stretch: 1;
+                                    changed has-focus => {
+                                        root.made-focused = self.has-focus;
+                                    }
+                                    label: "Sheet template or spec file";
+                                    placeholder: "iau-ccsit-v1, or your own sheet's spec file";
+                                    target: "new-spec";
+                                    field: "sheet";
+                                    error: ExamsVM.h-sheet.error;
+                                    text <=> ExamsVM.new-sheet;
+                                }
+                                FormField {
+                                    horizontal-stretch: 1;
+                                    changed has-focus => {
+                                        root.made-focused = self.has-focus;
+                                    }
+                                    label: "Output folder";
+                                    placeholder: ExamsVM.h-out.proposed != "" ? ExamsVM.h-out.proposed : "a new folder in the exams folder";
+                                    target: "new-out";
+                                    field: "folder";
+                                    error: ExamsVM.h-out.error;
+                                    text <=> ExamsVM.new-out;
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: Theme.space-md;
+                                FormField {
+                                    horizontal-stretch: 1;
+                                    changed has-focus => {
+                                        root.made-focused = self.has-focus;
+                                    }
+                                    label: "Term";
+                                    placeholder: ExamsVM.h-term.proposed != "" ? ExamsVM.h-term.proposed : "e.g. 1447-2";
+                                    mono: false;
+                                    field: "term";
+                                    error: ExamsVM.h-term.error;
+                                    text <=> ExamsVM.new-term;
+                                }
+                                FormField {
+                                    horizontal-stretch: 1;
+                                    changed has-focus => {
+                                        root.made-focused = self.has-focus;
+                                    }
+                                    label: "Student ID scheme";
+                                    placeholder: ExamsVM.h-id-scheme.proposed != "" ? ExamsVM.h-id-scheme.proposed : "iau, pnu, ksu or digits:N";
+                                    field: "id-scheme";
+                                    error: ExamsVM.h-id-scheme.error;
+                                    text <=> ExamsVM.new-id-scheme;
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: Theme.space-md;
+                                FormField {
+                                    horizontal-stretch: 1;
+                                    changed has-focus => {
+                                        root.made-focused = self.has-focus;
+                                    }
+                                    label: "Cancel mode";
+                                    // the IAU sheet's convention is printed on it: erasures cancel
+                                    enabled: !ExamsVM.cancel-locked;
+                                    placeholder: ExamsVM.h-cancel-mode.proposed != "" ? ExamsVM.h-cancel-mode.proposed : "erase_only, cross_cancels or fill_cancels_check";
+                                    field: "cancel-mode";
+                                    error: ExamsVM.h-cancel-mode.error;
+                                    text <=> ExamsVM.new-cancel-mode;
+                                }
+                                FormField {
+                                    horizontal-stretch: 1;
+                                    changed has-focus => {
+                                        root.made-focused = self.has-focus;
+                                    }
+                                    label: "Second review";
+                                    placeholder: ExamsVM.h-multi-review.proposed != "" ? ExamsVM.h-multi-review.proposed : "never, always or high_stakes";
+                                    field: "multi-review";
+                                    error: ExamsVM.h-multi-review.error;
+                                    text <=> ExamsVM.new-multi-review;
+                                }
+                            }
+                            Switch {
+                                changed has-focus => {
+                                    root.made-focused = self.has-focus;
+                                }
+                                label: "High-stakes exam";
+                                description: ExamsVM.h-high-stakes.proposed;
+                                checked <=> ExamsVM.new-high-stakes;
+                                toggled => {
+                                    ExamsVM.form-changed("high-stakes");
+                                }
+                            }
+                        }
                     }
-                    Centered {
-                        GhostButton {
-                            init => {
-                                root.clear-focused = false;
+                    // ---- what is graded
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: start;
+                        spacing: Theme.space-sm;
+                        Text {
+                            text: "What is graded";
+                            font-size: Theme.text-sm;
+                            font-weight: Theme.weight-semibold;
+                            color: Theme.ink;
+                        }
+                        for a[i] in ExamsVM.card-asks: AskCard {
+                            issue: a;
+                            index: i;
+                            focused(f) => {
+                                root.made-focused = f;
                             }
-                            changed has-focus => {
-                                root.clear-focused = self.has-focus;
+                        }
+                        if ExamsVM.card-notes.length > 0: HorizontalLayout {
+                            alignment: start;
+                            GhostButton {
+                                changed has-focus => {
+                                    root.made-focused = self.has-focus;
+                                }
+                                text: (ExamsVM.new-notes-open ? "Hide notes" : "Show notes") + " (" + ExamsVM.card-notes.length + ")";
+                                accessible-label: "Notes";
+                                accessible-expandable: true;
+                                accessible-expanded: ExamsVM.new-notes-open;
+                                clicked => {
+                                    ExamsVM.new-notes-open = !ExamsVM.new-notes-open;
+                                }
                             }
-                            text: "Clear the Remark import";
-                            accessible-description: "The form no longer uses the import: give a key file, key sheets or no key";
-                            clicked => {
-                                RemarkVM.clear-new();
+                        }
+                        if ExamsVM.new-notes-open: VerticalLayout {
+                            spacing: Theme.space-xs;
+                            for n in ExamsVM.card-notes: Text {
+                                text: n.label + ": " + n.text;
+                                font-size: Theme.text-xs;
+                                color: Theme.ink-2;
+                                wrap: word-wrap;
                             }
+                        }
+                        for v in ExamsVM.card-values: CardRow {
+                            v: v;
                         }
                     }
                 }
             }
-            HorizontalLayout {
-                spacing: Theme.space-md;
-                key-file := FormField {
-                    horizontal-stretch: 1;
-                    label: "Answer key file";
-                    placeholder: "key.csv; blank: infer a provisional key";
-                    target: "new-key";
-                    text <=> ExamsVM.new-key;
-                }
-                roster := FormField {
-                    horizontal-stretch: 1;
-                    label: "Roster file";
-                    placeholder: "roster.csv or .xlsx (optional)";
-                    target: "new-roster";
-                    text <=> ExamsVM.new-roster;
-                }
-                clo := FormField {
-                    horizontal-stretch: 1;
-                    label: "CLO mapping file";
-                    placeholder: "clo.csv (optional)";
-                    target: "new-clo";
-                    text <=> ExamsVM.new-clo;
-                }
-            }
-            HorizontalLayout {
-                spacing: Theme.space-md;
-                key-sheets := FormField {
-                    horizontal-stretch: 1;
-                    label: "Key sheets";
-                    placeholder: "the instructor's filled answer sheets, ; between several (optional; confirmed in Setup)";
-                    target: "new-key-sheets";
-                    text <=> ExamsVM.new-key-sheets;
-                }
-            }
-            HorizontalLayout {
+            foot := HorizontalLayout {
                 spacing: Theme.space-md;
                 import := SecondaryButton {
                     text: "Import from Remark export…";
                     enabled: RemarkVM.can-new;
-                    accessible-description: "Reads Remark's graded Excel exports: the key with exact points per version and the learning objectives, shown for your review before the form uses them";
+                    accessible-description: "Reads Remark's graded Excel exports: the key with exact points per version and the learning objectives, shown for your review before the card uses them";
                     clicked => {
                         RemarkVM.new-panel = true;
                     }
                 }
-                Rectangle {
+                Text {
                     horizontal-stretch: 1;
+                    text: ExamsVM.new-block;
+                    font-size: Theme.text-xs;
+                    color: Theme.ink-2;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                    accessible-role: none;
                 }
                 cancel := GhostButton {
                     text: "Cancel";
@@ -686,7 +1040,9 @@ component NewExamBar inherits Rectangle {
                 }
                 grade := PrimaryButton {
                     text: "Grade exam";
-                    enabled: root.ready;
+                    enabled: ExamsVM.new-block == "";
+                    // why it waits, for a screen reader too
+                    accessible-description: ExamsVM.new-block;
                     clicked => {
                         ExamsVM.create-exam();
                     }
@@ -1172,8 +1528,10 @@ export component ExamsScreen inherits Rectangle {
     if ExamsVM.new-open && !RemarkVM.new-panel: NewExamBar {
         x: (root.width - self.width) / 2;
         y: Theme.top-bar-height + Theme.space-sm;
-        width: min(root.width - 2 * Theme.space-lg, 960px);
+        width: min(root.width - 2 * Theme.space-lg, 1240px);
         height: self.preferred-height;
+        // the status bar stays in view: it says why a click did nothing
+        max-h: root.height - Theme.top-bar-height - Theme.status-bar-height - 2 * Theme.space-sm;
     }
     if ExamsVM.new-open && RemarkVM.new-panel: RemarkNewPanel {
         x: (root.width - self.width) / 2;

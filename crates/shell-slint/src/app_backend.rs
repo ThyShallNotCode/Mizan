@@ -15,13 +15,16 @@
 //! and reopened when the worker reports.
 
 use crate::backend::{self as b, Backend, BackendError, ExamId, ItemId};
+use omr_app::define::Sheet;
 use omr_app::exam::{DomainLetter, ExamDefinition};
 use omr_app::model::{PageStatus, ResponseStatus};
+use omr_app::propose::{Answer, ChoiceAction, Context, FieldId, Given, Proposal, RecentExam};
 use omr_app::review::{
     Action, Decision as AppDecision, ItemKind, Lane as AppLane, OverlayState, ReviewReason,
 };
+use omr_app::survey::{Survey, SurveyRequest};
 use omr_app::vm::{self, ProgressTracker};
-use omr_app::{AppError, ExamProject, GradeOptions, Progress};
+use omr_app::{AppError, Cancel, ExamProject, GradeOptions, Progress};
 use omr_model::Severity as AppSeverity;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -138,6 +141,144 @@ pub fn run_append(req: AppendRequest, tx: Sender<JobEvent>) {
         }
     };
     let _ = tx.send(JobEvent::Finished(outcome));
+}
+
+/// What a survey worker reports, tagged with the survey's generation ([`run_survey`]): counts
+/// only (no page's provisional result crosses).
+#[derive(Debug)]
+pub enum SurveyEvent {
+    /// Pages read of the pages found.
+    Pages { done: usize, total: usize },
+    /// The survey ended, and how long it took.
+    Finished(Result<Box<Survey>, AppError>, Duration),
+}
+
+/// The body of a survey worker thread: reads the scans of `req` once, in memory, counts only
+/// ([`omr_app::survey::survey`]), and reports on `tx` with `generation`, so a survey whose
+/// scans were changed meanwhile is told apart (and dropped). Nothing is written.
+pub fn run_survey(req: SurveyRequest, generation: u64, tx: Sender<(u64, SurveyEvent)>) {
+    let progress_tx = tx.clone();
+    let progress = move |p: &Progress| {
+        let pages = match p {
+            Progress::Started { pages, .. } => Some((0, *pages)),
+            Progress::Page { done, total, .. } => Some((*done, *total)),
+            _ => None,
+        };
+        if let Some((done, total)) = pages {
+            let _ = progress_tx.send((generation, SurveyEvent::Pages { done, total }));
+        }
+    };
+    let t0 = std::time::Instant::now();
+    let r = omr_app::survey::survey(&req, &progress).map(Box::new);
+    let _ = tx.send((generation, SurveyEvent::Finished(r, t0.elapsed())));
+}
+
+/// What a survey reads: the sheet, the scans, the named key sheets and the roster. Another of
+/// these is another survey.
+type SurveyInputs = (Sheet, Vec<PathBuf>, Vec<PathBuf>, Option<PathBuf>);
+
+fn survey_inputs(g: &Given) -> SurveyInputs {
+    (
+        g.sheet.clone(),
+        g.scans.clone(),
+        g.key_sheets.clone(),
+        g.roster.clone(),
+    )
+}
+
+/// A survey of the New-exam card's scans.
+struct SurveyRun {
+    generation: u64,
+    inputs: SurveyInputs,
+    cancel: Cancel,
+    rx: Receiver<(u64, SurveyEvent)>,
+    /// Pages read of the pages found.
+    done: usize,
+    total: usize,
+    /// The survey and how long it took, or why there is none (stopped, or the scans could not
+    /// be read); `None` while it runs.
+    outcome: Option<Result<(Box<Survey>, Duration), String>>,
+}
+
+/// The New-exam card (G-3): the form last proposed, the instructor's answers, the survey of its
+/// scans and the proposal shown.
+#[derive(Default)]
+struct NewCard {
+    form: Option<b::NewExam>,
+    answers: Vec<Answer>,
+    survey: Option<SurveyRun>,
+    /// Counts the surveys started: a report of any but the last is dropped.
+    generation: u64,
+    /// What the card shown was proposed from, and the proposal.
+    shown: Option<(Box<Given>, Box<Proposal>)>,
+}
+
+/// Why a survey stopped by the instructor has no result.
+const STOPPED: &str = "You stopped checking the scans: nothing is graded until they are checked";
+
+impl NewCard {
+    /// The survey of `inputs`, when it ended well.
+    fn survey_of(&self, inputs: &SurveyInputs) -> Option<&Survey> {
+        let s = self.survey.as_ref().filter(|s| &s.inputs == inputs)?;
+        match &s.outcome {
+            Some(Ok((survey, _))) => Some(survey),
+            _ => None,
+        }
+    }
+
+    /// The question the survey's state puts on the card, ahead of the proposal's: it was
+    /// stopped, or the scans could not be read. Its answers: check again, choose other scans.
+    fn survey_ask(&self) -> Option<b::CardIssue> {
+        let why = match &self.survey.as_ref()?.outcome {
+            Some(Err(why)) => why.clone(),
+            _ => return None,
+        };
+        Some(b::CardIssue {
+            field: b::CardField::Scans,
+            label: FieldId::Scans.label().into(),
+            text: why,
+            choices: vec!["Check the scans again".into(), "Choose scans…".into()],
+        })
+    }
+
+    /// Stops the survey running (its report is dropped).
+    fn stop(&mut self) {
+        if let Some(s) = self.survey.take() {
+            s.cancel.cancel();
+        }
+    }
+}
+
+fn card_field(f: FieldId) -> b::CardField {
+    match f {
+        FieldId::Scans => b::CardField::Scans,
+        FieldId::Sheet => b::CardField::Sheet,
+        FieldId::Key => b::CardField::Key,
+        FieldId::KeySheets => b::CardField::KeySheets,
+        FieldId::Remark => b::CardField::Remark,
+        FieldId::Versions => b::CardField::Versions,
+        FieldId::Questions => b::CardField::Questions,
+        FieldId::Options => b::CardField::Options,
+        FieldId::CancelMode => b::CardField::CancelMode,
+        FieldId::IdScheme => b::CardField::IdScheme,
+        FieldId::Roster => b::CardField::Roster,
+        FieldId::Clo => b::CardField::Clo,
+        FieldId::Title => b::CardField::Title,
+        FieldId::Course => b::CardField::Course,
+        FieldId::Term => b::CardField::Term,
+        FieldId::MultiReview => b::CardField::MultiReview,
+        FieldId::HighStakes => b::CardField::HighStakes,
+        FieldId::Folder => b::CardField::Folder,
+    }
+}
+
+fn card_issue(i: &omr_app::propose::Issue) -> b::CardIssue {
+    b::CardIssue {
+        field: card_field(i.field),
+        label: i.field.label().into(),
+        text: i.text.clone(),
+        choices: i.choices.iter().map(|c| c.label.clone()).collect(),
+    }
 }
 
 /// "batch-2 · 4 files · 4 new pages · 60 → 64 booklets · 3 decisions kept · 0 conflicts".
@@ -395,6 +536,8 @@ pub struct AppBackend {
     stability_jobs: RefCell<Vec<StabilityJob>>,
     /// A Remark import read on the New-exam form and not used yet (§3.5).
     remark_new: Option<HeldImport>,
+    /// The New-exam card: its survey, answers and proposal.
+    card: NewCard,
     /// Page thumbnails of every project opened (shared with each [`Opened`]).
     thumbs: Rc<RefCell<Thumbs>>,
 }
@@ -445,6 +588,7 @@ impl AppBackend {
             reloaded: Vec::new(),
             stability_jobs: RefCell::new(Vec::new()),
             remark_new: None,
+            card: NewCard::default(),
             thumbs: Rc::default(),
         }
     }
@@ -554,62 +698,12 @@ impl AppBackend {
         exam
     }
 
-    /// Starts grading the New-exam form (see [`Backend::create_exam`]).
-    fn start_new_exam(&mut self, form: &b::NewExam) -> Result<(ExamId, String), BackendError> {
-        let Some(workspace) = self.workspace.clone() else {
-            return Err(BackendError::Denied(
-                "No exams folder is open: start omr-desktop with --workspace DIR (or without \
-                 flags, for ~/OMR Exams)"
-                    .into(),
-            ));
-        };
-        if let Some(j) = self.job.as_ref().filter(|j| j.running()) {
-            return Err(BackendError::Denied(format!(
-                "{} is still being graded: create the next exam when the Scan screen says \
-                 complete",
-                j.exam
-            )));
-        }
-        let Some(spawn) = self.spawn.as_ref() else {
-            return Err(BackendError::Denied(
-                "This window cannot start background work; grade with `omr grade <scans…> \
-                 --out <folder in the exams folder>` and reopen the workspace"
-                    .into(),
-            ));
-        };
-        let bad = |m: String| BackendError::Invalid(m);
+    /// What the New-exam form gives, as the proposal takes it: the files (a dialog's picks
+    /// exactly, typed text as typed), the values typed over the proposed ones, the Remark import
+    /// the form uses, and the answers given on the card so far.
+    fn given_of(&self, form: &b::NewExam) -> Given {
         let text = |s: &str| Some(s.trim().to_string()).filter(|s| !s.is_empty());
-        // the files a dialog picked are used exactly; typed text is read as typed
         let picked = |k: &str| form.picked.get(k).filter(|p| !p.is_empty()).cloned();
-        let inputs = picked("scans").unwrap_or_else(|| crate::bind::scan_paths(&form.scans));
-        if inputs.is_empty() {
-            return Err(bad(
-                "Scans: type the folder or the scan files to grade (several: separate them \
-                 with ;)"
-                    .into(),
-            ));
-        }
-        let questions: u16 = form
-            .questions
-            .trim()
-            .parse()
-            .ok()
-            .filter(|q| *q > 0)
-            .ok_or_else(|| {
-                bad(format!(
-                    "Questions: type how many questions this exam uses, e.g. 30 (not {:?})",
-                    form.questions.trim()
-                ))
-            })?;
-        let options = match text(&form.options) {
-            None => None,
-            Some(o) => Some(o.parse::<u8>().map_err(|_| {
-                bad(format!(
-                    "Options: type the options per question, e.g. 4 or 5 (not {o:?}), or leave \
-                     it blank for the sheet's"
-                ))
-            })?),
-        };
         // one path, quotes and a leading ~/ handled as for the scans
         let path = |k: &str, s: &str| {
             picked(k)
@@ -618,59 +712,356 @@ impl AppBackend {
         };
         let sheet = text(&form.sheet).unwrap_or_else(|| "iau-ccsit-v1".into());
         let sheet = match picked("sheet") {
-            Some(p) => omr_app::define::Sheet::Spec(p[0].clone()),
-            None => match omr_app::define::Sheet::parse(&sheet) {
-                omr_app::define::Sheet::Spec(p) => {
-                    omr_app::define::Sheet::Spec(path("sheet", &sheet).unwrap_or(p))
-                }
+            Some(p) => Sheet::Spec(p[0].clone()),
+            None => match Sheet::parse(&sheet) {
+                Sheet::Spec(p) => Sheet::Spec(path("sheet", &sheet).unwrap_or(p)),
                 t => t,
             },
         };
-        let mut i = omr_app::define::Inputs::new(sheet, questions);
-        i.options = options;
-        i.forms = text(&form.forms).map(|f| {
-            f.split([',', ' '])
-                .map(|x| x.trim().to_uppercase())
-                .filter(|x| !x.is_empty())
-                .collect()
-        });
-        i.key = path("key", &form.key);
-        i.infer_key = i.key.is_none();
-        // key sheets named in the form: read with the exam, held until confirmed in Setup
-        let key_sheets =
+        let scans = picked("scans").unwrap_or_else(|| crate::bind::scan_paths(&form.scans));
+        let mut g = Given::new(sheet, scans);
+        g.key = path("key", &form.key);
+        g.key_sheets =
             picked("key_sheets").unwrap_or_else(|| crate::bind::scan_paths(&form.key_sheets));
-        i.roster = path("roster", &form.roster);
-        i.clo = path("clo", &form.clo);
-        i.title = text(&form.title);
-        i.course = text(&form.course);
-        // the key, its exact points per version and the learning objectives from a Remark
-        // import read on this form (§3.5): applied to the definition as omr-app gives them
-        let remark = match text(&form.remark) {
-            None => None,
-            Some(named) => Some(self.remark_for_new_exam(&named, &mut i, &key_sheets)?),
+        g.roster = path("roster", &form.roster);
+        g.clo = path("clo", &form.clo);
+        // the Remark import read on this form, while the form uses it
+        g.remark = self
+            .remark_new
+            .as_ref()
+            .filter(|h| {
+                let files: Vec<String> = h.files.iter().map(|f| file_label(f)).collect();
+                text(&form.remark).is_some_and(|named| named == files.join("; "))
+            })
+            .map(|h| h.imp.clone());
+        let t = &mut g.typed;
+        t.questions = text(&form.questions);
+        t.options = text(&form.options);
+        t.forms = text(&form.forms);
+        t.title = text(&form.title);
+        t.course = text(&form.course);
+        t.term = text(&form.term);
+        t.cancel_mode = text(&form.cancel_mode);
+        t.multi_review = text(&form.multi_review);
+        t.high_stakes = form.high_stakes.then_some(true);
+        t.id_scheme = text(&form.id_scheme);
+        t.folder = path("out", &form.out);
+        g.answers = self.card.answers.clone();
+        g
+    }
+
+    /// Proposes the card again for the form last given, with the survey as it stands. Scans,
+    /// a sheet, key sheets or a roster other than those surveyed start a new survey (the one
+    /// running stops); other scans or another sheet drop the answers given for the old ones.
+    fn propose_card(&mut self) {
+        let (Some(form), Some(workspace)) = (self.card.form.clone(), self.workspace.clone()) else {
+            return;
         };
-        let (mut definition, warnings) = omr_app::define::define(&i).map_err(app_err)?;
-        if let Some(imp) = &remark {
-            definition.key = omr_app::exam::KeySource::Provided {
-                forms: imp.form_keys(),
-            };
-            definition.set_key_points(&imp.key_points());
-            if let Some(o) = imp.outcome_setup() {
-                definition.outcomes = Some(o);
+        let mut given = self.given_of(&form);
+        let inputs = survey_inputs(&given);
+        if given.scans.is_empty() {
+            self.card.stop();
+        } else if self.card.survey.as_ref().is_none_or(|s| s.inputs != inputs) {
+            let restacked = self
+                .card
+                .survey
+                .as_ref()
+                .is_some_and(|s| (&s.inputs.0, &s.inputs.1) != (&inputs.0, &inputs.1));
+            if restacked {
+                self.card.answers.clear();
+                given.answers.clear();
             }
-            definition.exam_id = definition.derived_exam_id();
-            definition.validate().map_err(app_err)?;
+            self.start_survey(&given);
         }
-        // the inputs exist and hold scans before anything is created
-        let files = omr_app::ingest::collect_paths(&inputs).map_err(app_err)?;
-        let dir = omr_app::define::new_exam_dir(&workspace, &definition);
+        let mut ctx = Context::new(workspace);
+        ctx.recent = self
+            .entries
+            .iter()
+            .map(|e| RecentExam {
+                term: e.summary.term.clone(),
+                course: e.summary.course_code.clone(),
+                graded_utc: e.snapshot_utc.clone(),
+            })
+            .collect();
+        let p = omr_app::propose::propose(&given, self.card.survey_of(&inputs), &ctx);
+        self.card.shown = Some((Box::new(given), Box::new(p)));
+    }
+
+    /// Starts surveying the scans of `given` on the spawner; the survey running stops.
+    fn start_survey(&mut self, given: &Given) {
+        self.card.stop();
+        self.card.generation += 1;
+        let generation = self.card.generation;
+        let cancel = Cancel::default();
+        let mut req = given.survey_request(0);
+        req.cancel = cancel.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let outcome = match self.spawn.as_ref() {
+            None => Some(Err(
+                "The scans cannot be checked in this window: it starts no background work".into(),
+            )),
+            Some(spawn) => spawn(Box::new(move || run_survey(req, generation, tx)))
+                .err()
+                .map(|e| {
+                    Err(format!(
+                        "The scans could not be checked: no worker could start ({e}); close \
+                         other programs and check them again"
+                    ))
+                }),
+        };
+        self.card.survey = Some(SurveyRun {
+            generation,
+            inputs: survey_inputs(given),
+            cancel,
+            rx,
+            done: 0,
+            total: 0,
+            outcome,
+        });
+    }
+
+    /// Surveys the card's scans again (the instructor asked), and proposes the card again.
+    fn resurvey(&mut self) {
+        let Some(form) = self.card.form.clone() else {
+            return;
+        };
+        let given = self.given_of(&form);
+        if !given.scans.is_empty() {
+            self.start_survey(&given);
+        }
+        self.propose_card();
+    }
+
+    /// Folds in the survey's reports; when it ends, the card is proposed again with it.
+    fn drain_survey(&mut self) -> bool {
+        let Some(s) = self.card.survey.as_mut() else {
+            return false;
+        };
+        let mut changed = false;
+        while s.outcome.is_none() {
+            match s.rx.try_recv() {
+                // a report of any other survey is dropped
+                Ok((g, _)) if g != s.generation => {}
+                Ok((_, SurveyEvent::Pages { done, total })) => {
+                    (s.done, s.total) = (done, total);
+                    changed = true;
+                }
+                Ok((_, SurveyEvent::Finished(r, took))) => {
+                    s.outcome = Some(match r {
+                        Ok(survey) => Ok((survey, took)),
+                        Err(AppError::Cancelled) => Err(STOPPED.into()),
+                        Err(e) => Err(format!(
+                            "The scans could not be checked: {}",
+                            app_message(&e)
+                        )),
+                    });
+                    changed = true;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    s.outcome = Some(Err("The check of the scans stopped without a result: \
+                                          check them again"
+                        .into()));
+                    changed = true;
+                }
+            }
+        }
+        if changed && s.outcome.is_some() {
+            self.propose_card();
+        }
+        changed
+    }
+
+    /// The card as shown: the proposal, the survey as it stands and why *Grade exam* waits.
+    fn card_view(&self) -> b::NewExamCard {
+        let Some((given, p)) = self.card.shown.as_ref() else {
+            return b::NewExamCard {
+                blocker: self
+                    .create_exam_blocker()
+                    .or_else(|| Some("Choose the scans to grade".into())),
+                ..b::NewExamCard::default()
+            };
+        };
+        let survey = match &self.card.survey {
+            None => b::SurveyState::None,
+            Some(s) => match &s.outcome {
+                None => b::SurveyState::Running {
+                    done: s.done,
+                    total: s.total,
+                },
+                Some(Ok((sv, took))) => b::SurveyState::Done {
+                    pages: sv.pages,
+                    took: *took,
+                },
+                Some(Err(why)) => b::SurveyState::Failed(why.clone()),
+            },
+        };
+        let survey_ask = self.card.survey_ask();
+        let values = p
+            .fields
+            .iter()
+            .map(|f| b::CardValue {
+                field: card_field(f.id),
+                label: f.id.label().into(),
+                value: f.value.clone(),
+                source: f.source.text().into(),
+                detail: f.detail.clone(),
+                state: match f.state {
+                    _ if f.id == FieldId::Scans && survey_ask.is_some() => b::CardState::Ask,
+                    omr_app::propose::FieldState::Ok => b::CardState::Ok,
+                    omr_app::propose::FieldState::Note => b::CardState::Note,
+                    omr_app::propose::FieldState::Ask => b::CardState::Ask,
+                },
+            })
+            .collect();
+        let reading = match &survey {
+            b::SurveyState::Running { done, total } if *total > 0 => Some(format!(
+                "Checking the scans ({done} of {total} pages): Grade exam is available when \
+                 every page is checked"
+            )),
+            b::SurveyState::Running { .. } => Some(
+                "Checking the scans: Grade exam is available when every page is checked".into(),
+            ),
+            _ => None,
+        };
+        let blocker = self
+            .create_exam_blocker()
+            .or(reading)
+            .or_else(|| {
+                survey_ask
+                    .as_ref()
+                    .map(|a| format!("{}: {}", a.label, a.text))
+            })
+            .or_else(|| p.blocker())
+            .or_else(|| {
+                p.inputs.is_none().then(|| {
+                    "The card is not complete: give the scans and answer its questions".into()
+                })
+            });
+        let mut asks: Vec<b::CardIssue> = survey_ask.into_iter().collect();
+        asks.extend(p.asks().map(card_issue));
+        b::NewExamCard {
+            values,
+            asks,
+            notes: p.notes().map(card_issue).collect(),
+            survey,
+            blocker,
+            cancel_locked: matches!(given.sheet, Sheet::Template(_)),
+        }
+    }
+
+    /// The instructor's answer `choice` to question `ask` of the card shown (see
+    /// [`Backend::choose_on_card`]).
+    fn choose(&mut self, ask: usize, choice: usize) -> Result<b::CardAction, BackendError> {
+        let gone = || {
+            BackendError::NotFound(
+                "That question is no longer on the card: answer the ones it shows now".into(),
+            )
+        };
+        let mut ask = ask;
+        if self.card.survey_ask().is_some() {
+            if ask == 0 {
+                return match choice {
+                    0 => {
+                        self.resurvey();
+                        Ok(b::CardAction::Done)
+                    }
+                    1 => Ok(b::CardAction::Pick(b::CardField::Scans)),
+                    _ => Err(gone()),
+                };
+            }
+            ask -= 1;
+        }
+        let action = self
+            .card
+            .shown
+            .as_ref()
+            .and_then(|(_, p)| Some(p.asks().nth(ask)?.choices.get(choice)?.action.clone()))
+            .ok_or_else(gone)?;
+        Ok(match action {
+            ChoiceAction::Answer(a) => {
+                if !self.card.answers.contains(&a) {
+                    self.card.answers.push(a);
+                }
+                self.propose_card();
+                b::CardAction::Done
+            }
+            ChoiceAction::Pick(f) => b::CardAction::Pick(card_field(f)),
+            ChoiceAction::Clear(f) => b::CardAction::Clear(card_field(f)),
+            ChoiceAction::Type(f) => b::CardAction::Type(card_field(f)),
+            ChoiceAction::Survey => {
+                self.resurvey();
+                b::CardAction::Done
+            }
+        })
+    }
+
+    /// What the running job grades: the course and title of a new exam, else its exam.
+    fn job_name(&self, j: &Job) -> String {
+        let named = |course: &str, title: &str| {
+            Some(format!("{course} {title}").trim().to_string()).filter(|s| !s.is_empty())
+        };
+        match &j.kind {
+            JobKind::Grade { definition } => named(&definition.course_code, &definition.title),
+            JobKind::Append { .. } => self
+                .entries
+                .iter()
+                .find(|e| e.id == j.exam)
+                .and_then(|e| named(&e.summary.course_code, &e.summary.assessment)),
+        }
+        .unwrap_or_else(|| "Another exam".into())
+    }
+
+    /// Grades the new exam as the card shown for `form` proposes it (see
+    /// [`Backend::create_exam`]).
+    fn start_new_exam(&mut self, form: &b::NewExam) -> Result<(ExamId, String), BackendError> {
+        if let Some(why) = self.create_exam_blocker() {
+            return Err(BackendError::Denied(why));
+        }
+        // what is shown is what is graded: a form changed since the card was shown is shown
+        // again first
+        let given = self.given_of(form);
+        if !self.card.shown.as_ref().is_some_and(|(g, _)| **g == given) {
+            self.card.form = Some(form.clone());
+            self.propose_card();
+            return Err(BackendError::Invalid(
+                "The card changed with your last change: check it, then grade the exam".into(),
+            ));
+        }
+        if let Some(why) = self.card_view().blocker {
+            return Err(BackendError::Invalid(why));
+        }
+        let Some((given, p)) = self.card.shown.clone() else {
+            return Err(BackendError::Invalid("Choose the scans to grade".into()));
+        };
+        let Some(inputs) = p.inputs.clone() else {
+            return Err(BackendError::Invalid(
+                "The card is not complete: answer its questions first".into(),
+            ));
+        };
+        if p.folder.join("project.omrproj").exists() {
+            self.propose_card();
+            return Err(BackendError::Invalid(format!(
+                "{} holds an exam already: the card now proposes another folder; check it, then \
+                 grade the exam",
+                p.folder.display()
+            )));
+        }
+        let Some(spawn) = self.spawn.as_ref() else {
+            return Err(BackendError::Denied(
+                "This window cannot grade in the background".into(),
+            ));
+        };
+        // the proposal's inputs, checked by the same rules once more: the definition graded
+        let (definition, warnings) = omr_app::define::define(&inputs).map_err(app_err)?;
+        let files = omr_app::ingest::collect_paths(&given.scans).map_err(app_err)?;
         let req = GradeRequest {
             definition: definition.clone(),
-            inputs,
-            key_sheets: key_sheets.clone(),
+            inputs: given.scans.clone(),
+            key_sheets: p.key_sheets.clone(),
             options: GradeOptions {
                 threads: 0,
-                project_dir: Some(dir.join("project.omrproj")),
+                project_dir: Some(p.folder.join("project.omrproj")),
                 snapshot_utc: None,
                 operator: self.operator.clone(),
                 max_pages: None,
@@ -687,26 +1078,28 @@ impl AppBackend {
         if let Some(job) = self.job.as_mut() {
             let now = snapshot_label(&omr_app::pipeline::now_utc());
             for w in warnings {
-                job.activity.insert(0, format!("{now} · roster: {w}"));
+                job.activity.insert(0, format!("{now} · {w}"));
+            }
+            if let Some(imp) = &given.remark {
+                for line in remark_activity(imp) {
+                    job.activity.insert(0, format!("{now} · {line}"));
+                }
             }
         }
-        if let (Some(imp), Some(job)) = (&remark, self.job.as_mut()) {
-            let now = snapshot_label(&omr_app::pipeline::now_utc());
-            for line in remark_activity(imp) {
-                job.activity.insert(0, format!("{now} · {line}"));
-            }
-        }
+        // the import and the card are used up: the next exam starts afresh
         self.remark_new = None;
+        self.card.stop();
+        self.card = NewCard::default();
         self.default = Some(exam.clone());
-        let key = if remark.is_some() {
-            "; the key and its points per version come from the Remark import, the learning \
-             objectives as CLO mappings flagged imported, needs review"
-        } else if !key_sheets.is_empty() {
+        let held = matches!(definition.key, omr_app::exam::KeySource::None);
+        let key = if given.remark.is_some() {
+            "; the key and its points per version come from the Remark import"
+        } else if held {
             "; the key is read from the key sheets and waits for your confirmation in Setup \
              (nothing is scored until then)"
-        } else if i.infer_key {
-            "; no key file, so the key is inferred and the results stay provisional until you \
-             replace it in Setup"
+        } else if matches!(definition.key, omr_app::exam::KeySource::Inferred) {
+            "; the key is provisional, inferred from the answers as you chose: the results \
+             cannot be released until you replace it in Setup"
         } else {
             ""
         };
@@ -715,79 +1108,17 @@ impl AppBackend {
             format!(
                 "Grading {} into {}{key}",
                 plural(files.len(), "scan file"),
-                dir.display()
+                p.folder.display()
             ),
         ))
     }
 
-    /// The Remark import held for the New-exam form, checked against what the form says
-    /// (`named`: the workbooks it lists) and the form's other fields; sets the questions and
-    /// versions it gives and that no key is inferred.
-    fn remark_for_new_exam(
-        &self,
-        named: &str,
-        i: &mut omr_app::define::Inputs,
-        key_sheets: &[PathBuf],
-    ) -> Result<omr_app::remark::RemarkImport, BackendError> {
-        let bad = |m: String| BackendError::Invalid(m);
-        let held = self.remark_new.as_ref().ok_or_else(|| {
-            bad(
-                "Remark import: the export read on this form is no longer held; read it again \
-                 with Import from Remark export…"
-                    .into(),
-            )
-        })?;
-        let files: Vec<String> = held.files.iter().map(|f| file_label(f)).collect();
-        if files.join("; ") != named.trim() {
-            return Err(bad(format!(
-                "Remark import: the form lists {named} but the export read is {}; read it again \
-                 with Import from Remark export…",
-                files.join("; ")
-            )));
-        }
-        let imp = &held.imp;
-        if i.key.is_some() {
-            return Err(bad(
-                "Answer key file: the key comes from the Remark import; clear the key file, or \
-                 clear the import"
-                    .into(),
-            ));
-        }
-        if !key_sheets.is_empty() {
-            return Err(bad(
-                "Key sheets: the key comes from the Remark import; clear the key sheets, or \
-                 clear the import"
-                    .into(),
-            ));
-        }
-        if i.questions != imp.questions {
-            return Err(bad(format!(
-                "Number of questions: the Remark export has {} questions (not {}); type {} or \
-                 clear the import",
-                imp.questions, i.questions, imp.questions
-            )));
-        }
-        let forms = imp.forms();
-        if let Some(f) = i.forms.as_ref().filter(|f| !f.is_empty() && **f != forms) {
-            return Err(bad(format!(
-                "Form letters: the Remark export gives versions {} (not {}); type {} or clear \
-                 the import",
-                forms.join(","),
-                f.join(","),
-                forms.join(",")
-            )));
-        }
-        let objectives = imp.versions.iter().any(|v| !v.groups.is_empty());
-        if objectives && i.clo.is_some() {
-            return Err(bad(
-                "CLO mapping file: the learning objectives come from the Remark import; clear \
-                 the CLO file, or clear the import"
-                    .into(),
-            ));
-        }
-        i.forms = Some(forms);
-        i.infer_key = false;
-        Ok(imp.clone())
+    /// True while the New-exam card's scans are being checked.
+    pub fn surveying(&self) -> bool {
+        self.card
+            .survey
+            .as_ref()
+            .is_some_and(|s| s.outcome.is_none())
     }
 
     /// True while a grading run or an added batch is in progress (screenshots wait for it).
@@ -1330,7 +1661,7 @@ impl AppBackend {
         if let Some(j) = self.job.as_ref().filter(|j| j.running()) {
             return Err(BackendError::Denied(format!(
                 "{} is being graded: open another folder when the Scan screen says it is complete",
-                j.exam
+                self.job_name(j)
             )));
         }
         if !dir.is_dir() {
@@ -1347,6 +1678,7 @@ impl AppBackend {
         self.job = None;
         self.default = None;
         self.remark_new = None;
+        self.reset_new_exam();
         self.reloaded.clear();
         self.stability_jobs.borrow_mut().clear();
         for (d, summary) in vm::list_exams(&dir) {
@@ -4964,7 +5296,54 @@ impl Backend for AppBackend {
     }
 
     fn can_create_exam(&self) -> bool {
-        self.workspace.is_some() && self.spawn.is_some() && !self.grading_in_progress()
+        self.workspace.is_some()
+    }
+
+    fn create_exam_blocker(&self) -> Option<String> {
+        if self.workspace.is_none() {
+            return Some("No exams folder is open: open one with Open folder…".into());
+        }
+        if let Some(j) = self.job.as_ref().filter(|j| j.running()) {
+            return Some(format!(
+                "{} is being graded: Grade exam is available when it finishes",
+                self.job_name(j)
+            ));
+        }
+        if self.spawn.is_none() {
+            return Some("This window cannot grade in the background".into());
+        }
+        None
+    }
+
+    fn propose_new_exam(&mut self, form: &b::NewExam) -> b::NewExamCard {
+        self.card.form = Some(form.clone());
+        self.propose_card();
+        self.card_view()
+    }
+
+    fn new_exam_card(&self) -> b::NewExamCard {
+        self.card_view()
+    }
+
+    fn choose_on_card(&mut self, ask: usize, choice: usize) -> Result<b::CardAction, BackendError> {
+        self.choose(ask, choice)
+    }
+
+    fn stop_survey(&mut self) -> Result<String, BackendError> {
+        let s = self
+            .card
+            .survey
+            .as_mut()
+            .filter(|s| s.outcome.is_none())
+            .ok_or_else(|| BackendError::Invalid("The scans are not being checked".into()))?;
+        s.cancel.cancel();
+        s.outcome = Some(Err(STOPPED.into()));
+        Ok("Stopped checking the scans: check them again to grade them".into())
+    }
+
+    fn reset_new_exam(&mut self) {
+        self.card.stop();
+        self.card = NewCard::default();
     }
 
     fn create_exam(&mut self, form: &b::NewExam) -> Result<(ExamId, String), BackendError> {
@@ -5559,7 +5938,13 @@ impl Backend for AppBackend {
     fn pump(&mut self) -> bool {
         let analysed = self.drain_stability(false);
         let thumbs = self.drain_thumbs(false);
-        self.drain_job() || analysed || thumbs
+        let surveyed = self.drain_survey();
+        let graded = self.drain_job();
+        if graded && !self.grading_in_progress() {
+            // the card's folder and the exams folder's last term may have changed
+            self.propose_card();
+        }
+        graded || analysed || thumbs || surveyed
     }
 
     fn settle(&mut self) -> bool {
