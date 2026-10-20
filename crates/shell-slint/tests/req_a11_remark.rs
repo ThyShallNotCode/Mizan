@@ -12,67 +12,16 @@
 mod support;
 
 use i_slint_backend_testing::{AccessibleRole, ElementQuery};
-use shell_slint::app_backend::{AppBackend, Spawn};
+use shell_slint::app_backend::AppBackend;
 use shell_slint::backend::{Backend, ExamId};
-use shell_slint::bind::Shell;
 use shell_slint::ui::{App, AppWindow, ExamsVM, Page, RemarkVM, Theme};
 use slint::{ComponentHandle, Model};
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
-use std::time::{Duration, Instant};
 use support::a11::{by_label, one, tab, with_prefix};
+use support::harness::{Harness, harness_in, held_spawner, run_held};
 use support::synthetic_exam::{self as synth, MIDTERM};
 use support::synthetic_remark as remark;
-
-struct Harness {
-    ui: AppWindow,
-    app: Rc<RefCell<AppBackend>>,
-    shell: Rc<Shell>,
-}
-
-fn harness_for(app: AppBackend) -> Harness {
-    i_slint_backend_testing::init_no_event_loop();
-    let ui = AppWindow::new().expect("window");
-    ui.global::<Theme>().set_reduce_motion(true);
-    let app = Rc::new(RefCell::new(app));
-    let dynamic: Rc<RefCell<dyn Backend>> = app.clone();
-    let shell = Shell::bind(&ui, dynamic);
-    ui.show().expect("show");
-    Harness { ui, app, shell }
-}
-
-type Held = Rc<RefCell<Vec<Box<dyn FnOnce() + Send>>>>;
-
-/// A spawner that holds the work for the test to run (the binary's threads, R4).
-fn held_spawner() -> (Spawn, Held) {
-    let held: Held = Rc::default();
-    let h = held.clone();
-    (
-        Box::new(move |work| {
-            h.borrow_mut().push(work);
-            Ok(())
-        }),
-        held,
-    )
-}
-
-fn run_held(h: &Harness, held: &Held) {
-    let work = held.borrow_mut().pop().expect("work was started");
-    let worker = std::thread::spawn(work);
-    let t0 = Instant::now();
-    while h.app.borrow().grading_in_progress() {
-        assert!(
-            t0.elapsed() < Duration::from_secs(300),
-            "the batch never finished"
-        );
-        h.shell.pump();
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    worker.join().expect("worker");
-    h.shell.pump();
-}
 
 fn message(ui: &AppWindow) -> String {
     ui.global::<App>().get_message().to_string()
@@ -200,7 +149,7 @@ fn req_a11_remark_import_on_the_new_exam_form_grades_with_its_key_points_and_obj
     let (spawn, held) = held_spawner();
     let mut app = AppBackend::workspace(&ws, "principal:a11-instructor");
     app.set_spawner(spawn);
-    let h = harness_for(app);
+    let h = harness_in(app);
     let ui = &h.ui;
     ui.window().set_size(slint::PhysicalSize::new(1440, 1600));
 
@@ -455,7 +404,7 @@ fn req_a11_remark_import_refusals_name_the_remedy_and_the_suggested_points() {
     let (spawn, _held) = held_spawner();
     let mut app = AppBackend::workspace(&ws, "principal:a11-instructor");
     app.set_spawner(spawn);
-    let h = harness_for(app);
+    let h = harness_in(app);
     let ui = &h.ui;
     ui.window().set_size(slint::PhysicalSize::new(1440, 1600));
     one(ui, "New exam").invoke_accessible_default_action();
@@ -530,7 +479,7 @@ fn req_a11_remark_import_in_setup_replaces_the_key() {
     let books = remark::write_books_with(&spec, &dir.path().join("remark"), true);
     let app = AppBackend::project(&built.exam_dir, "principal:a11-instructor").expect("open");
     let exam = app.default_exam().expect("exam");
-    let h = harness_for(app);
+    let h = harness_in(app);
     let ui = &h.ui;
     ui.window().set_size(slint::PhysicalSize::new(1440, 1600));
     let key = |h: &Harness| {
@@ -643,7 +592,7 @@ fn req_a11_parallel_run_in_results_shows_the_differences_with_crops() {
     let books = remark::write_books_with(&MIDTERM, &dir.path().join("remark"), true);
     let app = AppBackend::project(&built.exam_dir, "principal:a11-instructor").expect("open");
     let exam = app.default_exam().expect("exam");
-    let h = harness_for(app);
+    let h = harness_in(app);
     let ui = &h.ui;
     ui.window().set_size(slint::PhysicalSize::new(1440, 2400));
     tab(ui, "Results").invoke_accessible_default_action();
@@ -821,7 +770,7 @@ fn req_a11_remark_states_fit_the_minimum_window_in_both_themes() {
     let (spawn, _held) = held_spawner();
     let mut app = AppBackend::workspace(&ws, "principal:a11-instructor");
     app.set_spawner(spawn);
-    let h = harness_for(app);
+    let h = harness_in(app);
     let ui = &h.ui;
     ui.window().set_size(slint::PhysicalSize::new(1280, 800));
     let exam: ExamId = h.app.borrow().default_exam().expect("exam");

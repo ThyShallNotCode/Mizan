@@ -12,50 +12,17 @@ mod support;
 use omr_app::ExamProject;
 use omr_app::model::ResponseStatus;
 use omr_model::Response;
-use shell_slint::app_backend::{AppBackend, GradeRequest, JobEvent, Spawn, run_grading};
+use shell_slint::app_backend::{AppBackend, GradeRequest, JobEvent, run_grading};
 use shell_slint::backend::{Backend, Decision, ExamId, ItemId, Lane, ReviewAction, ReviewKind};
-use shell_slint::bind::Shell;
 use shell_slint::ui::{
     App, AppWindow, ExamsVM, OutcomesVM, Page, RemarkVM, ResultsVM, ReviewVM, ScanVM, SetupVM,
-    Theme,
 };
 use slint::{ComponentHandle, Model};
-use std::cell::RefCell;
 use std::path::Path;
-use std::rc::Rc;
 use std::time::{Duration, Instant};
 use support::a11::{all_texts, by_label, click, key, one, selected_queue_row, tab, with_prefix};
+use support::harness::{Harness, grade, harness, harness_for, held_spawner, run_held};
 use support::synthetic_exam::{self as synth, MIDTERM};
-
-struct Harness {
-    ui: AppWindow,
-    app: Rc<RefCell<AppBackend>>,
-    shell: Rc<Shell>,
-    exam: ExamId,
-}
-
-fn harness(app: AppBackend) -> Harness {
-    let exam = app.default_exam().expect("an exam");
-    harness_for(app, exam)
-}
-
-/// A harness for any workspace, even one without an exam (`exam` is then a name that matches
-/// none).
-fn harness_for(app: AppBackend, exam: ExamId) -> Harness {
-    i_slint_backend_testing::init_no_event_loop();
-    let ui = AppWindow::new().expect("window");
-    ui.global::<Theme>().set_reduce_motion(true);
-    let app = Rc::new(RefCell::new(app));
-    let dynamic: Rc<RefCell<dyn Backend>> = app.clone();
-    let shell = Shell::bind(&ui, dynamic);
-    ui.show().expect("show");
-    Harness {
-        ui,
-        app,
-        shell,
-        exam,
-    }
-}
 
 impl Harness {
     fn open_items(&self) -> u32 {
@@ -535,54 +502,6 @@ fn req_a11_real_backend_review_flow_rescores_results() {
         msg.contains("tp154.xlsx") && msg.contains("Blackboard"),
         "{msg}"
     );
-}
-
-/// A spawner that holds the work until the test runs it, so the state while the project is
-/// handed over can be checked first (the test plays the binary's part, R4).
-type Held = Rc<RefCell<Vec<Box<dyn FnOnce() + Send>>>>;
-
-fn held_spawner() -> (Spawn, Held) {
-    let held: Held = Rc::default();
-    let h = held.clone();
-    (
-        Box::new(move |work| {
-            h.borrow_mut().push(work);
-            Ok(())
-        }),
-        held,
-    )
-}
-
-/// Runs the held work on a thread and pumps the shell until the backend is idle again.
-fn run_held(h: &Harness, held: &Held) {
-    let work = held.borrow_mut().pop().expect("work was started");
-    let worker = std::thread::spawn(work);
-    let t0 = Instant::now();
-    while h.app.borrow().grading_in_progress() {
-        assert!(
-            t0.elapsed() < Duration::from_secs(300),
-            "the batch never finished"
-        );
-        h.shell.pump();
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    worker.join().expect("worker");
-    h.shell.pump();
-}
-
-fn grade(def: &omr_app::ExamDefinition, scans: &Path, project: &Path) {
-    let opts = omr_app::GradeOptions {
-        threads: 2,
-        project_dir: Some(project.to_path_buf()),
-        snapshot_utc: Some(synth::SNAPSHOT.into()),
-        operator: "principal:a11".into(),
-        max_pages: None,
-        cancel: Default::default(),
-    };
-    ExamProject::grade(def, &[scans.to_path_buf()], &opts, &|_| {})
-        .expect("grading")
-        .close()
-        .expect("close");
 }
 
 fn jpeg(img: &image::GrayImage, path: &Path) {
