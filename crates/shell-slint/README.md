@@ -48,6 +48,17 @@ window), the file manager and the preferences; the library only describes each d
 (`PickRequest`: kind, title, filters, the folder it opens in). Paths a dialog picked are used
 exactly while the field still shows them (a `;` in a file name stays intact); an edited field
 is read as typed. Headless tests and screenshots have no host, so no Browse button.
+*Open folder…* (Ctrl+O; *Change…* in Settings) picks another exams folder:
+`Backend::open_workspace` saves and closes every exam open (`close_all`, which the binary also
+calls when the window closes, so each writes its signed checkpoint) and lists the new folder; a
+folder holding one exam opens the folder above it with that exam selected
+(`open_exam_folder`). It is refused while an exam is being graded. *Refresh* (F5) re-lists the
+folder (`refresh_workspace`); an exam open here stays even if its folder is gone. The drawer's
+*Open exam folder*, Results' *Open exports folder* and Settings' folder button show a folder
+the backend names (`exam_folder`, `workspace_dir`) in the file manager, never a typed path or a
+file; every folder opened is saved in the preferences as the one to open next time. With
+`--project`, the exams folder is the folder above the exam's, so a new exam is graded beside
+it.
 Setup's *Replace key…* loads a key
 file (`ExamProject::replace_key`, a new key version, rescored); the key reads "Key vN · in
 force" or "· released", never "draft". Results' *Release results…* asks for confirmation and

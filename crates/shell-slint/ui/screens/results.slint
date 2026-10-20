@@ -27,7 +27,9 @@ component ExportBar inherits Rectangle {
     init => {
         all.focus();
     }
-    property <bool> focus-inside: all.has-focus || column.has-focus || blackboard.has-focus || close.has-focus;
+    property <bool> focus-inside: all.has-focus || column.has-focus || blackboard.has-focus || close.has-focus || root.reveal-focused;
+    // "Open exports folder" (made with App.can-reveal) has the keyboard (reset when made)
+    property <bool> reveal-focused;
     // An overlay: a press on its background must not reach the page underneath. A click on it
     // gives the bar the keyboard back (for Escape) unless a control inside has it.
     TouchArea {
@@ -101,6 +103,22 @@ component ExportBar inherits Rectangle {
                 }
                 Rectangle {
                     horizontal-stretch: 1;
+                }
+                // the folder the exports are written to, in the file manager
+                if App.can-reveal: Centered {
+                    SecondaryButton {
+                        init => {
+                            root.reveal-focused = false;
+                        }
+                        changed has-focus => {
+                            root.reveal-focused = self.has-focus;
+                        }
+                        text: "Open exports folder";
+                        accessible-description: "Shows the exam's folder, where its exports are written, in the file manager";
+                        clicked => {
+                            App.reveal("exports");
+                        }
+                    }
                 }
                 Centered {
                     close := GhostButton {
@@ -921,9 +939,12 @@ export component ResultsScreen inherits Rectangle {
                                     horizontal-stretch: 1;
                                 }
                                 Centered {
+                                    // a long reason is cut here, never the screen (the
+                                    // Release button's description carries it whole)
                                     StatusPill {
                                         text: ResultsVM.release-blocked ? "Blocked · " + ResultsVM.release-reason : "Ready";
                                         tone: ResultsVM.release-blocked ? Tone.error : Tone.success;
+                                        max-pill-width: root.narrow ? 360px : 480px;
                                     }
                                 }
                             }

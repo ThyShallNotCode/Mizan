@@ -75,10 +75,13 @@ pub enum GlobalKey {
     Settings,
     /// Escape.
     Dismiss,
+    /// F5: read the list shown again (the exams folder).
+    Refresh,
 }
 
-/// A Ctrl chord whose meaning depends on the screen showing (DESIGN §9): Ctrl+N and Ctrl+K on
-/// Exams, Ctrl+Space and Ctrl+R on Scan, Ctrl+P on Results. Letters are physical positions.
+/// A Ctrl chord whose meaning depends on the screen showing (DESIGN §9): Ctrl+N, Ctrl+K and
+/// Ctrl+O on Exams, Ctrl+Space and Ctrl+R on Scan, Ctrl+P on Results. Letters are physical
+/// positions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Chord {
     /// Ctrl + the letter at this physical position (`'a'`…`'z'`).
@@ -285,6 +288,9 @@ pub fn global_key(text: &str, ctrl: bool, alt: bool) -> Option<GlobalKey> {
     if is_key(text, Key::Escape) {
         return Some(GlobalKey::Dismiss);
     }
+    if is_key(text, Key::F5) && !ctrl {
+        return Some(GlobalKey::Refresh);
+    }
     if !ctrl {
         return None;
     }
@@ -311,6 +317,8 @@ mod tests {
         assert_eq!(page_chord("n", true, false), Some(Chord::Letter('n')));
         // Ctrl+N under the Arabic (101) layout produces ى on the N position
         assert_eq!(page_chord("ى", true, false), Some(Chord::Letter('n')));
+        // Ctrl+O under the Arabic (101) layout produces خ on the O position
+        assert_eq!(page_chord("خ", true, false), Some(Chord::Letter('o')));
         assert_eq!(page_chord(" ", true, false), Some(Chord::Space));
         assert_eq!(page_chord("n", false, false), None);
         assert_eq!(page_chord("n", true, true), None);
@@ -531,5 +539,10 @@ mod tests {
             global_key(&k(Key::Escape), false, false),
             Some(GlobalKey::Dismiss)
         );
+        assert_eq!(
+            global_key(&k(Key::F5), false, false),
+            Some(GlobalKey::Refresh)
+        );
+        assert_eq!(global_key(&k(Key::F5), true, false), None);
     }
 }

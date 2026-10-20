@@ -492,10 +492,14 @@ impl AppBackend {
         me
     }
 
-    /// One graded project: `dir` is the exam folder or its `project.omrproj`.
+    /// One graded project: `dir` is the exam folder or its `project.omrproj`. Its exams folder
+    /// (where a new exam is graded into) is the folder the exam folder sits in.
     pub fn project(dir: &Path, operator: &str) -> Result<Self, String> {
         let dir = project_dir(dir);
-        let mut me = Self::empty(operator, dir.parent().map(Path::to_path_buf));
+        // absolute, so a relative `exam/` still has a folder above it
+        let dir = std::path::absolute(&dir).unwrap_or(dir);
+        let workspace = dir.parent().and_then(Path::parent).map(Path::to_path_buf);
+        let mut me = Self::empty(operator, workspace);
         let (p, read_only) = open_project(&dir, operator)?;
         let summary = p.summary_vm();
         let id = me.add_entry(dir.clone(), summary, Some(&p));
@@ -1317,6 +1321,121 @@ impl AppBackend {
         Ok(format!(
             "Adding scans as batch {batch}: the exam is graded again with them in the background; \
              review decisions carry over"
+        ))
+    }
+
+    /// Lists the exams below `dir` in place of the folder open (see
+    /// [`Backend::open_workspace`]); the exams open are saved and closed first.
+    fn open_folder(&mut self, dir: &Path) -> Result<String, BackendError> {
+        if let Some(j) = self.job.as_ref().filter(|j| j.running()) {
+            return Err(BackendError::Denied(format!(
+                "{} is being graded: open another folder when the Scan screen says it is complete",
+                j.exam
+            )));
+        }
+        if !dir.is_dir() {
+            return Err(BackendError::Invalid(format!(
+                "{}: no such folder; choose the folder that holds your exam folders",
+                dir.display()
+            )));
+        }
+        let dir = std::path::absolute(dir)
+            .map_err(|e| BackendError::Invalid(format!("{}: {e}", dir.display())))?;
+        let unclosed = self.close_all();
+        // nothing of the last folder stays: its exams, a finished run's view, a held import
+        self.entries.clear();
+        self.job = None;
+        self.default = None;
+        self.remark_new = None;
+        self.reloaded.clear();
+        self.stability_jobs.borrow_mut().clear();
+        for (d, summary) in vm::list_exams(&dir) {
+            self.add_entry(d, summary, None);
+        }
+        self.default = self.entries.first().map(|e| e.id.clone());
+        let what = match self.entries.len() {
+            0 => format!(
+                "Opened {}: no exams in it yet; grade one with New exam",
+                short_path(&dir)
+            ),
+            n => format!("Opened {}: {}", short_path(&dir), plural(n, "exam")),
+        };
+        self.workspace = Some(dir);
+        Ok(if unclosed.is_empty() {
+            what
+        } else {
+            format!(
+                "{what}. Not saved and closed properly: {}",
+                unclosed.join("; ")
+            )
+        })
+    }
+
+    /// Lists the exams folder again (see [`Backend::refresh_workspace`]).
+    fn reread_folder(&mut self) -> Result<String, BackendError> {
+        let Some(ws) = self.workspace.clone() else {
+            return Err(BackendError::Denied(
+                "No exams folder is open: open one with Open folder…".into(),
+            ));
+        };
+        let listed = vm::list_exams(&ws);
+        let open: BTreeSet<ExamId> = self.opened.borrow().keys().cloned().collect();
+        let running = self
+            .job
+            .as_ref()
+            .filter(|j| j.running())
+            .map(|j| j.exam.clone());
+        // an exam open here (or being graded) stays even when its folder is not listed
+        let mut gone = 0;
+        for e in std::mem::take(&mut self.entries) {
+            let stays = listed.iter().any(|(d, _)| *d == e.dir)
+                || open.contains(&e.id)
+                || running.as_ref() == Some(&e.id);
+            if stays {
+                self.entries.push(e);
+            } else {
+                self.failed.borrow_mut().remove(&e.id);
+                gone += 1;
+            }
+        }
+        let mut added = 0;
+        for (dir, summary) in listed {
+            match self.entries.iter_mut().find(|e| e.dir == dir) {
+                // another program may have changed an exam not open here
+                Some(e) if !open.contains(&e.id) => e.summary = summary,
+                Some(_) => {}
+                None => {
+                    self.add_entry(dir, summary, None);
+                    added += 1;
+                }
+            }
+        }
+        // newest first, as the folder was listed when it was opened
+        self.entries.sort_by(|a, b| {
+            b.snapshot_utc
+                .cmp(&a.snapshot_utc)
+                .then_with(|| a.dir.cmp(&b.dir))
+        });
+        let known =
+            |id: &ExamId| self.entries.iter().any(|e| &e.id == id) || running.as_ref() == Some(id);
+        if !self.default.as_ref().is_some_and(known) {
+            self.default = self.entries.first().map(|e| e.id.clone());
+        }
+        let mut changes = Vec::new();
+        if added > 0 {
+            changes.push(format!("{added} new"));
+        }
+        if gone > 0 {
+            changes.push(format!("{gone} no longer in the folder"));
+        }
+        if changes.is_empty() {
+            changes.push("nothing changed".to_string());
+        }
+        Ok(format!(
+            "{} in {}: {}",
+            plural(self.entries.len(), "exam"),
+            short_path(&ws),
+            changes.join(", ")
         ))
     }
 }
@@ -4760,6 +4879,72 @@ impl Backend for AppBackend {
 
     fn workspace_dir(&self) -> Option<PathBuf> {
         self.workspace.clone()
+    }
+
+    fn can_open_workspace(&self) -> bool {
+        true
+    }
+
+    fn open_workspace(&mut self, dir: &Path) -> Result<String, BackendError> {
+        // a folder holding one graded exam opens that exam among its neighbours
+        if dir.extension().is_some_and(|e| e == "omrproj") || dir.join("project.omrproj").is_dir() {
+            return self.open_exam_folder(dir).map(|(_, what)| what);
+        }
+        self.open_folder(dir)
+    }
+
+    fn open_exam_folder(&mut self, dir: &Path) -> Result<(ExamId, String), BackendError> {
+        let package = project_dir(dir);
+        let package = std::path::absolute(&package)
+            .map_err(|e| BackendError::Invalid(format!("{}: {e}", dir.display())))?;
+        if !package.join("project.omr").exists() {
+            return Err(BackendError::Invalid(format!(
+                "{}: no graded exam here; choose the folder of a graded exam, or the folder that \
+                 holds your exam folders",
+                dir.display()
+            )));
+        }
+        let p = ExamProject::open_read_only(&package).map_err(|e| {
+            BackendError::Invalid(format!("{} cannot be opened: {e}", dir.display()))
+        })?;
+        let Some(workspace) = package.parent().and_then(Path::parent) else {
+            return Err(BackendError::Invalid(format!(
+                "{}: the exam folder has no folder above it to open",
+                dir.display()
+            )));
+        };
+        let opened = self.open_folder(workspace)?;
+        let exam = match self.entries.iter().find(|e| e.dir == package) {
+            Some(e) => e.id.clone(),
+            // deeper than the folder listing reaches
+            None => self.add_entry(package.clone(), p.summary_vm(), Some(&p)),
+        };
+        self.default = Some(exam.clone());
+        let title = self
+            .entries
+            .iter()
+            .find(|e| e.id == exam)
+            .map(|e| format!("{} {}", e.summary.course_code, e.summary.assessment))
+            .unwrap_or_default();
+        Ok((exam, format!("{opened}; {} is selected", title.trim())))
+    }
+
+    fn refresh_workspace(&mut self) -> Result<String, BackendError> {
+        self.reread_folder()
+    }
+
+    fn exam_folder(&self, exam: &ExamId) -> Option<PathBuf> {
+        let e = self.entries.iter().find(|e| &e.id == exam)?;
+        e.dir.parent().map(Path::to_path_buf)
+    }
+
+    fn close_all(&mut self) -> Vec<String> {
+        let opened = std::mem::take(&mut *self.opened.borrow_mut());
+        self.failed.borrow_mut().clear();
+        opened
+            .into_iter()
+            .filter_map(|(id, o)| o.p.close().err().map(|e| format!("{id}: {e}")))
+            .collect()
     }
 
     fn can_create_exam(&self) -> bool {

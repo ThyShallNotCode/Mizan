@@ -1,6 +1,10 @@
-// Settings: theme, motion, the single-key shortcut switch (WCAG 2.1.4) and the review keymap.
+// Settings: theme, motion, the single-key shortcut switch (WCAG 2.1.4), the exams folder and
+// the review keymap.
 
-import { Theme, Tone, Card, TopBar, StatusBar, StatusPill, Tag, Keycap, GirihDivider } from "../theme.slint";
+import {
+    Theme, Tone, Card, TopBar, StatusBar, StatusPill, Tag, Keycap, GirihDivider, SecondaryButton,
+    GhostButton,
+} from "../theme.slint";
 import { App } from "../state.slint";
 import {
     ThemeToggle, Centered, StatusText, Switch, Segment, SegmentGroup, SectionLabel, KVLine, MessageText,
@@ -63,7 +67,8 @@ export component SettingsScreen inherits VerticalLayout {
         spacing: Theme.space-lg;
         VerticalLayout {
             width: root.narrow ? 420px : 460px;
-            spacing: Theme.space-lg;
+            // tighter below 880 px so the cards fit an 800 px window
+            spacing: root.win-h < 880px ? Theme.space-md : Theme.space-lg;
             Card {
                 title: "Appearance";
                 vertical-stretch: 0;
@@ -135,9 +140,28 @@ export component SettingsScreen inherits VerticalLayout {
                     mono: true;
                 }
                 KVLine {
-                    label: "Workspace";
+                    label: "Exams folder";
                     value: App.workspace;
                     wrap-value: true;
+                }
+                // another folder, or this one in the file manager (the desktop app only)
+                if App.has-workspace && (App.can-browse || App.can-reveal): HorizontalLayout {
+                    spacing: Theme.space-sm;
+                    alignment: end;
+                    if App.can-browse: SecondaryButton {
+                        text: "Change…";
+                        accessible-label: "Change the exams folder…";
+                        clicked => {
+                            App.open-workspace();
+                        }
+                    }
+                    if App.can-reveal: GhostButton {
+                        text: App.reveal-label;
+                        accessible-description: "Shows the exams folder in the file manager";
+                        clicked => {
+                            App.reveal("workspace");
+                        }
+                    }
                 }
                 Text {
                     text: App.data-note;

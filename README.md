@@ -317,6 +317,10 @@ omr-desktop --demo                            # invented demo data, marked DEMO 
 - Every file or folder field has **Browse…** beside it (and **Folder…** for scans), which opens
   your system's file dialog at the folder you picked from last; typing or pasting a path still
   works.
+- **Open folder…** (Ctrl+O) opens another exams folder, or the folder of one exam (selected
+  among the exams beside it); the app opens it again next time. **Refresh** (F5) lists exams
+  graded meanwhile, for example with `omr grade`. **Open exam folder** (in an exam's details)
+  and **Open exports folder** (Results › Export…) show the exam's folder in your file manager.
 - **Setup** shows the key, versions and CLO mapping; **Replace key…** loads the real key from
   a file and rescores; **Read key from answer sheet…** reads the instructor's key sheets, shows
   the key summary and, once you confirm, adds them to the exam (stored and audited like key

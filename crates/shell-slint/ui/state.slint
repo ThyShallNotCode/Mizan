@@ -35,6 +35,10 @@ export global App {
     in property <bool> can-browse;
     // the window can show a folder in the system's file manager
     in property <bool> can-reveal;
+    // the file manager's verb on this system ("Show in Explorer" on Windows)
+    in property <string> reveal-label: "Show folder";
+    // an exams folder is open (Settings shows it, with Change… and the file manager)
+    in property <bool> has-workspace;
     // settings
     in-out property <bool> single-key: true;
     in-out property <bool> show-all-default: false;
@@ -42,6 +46,13 @@ export global App {
     callback set-dark(bool);
     callback set-reduce-motion(bool);
     callback set-single-key(bool);
+    // shows a folder in the system's file manager: "exam" (the current exam's folder),
+    // "exports" (the same folder, where its exports are written) or "workspace"
+    callback reveal(string);
+    // the folder dialog for another exams folder; what is chosen opens
+    callback open-workspace();
+    // reads the exams folder again (F5)
+    callback refresh();
     // a command the shell forwards but the demo backend does not model (e.g. "New exam")
     callback request(string);
     // a path field's Browse… or Folder… button: opens the file dialog of that field
@@ -147,6 +158,8 @@ export global ExamsVM {
     // Setup, on the key summary that confirms a key read from key sheets
     callback confirm-key();
     callback close-drawer();
+    // another exams folder can be opened and the folder read again (not the demo)
+    in property <bool> can-open-workspace;
     // the New-exam form (CR-04): what the instructor types; Rust validates and grades it
     in-out property <bool> new-open;
     in property <bool> can-create;

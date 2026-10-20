@@ -1,20 +1,24 @@
-//! The desktop workflow without the command line (G-3): file dialogs on every path field. The
+//! The desktop workflow without the command line (G-3): file dialogs on every path field,
+//! opening another exams folder and showing folders in the file manager. The
 //! window gets what the binary supplies from the operating system through a fake host (it
-//! records each dialog asked for and answers from a queue), and is driven as a user does:
-//! real pointer clicks and typed keys, on the synthetic exam (no real data).
+//! records each dialog asked for and answers from a queue, each folder shown and each save of
+//! the preferences), and is driven as a user does: real pointer clicks and typed keys, on
+//! synthetic exams (no real data).
 //!
 //! Each test runs on its own thread with its own Slint testing platform.
 
 mod support;
 
+use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+use omr_app::ExamProject;
 use shell_slint::app_backend::AppBackend;
 use shell_slint::backend::Backend;
 use shell_slint::host::{PickKind, PickTarget, Prefs};
-use shell_slint::ui::{App, AppWindow, ExamsVM, RemarkVM, ScanVM, SetupVM};
+use shell_slint::ui::{App, AppWindow, ExamsVM, RemarkVM, ResultsVM, ScanVM, SetupVM, Theme};
 use slint::ComponentHandle;
 use slint::platform::Key;
 use std::path::{Path, PathBuf};
-use support::a11::{chord, click, one, tab, type_text, with_prefix};
+use support::a11::{by_label, chord, click, one, special, tab, type_text, with_prefix};
 use support::harness::{
     FakeHost, Harness, Held, grade, harness, harness_in, held_spawner, run_held,
 };
@@ -600,5 +604,547 @@ fn browse_buttons_fit_the_smallest_window() {
         assert!(rm.get_cmp_open(), "{}", message(ui));
         buttons_inside(ui, &what("Results, parallel run"));
         press(ui, "Back to results");
+    }
+}
+
+// ------------------------------------------------------------------ exams folders (D3, D4)
+
+/// A small exam (six sheets, the key inferred): CS 213 Quiz 1.
+const QUIZ_1: synth::Spec = synth::Spec {
+    sheets: 6,
+    ..synth::BARE
+};
+
+/// Another small exam, graded earlier than [`QUIZ_1`]: CS 299 Quiz 9.
+const QUIZ_9: synth::Spec = synth::Spec {
+    course_code: "CS 299",
+    course_title: "Compilers",
+    course_title_ar: "المترجمات",
+    title: "Quiz 9",
+    date: "2026-09-30",
+    snapshot: "2026-10-01T08:00:00Z",
+    sheets: 6,
+    seed: 20_261_020,
+    folder: "cs299-quiz-9",
+    ..synth::BARE
+};
+
+/// An exams folder holding the exams `specs`, graded from their synthetic sheets.
+fn exams_folder(dir: &Path, specs: &[&synth::Spec]) -> PathBuf {
+    std::fs::create_dir_all(dir).expect("exams folder");
+    for s in specs {
+        synth::build(s, dir);
+    }
+    dir.to_path_buf()
+}
+
+/// The window on the exams folder `ws`, with file dialogs and the file manager (the fake host),
+/// the work it starts held.
+fn window_on(ws: &Path) -> (Harness, Held, std::rc::Rc<FakeHost>) {
+    let (spawn, held) = held_spawner();
+    let mut app = AppBackend::workspace(ws, "principal:a11");
+    app.set_spawner(spawn);
+    let h = harness_in(app);
+    let host = FakeHost::new();
+    h.shell.set_host(host.host(Prefs::default()));
+    (h, held, host)
+}
+
+/// The course codes of the exams table, top to bottom.
+fn courses(ui: &AppWindow) -> Vec<String> {
+    use slint::Model;
+    let rows = ui.global::<ExamsVM>().get_rows();
+    rows.iter().map(|r| r.code.to_string()).collect()
+}
+
+/// The navigation tab whose label starts with `label` (Review carries its open count).
+fn tab_of(ui: &AppWindow, label: &str) -> ElementHandle {
+    let tabs: Vec<_> = with_prefix(ui, label)
+        .into_iter()
+        .map(|(_, e)| e)
+        .filter(|e| e.accessible_role() == Some(AccessibleRole::Tab))
+        .collect();
+    assert_eq!(tabs.len(), 1, "one tab labelled {label}…");
+    tabs.into_iter().next().unwrap()
+}
+
+/// The preferences as the last save gave them.
+fn last_saved(host: &FakeHost) -> Prefs {
+    let saved = host.saved.borrow().last().cloned();
+    saved.expect("the preferences were saved")
+}
+
+/// D3: Open folder… (and Ctrl+O) chooses another exams folder in the folder dialog: its exams
+/// are listed, the first one selected, and it is the folder opened next time.
+#[test]
+fn open_folder_lists_the_other_folders_exams_and_remembers_it() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let fall = exams_folder(&dir.path().join("fall"), &[&QUIZ_1]);
+    let spring = exams_folder(&dir.path().join("spring"), &[&QUIZ_9]);
+    let (h, _held, host) = window_on(&fall);
+    let ui = &h.ui;
+    assert_eq!(courses(ui), ["CS 213"]);
+
+    host.will_pick(&[&spring]);
+    press(ui, "Open folder…");
+    let req = host.last_request();
+    assert_eq!(
+        (req.target, req.kind),
+        (PickTarget::Workspace, PickKind::Folder)
+    );
+    assert!(req.filters.is_empty());
+    assert_eq!(courses(ui), ["CS 299"], "the other folder's exams");
+    let app = ui.global::<App>();
+    assert!(app.get_course().starts_with("CS 299"), "its exam is open");
+    assert!(app.get_workspace().ends_with("spring"));
+    let msg = message(ui);
+    assert!(msg.contains("Opened") && msg.contains("1 exam"), "{msg}");
+    let saved = last_saved(&host);
+    assert_eq!(saved.workspace.as_deref(), Some(spring.as_path()));
+    assert_eq!(saved.recent.first(), Some(&spring));
+    // the next dialog opens beside the folder chosen
+    assert_eq!(
+        saved.last_dirs.get("folders"),
+        Some(&dir.path().to_path_buf())
+    );
+
+    // Ctrl+O on the Exams screen; a dialog closed without a choice changes nothing
+    host.will_cancel();
+    chord(ui, Key::Control, "o");
+    assert_eq!(host.requests.borrow().len(), 2, "Ctrl+O opens the dialog");
+    assert_eq!(host.last_request().target, PickTarget::Workspace);
+    assert_eq!(courses(ui), ["CS 299"]);
+    // back to the first folder
+    host.will_pick(&[&fall]);
+    chord(ui, Key::Control, "o");
+    assert_eq!(courses(ui), ["CS 213"]);
+    let saved = last_saved(&host);
+    assert_eq!(saved.workspace.as_deref(), Some(fall.as_path()));
+    assert_eq!(saved.recent, vec![fall.clone(), spring.clone()]);
+}
+
+/// D3: choosing the folder of one exam opens the folder it sits in, with that exam selected
+/// (not the newest).
+#[test]
+fn open_exam_folder_selects_that_exam() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let ws = exams_folder(&dir.path().join("exams"), &[&QUIZ_1, &QUIZ_9]);
+    let empty = dir.path().join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let (h, _held, host) = window_on(&empty);
+    let ui = &h.ui;
+    assert!(courses(ui).is_empty());
+    host.will_pick(&[&ws.join(QUIZ_9.folder)]);
+    press(ui, "Open folder…");
+    assert_eq!(courses(ui), ["CS 213", "CS 299"], "newest first");
+    let ex = ui.global::<ExamsVM>();
+    assert_eq!(ex.get_selected(), 1, "the exam chosen is selected");
+    assert!(ex.get_drawer_open());
+    assert_eq!(ex.get_drawer().code, "CS 299");
+    assert!(ui.global::<App>().get_course().starts_with("CS 299"));
+    let msg = message(ui);
+    assert!(msg.contains("CS 299 Quiz 9 is selected"), "{msg}");
+    assert_eq!(last_saved(&host).workspace.as_deref(), Some(ws.as_path()));
+
+    // its project.omrproj chosen works the same; a folder with no exam is refused as it is
+    host.will_pick(&[&ws.join(QUIZ_1.folder).join("project.omrproj")]);
+    press(ui, "Open folder…");
+    assert_eq!(ex.get_drawer().code, "CS 213");
+    host.will_pick(&[&dir.path().join("nowhere")]);
+    press(ui, "Open folder…");
+    let msg = message(ui);
+    assert!(msg.contains("no such folder"), "{msg}");
+    assert_eq!(courses(ui), ["CS 213", "CS 299"], "nothing changed");
+    assert_eq!(
+        last_saved(&host).workspace.as_deref(),
+        Some(ws.as_path()),
+        "the folder opened next time is still the last one opened"
+    );
+}
+
+/// D3: Refresh (F5) reads the folder again: an exam graded meanwhile (here, as the command
+/// line would) is listed, and one whose folder was removed goes.
+#[test]
+fn refresh_shows_an_exam_graded_behind_the_apps_back() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let ws = exams_folder(&dir.path().join("exams"), &[&QUIZ_1]);
+    let (h, _held, _host) = window_on(&ws);
+    let ui = &h.ui;
+    assert_eq!(courses(ui), ["CS 213"]);
+    synth::build(&QUIZ_9, &ws);
+    assert_eq!(courses(ui), ["CS 213"], "not read yet");
+    special(ui, Key::F5);
+    assert_eq!(courses(ui), ["CS 213", "CS 299"]);
+    let msg = message(ui);
+    assert!(msg.contains("2 exams") && msg.contains("1 new"), "{msg}");
+    assert_eq!(
+        ui.global::<ExamsVM>().get_drawer().code,
+        "CS 213",
+        "the exam open stays selected"
+    );
+
+    std::fs::remove_dir_all(ws.join(QUIZ_9.folder)).unwrap();
+    press(ui, "Refresh the exams list (F5)");
+    assert_eq!(courses(ui), ["CS 213"]);
+    let msg = message(ui);
+    assert!(msg.contains("1 no longer in the folder"), "{msg}");
+    press(ui, "Refresh the exams list (F5)");
+    assert!(message(ui).contains("nothing changed"), "{}", message(ui));
+}
+
+/// D3: while an exam is being graded the folder stays: opening another is refused with what to
+/// do, and works once the run has ended.
+#[test]
+fn opening_a_folder_is_refused_while_grading() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let host = FakeHost::new();
+    w.h.shell.set_host(host.host(Prefs::default()));
+    let other = dir.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    press(ui, "New exam");
+    type_into(ui, "Scan files or folders", w.scans.to_str().unwrap());
+    type_into(ui, "Number of questions", "30");
+    press(ui, "Grade exam");
+    assert!(w.h.app.borrow().grading_in_progress());
+    click(ui, &tab(ui, "Exams"));
+    host.will_pick(&[&other]);
+    press(ui, "Open folder…");
+    let msg = message(ui);
+    assert!(
+        msg.contains("is being graded") && msg.contains("when the Scan screen says"),
+        "{msg}"
+    );
+    assert_eq!(courses(ui).len(), 1, "the run's exam is still listed");
+    assert!(ui.global::<App>().get_workspace().ends_with("exams"));
+    assert_eq!(
+        last_saved(&host).workspace,
+        None,
+        "nothing opened, nothing remembered"
+    );
+
+    run_held(&w.h, &w.held);
+    assert_eq!(w.h.app.borrow().grading_error(), None);
+    host.will_pick(&[&other]);
+    press(ui, "Open folder…");
+    let msg = message(ui);
+    assert!(msg.contains("no exams in it yet"), "{msg}");
+    assert!(courses(ui).is_empty());
+    one(ui, "No exams in this folder yet");
+}
+
+/// D3: another folder opened saves and closes the exams open: the project is free for another
+/// program and its signed checkpoint covers the last decision.
+#[test]
+fn switching_folders_closes_open_projects() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let fall = exams_folder(&dir.path().join("fall"), &[&QUIZ_1]);
+    let spring = dir.path().join("spring");
+    std::fs::create_dir_all(&spring).unwrap();
+    let (h, _held, host) = window_on(&fall);
+    let ui = &h.ui;
+    let package = fall.join(QUIZ_1.folder).join("project.omrproj");
+    let checkpoint = |p: &ExamProject| {
+        let st = p.store().expect("a store");
+        st.latest_checkpoint().expect("readable").map(|c| c.seq)
+    };
+    let graded = h
+        .app
+        .borrow()
+        .with_project(&h.exam, checkpoint)
+        .flatten()
+        .expect("grading ended with a checkpoint");
+    // a decision after it
+    click(ui, &tab_of(ui, "Review"));
+    press(ui, "Accept suggestion");
+    let head = h
+        .app
+        .borrow()
+        .with_project(&h.exam, |p| {
+            p.store().unwrap().events().unwrap().last().map(|e| e.seq)
+        })
+        .flatten()
+        .expect("events");
+    assert!(
+        head > graded,
+        "the decision is recorded after the checkpoint"
+    );
+    // held open here: another program could not write it
+    assert!(ExamProject::open(&package, "principal:other").is_err());
+
+    click(ui, &tab(ui, "Exams"));
+    host.will_pick(&[&spring]);
+    press(ui, "Open folder…");
+    assert!(message(ui).contains("Opened"), "{}", message(ui));
+    let p = ExamProject::open(&package, "principal:other").expect("free to open read-write");
+    let closed = checkpoint(&p).expect("a checkpoint");
+    assert!(
+        closed >= head,
+        "the close signed a checkpoint over the decision: {closed} < {head}"
+    );
+}
+
+/// The `--project` exam's folder is not the exams folder: New exam grades beside it.
+#[test]
+fn project_mode_grades_new_exams_beside_the_exam_not_inside_it() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let ws = exams_folder(&dir.path().join("exams"), &[&QUIZ_1]);
+    let exam_dir = ws.join(QUIZ_1.folder);
+    let scans = synth::write_scans(&QUIZ_9, &dir.path().join("scans"));
+    let (spawn, held) = held_spawner();
+    let mut app = AppBackend::project(&exam_dir, "principal:a11").expect("open");
+    app.set_spawner(spawn);
+    assert_eq!(app.workspace_dir().as_deref(), Some(ws.as_path()));
+    let h = harness(app);
+    let ui = &h.ui;
+    assert!(ui.global::<App>().get_workspace().ends_with("exams"));
+    press(ui, "New exam");
+    type_into(ui, "Scan files or folders", scans.to_str().unwrap());
+    type_into(ui, "Number of questions", "30");
+    type_into(ui, "Course code", "CS 299");
+    press(ui, "Grade exam");
+    let msg = message(ui);
+    assert!(msg.contains("Grading 6 scan files"), "{msg}");
+    assert!(
+        !msg.contains(&format!(
+            "{}{}",
+            exam_dir.display(),
+            std::path::MAIN_SEPARATOR
+        )),
+        "{msg}"
+    );
+    run_held(&h, &held);
+    assert_eq!(h.app.borrow().grading_error(), None);
+    let graded: Vec<PathBuf> = std::fs::read_dir(&ws)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.join("project.omrproj").is_dir())
+        .collect();
+    assert_eq!(graded.len(), 2, "the new exam beside the first: {graded:?}");
+    assert!(
+        std::fs::read_dir(&exam_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .all(|e| !e.path().join("project.omrproj").exists()),
+        "nothing graded inside the exam's folder"
+    );
+}
+
+/// D3: the drawer shows the exam's folder (its project and exports) in the file manager.
+#[test]
+fn drawer_open_exam_folder_reveals_the_exam_folder() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let ws = exams_folder(&dir.path().join("exams"), &[&QUIZ_1]);
+    let (spawn, _held) = held_spawner();
+    let mut app = AppBackend::workspace(&ws, "principal:a11");
+    app.set_spawner(spawn);
+    let h = harness_in(app);
+    let ui = &h.ui;
+    assert!(ui.global::<ExamsVM>().get_drawer_open());
+    assert!(
+        by_label(ui, "Open exam folder").is_empty(),
+        "no file manager, no button"
+    );
+    let host = FakeHost::new();
+    h.shell.set_host(host.host(Prefs::default()));
+    press(ui, "Open exam folder");
+    let shown = host.revealed.borrow().clone();
+    assert_eq!(shown, vec![ws.join(QUIZ_1.folder)]);
+    assert!(shown[0].join("project.omrproj").is_dir());
+    assert!(message(ui).contains("Opened"), "{}", message(ui));
+}
+
+/// D3: Results' export bar writes the exports and shows the folder they are in.
+#[test]
+fn results_open_exports_folder_reveals_the_folder_with_results_csv() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let ws = exams_folder(&dir.path().join("exams"), &[&QUIZ_1]);
+    let (h, _held, host) = window_on(&ws);
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Results"));
+    press(ui, "Export…");
+    press(ui, "Write all exports");
+    assert!(message(ui).contains("Wrote"), "{}", message(ui));
+    press(ui, "Open exports folder");
+    let shown = host.revealed.borrow().clone();
+    assert_eq!(shown, vec![ws.join(QUIZ_1.folder)]);
+    let results = std::fs::read_dir(&shown[0])
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("results") && n.ends_with(".csv"))
+        .count();
+    assert_eq!(results, 1, "the results file is in the folder shown");
+}
+
+/// Only folders reach the file manager: the exams folder from Settings, never a file; an exam
+/// being graded has no folder yet, so nothing is shown for it.
+#[test]
+fn reveal_never_receives_a_file_path() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let host = FakeHost::new();
+    w.h.shell.set_host(host.host(Prefs::default()));
+    // an exam being graded: selected, but no folder to show
+    press(ui, "New exam");
+    type_into(ui, "Scan files or folders", w.scans.to_str().unwrap());
+    type_into(ui, "Number of questions", "30");
+    press(ui, "Grade exam");
+    click(ui, &tab(ui, "Exams"));
+    press(ui, "Open exam folder");
+    assert!(host.revealed.borrow().is_empty());
+    assert!(message(ui).contains("no folder yet"), "{}", message(ui));
+    run_held(&w.h, &w.held);
+    press(ui, "Open exam folder");
+    click(ui, &tab(ui, "Settings"));
+    let label = ui.global::<App>().get_reveal_label().to_string();
+    let expected = if cfg!(windows) {
+        "Show in Explorer"
+    } else {
+        "Show folder"
+    };
+    assert_eq!(label, expected);
+    press(ui, &label);
+    let shown = host.revealed.borrow().clone();
+    assert_eq!(shown.len(), 2);
+    assert_eq!(shown[1], w.ws, "the exams folder");
+    for p in &shown {
+        assert!(p.is_dir(), "{} is a folder", p.display());
+    }
+}
+
+/// D3: Settings shows the exams folder, changes it in the folder dialog and remembers it.
+#[test]
+fn settings_change_opens_another_exams_folder() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let fall = exams_folder(&dir.path().join("fall"), &[&QUIZ_1]);
+    let spring = exams_folder(&dir.path().join("spring"), &[&QUIZ_9]);
+    let (h, _held, host) = window_on(&fall);
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Settings"));
+    assert!(ui.global::<App>().get_workspace().ends_with("fall"));
+    host.will_pick(&[&spring]);
+    press(ui, "Change the exams folder…");
+    assert_eq!(courses(ui), ["CS 299"]);
+    assert_eq!(ui.global::<App>().get_page(), shell_slint::ui::Page::Exams);
+    assert_eq!(
+        last_saved(&host).workspace.as_deref(),
+        Some(spring.as_path())
+    );
+}
+
+/// D4: an empty folder offers what to do: New exam, another folder (the folder dialog), and
+/// the Remark import; the folder button needs the dialog.
+#[test]
+fn empty_workspace_shows_no_exams_yet_with_three_actions() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    one(ui, "No exams in this folder yet");
+    assert!(
+        by_label(ui, "Open another folder…").is_empty(),
+        "no folder dialog, no button"
+    );
+    let host = FakeHost::new();
+    w.h.shell.set_host(host.host(Prefs::default()));
+    press(ui, "New exam…");
+    let ex = ui.global::<ExamsVM>();
+    assert!(ex.get_new_open(), "the form opens");
+    press(ui, "Cancel");
+    assert!(!ex.get_new_open());
+    host.will_cancel();
+    press(ui, "Open another folder…");
+    assert_eq!(host.last_request().target, PickTarget::Workspace);
+    one(ui, "No exams in this folder yet");
+    press(ui, "Import from Remark export…");
+    assert!(ex.get_new_open());
+    assert!(ui.global::<RemarkVM>().get_new_panel(), "the Remark import");
+}
+
+/// D4: a status filter that hides every exam says so and shows them all again in one click.
+#[test]
+fn filter_hiding_every_row_offers_show_all() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let ws = exams_folder(&dir.path().join("exams"), &[&QUIZ_1]);
+    let (h, _held, _host) = window_on(&ws);
+    let ui = &h.ui;
+    press(ui, "Released, 0");
+    assert!(courses(ui).is_empty());
+    one(ui, "No exams with this status");
+    press(ui, "Show all exams");
+    assert_eq!(courses(ui), ["CS 213"]);
+    assert_eq!(ui.global::<ExamsVM>().get_filter(), 0);
+    assert!(by_label(ui, "No exams with this status").is_empty());
+}
+
+/// Every control for folders and settings sits inside the smallest window, in both themes.
+#[test]
+fn folder_and_settings_controls_fit_the_smallest_window() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    // a long folder name: Settings shows it on two lines
+    let long = dir
+        .path()
+        .join("Final exams of the fall term, Computer Science");
+    let ws = exams_folder(&long, &[&QUIZ_1]);
+    let (h, _held, _host) = window_on(&ws);
+    let ui = &h.ui;
+    ui.window().set_size(slint::PhysicalSize::new(1280, 800));
+    let inside = |label: &str, what: &str| {
+        let e = one(ui, label);
+        let (p, sz) = (e.absolute_position(), e.size());
+        assert!(
+            p.x >= 0.0 && p.y >= 0.0 && p.x + sz.width <= 1280.5 && p.y + sz.height <= 800.5,
+            "{what}: {label:?} at ({}, {}) size {}x{} is outside the window",
+            p.x,
+            p.y,
+            sz.width,
+            sz.height
+        );
+    };
+    for dark in [false, true] {
+        ui.global::<Theme>().set_dark(dark);
+        let what = format!("dark {dark}");
+        click(ui, &tab(ui, "Exams"));
+        for l in [
+            "Open folder…",
+            "Refresh the exams list (F5)",
+            "New exam",
+            "Open exam folder",
+            "Scan and recognise",
+        ] {
+            inside(l, &what);
+        }
+        click(ui, &tab(ui, "Results"));
+        // release is blocked (the key is inferred): the long reason never widens the screen
+        assert!(ui.global::<ResultsVM>().get_release_blocked());
+        let toggle = if dark { "Light theme" } else { "Dark theme" };
+        for l in ["Release results…", toggle] {
+            inside(l, &what);
+        }
+        press(ui, "Export…");
+        for l in ["Write all exports", "Open exports folder", "Close"] {
+            inside(l, &what);
+        }
+        press(ui, "Close");
+        click(ui, &tab(ui, "Settings"));
+        let reveal = ui.global::<App>().get_reveal_label().to_string();
+        for l in [
+            "Change the exams folder…",
+            reveal.as_str(),
+            "Show blank-bubble overlays",
+        ] {
+            inside(l, &what);
+        }
+        for bar in ElementHandle::find_by_element_type_name(ui, "StatusBar") {
+            let (p, sz) = (bar.absolute_position(), bar.size());
+            assert!(
+                p.y + sz.height <= 800.5,
+                "{what}: Settings' status bar ends at {} past the window",
+                p.y + sz.height
+            );
+        }
     }
 }

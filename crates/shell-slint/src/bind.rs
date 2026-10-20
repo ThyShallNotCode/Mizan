@@ -4,7 +4,7 @@
 use crate::backend::{
     self as b, Backend, Decision, ExamId, ItemId, Lane, ReviewAction, ReviewKind,
 };
-use crate::host::{Host, PickKind, PickRequest, PickTarget};
+use crate::host::{Host, PickKind, PickRequest, PickTarget, Prefs};
 use crate::keymap::{self, GlobalKey, KeyContext, ReviewKey};
 use crate::ui::{self as s, AppWindow};
 use slint::{
@@ -12,7 +12,7 @@ use slint::{
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 
 // ------------------------------------------------------------------------------------ helpers
@@ -574,6 +574,13 @@ impl Shell {
         });
         shell.wire(ui);
         shell.refresh_all();
+        let app = ui.global::<s::App>();
+        // the file manager by its name on Windows; elsewhere it varies
+        app.set_reveal_label(ss(if cfg!(windows) {
+            "Show in Explorer"
+        } else {
+            "Show folder"
+        }));
         shell
     }
 
@@ -609,6 +616,18 @@ impl Shell {
         app.set_can_browse(host.pick.is_some());
         app.set_can_reveal(host.reveal.is_some());
         *self.host.borrow_mut() = host;
+    }
+
+    /// Changes the preferences with `change` and saves them (when the window can).
+    fn save_prefs(&self, change: impl FnOnce(&mut Prefs)) {
+        let (save, prefs) = {
+            let mut host = self.host.borrow_mut();
+            change(&mut host.prefs);
+            (host.save_prefs.clone(), host.prefs.clone())
+        };
+        if let Some(save) = save {
+            save(&prefs);
+        }
     }
 
     /// Starts the ~2 Hz timer that lets the backend fold in background work (live batch view).
@@ -747,15 +766,7 @@ impl Shell {
             let mut st = self.st.borrow_mut();
             let changed = st.exam.as_ref() != Some(exam);
             if changed {
-                st.item = None;
-                st.current = None;
-                st.pending = None;
-                st.lane = Lane::Marks;
-                st.sel_row = 0;
-                st.sel_col = 0;
-                st.ks_version = 0;
-                st.ks_picks.clear();
-                st.remark_version = 0;
+                Self::forget_exam(&mut st);
             }
             st.exam = Some(exam.clone());
             changed
@@ -767,6 +778,20 @@ impl Shell {
         }
         self.refresh_all();
         self.restart_review();
+    }
+
+    /// Forgets where the reviewer was in the exam shown: its open item, lane, Setup cell and the
+    /// key-sheet and import versions looked at.
+    fn forget_exam(st: &mut State) {
+        st.item = None;
+        st.current = None;
+        st.pending = None;
+        st.lane = Lane::Marks;
+        st.sel_row = 0;
+        st.sel_col = 0;
+        st.ks_version = 0;
+        st.ks_picks.clear();
+        st.remark_version = 0;
     }
 
     /// Closes the bars and empties the fields that belong to one exam: a Blackboard column is
@@ -840,6 +865,12 @@ impl Shell {
         app.on_request(move |what| me.request(&what));
         let me = self.clone();
         app.on_browse(move |target| me.browse(&target));
+        let me = self.clone();
+        app.on_reveal(move |what| me.reveal(&what));
+        let me = self.clone();
+        app.on_open_workspace(move || me.browse(PickTarget::Workspace.name()));
+        let me = self.clone();
+        app.on_refresh(move || me.refresh_folder());
         let me = self.clone();
         app.on_set_single_key(move |v| {
             me.st.borrow_mut().single_key = v;
@@ -1345,6 +1376,19 @@ impl Shell {
         if target.kind() != PickKind::Files {
             paths.truncate(1);
         }
+        if target == PickTarget::Workspace {
+            // no field: the folder opens (and is remembered with where the dialog was)
+            let dir = paths.swap_remove(0);
+            let parent = dir.parent().filter(|d| !d.as_os_str().is_empty());
+            let start = parent.unwrap_or(&dir).to_path_buf();
+            self.host
+                .borrow_mut()
+                .prefs
+                .last_dirs
+                .insert(target.dir_key().to_string(), start);
+            self.open_folder(&dir);
+            return;
+        }
         let field = target.field();
         let shown = paths
             .iter()
@@ -1394,6 +1438,126 @@ impl Shell {
             PickTarget::RemarkPoints => rm.set_points_path(text),
             PickTarget::CompareBooks => rm.set_cmp_path(text),
             PickTarget::ParallelDir => rm.set_save_path(text),
+            PickTarget::Workspace => {}
+        }
+    }
+
+    // ------------------------------------------------------------------ exams folders
+
+    /// Opens another exams folder (or the folder of one exam, selected among its neighbours):
+    /// the window starts again on it, and it is the folder opened next time.
+    fn open_folder(&self, dir: &Path) {
+        let r = self.backend.borrow_mut().open_workspace(dir);
+        match r {
+            Ok(what) => {
+                self.folder_changed();
+                let opened = self.backend.borrow().workspace_dir();
+                self.save_prefs(|p| {
+                    if let Some(w) = opened {
+                        p.remember_workspace(w);
+                    }
+                });
+                self.navigate(s::Page::Exams);
+                self.say(what, s::Tone::Success);
+            }
+            Err(e) => {
+                // the dialog's folder is still worth remembering
+                self.save_prefs(|_| {});
+                self.say(e.to_string(), s::Tone::Warning);
+            }
+        }
+    }
+
+    /// Another folder is open: nothing of the last folder's exams stays (selection, open bars,
+    /// typed paths, imports, filters); its default exam is selected.
+    fn folder_changed(&self) {
+        let exam = self.backend.borrow().default_exam();
+        {
+            let mut st = self.st.borrow_mut();
+            Self::forget_exam(&mut st);
+            st.exam = exam;
+            st.exam_filter = 0;
+            st.exam_search.clear();
+            st.drawer_open = true;
+            st.remark_new = None;
+            st.remark_new_using = None;
+            st.remark_setup = None;
+            st.parallel = None;
+        }
+        let ui = self.ui();
+        ui.global::<s::ExamsVM>()
+            .set_search_text(SharedString::new());
+        ui.global::<s::RemarkVM>().set_new_panel(false);
+        self.clear_exam_inputs();
+        self.refresh_all();
+        self.restart_review();
+    }
+
+    /// Reads the exams folder again (Refresh, F5): exams graded meanwhile appear, exams whose
+    /// folder is gone go.
+    fn refresh_folder(&self) {
+        let r = self.backend.borrow_mut().refresh_workspace();
+        match r {
+            Ok(what) => {
+                let gone = self.exam().is_some_and(|e| {
+                    !self
+                        .backend
+                        .borrow()
+                        .dashboard()
+                        .exams
+                        .iter()
+                        .any(|x| x.id == e)
+                });
+                if gone {
+                    let exam = self.backend.borrow().default_exam();
+                    match exam {
+                        Some(e) => self.select_exam(&e),
+                        None => {
+                            Self::forget_exam(&mut self.st.borrow_mut());
+                            self.st.borrow_mut().exam = None;
+                            self.clear_exam_inputs();
+                            self.refresh_all();
+                        }
+                    }
+                } else {
+                    self.refresh_all();
+                }
+                self.say(what, s::Tone::Info);
+            }
+            Err(e) => self.say(e.to_string(), s::Tone::Warning),
+        }
+    }
+
+    /// Shows a folder in the system's file manager: the current exam's folder (`exam`; its
+    /// exports are written there too, `exports`) or the exams folder (`workspace`). Only
+    /// folders the backend names are shown, never a typed path or a file.
+    fn reveal(&self, what: &str) {
+        let Some(reveal) = self.host.borrow().reveal.clone() else {
+            return;
+        };
+        let dir = match what {
+            "exam" | "exports" => self
+                .exam()
+                .and_then(|e| self.backend.borrow().exam_folder(&e)),
+            "workspace" => self.backend.borrow().workspace_dir(),
+            _ => None,
+        };
+        let Some(dir) = dir else {
+            self.say(
+                match what {
+                    "workspace" => "No exams folder is open",
+                    _ => "This exam has no folder yet: it is being graded",
+                },
+                s::Tone::Info,
+            );
+            return;
+        };
+        match reveal(&dir) {
+            Ok(()) => self.say(format!("Opened {}", dir.display()), s::Tone::Info),
+            Err(e) => self.say(
+                format!("Cannot show the folder: {e}. It is {}", dir.display()),
+                s::Tone::Warning,
+            ),
         }
     }
 
@@ -1995,7 +2159,7 @@ impl Shell {
 
     // -------------------------------------------------------------------------- keys
 
-    fn global_key(&self, text: &str, ctrl: bool, _shift: bool, alt: bool) -> bool {
+    fn global_key(self: &Rc<Self>, text: &str, ctrl: bool, _shift: bool, alt: bool) -> bool {
         const SCREENS: [s::Page; 6] = [
             s::Page::Exams,
             s::Page::Setup,
@@ -2016,6 +2180,15 @@ impl Shell {
                 self.navigate(s::Page::Settings);
                 true
             }
+            // the exams list, read again where it is shown
+            Some(GlobalKey::Refresh) => {
+                let page = self.ui().global::<s::App>().get_page();
+                if page != s::Page::Exams || !self.backend.borrow().can_open_workspace() {
+                    return false;
+                }
+                self.refresh_folder();
+                true
+            }
             Some(GlobalKey::Dismiss) => {
                 let page = self.ui().global::<s::App>().get_page();
                 if page == s::Page::Exams && self.st.borrow().drawer_open {
@@ -2034,7 +2207,7 @@ impl Shell {
     }
 
     /// The Ctrl chords each screen advertises on its buttons (DESIGN §9).
-    fn page_chord(&self, text: &str, ctrl: bool, alt: bool) -> bool {
+    fn page_chord(self: &Rc<Self>, text: &str, ctrl: bool, alt: bool) -> bool {
         use keymap::Chord;
         let Some(chord) = keymap::page_chord(text, ctrl, alt) else {
             return false;
@@ -2042,6 +2215,9 @@ impl Shell {
         let page = self.ui().global::<s::App>().get_page();
         match (page, chord) {
             (s::Page::Exams, Chord::Letter('n')) => self.request("New exam"),
+            (s::Page::Exams, Chord::Letter('o')) if self.backend.borrow().can_open_workspace() => {
+                self.browse(PickTarget::Workspace.name())
+            }
             (s::Page::Exams, Chord::Letter('k')) => {
                 let ui = self.ui();
                 let ex = ui.global::<s::ExamsVM>();
@@ -2761,6 +2937,8 @@ impl Shell {
 
         let ex = ui.global::<s::ExamsVM>();
         ex.set_can_create(self.backend.borrow().can_create_exam());
+        ex.set_can_open_workspace(self.backend.borrow().can_open_workspace());
+        app.set_has_workspace(self.backend.borrow().workspace_dir().is_some());
         ex.set_new_note(ss(format!(
             "Graded into a new folder of {}. Without a key file the key is inferred: the \
              results stay provisional until you replace it in Setup.",

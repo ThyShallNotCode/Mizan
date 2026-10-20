@@ -433,6 +433,14 @@ component Drawer inherits Rectangle {
                     ExamsVM.open(Page.scan);
                 }
             }
+            // the exam's folder in the file manager: its project and the exports beside it
+            if App.can-reveal: GhostButton {
+                text: "Open exam folder";
+                accessible-description: "Shows the folder of this exam, with its exports, in the file manager";
+                clicked => {
+                    App.reveal("exam");
+                }
+            }
         }
     }
 }
@@ -873,6 +881,25 @@ export component ExamsScreen inherits Rectangle {
                         }
                     }
                 }
+                // another exams folder (or one exam's folder), and this one read again
+                if ExamsVM.can-open-workspace && App.can-browse: Centered {
+                    SecondaryButton {
+                        text: "Open folder…";
+                        key-hint: "Ctrl+O";
+                        clicked => {
+                            App.open-workspace();
+                        }
+                    }
+                }
+                if ExamsVM.can-open-workspace: Centered {
+                    IconButton {
+                        icon: Icons.refresh;
+                        label: "Refresh the exams list (F5)";
+                        clicked => {
+                            App.refresh();
+                        }
+                    }
+                }
                 Centered {
                     PrimaryButton {
                         text: "New exam";
@@ -1070,7 +1097,9 @@ export component ExamsScreen inherits Rectangle {
                         if ExamsVM.rows.length == 0 && ExamsVM.filters[0].count == 0 && !ExamsVM.new-open: EmptyState {
                             vertical-stretch: 1;
                             title: "No exams in this folder yet";
-                            text: "Each exam graded into this folder is listed here. Grade one from its scans with New exam, or start from Remark's graded Excel exports.";
+                            text: ExamsVM.can-open-workspace && App.can-browse
+                                ? "Each exam graded into this folder is listed here. Grade one from its scans with New exam, open the folder your exams are in, or start from Remark's graded Excel exports."
+                                : "Each exam graded into this folder is listed here. Grade one from its scans with New exam, or start from Remark's graded Excel exports.";
                             PrimaryButton {
                                 text: "New exam…";
                                 icon: Icons.plus;
@@ -1078,7 +1107,14 @@ export component ExamsScreen inherits Rectangle {
                                     App.request("New exam");
                                 }
                             }
-                            if ExamsVM.can-create && RemarkVM.can-new: SecondaryButton {
+                            if ExamsVM.can-open-workspace && App.can-browse: SecondaryButton {
+                                text: "Open another folder…";
+                                accessible-description: "Opens the folder dialog: the folder your exams are in, or the folder of one exam";
+                                clicked => {
+                                    App.open-workspace();
+                                }
+                            }
+                            if ExamsVM.can-create && RemarkVM.can-new: GhostButton {
                                 text: "Import from Remark export…";
                                 accessible-description: "Opens the New-exam form on Remark's graded Excel exports: the key with exact points per version and the learning objectives, shown for your review before the form uses them";
                                 clicked => {

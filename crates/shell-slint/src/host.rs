@@ -41,13 +41,15 @@ pub enum PickTarget {
     /// The parallel run: Remark's workbooks to compare, and the folder of its report.
     CompareBooks,
     ParallelDir,
+    /// Another exams folder to open (Exams, Settings): no path field, the folder opens.
+    Workspace,
 }
 
 /// The scan files a dialog offers (`omr_app::ingest` reads these).
 const SCANS: &[&str] = omr_app::ingest::EXTENSIONS;
 
 impl PickTarget {
-    pub const ALL: [PickTarget; 16] = [
+    pub const ALL: [PickTarget; 17] = [
         PickTarget::NewScans,
         PickTarget::NewScanFolder,
         PickTarget::NewKey,
@@ -64,6 +66,7 @@ impl PickTarget {
         PickTarget::RemarkPoints,
         PickTarget::CompareBooks,
         PickTarget::ParallelDir,
+        PickTarget::Workspace,
     ];
 
     /// The name the window uses for it (`App.browse("new-scans")`).
@@ -85,6 +88,7 @@ impl PickTarget {
             PickTarget::RemarkPoints => "remark-points",
             PickTarget::CompareBooks => "compare-books",
             PickTarget::ParallelDir => "parallel-dir",
+            PickTarget::Workspace => "workspace",
         }
     }
 
@@ -109,9 +113,10 @@ impl PickTarget {
             | PickTarget::AddScans
             | PickTarget::RemarkBooks
             | PickTarget::CompareBooks => PickKind::Files,
-            PickTarget::NewScanFolder | PickTarget::AddScanFolder | PickTarget::ParallelDir => {
-                PickKind::Folder
-            }
+            PickTarget::NewScanFolder
+            | PickTarget::AddScanFolder
+            | PickTarget::ParallelDir
+            | PickTarget::Workspace => PickKind::Folder,
             PickTarget::NewKey
             | PickTarget::NewRoster
             | PickTarget::NewClo
@@ -140,6 +145,7 @@ impl PickTarget {
             PickTarget::RemarkPoints => "Choose the points file",
             PickTarget::CompareBooks => "Choose Remark's graded Excel exports to compare",
             PickTarget::ParallelDir => "Choose the folder for the report",
+            PickTarget::Workspace => "Choose the folder that holds your exams",
         }
     }
 
@@ -171,9 +177,10 @@ impl PickTarget {
                 "Remark exports and handwritten student numbers",
                 &["xlsx", "csv"],
             )],
-            PickTarget::NewScanFolder | PickTarget::AddScanFolder | PickTarget::ParallelDir => {
-                Vec::new()
-            }
+            PickTarget::NewScanFolder
+            | PickTarget::AddScanFolder
+            | PickTarget::ParallelDir
+            | PickTarget::Workspace => Vec::new(),
         }
     }
 
@@ -186,7 +193,7 @@ impl PickTarget {
             | PickTarget::SetupKeySheets
             | PickTarget::AddScans
             | PickTarget::AddScanFolder => "scans",
-            PickTarget::ParallelDir => "folders",
+            PickTarget::ParallelDir | PickTarget::Workspace => "folders",
             _ => "files",
         }
     }
@@ -266,6 +273,15 @@ impl Default for Prefs {
 impl Prefs {
     pub const VERSION: u64 = 1;
     pub const RECENT: usize = 5;
+
+    /// `dir` is the exams folder opened last: the one to open next time, and the latest of
+    /// the recent folders (each folder once, at most [`Prefs::RECENT`]).
+    pub fn remember_workspace(&mut self, dir: PathBuf) {
+        self.recent.retain(|r| *r != dir);
+        self.recent.insert(0, dir.clone());
+        self.recent.truncate(Self::RECENT);
+        self.workspace = Some(dir);
+    }
 
     /// The preferences in `bytes`; anything unreadable takes its default.
     pub fn from_json(bytes: &[u8]) -> Self {
@@ -408,6 +424,20 @@ mod tests {
         assert_eq!(
             Prefs::from_json(&Prefs::default().to_json()),
             Prefs::default()
+        );
+    }
+
+    #[test]
+    fn the_folder_opened_last_leads_the_recent_folders() {
+        let mut p = Prefs::default();
+        for d in ["/a", "/b", "/c", "/d", "/e", "/f", "/c"] {
+            p.remember_workspace(PathBuf::from(d));
+        }
+        assert_eq!(p.workspace, Some(PathBuf::from("/c")));
+        let recent: Vec<_> = ["/c", "/f", "/e", "/d", "/b"].map(PathBuf::from).into();
+        assert_eq!(
+            p.recent, recent,
+            "each once, the latest first, five at most"
         );
     }
 

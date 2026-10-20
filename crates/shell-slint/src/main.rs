@@ -380,7 +380,7 @@ fn remember_workspace(prefs: &mut Prefs, w: &Path) {
     let Ok(abs) = std::path::absolute(w) else {
         return;
     };
-    prefs.workspace = Some(abs);
+    prefs.remember_workspace(abs);
     save_prefs(prefs);
 }
 
@@ -699,6 +699,8 @@ fn host(ui: &AppWindow, prefs: Prefs) -> Host {
     }
 }
 
+/// Runs the window until it is closed; then every exam open is saved and closed (each writes
+/// its signed checkpoint).
 fn run_windowed(
     dark: bool,
     backend: Rc<RefCell<dyn Backend>>,
@@ -709,11 +711,15 @@ fn run_windowed(
     // the Wayland app id and X11 class, matched by packaging/linux/mizan.desktop (its icon)
     let _ = slint::set_xdg_app_id("mizan");
     ui.global::<Theme>().set_dark(dark);
-    let shell = Shell::bind(&ui, backend);
+    let shell = Shell::bind(&ui, backend.clone());
     shell.set_host(host(&ui, prefs));
     if live {
         shell.navigate(Page::Scan);
     }
     shell.start_live_updates();
-    ui.run()
+    let ran = ui.run();
+    for e in backend.borrow_mut().close_all() {
+        eprintln!("omr-desktop: not saved and closed properly: {e}");
+    }
+    ran
 }

@@ -110,6 +110,10 @@ expectation tied to the real exams out of the repository.
     library only describes each dialog (`shell_slint::host`); picked paths are used exactly
     while the field shows them, so a `;` in a file name stays intact. The preferences file
     (`desktop.json`, schema version 1) also keeps the folder each kind of dialog opened last.
+  - Exams folders: another folder (or one exam's folder) opened from the Exams screen or
+    Settings, the folder read again (F5), the exams open saved and closed on a switch and when
+    the window closes, an exam's folder and its exports shown in the file manager (Explorer,
+    `xdg-open`, `open`).
 
 **Deferred, with the spec section that owns each:**
 - The CNN/conformal stage of the cascade (§8.7 steps 3–6); the MVP uses calibrated classical features plus hysteresis.
@@ -178,7 +182,11 @@ expectation tied to the real exams out of the repository.
 - Parts of the file dialogs (G-3 D2): drag-and-drop of files onto the window (it needs an
   unstable Slint feature and works on X11 and Windows only); a Folder… button for Remark's
   workbooks (the import reads named files only: the dialog picks several); the roster bar in
-  Setup, the output folder and the exams folder take their Browse buttons with those steps.
+  Setup and the output folder take their Browse buttons with those steps.
+- Parts of the exams folder (G-3 D3, D9): a menu of the recent folders (the preferences keep
+  the last five); Explorer selecting the results file (`explorer /select`); opening a large
+  folder reads every exam on the UI thread, twice (the listing and the dashboard row), not on
+  a worker with a progress line.
 - Parts of cancelling a run (G-3 D7; built in `omr-app`: `Cancel` stops a new exam's grading
   or a survey before anything is stored):
   - a cancelled run keeps nothing and cannot be resumed (§22.4 keeps the completed pages and

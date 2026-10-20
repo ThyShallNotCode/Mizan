@@ -1749,6 +1749,64 @@ pub trait Backend {
         None
     }
 
+    /// True when this backend opens exams folders ([`Backend::open_workspace`]): the Exams
+    /// screen offers to open another folder and to read the folder again. The default opens
+    /// none.
+    fn can_open_workspace(&self) -> bool {
+        false
+    }
+
+    /// Opens another exams folder: the exams open now are saved and closed
+    /// ([`Backend::close_all`]) and the exams below `dir` are listed instead. A folder that
+    /// holds one graded exam opens that exam among its neighbours
+    /// ([`Backend::open_exam_folder`]). Refused while an exam is being graded. Returns what was
+    /// opened. The default refuses.
+    fn open_workspace(&mut self, dir: &std::path::Path) -> Result<String, BackendError> {
+        let _ = dir;
+        Err(BackendError::Denied(
+            "The demo shows invented exams: start omr-desktop without --demo to open your exams \
+             folder"
+                .into(),
+        ))
+    }
+
+    /// Opens the folder of one graded exam (or its `project.omrproj`): the exams folder it sits
+    /// in is opened ([`Backend::open_workspace`]) with that exam selected. Returns the exam and
+    /// what was opened. The default refuses.
+    fn open_exam_folder(
+        &mut self,
+        dir: &std::path::Path,
+    ) -> Result<(ExamId, String), BackendError> {
+        let _ = dir;
+        Err(BackendError::Denied(
+            "The demo shows invented exams: start omr-desktop without --demo to open an exam"
+                .into(),
+        ))
+    }
+
+    /// Reads the exams folder again: exams graded meanwhile (in another window, or on the
+    /// command line) are listed and exams whose folder is gone are dropped (an exam open here
+    /// stays). Returns what changed. The default has no folder to read.
+    fn refresh_workspace(&mut self) -> Result<String, BackendError> {
+        Err(BackendError::Denied(
+            "The demo shows invented exams: there is no exams folder to read again".into(),
+        ))
+    }
+
+    /// The folder of `exam`: it holds the exam's `project.omrproj` and the exports written
+    /// beside it. `None` while the exam has no folder (it is being graded) or is unknown.
+    fn exam_folder(&self, exam: &ExamId) -> Option<std::path::PathBuf> {
+        let _ = exam;
+        None
+    }
+
+    /// Saves and closes every exam open (each writes its signed checkpoint), as the window
+    /// closes or another folder opens; returns what could not be closed. The default has none
+    /// open.
+    fn close_all(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// True when a new exam can be graded from the New-exam form (a workspace to grade into,
     /// and no other run in progress).
     fn can_create_exam(&self) -> bool {
