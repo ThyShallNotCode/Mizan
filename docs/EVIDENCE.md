@@ -409,22 +409,38 @@ profile: the row is not timed):
   project whose snapshot was edited outside the app refused with SYS-011 and the remedy.
 - The 32 unit tests of the shell (key map, bindings, view-model formatting, flag stability)
   run in `scripts/check.sh`.
+- Since that run, the desktop workflow without the command line (G-3) is driven as a user
+  drives it, with real pointer clicks and typed keys, by
+  `crates/shell-slint/tests/req_gui_workflow.rs` (47 tests, in `scripts/check.sh`, not in the
+  acceptance run): file dialogs on every path field, another exams folder opened and read again,
+  folders shown in the file manager, Settings kept between starts, the New-exam card (the scans
+  checked, every value with its source, a question that blocks Grade exam until answered, the
+  definition graded equal to the proposal's), the exports written after a run with the
+  completion notice and its next steps, a new exam's grading cancelled, a roster given to a
+  graded exam, and the staging of the workflow's screenshots. The window gets the file
+  dialogs, the file manager and the preferences from a fake host: the native dialogs were never
+  shown (§7).
 
 **Screenshots** (synthetic data only, rendered headless by `omr-desktop --screenshot`):
-[`design/screens/`](design/screens/) (the demo data, marked DEMO DATA: exams, setup, scan,
-review, review-identity, review-blind, results, outcomes, settings; light, dark and
-1280 × 800) and [`design/screens/real/`](design/screens/real/) (synthetic IAU exams graded
-through `omr-app`: the same screens plus review-scoring, review-override, results-export,
-scan-add, exams-new (the New-exam form), and the key-sheet screens setup-keysheet (the key
-summary to confirm, each row with its printed question number) and scan-keysheet), for example
-[the review screen](design/screens/real/review-light.png),
-[results](design/screens/real/results-light.png) and
-[New exam](design/screens/real/exams-new-light.png).
+[`design/screens/`](design/screens/) (the demo data, marked DEMO DATA: exams, exams-new (an
+invented card), setup, scan, review, review-identity, review-blind, results, outcomes,
+settings; light, dark and 1280 × 800) and [`design/screens/real/`](design/screens/real/)
+(synthetic IAU exams graded through `omr-app`: the same screens plus review-scoring,
+review-override, results-export, scan-add, the New-exam card as it opens (exams-new), made from
+an exam's scans with the answer key asked (exams-new-ask) and from its scans, key, roster and
+CLO files with nothing asked (exams-new-ready), the completion notice of a grading run
+(scan-notice), an empty exams folder (exams-empty), the key-sheet screens setup-keysheet (the
+key summary to confirm, each row with its printed question number) and scan-keysheet, and the
+Remark screens), for example [the review screen](design/screens/real/review-light.png),
+[results](design/screens/real/results-light.png),
+[New exam](design/screens/real/exams-new-ready-light.png) and
+[the completion notice](design/screens/real/scan-notice-light.png).
 
 **Result: pass.** **Caveats:** the app has never run in a real window; on Windows it has run only headless, in CI (§7): the
-tests use Slint's testing backend and the screenshots its software renderer. GUI gaps: no
-keymap editor, and the roster is chosen when the exam is created (the CLI's `omr grade`
-options), not replaced later from the app (the CLO file can be, in Setup, since §5.2).
+tests use Slint's testing backend and the screenshots its software renderer, and the native
+file dialogs, the file manager and the startup message box have never been shown. GUI gap: no
+keymap editor. (A roster can be given to a graded exam from Setup's step 4 Roster since G-3,
+§3.1.7; the CLO file can be replaced in Setup since §5.2.)
 
 ## 3. The common cases (C1–C10)
 
@@ -634,7 +650,7 @@ multi-page TIFF fix of §3.1 had already landed).
 | CR-05 | The README said "design phase" and explained nothing | A user guide: build, grade with or without a key, review, release, the desktop app | `README.md` |
 | CR-06, CR-08, CR-14, CR-15 | Evidence gaps: open privacy controls not disclosed, A11 not run, A4 measured without the save, real-data scoring shown beside "Pass" rows | This document: §2.4, §2.11, §7, and the real-data row of §1 | — |
 | CR-07 | No release step; the Blackboard upload was written for unreleased results | `omr release` and *Release results…*: refused while anything blocks release; the upload exists only for released results and is removed when a later change supersedes the release | `project_actions.rs::c8_blackboard_grade_center_upload_holds_only_what_it_needs`; `omr-cli/tests/real_world.rs` |
-| CR-09 | Launching the app without a display printed a raw error | The error says what to do (desktop session, `--screenshot`, or the CLI). A real window, and this launch error on Windows, remain untested (§7) | — |
+| CR-09 | Launching the app without a display printed a raw error | The error says what to do (desktop session, `--screenshot`, or the CLI); the Windows release build, which has no console, shows it in a window of its own, or in the system's message box when no window of the app can open. A real window, this launch error on Windows and the native file dialogs remain untested (§7) | — |
 | CR-10 | The section and exam type read from the IAU sheet were discarded | Carried into the exports; a sheet whose section disagrees with the roster is IDN-004 `cross_section` (INFO) | `c13_sheet_section_is_carried_and_checked_against_the_roster` |
 | CR-11 | No teacher-filled key sheet | Built after the acceptance run: key sheets named (`--key-sheet`, `omr key read`) or found in the stack (student number all 0 or all 9; on a two-version exam a key sheet must also show its version, else it is refused with what to do), never graded as students, the run held (SCO-003 BLOCKER) until the instructor confirms the rendered key summary; rows that are not one confident mark block the confirmation, and erased-and-changed rows and rows a key file contradicts are highlighted; a key sheet showing no marker is refused, never read; a correction after confirmation survives a later rescan of the key sheet (§3.1.1, §4.1) | `omr-app/tests/key_sheets.rs` (8 tests), `omr-cli/tests/key_sheets.rs`; real: `real_iau_scored.rs`, `omr-cli/tests/real_key_read.rs`, `omr-recog/tests/real_key_sheets.rs` |
 | CR-13 | A failed grade left a half-made project that every command then refused differently | The folder is removed when grading fails; an unfinished one is named with what to do | `c14_an_unfinished_grading_run_is_named_with_its_remedy` |
@@ -882,7 +898,9 @@ These limits apply to the MVP as measured here.
     paths and sync-client marker files are refused on every OS), owner-only ACLs, DPAPI key
     protection and the audit principal from `USERNAME`.
   - **Desktop app:** has run headless only (the testing backend and software-rendered
-    screenshots), never in a real window.
+    screenshots), never in a real window. Its native file dialogs (the Windows dialog, the XDG
+    desktop portal, zenity), the file manager it opens and the startup message box have never
+    been shown on a real display: the tests drive a fake host.
 
 **Recognition and review**
 - Classical rules only; the learned mark classifier (spec §8.7) is deferred. A light second
@@ -949,8 +967,9 @@ These limits apply to the MVP as measured here.
   when the letter is each row's first answer instead, a count past the rows' answers (typed,
   or the students' row past them that a survey asks about) asks how to read them, and with
   neither the rows stay read as labelled. The survey reads every printed row where grading reads the exam's, so
-  its counts are evidence, not the graded reads. The desktop does not show the proposal yet,
-  and `omr grade` does not take its defaults from it (`docs/IMPLEMENTATION.md`).
+  its counts are evidence, not the graded reads. The desktop's New-exam card shows the
+  proposal and grades exactly what it shows; `omr grade` does not take its defaults from it
+  (`docs/IMPLEMENTATION.md`).
 - No hot-folder watching and no SVG/PNG sheet output (CR-19). Key sheets (CR-11, §4.1) are
   confirmed with `omr key confirm` or in the desktop app's Setup screen (read, rendered summary,
   confirmation; covered by `shell-slint/tests/req_a11_real.rs` on synthetic key sheets); the
@@ -1018,5 +1037,6 @@ These limits apply to the MVP as measured here.
   page.
 - Exports: XLSX and HTML cite the audit-chain head, so only the CSV and JSON decision files are
   byte-identical across runs (§2.5).
-- GUI: no keymap editor; the roster is chosen when the exam is created and cannot be replaced
-  from the app afterwards (the CLO file can: Setup's *Replace CLOs*, `omr clo replace`).
+- GUI: no keymap editor, no drag-and-drop of files onto the window, no menu of recent exams
+  folders; an added batch or a roster run is cancelled only by closing the window
+  (`docs/IMPLEMENTATION.md`).

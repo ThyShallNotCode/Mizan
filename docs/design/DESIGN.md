@@ -362,11 +362,15 @@ All screens are 1440×900 nominal and work down to 1280×800. The frame is:
 
 Nav order: **Exams, Setup, Scan, Review, Results, Outcomes, Export**, then Settings at the bottom. `Ctrl+1`…`Ctrl+7` jump between them; these chords do not collide with review keys (§13.3).
 
+The built shell has no Export screen: exports are written when a run ends and from Results' **Export…** bar, so `Ctrl+1`…`Ctrl+6` reach Exams to Outcomes. Screenshots of every built screen, rendered headless from synthetic data, are in `screens/` (demo data) and `screens/real/` (synthetic exams graded through the core), light, dark and 1280×800.
+
+**Completion notice** (on every screen; `screens/real/scan-notice-light.png`). When a background run ends (a new exam graded, scans added, a roster given), a `surface-raised` card with `shadow-2` and `radius-lg` floats 12 px above the `StatusBar`, across the content column (24 px in from each side), so no screen loses height. A 4 px bar at its start carries the tone (success; warning when a key is inferred or waits for confirmation; info when cancelled), and the words say it too. It shows the title (text-sm/600, "CS 213 Quiz 1 is graded"), one line of what happened and what waits (text-xs, `ink-2`: booklets, items to review, where the exports are), the next steps as buttons (the first primary: **Review N items**, **Open results**, **Open exports folder**, **Confirm the key in Setup**, **Replace the key in Setup**, **Edit and grade again**, **Show the Scan log**) and a close `IconButton` "Dismiss the notice". A step that leads to another screen dismisses it; *Open exports folder* leaves it on show.
+
 ### 9.1 Exams dashboard (concept: `exams-dashboard.png`)
 
 - **Top bar.**
   - Left: wordmark "Mizan" and the term selector ("Term 1448-1 (Fall 2026)").
-  - Right: global search (`Ctrl+K`), primary **New exam**, theme toggle and user (name · role).
+  - Right: global search (`Ctrl+K`), **Open folder…** (`Ctrl+O`, another exams folder), a refresh `IconButton` (`F5`, reads the folder again), primary **New exam**, theme toggle and user (name · role).
 - **Page header.** "Exams" (20/600), with a `GirihDivider` under it and filter `Chip`s with counts: All, Setup, Scanning, In review, Ready to release, Released. A view toggle (table / cards) sits on the right.
 - **Stat row.** Four `StatTile`s:
   - Sheets scanned this week;
@@ -393,7 +397,22 @@ Nav order: **Exams, Setup, Scan, Review, Results, Outcomes, Export**, then Setti
   - logistics: roster count, sections, last scan, batch ID;
   - **Open results**.
 - **Keyboard.** `↑`/`↓` move rows, `Enter` opens the drawer, `Esc` closes it, `Ctrl+N` starts a new exam. Single-character keys are reserved for the review canvas (§10, 2.1.4).
-- **Empty state.** The girih line art, "No exams this term", and **New exam** / **Import from Remark**.
+- **Empty state** (`screens/real/exams-empty-light.png`). The girih line art, "No exams in this folder yet", one sentence on what goes here, and **New exam…** (primary), **Open another folder…** and **Import from Remark export…**. A filter or search that hides every exam says so instead ("No exams with this status") with **Show all exams**.
+
+### 9.1.1 New exam card (`screens/real/exams-new-ask-light.png`, `exams-new-ready-light.png`)
+
+**New exam** opens a card over the dashboard (`surface-raised`, `shadow-2`; the top bar stays above it) with a one-line explanation: every value is proposed from the scans and the files given, with where it came from, and what the card shows is what is graded.
+- **Left column: what the instructor gives.**
+  - Path fields, each with **Browse…** beside it (and **Folder…** for the scans) when the window has file dialogs: Scan files or folders, Answer key file, Key sheets, Roster file, CLO mapping file.
+  - Values typed over the proposal: Exam title, Course code, Number of questions, Versions, Options per question. An empty field shows, as its placeholder, the value it will grade and its source ("30 · key file").
+  - **Advanced options ▸**: the sheet, output folder, term, student-ID scheme, cancel mode (locked on the IAU sheet), second review and high stakes. Folded, these fields do not exist.
+  - Under the scans field, the check of the scans: "Checking the scans: 6 of 12 pages read" with a `ProgressBar` and **Stop checking**, then "Checked 12 pages in 0.5 s: the card is made from them".
+  - A question about a typed value is also said under its field (its accessible description).
+- **Right column: What is graded.**
+  - The questions first, each in a `warning-soft` box: its text and one-click answers as secondary buttons (an answer is recorded; a file to choose opens its dialog; a field to type in takes the focus).
+  - **Show notes (n)**, folded.
+  - One row per value: the label (`ink-2`), the value and its source ("A, B — the sheets"; a missing value in `error`), the evidence under it (text-xs, `ink-3`), and "question" (`error`) or "note" (`ink-3`) at the row's end.
+- **Footer.** **Import from Remark export…** at the start; at the end why grading waits (text-xs), **Cancel** and primary **Grade exam**, disabled with that reason while anything blocks it (another exam being graded, the scans being checked, a question).
 
 ### 9.2 Exam setup: template, key and CLO mapping (no concept; spec §6, §10.3, §11.2)
 
@@ -418,13 +437,16 @@ Nav order: **Exams, Setup, Scan, Review, Results, Outcomes, Export**, then Setti
 
   Rows sit in a sticky header grid with the CLO titles truncated and the full text in a tooltip. Below it, a **coverage strip** shows one `MeterBar` per CLO for Σ e<sub>i,c</sub> share and lint chips (unmapped items, thin evidence SCO-014, Bloom gap SCO-015). Keyboard: arrows move cells; digits type the weight; `Delete` clears; `Ctrl+Enter` approves the selected rows (role-gated).
 - **Roster.** An import drop zone and a table with masked national IDs (`••••••3456`, mono).
+  - Built so far: step **4 Roster** opens a bar under the top bar with the roster file (**Browse…**) and **Add roster and match students**, for an exam graded without one or to replace it. The file is checked first; the students are then matched again in the background, followed on the Scan screen and closed by the completion notice. There is no drop zone or roster table yet.
 
 ### 9.3 Scan and recognise, live batch (concept: `scan-live.png`)
 
 - **Top bar.**
   - Breadcrumb "CHEM 101 / Midterm 1 / Batch 3 of 5" and source `Tag` (hot folder or file import);
   - device pill (model · dpi · mode);
-  - **Pause** (`Ctrl+Space`) and ghost **Stop**;
+  - **Pause** (`Ctrl+Space`) and ghost **Stop**, for a capture agent's batch only (not built: a file import runs to its end);
+  - **Cancel grading…** while a new exam is being graded: a bar under the top bar asks "Cancel grading? Nothing is saved; your scan files are unchanged." with **Keep grading** and **Cancel grading**;
+  - **Add scans…** (a floating bar with the scan files or folder, **Browse…**, **Folder…** and **Add and regrade**);
   - primary **Open review · N** (`Ctrl+4`).
 - **Body.** A grid of a flexible left column plus a 360 px right column.
 - **Left column, row 1.** A `Gauge` card (pages/s, floor tick at the 40 pages/s spec floor, max = stretch target ×1.2) and four `StatTile`s:
@@ -510,6 +532,20 @@ Codes whose Appendix A severity varies by instance (e.g. MRK-003 INFO/ERROR, REG
 - **Centre:** a live preview of the selected table, rendered with data-table rules, plus a classification banner: "Restricted" (`warning-soft`, lock glyph).
 - **Right, 340 px:** options (language Arabic/English, digits `latn`/`arab`, Hijri dates on/off, include provisional), destination path (mono), and primary **Export** (`Ctrl+E` in this view). Below that, an "Export history" list with hashes (mono) and the SUPERSEDED watermark state.
 - An export that would carry identities before release shows a blocking `error` call-out with the §17.4 reason.
+- Built so far: no Export screen. Results' **Export…** opens a floating bar with **Write all exports**, the Blackboard upload into a new or an existing column (**Write Blackboard CSV**) and **Open exports folder**; the exports are also written when a run ends (Settings, §9.7).
+
+### 9.7 Settings (no concept; `screens/real/settings-light.png`)
+
+Two columns of `Card`s.
+- **Left.**
+  - **Appearance**: Theme (segments Light · Dark, also the top bars' toggle) and Reduce motion.
+  - **Review**: "Your name in the audit trail" (a text field with **Save**; Enter saves too; the status bar says why a name is refused), recorded on every decision from then on; Single-key shortcuts; Show blank-bubble overlays.
+  - **About**: Engine (mono), Exams folder, **Change…** (the folder dialog) and **Show folder** (*Show in Explorer* on Windows), and the data note.
+- **Right.**
+  - **Grading**: Write exports after grading (on by default).
+  - **Review keymap**: every key with its keycaps and what it does.
+
+Every setting is kept for the next start.
 
 ---
 

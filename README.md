@@ -34,7 +34,8 @@ command line and from the desktop app `omr-desktop`, on Linux.
   - DPAPI-protected keys;
   - an installer.
 
-  The desktop app has not yet run in a real window (see `docs/IMPLEMENTATION.md`).
+  The desktop app has not yet run in a real window, nor shown its file dialogs on a real
+  display (see `docs/IMPLEMENTATION.md`).
 - **Not proven yet:** identity against a real roster.
 - What the MVP covers and what it defers: [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md).
   The full design: [`docs/TECHNICAL_DESIGN.md`](docs/TECHNICAL_DESIGN.md).
@@ -310,6 +311,37 @@ omr-desktop --workspace "$HOME/OMR Exams"     # every exam below a folder
 omr-desktop --project "$HOME/OMR Exams/cs211-midterm-1"
 omr-desktop --demo                            # invented demo data, marked DEMO on every screen
 ```
+
+### A first exam, step by step
+
+1. **Open your exams folder.** `omr-desktop` opens `~/OMR Exams` the first time (it creates
+   it), then the folder you used last. **Open folder…** (Ctrl+O) on the Exams screen opens
+   another one; it lists every exam graded below it.
+2. **New exam** (Ctrl+N). Click **Folder…** beside *Scan files or folders* and choose the
+   folder of scans (or **Browse…** for files). Add the **Answer key file**, the **Roster file**
+   and the **CLO mapping file** the same way when you have them.
+3. **Check the card.** The scans are checked at once (*Checking the scans: 6 of 12 pages
+   read*; **Stop checking** stops it). Then *What is graded* lists every value with where it
+   came from: `30 — key file`, `A, B — the sheets`, `CS 213 — folder name` (a scans folder
+   named like `CS213 Quiz 1` gives the course and the title). Type in a field on the left to
+   change a value. A question (in a highlighted box at the top) stops grading until you answer
+   it with one of its buttons, for example *no answer key*: **Choose a key file…**, **Import
+   from Remark…**, **Key sheets…** or **Grade with a provisional key (cannot be released)**.
+4. **Grade exam.** It is enabled once nothing is left to answer, and grades exactly what the
+   card shows into a new folder of the exams folder (*Folder* on the card). The Scan screen
+   follows the run; **Cancel grading…** stops it, after a confirmation, and saves nothing.
+5. **When it ends** a notice says how it went, for example *CS 213 Quiz 1 is graded*, with
+   **Review N items**, **Open results** and **Open exports folder**.
+6. **Review.** Each item shows the bubble row as scanned with the reading: Enter accepts the
+   proposal, the letter or number keys choose another answer (with a reason when it overrides
+   the proposal), Ctrl+Z undoes. Results update as you go.
+7. **Results and exports.** The exports (`results.xlsx`, `results.csv`, `item_analysis.xlsx`,
+   `tp154.xlsx`, `report.html`) were written into the exam's folder when grading ended
+   (Settings › **Write exports after grading**, on by default); Results › **Export…** writes
+   them again after your review decisions, or only the Blackboard upload. **Release
+   results…** releases the results once nothing blocks them and writes the Blackboard upload.
+
+### What each screen does
 
 - **Exams** lists every graded exam. **New exam** (Ctrl+N) opens a card: choose the scans (and,
   if you have them, the key file or key sheets, the roster and the CLO file). The scans are

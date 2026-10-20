@@ -124,6 +124,10 @@ expectation tied to the real exams out of the repository.
     cancelled from the Scan screen after a confirmation (`omr_app::Cancel`: nothing is
     saved, no folder is left); closing the window while a run is in progress asks first, and
     a cancelled run is waited for before the window closes.
+  - Driven as a user drives it, with real pointer clicks and typed keys through a fake host
+    (`crates/shell-slint/tests/req_gui_workflow.rs`), on synthetic exams; the screenshots of
+    the workflow (the New-exam card with a question and ready, the completion notice, an empty
+    exams folder, Settings) are in `docs/design/screens/real/`.
 
 **Deferred, with the spec section that owns each:**
 - The CNN/conformal stage of the cascade (§8.7 steps 3–6); the MVP uses calibrated classical features plus hysteresis.
@@ -131,7 +135,7 @@ expectation tied to the real exams out of the repository.
 - Typst rendering (§6.2): the MVP renders through SVG behind the same API.
 - TWAIN/eSCL capture agents (§7.1) and hot-folder watching; the MVP imports files and folders (`omr grade`, `omr add`, the desktop's New exam and Add scans).
 - SVG and PNG sheet output (§6.2); `omr sheet render` writes PDF.
-- Packaging, installers and the macOS build (§24). The desktop app has run headless (testing backend and software-rendered screenshots), never in a real window. Built so far: the app icon and version resource in both Windows executables (`omr-winres`, no resource compiler), a GUI-subsystem release build of `omr-desktop.exe` that shows startup errors in a window instead of a console (the system's message box when no window of the app can open), the operator name from `USERNAME` on Windows, and a Linux desktop entry with its icon in the release archive.
+- Packaging, installers and the macOS build (§24). The desktop app has run headless (testing backend and software-rendered screenshots), never in a real window: its native file dialogs (the Windows dialog, the XDG desktop portal, zenity), the file manager it opens and the startup message box have never been shown either (the tests drive a fake host). Built so far: the app icon and version resource in both Windows executables (`omr-winres`, no resource compiler), a GUI-subsystem release build of `omr-desktop.exe` that shows startup errors in a window instead of a console (the system's message box when no window of the app can open), the operator name from `USERNAME` on Windows, and a Linux desktop entry with its icon in the release archive.
 - The Windows platform layer. Windows is built and tested in CI on Windows Server 2025 (MSVC), but these are deferred:
   - the §14.2 Windows signals (`GetDriveTypeW`, the file-system type, Cloud Files sync roots, which include OneDrive Known Folder Move);
   - owner-only ACLs (§19.3);
@@ -175,10 +179,9 @@ expectation tied to the real exams out of the repository.
     file that names them) and does not take them from the proposal (`omr survey` prints them):
     the desktop takes an own sheet's cancel mode from its spec;
   - the desktop's New-exam card (G-3 D5) takes the sheet, student-number scheme, cancel mode
-    and second review as typed text (checked by the proposal), not from lists; it starts empty
-    after a failed run (no "Edit and grade again"); a survey it stops or replaces runs to its
-    next stage before it ends; `omr-desktop --grade` defines the exam from its flags, as
-    `omr grade` does, without the card;
+    and second review as typed text (checked by the proposal), not from lists; a survey it
+    stops or replaces runs to its next stage before it ends; `omr-desktop --grade` defines the
+    exam from its flags, as `omr grade` does, without the card;
   - the setup's provenance (each value with its source, `ExamDefinition::provenance`) is
     recorded only for exams defined from a proposal; the survey's own counts are not stored;
   - `omr grade --key` and `omr key replace` read headerless key rows that start with a letter

@@ -19,7 +19,12 @@ cargo run -p shell-slint -- --workspace W --screenshot D --size 1280x800 --shots
 cargo run -p shell-slint --example synthetic_exam -- W         # the synthetic IAU workspace
 cargo run -p shell-slint -- --workspace W --screenshot D --size 1280x800 --shots setup-keysheet
 cargo run -p shell-slint -- --workspace W --screenshot D --remark W/remark-cs211-midterm-1 \
-    --remark-setup W/remark-cs212-quiz-2                       # + the Remark import and parallel run
+    --remark-setup W/remark-cs212-quiz-2 \
+    --new-exam "W/new-cs213-quiz-1/CS213 Quiz 1"              # + the Remark screens and the card
+cargo run -p shell-slint -- --grade "W/new-cs213-quiz-1/CS213 Quiz 1" --template iau-ccsit-v1 \
+    --questions 30 --key W/new-cs213-quiz-1/key.csv --workspace W --screenshot D \
+    --shots scan-notice                                        # the completion notice (grades W)
+cargo run -p shell-slint -- --workspace EMPTY --screenshot D   # an empty exams folder
 cargo test -p shell-slint                                      # unit + A11 tests (demo and real)
 ```
 
@@ -77,7 +82,10 @@ the shell a `host::Host` (`Shell::set_host`) with native dialogs (`rfd`, parente
 window), the file manager and the preferences; the library only describes each dialog
 (`PickRequest`: kind, title, filters, the folder it opens in). Paths a dialog picked are used
 exactly while the field still shows them (a `;` in a file name stays intact); an edited field
-is read as typed. Headless tests and screenshots have no host, so no Browse button.
+is read as typed. Headless tests have no host, so no Browse button; screenshots show the
+window as the app has it, with a host whose dialogs never open (`screenshot::display_host`).
+A path the window proposes (the card's folder, the parallel run's report folder) or writes in
+the Scan log reads `~` for the home folder, as the status bar does (`bind::home_path`).
 *Open folder…* (Ctrl+O; *Change…* in Settings) picks another exams folder:
 `Backend::open_workspace` saves and closes every exam open (`close_all`, which the binary also
 calls when the window closes, so each writes its signed checkpoint) and lists the new folder; a
@@ -104,15 +112,22 @@ results, outcomes, settings and exams-new (the New-exam card, invented) (`docs/d
 midterm's second batch, with its REG-002 and CAP-012 page notices), scan-add (the Add scans
 bar), one review frame per lane with open items (review, review-identity, review-scoring),
 review-override (an answer that overrides the suggestion, waiting for its reason), results,
-results-export (the Exports bar), outcomes, settings, exams-new (the New-exam card), and, when
-the workspace holds an exam graded with key sheets, setup-keysheet (its key summary to confirm)
-and scan-keysheet (its batch, the key sheets listed as such), and with `--remark <workbooks or
-their folder>` the Remark migration: exams-remark (the New-exam card's import for review) and
-results-remark (the parallel run) of the default exam, and setup-remark (Setup's import, of
-`--remark-setup` when given, shown for the first exam it applies to); there is no blind-verify
-frame because omr-app draws no blind sample yet. With `--grade` the shots are taken once grading has
-finished; background analyses (flag stability) report before each capture
-(`Backend::settle`), so no shot catches "computing…".
+results-export (the Exports bar), outcomes, settings, exams-new (the New-exam card as it
+opens), and, when the workspace holds an exam graded with key sheets, setup-keysheet (its key
+summary to confirm) and scan-keysheet (its batch, the key sheets listed as such). With `--remark
+<workbooks or their folder>`: the Remark migration, exams-remark (the New-exam card's import for
+review) and results-remark (the parallel run) of the default exam, and setup-remark (Setup's
+import, of `--remark-setup` when given, shown for the first exam it applies to). With
+`--new-exam <scans folder>` (`key.csv`, `roster.csv` and `clo.csv` beside it; the example writes
+`W/new-cs213-quiz-1/`): the New-exam card made from them, its scans checked, exams-new-ask (the
+scans alone: the answer key asked, Grade exam waiting) and exams-new-ready (with the files:
+every value with its source, the title and course from the scans' folder name, nothing asked).
+With `--grade` the shots are taken once grading has finished, and scan-notice adds the
+completion notice of that run over the Scan screen (it grades into `--workspace`: use a copy).
+An exams folder with no exam gives one shot, exams-empty (its empty state). There is no
+blind-verify frame because omr-app draws no blind sample yet. Background work (flag stability,
+thumbnails, the card's check of the scans) reports before each capture (`Backend::settle`), so
+no shot catches "computing…" or "Checking the scans".
 
 The window size reaches the screens as a copy that `app.slint` writes when the platform
 resizes the window (`changed width`), never as a binding: binding `win-w: root.width` closed a
@@ -459,6 +474,11 @@ real export.
 | `the_card_opens_during_a_run_and_says_why_grade_waits` | while one exam is graded the card opens, checks its scans and says why Grade exam waits; when the run ends Grade is available, into another folder than the first exam's |
 | `stopping_the_survey_holds_grade_until_checked_again` | *Stop checking* ends the check: a question on the scans blocks Grade, the stopped worker's end changes nothing, *Check the scans again* checks them |
 | `an_invalid_value_is_marked_on_its_field` | "thirty" questions: the question shows under the field (its description) and blocks Grade; *Type the count* puts the keyboard in the field, and 30 typed there unblocks it |
+| `screenshots_make_the_card_from_an_exams_files` | the card shots type the exam's files as an instructor types them (`~` for the home folder) and wait for the check of the scans: the scans alone ask for the answer key and Grade exam waits; with the key, roster and CLO files nothing is asked, title and course come from the scans' folder name and the card's folder reads `~`; the Browse buttons are shown; the card as it opens is empty |
+| `screenshots_show_the_notice_on_its_shot_only` | a grading run ended unseen: scan-notice shows its notice (in both themes), every other shot hides it; the Scan log names the project saved by its last folders, as the status bar does |
+| `screenshots_of_an_empty_folder_show_its_empty_state` | an empty exams folder has one shot, exams-empty, with New exam…, Open another folder… and the Remark import |
+| `the_proposed_report_folder_reads_a_tilde` | the parallel run's proposed report folder below the home folder reads `~/…` and is read back as the same folder (`bind::home_path`) |
+| `settings_keymap_lists_the_folder_keys` | the Settings keymap lists Ctrl+O and F5 where an exams folder can be opened |
 | `req_a11_demo_data_is_marked_on_every_screen` (demo file) | the DEMO DATA mark on every screen, release refused on demo data, and New exam saying how to open real exams |
 | `req_a11_blind_items_never_show_a_leaked_engine_reading` (demo file) | a backend that sends the engine's reading with blind items: the frame, the sparkline and Enter never show or commit it |
 | `req_a11.rs` (demo) | the review flow, keyboard paths, labels, layouts and screens on the demo backend |
@@ -481,8 +501,8 @@ both themes.
 
 Single-key shortcuts act only while the review canvas has focus and can be switched off in
 Settings (WCAG 2.1.4). Every keycap shown on a button works: Ctrl+1…6 and Ctrl+, everywhere;
-Ctrl+K and Ctrl+N on Exams (whose table is one tab stop: ↑/↓ move, Enter opens the drawer, Esc
-closes it); Ctrl+Space and Ctrl+R on Scan; Ctrl+P on Results. A page change hands focus back
+Ctrl+K, Ctrl+N and Ctrl+O on Exams, and F5 there (whose table is one tab stop: ↑/↓ move, Enter
+opens the drawer, Esc closes it); Ctrl+Space and Ctrl+R on Scan; Ctrl+P on Results. A page change hands focus back
 to the window's key scope (Review focuses its canvas). Slint 1.18 reports produced text, not scan codes, so physical positions
 are recovered from the Arabic (101) layout (ADR-001 S4 remains open for true scan codes).
 
