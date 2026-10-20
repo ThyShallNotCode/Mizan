@@ -468,10 +468,18 @@ fn backend(a: &Args, prefs: &mut Prefs) -> Result<(Built, bool), String> {
 
 /// Prints `text` to stderr and, in a Windows release build (no console), also shows it in a
 /// window, so a user who started Mizan from the Start menu or Explorer sees why it stopped.
+/// When no window of the app can open (often the very reason it stopped), the system's own
+/// message box shows it.
 fn tell(heading: &str, text: &str) {
     eprintln!("{text}");
     if cfg!(all(windows, not(debug_assertions))) {
         let Ok(w) = shell_slint::ui::ErrorWindow::new() else {
+            rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Error)
+                .set_title(heading)
+                .set_description(text)
+                .set_buttons(rfd::MessageButtons::Ok)
+                .show();
             return;
         };
         w.set_heading(heading.into());
@@ -516,10 +524,13 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             // R10: the windowing system is missing (no display, no X11 or Wayland session)
-            eprintln!(
-                "omr-desktop: cannot open a window ({e}). Run omr-desktop from a desktop \
-                 session (Windows, macOS, or Linux with X11 or Wayland); on a server, render the \
-                 screens to PNG files with --screenshot DIR, or use the `omr` command line"
+            tell(
+                "Mizan cannot start",
+                &format!(
+                    "omr-desktop: cannot open a window ({e}). Run omr-desktop from a desktop \
+                     session (Windows, macOS, or Linux with X11 or Wayland); on a server, render \
+                     the screens to PNG files with --screenshot DIR, or use the `omr` command line"
+                ),
             );
             ExitCode::FAILURE
         }
