@@ -97,7 +97,12 @@ tempfile = "3.27.0"
 rayon = "1.12.0"
 clap = { version = "4.6.7", features = ["derive"] }
 # gui
-slint = "1.18.1"
+# `raw-window-handle-06`: the main window's handle, so the native file dialogs (rfd) open as its
+# children. A stable feature (not `unstable-*`).
+slint = { version = "1.18.1", features = ["raw-window-handle-06"] }
+# Native file and folder dialogs (MIT). No default features: no GTK; on Linux the XDG desktop
+# portal over D-Bus (libdbus loaded at run time, zenity as fallback), with Wayland parenting.
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal", "wayland"] }
 slint-build = "1.18.1"
 i-slint-backend-testing = "=1.18.1"
 # testing

@@ -9,7 +9,7 @@ import { App, ExamsVM, ExamRow, Page, RemarkVM } from "../state.slint";
 import { RemarkFields, RemarkRefusal, RemarkImportCard, RemarkSideCard } from "remark.slint";
 import {
     Icons, ThemeToggle, Centered, KVLine, SectionLabel, StatusText, SeverityStack, SeverityCount,
-    CoverageRing, Avatar, MessageText, TextField, EmptyState,
+    CoverageRing, Avatar, MessageText, PathField, EmptyState,
 } from "../widgets.slint";
 import { ListView } from "std-widgets.slint";
 
@@ -438,11 +438,14 @@ component Drawer inherits Rectangle {
 }
 
 // One labelled field of the New-exam form: the visible label above the field (the field's
-// accessible label is the same text).
+// accessible label is the same text). A path field names its file dialogs (`target`,
+// `folder-target`): Browse… (and Folder…) beside it when the window has them.
 component FormField inherits VerticalLayout {
     in property <string> label;
     in property <string> placeholder;
     in property <bool> mono: true;
+    in property <string> target;
+    in property <string> folder-target;
     in-out property <string> text;
     out property <bool> has-focus: field.has-focus;
     callback accepted(string);
@@ -455,11 +458,13 @@ component FormField inherits VerticalLayout {
         color: Theme.ink-2;
         accessible-role: none;
     }
-    field := TextField {
+    field := PathField {
         label: root.label;
         placeholder: root.placeholder;
         text <=> root.text;
         mono: root.mono;
+        target: root.target;
+        folder-target: root.folder-target;
         accepted(v) => {
             root.accepted(v);
         }
@@ -530,6 +535,8 @@ component NewExamBar inherits Rectangle {
             scans := FormField {
                 label: "Scan files or folders";
                 placeholder: "A folder or files of scans (PDF, TIFF, JPEG, PNG); separate several with ;";
+                target: "new-scans";
+                folder-target: "new-scan-folder";
                 text <=> ExamsVM.new-scans;
             }
             HorizontalLayout {
@@ -555,6 +562,7 @@ component NewExamBar inherits Rectangle {
                     horizontal-stretch: 3;
                     label: "Sheet template or spec file";
                     placeholder: "iau-ccsit-v1, or the spec file of your own sheet";
+                    target: "new-spec";
                     text <=> ExamsVM.new-sheet;
                 }
                 questions := FormField {
@@ -621,18 +629,21 @@ component NewExamBar inherits Rectangle {
                     horizontal-stretch: 1;
                     label: "Answer key file";
                     placeholder: "key.csv; blank: infer a provisional key";
+                    target: "new-key";
                     text <=> ExamsVM.new-key;
                 }
                 roster := FormField {
                     horizontal-stretch: 1;
                     label: "Roster file";
                     placeholder: "roster.csv or .xlsx (optional)";
+                    target: "new-roster";
                     text <=> ExamsVM.new-roster;
                 }
                 clo := FormField {
                     horizontal-stretch: 1;
                     label: "CLO mapping file";
                     placeholder: "clo.csv (optional)";
+                    target: "new-clo";
                     text <=> ExamsVM.new-clo;
                 }
             }
@@ -642,6 +653,7 @@ component NewExamBar inherits Rectangle {
                     horizontal-stretch: 1;
                     label: "Key sheets";
                     placeholder: "the instructor's filled answer sheets, ; between several (optional; confirmed in Setup)";
+                    target: "new-key-sheets";
                     text <=> ExamsVM.new-key-sheets;
                 }
             }

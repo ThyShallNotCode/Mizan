@@ -6,7 +6,7 @@ import {
 } from "../theme.slint";
 import { App, ScanVM, Thumb } from "../state.slint";
 import {
-    Icons, ThemeToggle, Centered, StatusText, KVLine, EmptyState, NoExamState, MessageText, TextField,
+    Icons, ThemeToggle, Centered, StatusText, KVLine, EmptyState, NoExamState, MessageText, PathField,
 } from "../widgets.slint";
 
 // Adding a later batch (another section, another day, §8.1): the scan folders or files, then
@@ -61,12 +61,13 @@ component AddScansBar inherits Rectangle {
                     color: Theme.ink;
                     vertical-alignment: center;
                 }
-                field := TextField {
+                field := PathField {
                     horizontal-stretch: 1;
                     label: "Scan files or folders to add";
                     placeholder: "A folder or files of scans; separate several with ;";
                     text <=> ScanVM.add-path;
-                    mono: true;
+                    target: "add-scans";
+                    folder-target: "add-scan-folder";
                     enabled: ScanVM.can-add;
                     accepted(v) => {
                         if (ScanVM.can-add && v != "") {

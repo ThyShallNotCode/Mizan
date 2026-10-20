@@ -104,6 +104,12 @@ expectation tied to the real exams out of the repository.
   `omr survey`). Its thresholds are untuned (one `Thresholds` struct).
 - The `omr` CLI.
 - The Slint desktop shell (§5.2): an exams folder by default (demo data only with `--demo`, marked on every screen), a New-exam form that grades a folder of scans, setup with key replacement, live import and added batches, the review queue, results with release and exports, and outcomes.
+  - File dialogs on every path field (Browse…, and Folder… for scans): native dialogs from the
+    binary through `rfd` 0.17.2 (MIT; with `pollster` 0.4, Apache-2.0/MIT; no GTK: the XDG
+    desktop portal over D-Bus on Linux, zenity as its fallback), parented to the window. The
+    library only describes each dialog (`shell_slint::host`); picked paths are used exactly
+    while the field shows them, so a `;` in a file name stays intact. The preferences file
+    (`desktop.json`, schema version 1) also keeps the folder each kind of dialog opened last.
 
 **Deferred, with the spec section that owns each:**
 - The CNN/conformal stage of the cascade (§8.7 steps 3–6); the MVP uses calibrated classical features plus hysteresis.
@@ -169,6 +175,10 @@ expectation tied to the real exams out of the repository.
     the proposal asks for a key sheet of the version the students bubble (rule 5), although
     grading reads the blank key sheet as that version's;
   - the IAU student-ID scheme accepts intake years up to 2030 only (§9.2).
+- Parts of the file dialogs (G-3 D2): drag-and-drop of files onto the window (it needs an
+  unstable Slint feature and works on X11 and Windows only); a Folder… button for Remark's
+  workbooks (the import reads named files only: the dialog picks several); the roster bar in
+  Setup, the output folder and the exams folder take their Browse buttons with those steps.
 - Parts of cancelling a run (G-3 D7; built in `omr-app`: `Cancel` stops a new exam's grading
   or a survey before anything is stored):
   - a cancelled run keeps nothing and cannot be resumed (§22.4 keeps the completed pages and

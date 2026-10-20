@@ -8,7 +8,7 @@ import {
     StatTile, SeverityGlyph, TableRow, TableHeaderCell, Chip,
 } from "../theme.slint";
 import { RemarkVM, RmRow, CmpDiff, CmpLine } from "../state.slint";
-import { Centered, SectionLabel, KVLine, TextField, Segment, SegmentGroup } from "../widgets.slint";
+import { Centered, SectionLabel, KVLine, PathField, Segment, SegmentGroup } from "../widgets.slint";
 import { ListView, ScrollView } from "std-widgets.slint";
 
 // The classification banner of the parallel run (DESIGN §9.6: "Restricted", warning-soft, lock
@@ -156,24 +156,24 @@ export component RemarkFields inherits HorizontalLayout {
     init => {
         books.focus();
     }
-    books := TextField {
+    books := PathField {
         horizontal-stretch: 3;
         label: "Remark workbooks";
         placeholder: "Remark's graded Excel exports (.xlsx), ; between several (its .rmx/.aky files are never opened)";
         text <=> RemarkVM.path;
-        mono: true;
+        target: "remark-books";
         accepted(v) => {
             if (v != "") {
                 RemarkVM.read(RemarkVM.path, RemarkVM.points-path);
             }
         }
     }
-    points := TextField {
+    points := PathField {
         horizontal-stretch: 1;
         label: "Points file (optional)";
         placeholder: "points.csv (optional)";
         text <=> RemarkVM.points-path;
-        mono: true;
+        target: "remark-points";
     }
     Centered {
         read := PrimaryButton {
@@ -884,12 +884,12 @@ export component ParallelRunView inherits VerticalLayout {
                     }
                     HorizontalLayout {
                         spacing: Theme.space-sm;
-                        TextField {
+                        PathField {
                             horizontal-stretch: 1;
                             label: "Report folder";
                             placeholder: "Folder for the Restricted report";
                             text <=> RemarkVM.save-path;
-                            mono: true;
+                            target: "parallel-dir";
                         }
                         Centered {
                             PrimaryButton {
@@ -958,12 +958,12 @@ export component CompareBar inherits Rectangle {
                     color: Theme.ink;
                     vertical-alignment: center;
                 }
-                field := TextField {
+                field := PathField {
                     horizontal-stretch: 1;
                     label: "Remark workbooks to compare";
                     placeholder: "Remark's graded Excel exports of these sheets (.xlsx), and optionally a handwritten-ID .csv (file,page,student_id); ; between several";
                     text <=> RemarkVM.cmp-path;
-                    mono: true;
+                    target: "compare-books";
                     accepted(v) => {
                         if (v != "") {
                             RemarkVM.compare(v);

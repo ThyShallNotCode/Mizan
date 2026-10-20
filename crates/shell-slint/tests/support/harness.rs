@@ -1,6 +1,6 @@
 //! The real-core harness of the desktop tests: a headless window bound to an [`AppBackend`],
-//! and the background work it starts held for the test to run (the test plays the binary's
-//! part, R4).
+//! the background work it starts held for the test to run, and a fake of what the binary
+//! supplies from the operating system (the test plays the binary's part, R4).
 
 #![allow(dead_code)]
 
@@ -9,10 +9,12 @@ use omr_app::ExamProject;
 use shell_slint::app_backend::{AppBackend, Spawn};
 use shell_slint::backend::{Backend, ExamId};
 use shell_slint::bind::Shell;
+use shell_slint::host::{Host, Pick, PickRequest, Prefs};
 use shell_slint::ui::{AppWindow, Theme};
 use slint::ComponentHandle;
-use std::cell::RefCell;
-use std::path::Path;
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -101,4 +103,90 @@ pub fn grade(def: &omr_app::ExamDefinition, scans: &Path, project: &Path) {
         .expect("grading")
         .close()
         .expect("close");
+}
+
+/// A file dialog's answer: the paths picked, or `None` for nothing picked.
+type Answer = Option<Vec<PathBuf>>;
+
+/// How a dialog gives its answer to the shell.
+type Done = Box<dyn FnOnce(Answer)>;
+
+/// What the desktop binary supplies from the operating system, faked: every file dialog asked
+/// for is recorded and answered from a queue (nothing picked once it is empty), and every folder
+/// shown in the file manager and every save of the preferences is recorded.
+#[derive(Default)]
+pub struct FakeHost {
+    /// The dialogs asked for, in order.
+    pub requests: RefCell<Vec<PickRequest>>,
+    answers: RefCell<VecDeque<Answer>>,
+    /// Dialogs stay open (unanswered) until [`FakeHost::close`] or [`FakeHost::fail_held`].
+    pub hold: Cell<bool>,
+    held: RefCell<Option<Done>>,
+    /// The folders shown in the file manager.
+    pub revealed: RefCell<Vec<PathBuf>>,
+    /// The preferences as each save gave them.
+    pub saved: RefCell<Vec<Prefs>>,
+}
+
+impl FakeHost {
+    pub fn new() -> Rc<Self> {
+        Rc::default()
+    }
+
+    /// The host to hand the shell ([`Shell::set_host`]), with `prefs` as read at start.
+    pub fn host(self: &Rc<Self>, prefs: Prefs) -> Host {
+        let me = self.clone();
+        let pick: Pick = Rc::new(move |req, done| {
+            me.requests.borrow_mut().push(req);
+            if me.hold.get() {
+                *me.held.borrow_mut() = Some(done);
+            } else {
+                let answer = me.answers.borrow_mut().pop_front().flatten();
+                done(answer);
+            }
+        });
+        let me = self.clone();
+        let reveal = Rc::new(move |dir: &Path| {
+            me.revealed.borrow_mut().push(dir.to_path_buf());
+            Ok(())
+        });
+        let me = self.clone();
+        let save = Rc::new(move |p: &Prefs| me.saved.borrow_mut().push(p.clone()));
+        Host {
+            pick: Some(pick),
+            reveal: Some(reveal),
+            save_prefs: Some(save),
+            prefs,
+        }
+    }
+
+    /// The next dialog picks `paths`.
+    pub fn will_pick(&self, paths: &[&Path]) {
+        let paths = paths.iter().map(|p| p.to_path_buf()).collect();
+        self.answers.borrow_mut().push_back(Some(paths));
+    }
+
+    /// The next dialog is closed without a choice.
+    pub fn will_cancel(&self) {
+        self.answers.borrow_mut().push_back(None);
+    }
+
+    /// Closes the dialog held open, with the next answer of the queue.
+    pub fn close(&self) {
+        let done = self.held.borrow_mut().take().expect("a dialog is open");
+        let answer = self.answers.borrow_mut().pop_front().flatten();
+        done(answer);
+    }
+
+    /// The dialog held open could not show at all: it never answers.
+    pub fn fail_held(&self) {
+        let done = self.held.borrow_mut().take().expect("a dialog is open");
+        drop(done);
+    }
+
+    /// The last dialog asked for.
+    pub fn last_request(&self) -> PickRequest {
+        let last = self.requests.borrow().last().cloned();
+        last.expect("a dialog was asked for")
+    }
 }

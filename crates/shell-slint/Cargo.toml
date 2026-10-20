@@ -27,6 +27,9 @@ omr-scoring.workspace = true
 # `omr-desktop --grade --spec spec.json` reads the own-form spec (as `omr grade` does).
 serde_json.workspace = true
 slint.workspace = true
+# Native file and folder dialogs; called from the binary (src/main.rs) only: the library hands
+# out plain pick requests (src/host.rs).
+rfd.workspace = true
 # Synthetic review crops (bubble rows drawn at first use) and PNG encoding of headless screenshots.
 tiny-skia.workspace = true
 

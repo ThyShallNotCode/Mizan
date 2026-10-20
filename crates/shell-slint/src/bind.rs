@@ -4,6 +4,7 @@
 use crate::backend::{
     self as b, Backend, Decision, ExamId, ItemId, Lane, ReviewAction, ReviewKind,
 };
+use crate::host::{Host, PickKind, PickRequest, PickTarget};
 use crate::keymap::{self, GlobalKey, KeyContext, ReviewKey};
 use crate::ui::{self as s, AppWindow};
 use slint::{
@@ -11,7 +12,8 @@ use slint::{
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
+use std::path::PathBuf;
+use std::rc::{Rc, Weak};
 
 // ------------------------------------------------------------------------------------ helpers
 
@@ -110,10 +112,10 @@ fn join(parts: &[&str], sep: &str) -> String {
         .join(sep)
 }
 
-/// The parallel run's request from the Compare field: Remark's workbooks, and any `.csv`
-/// among them as handwritten student numbers (`file,page,student_id`).
-fn compare_request(typed: &str) -> b::RemarkRequest {
-    let (handwritten, workbooks): (Vec<_>, Vec<_>) = scan_paths(typed).into_iter().partition(|p| {
+/// The parallel run's request from the Compare field's paths: Remark's workbooks, and any
+/// `.csv` among them as handwritten student numbers (`file,page,student_id`).
+fn compare_request(paths: Vec<PathBuf>) -> b::RemarkRequest {
+    let (handwritten, workbooks): (Vec<_>, Vec<_>) = paths.into_iter().partition(|p| {
         p.extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("csv"))
@@ -125,24 +127,32 @@ fn compare_request(typed: &str) -> b::RemarkRequest {
     }
 }
 
-/// The scan files or folders typed into the Add scans field: separated by `;` or new lines,
-/// quotes stripped, `~/` (or `~\` on Windows) for the home folder.
-pub fn scan_paths(text: &str) -> Vec<std::path::PathBuf> {
-    let home = std::env::home_dir();
-    text.split([';', '\n'])
-        .map(|p| p.trim().trim_matches(|c| c == '"' || c == '\''))
-        .filter(|p| !p.is_empty())
-        .map(|p| {
-            let rest = p
-                .strip_prefix('~')
-                .and_then(|r| r.strip_prefix(std::path::is_separator));
-            (p, rest)
-        })
-        .map(|(p, rest)| match (rest, &home) {
-            (Some(rest), Some(h)) => h.join(rest),
-            _ => std::path::PathBuf::from(p),
-        })
-        .collect()
+/// One typed path: surrounding blanks and quotes stripped (Explorer's "Copy as path" quotes
+/// it), `~/` (or `~\` on Windows) for the home folder. `None` when nothing is left.
+fn typed_path(text: &str) -> Option<PathBuf> {
+    let p = text.trim().trim_matches(|c| c == '"' || c == '\'');
+    if p.is_empty() {
+        return None;
+    }
+    let rest = p
+        .strip_prefix('~')
+        .and_then(|r| r.strip_prefix(std::path::is_separator));
+    Some(match (rest, std::env::home_dir()) {
+        (Some(rest), Some(h)) => h.join(rest),
+        _ => PathBuf::from(p),
+    })
+}
+
+/// The scan files or folders typed into a field that takes several: separated by `;` or new
+/// lines, each read as [`one_path`] reads one.
+pub fn scan_paths(text: &str) -> Vec<PathBuf> {
+    text.split([';', '\n']).filter_map(typed_path).collect()
+}
+
+/// The path typed into a field that takes one file or folder (a key, roster or CLO file, a
+/// report folder): the whole text, so a `;` in a file name stays part of it.
+pub fn one_path(text: &str) -> Option<PathBuf> {
+    typed_path(text.lines().next().unwrap_or_default())
 }
 
 /// True when 1-based question `q` is in `ranges` (`1-8,11,13-14`).
@@ -405,6 +415,31 @@ fn help_for(code: &str, title: &str, remedy: Option<&str>) -> String {
     }
 }
 
+/// The answer of one file dialog, given once. Dropped unanswered (no dialog could open), it
+/// still lets the next Browse click open one.
+struct PickAnswer {
+    shell: Weak<Shell>,
+    target: PickTarget,
+}
+
+impl PickAnswer {
+    fn give(self, paths: Option<Vec<PathBuf>>) {
+        if let Some(shell) = self.shell.upgrade() {
+            shell.picked(self.target, paths);
+        }
+    }
+}
+
+impl Drop for PickAnswer {
+    fn drop(&mut self) {
+        if let Some(shell) = self.shell.upgrade()
+            && let Ok(mut st) = shell.st.try_borrow_mut()
+        {
+            st.picking = false;
+        }
+    }
+}
+
 // ------------------------------------------------------------------------------------ state
 
 struct State {
@@ -464,6 +499,14 @@ struct State {
     /// The parallel run of an exam with Remark (§23.7) and what was asked for it.
     parallel: Option<(ExamId, b::ParallelRunView)>,
     parallel_request: b::RemarkRequest,
+    /// What file dialogs picked, by the field they filled: the text shown in the field and the
+    /// paths exactly. They are used while the field still shows that text, so a `;` in a file
+    /// name stays intact; an edited field is read as typed.
+    picked: BTreeMap<PickTarget, (String, Vec<PathBuf>)>,
+    /// A file dialog is open: Browse clicks wait until it is closed.
+    picking: bool,
+    /// What to do when no dialog appears has been said (once a session).
+    pick_hint: bool,
 }
 
 /// The shell controller: owns the backend handle and keeps the UI globals in sync.
@@ -472,6 +515,8 @@ pub struct Shell {
     backend: Rc<RefCell<dyn Backend>>,
     st: RefCell<State>,
     timer: RefCell<Option<slint::Timer>>,
+    /// File dialogs, the file manager and the preferences, from the binary ([`Shell::set_host`]).
+    host: RefCell<Host>,
 }
 
 impl Shell {
@@ -520,8 +565,12 @@ impl Shell {
                 remark_version: 0,
                 parallel: None,
                 parallel_request: b::RemarkRequest::default(),
+                picked: BTreeMap::new(),
+                picking: false,
+                pick_hint: false,
             }),
             timer: RefCell::new(None),
+            host: RefCell::new(Host::default()),
         });
         shell.wire(ui);
         shell.refresh_all();
@@ -549,6 +598,17 @@ impl Shell {
         let app = ui.global::<s::App>();
         app.set_message(ss(text));
         app.set_message_tone(t);
+    }
+
+    /// Hands the shell what the binary supplies from the operating system: file dialogs (the
+    /// path fields then offer Browse…), the file manager, and the preferences with a way to
+    /// save them. Without it every path field takes typed paths alone.
+    pub fn set_host(&self, host: Host) {
+        let ui = self.ui();
+        let app = ui.global::<s::App>();
+        app.set_can_browse(host.pick.is_some());
+        app.set_can_reveal(host.reveal.is_some());
+        *self.host.borrow_mut() = host;
     }
 
     /// Starts the ~2 Hz timer that lets the backend fold in background work (live batch view).
@@ -778,6 +838,8 @@ impl Shell {
         app.on_key(move |t, ctrl, shift, alt| me.global_key(&t, ctrl, shift, alt));
         let me = self.clone();
         app.on_request(move |what| me.request(&what));
+        let me = self.clone();
+        app.on_browse(move |target| me.browse(&target));
         let me = self.clone();
         app.on_set_single_key(move |v| {
             me.st.borrow_mut().single_key = v;
@@ -1090,7 +1152,9 @@ impl Shell {
         });
         let me = self.clone();
         rm.on_compare(move |books| {
-            me.compare_remark(compare_request(&books));
+            me.compare_remark(compare_request(
+                me.paths_in(PickTarget::CompareBooks, &books),
+            ));
         });
         let me = self.clone();
         rm.on_cmp_use_suggested(move || {
@@ -1156,6 +1220,22 @@ impl Shell {
     fn create_exam(&self) {
         let ui = self.ui();
         let ex = ui.global::<s::ExamsVM>();
+        // the files a dialog picked, exactly, for the fields that still show them
+        let picked = [
+            ("scans", PickTarget::NewScans, ex.get_new_scans()),
+            ("sheet", PickTarget::NewSpec, ex.get_new_sheet()),
+            ("key", PickTarget::NewKey, ex.get_new_key()),
+            (
+                "key_sheets",
+                PickTarget::NewKeySheets,
+                ex.get_new_key_sheets(),
+            ),
+            ("roster", PickTarget::NewRoster, ex.get_new_roster()),
+            ("clo", PickTarget::NewClo, ex.get_new_clo()),
+        ]
+        .into_iter()
+        .filter_map(|(k, field, text)| Some((k.to_string(), self.picked_paths(field, &text)?)))
+        .collect();
         let form = b::NewExam {
             title: ex.get_new_title().to_string(),
             course: ex.get_new_course().to_string(),
@@ -1174,6 +1254,7 @@ impl Shell {
                 .remark_new_using
                 .clone()
                 .unwrap_or_default(),
+            picked,
         };
         let r = self.backend.borrow_mut().create_exam(&form);
         match r {
@@ -1204,6 +1285,140 @@ impl Shell {
         }
     }
 
+    // ------------------------------------------------------------------ file dialogs
+
+    /// Opens the file dialog of a path field's Browse… or Folder… button. What it picks fills
+    /// the field when the dialog closes ([`Shell::picked`]); while it is open, further clicks
+    /// are ignored.
+    fn browse(self: &Rc<Self>, name: &str) {
+        let Some(target) = PickTarget::from_name(name) else {
+            return;
+        };
+        let (pick, start) = {
+            let host = self.host.borrow();
+            let Some(pick) = host.pick.clone() else {
+                return;
+            };
+            // where this kind of file was picked last, else the exams folder, else home
+            let start = host
+                .prefs
+                .last_dirs
+                .get(target.dir_key())
+                .cloned()
+                .or_else(|| self.backend.borrow().workspace_dir())
+                .or_else(std::env::home_dir);
+            (pick, start)
+        };
+        if std::mem::replace(&mut self.st.borrow_mut().picking, true) {
+            return;
+        }
+        let req = PickRequest {
+            target,
+            kind: target.kind(),
+            title: target.title().to_string(),
+            filters: target.filters(),
+            start,
+        };
+        let answer = PickAnswer {
+            shell: Rc::downgrade(self),
+            target,
+        };
+        // the answer may come during this call (or later, from the event loop)
+        pick(req, Box::new(move |paths| answer.give(paths)));
+    }
+
+    /// A file dialog's answer: the picked paths fill the field (shown joined by `; `, used
+    /// exactly while the field shows them) and the folder is remembered for the next dialog of
+    /// the kind. Nothing picked leaves the field as it was.
+    fn picked(&self, target: PickTarget, paths: Option<Vec<PathBuf>>) {
+        self.st.borrow_mut().picking = false;
+        let Some(mut paths) = paths.filter(|p| !p.is_empty()) else {
+            if !std::mem::replace(&mut self.st.borrow_mut().pick_hint, true) {
+                self.say(
+                    "Nothing was chosen, so the field is unchanged. If no file dialog appeared, \
+                     type the path in the field instead",
+                    s::Tone::Info,
+                );
+            }
+            return;
+        };
+        if target.kind() != PickKind::Files {
+            paths.truncate(1);
+        }
+        let field = target.field();
+        let shown = paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join("; ");
+        self.set_path_field(field, &shown);
+        // the next dialog of the kind opens in the folder that holds the first path (a picked
+        // folder: among its siblings)
+        let first = &paths[0];
+        let dir = first.parent().filter(|d| !d.as_os_str().is_empty());
+        let dir = dir.unwrap_or(first).to_path_buf();
+        self.st.borrow_mut().picked.insert(field, (shown, paths));
+        let (save, prefs) = {
+            let mut host = self.host.borrow_mut();
+            host.prefs
+                .last_dirs
+                .insert(target.dir_key().to_string(), dir);
+            (host.save_prefs.clone(), host.prefs.clone())
+        };
+        if let Some(save) = save {
+            save(&prefs);
+        }
+    }
+
+    /// Puts `text` into the path field `field` (see [`PickTarget::field`]).
+    fn set_path_field(&self, field: PickTarget, text: &str) {
+        let ui = self.ui();
+        let ex = ui.global::<s::ExamsVM>();
+        let su = ui.global::<s::SetupVM>();
+        let rm = ui.global::<s::RemarkVM>();
+        let text = ss(text);
+        match field {
+            PickTarget::NewScans | PickTarget::NewScanFolder => ex.set_new_scans(text),
+            PickTarget::NewKey => ex.set_new_key(text),
+            PickTarget::NewKeySheets => ex.set_new_key_sheets(text),
+            PickTarget::NewRoster => ex.set_new_roster(text),
+            PickTarget::NewClo => ex.set_new_clo(text),
+            PickTarget::NewSpec => ex.set_new_sheet(text),
+            PickTarget::SetupKey => su.set_key_path(text),
+            PickTarget::SetupKeySheets => su.set_ks_path(text),
+            PickTarget::SetupClo => su.set_clo_path(text),
+            PickTarget::AddScans | PickTarget::AddScanFolder => {
+                ui.global::<s::ScanVM>().set_add_path(text)
+            }
+            PickTarget::RemarkBooks => rm.set_path(text),
+            PickTarget::RemarkPoints => rm.set_points_path(text),
+            PickTarget::CompareBooks => rm.set_cmp_path(text),
+            PickTarget::ParallelDir => rm.set_save_path(text),
+        }
+    }
+
+    /// The paths a dialog picked into `field`, while the field still shows `text`.
+    fn picked_paths(&self, field: PickTarget, text: &str) -> Option<Vec<PathBuf>> {
+        match self.st.borrow().picked.get(&field) {
+            Some((shown, paths)) if shown == text => Some(paths.clone()),
+            _ => None,
+        }
+    }
+
+    /// The paths in a field that takes several: as picked, else the typed text ([`scan_paths`]).
+    fn paths_in(&self, field: PickTarget, text: &str) -> Vec<PathBuf> {
+        self.picked_paths(field, text)
+            .unwrap_or_else(|| scan_paths(text))
+    }
+
+    /// The path in a field that takes one: as picked, else the typed text ([`one_path`]).
+    fn path_in(&self, field: PickTarget, text: &str) -> Option<PathBuf> {
+        match self.picked_paths(field, text) {
+            Some(p) => p.into_iter().next(),
+            None => one_path(text),
+        }
+    }
+
     // ------------------------------------------------------------------ Remark (§3.5, §23.7)
 
     /// The import the screen shown works on: the New-exam form's (Exams) or the current
@@ -1219,12 +1434,11 @@ impl Shell {
     /// Reads the typed Remark workbooks (and points file) for the New-exam form or Setup and
     /// shows the import for review; nothing changes until it is applied.
     fn read_remark(&self, books: &str, points: &str) {
-        let points = points.trim();
         let req = b::RemarkRequest {
-            workbooks: scan_paths(books),
-            points: match scan_paths(points).into_iter().next() {
-                Some(p) if !points.is_empty() => b::RemarkPoints::File(p),
-                _ => b::RemarkPoints::FromWorkbooks,
+            workbooks: self.paths_in(PickTarget::RemarkBooks, books),
+            points: match self.path_in(PickTarget::RemarkPoints, points) {
+                Some(p) => b::RemarkPoints::File(p),
+                None => b::RemarkPoints::FromWorkbooks,
             },
             handwritten: Vec::new(),
         };
@@ -1477,7 +1691,9 @@ impl Shell {
     /// Writes the Restricted parallel-run report into the typed folder.
     fn save_parallel_run(&self, dir: &str) {
         let Some(exam) = self.exam() else { return };
-        let path = scan_paths(dir).into_iter().next().unwrap_or_default();
+        let path = self
+            .path_in(PickTarget::ParallelDir, dir)
+            .unwrap_or_default();
         let r = self.backend.borrow_mut().save_parallel_run(&exam, &path);
         match r {
             Ok(what) => self.say(what, s::Tone::Success),
@@ -1499,10 +1715,10 @@ impl Shell {
         }
     }
 
-    /// Replaces the answer key from the typed key file and rescores.
+    /// Replaces the answer key from the key file (picked or typed) and rescores.
     fn replace_key(&self, path: &str) {
         let Some(exam) = self.exam() else { return };
-        let path = std::path::PathBuf::from(path.trim());
+        let path = self.path_in(PickTarget::SetupKey, path).unwrap_or_default();
         let r = self.backend.borrow_mut().replace_key(&exam, &path);
         match r {
             Ok(what) => {
@@ -1523,7 +1739,7 @@ impl Shell {
     /// key they give for confirmation; nothing in the exam changes yet.
     fn read_key_sheets(&self, text: &str) {
         let Some(exam) = self.exam() else { return };
-        let paths = scan_paths(text);
+        let paths = self.paths_in(PickTarget::SetupKeySheets, text);
         let r = self.backend.borrow_mut().read_key_sheets(&exam, &paths);
         match r {
             Ok(what) => {
@@ -1690,7 +1906,7 @@ impl Shell {
     /// background; the Scan screen follows it through `pump`).
     fn add_scans(&self, text: &str) {
         let Some(exam) = self.exam() else { return };
-        let paths = scan_paths(text);
+        let paths = self.paths_in(PickTarget::AddScans, text);
         let r = self.backend.borrow_mut().add_scans(&exam, &paths);
         match r {
             Ok(what) => {
@@ -2482,7 +2698,7 @@ impl Shell {
     /// Replaces the CLOs and mapping from the typed CLO file.
     fn replace_clos(&self, path: &str) {
         let Some(exam) = self.exam() else { return };
-        let path = scan_paths(path).into_iter().next().unwrap_or_default();
+        let path = self.path_in(PickTarget::SetupClo, path).unwrap_or_default();
         let r = self.backend.borrow_mut().replace_clos(&exam, &path);
         match r {
             Ok(what) => {
@@ -5253,7 +5469,7 @@ impl Shell {
     pub fn remark_compare(&self, workbooks: &str) {
         let ui = self.ui();
         ui.global::<s::RemarkVM>().set_cmp_path(ss(workbooks));
-        self.compare_remark(compare_request(workbooks));
+        self.compare_remark(compare_request(scan_paths(workbooks)));
     }
 
     /// Shows (or hides) Setup's key summary of the key read from key sheets. Asks the backend
@@ -5335,6 +5551,21 @@ mod tests {
             assert_eq!(scan_paths(&native), vec![home.join("scans")]);
         }
         assert!(scan_paths(" ; ").is_empty());
+    }
+
+    #[test]
+    fn one_path_keeps_the_whole_name() {
+        // Explorer's "Copy as path" quotes it; a ; is part of a file name
+        assert_eq!(
+            one_path(" \"C:\\Keys\\key;v2.csv\" "),
+            Some(PathBuf::from("C:\\Keys\\key;v2.csv"))
+        );
+        assert_eq!(one_path("'b c.csv'"), Some(PathBuf::from("b c.csv")));
+        if let Some(home) = std::env::home_dir() {
+            let native = format!("~{}key.csv", std::path::MAIN_SEPARATOR);
+            assert_eq!(one_path(&native), Some(home.join("key.csv")));
+        }
+        assert_eq!(one_path("  \"\" "), None);
     }
 
     #[test]

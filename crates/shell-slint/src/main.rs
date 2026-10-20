@@ -14,7 +14,9 @@
 //!
 //! The generated UI code lives in the library (`shell_slint::ui`, the audited R6 exception);
 //! this binary has no generated code, so it forbids unsafe code outright. File reads of the
-//! definition inputs and the grading worker thread live here (rule R4: binaries may).
+//! definition inputs, the grading worker thread and everything the window asks of the operating
+//! system (native file dialogs, the file manager, the preferences file) live here (rule R4:
+//! binaries may); the library only describes them (`shell_slint::host`).
 #![forbid(unsafe_code)]
 // Windows release builds are GUI programs: no console window opens behind the app. Messages a
 // user must see also go to a small window (`tell`); debug builds keep the console.
@@ -27,12 +29,13 @@ use shell_slint::app_backend::{AppBackend, GradeRequest, JobEvent, Spawn, run_gr
 use shell_slint::backend::Backend;
 use shell_slint::bind::Shell;
 use shell_slint::demo::DemoBackend;
+use shell_slint::host::{Host, Pick, PickKind, PickRequest, Prefs};
 use shell_slint::screenshot;
 use shell_slint::ui::{AppWindow, Page, Theme};
 use slint::ComponentHandle;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{ExitCode, Stdio};
 use std::rc::Rc;
 
 const USAGE: &str = "usage: omr-desktop [--demo | --project <dir> | --workspace <dir> | --grade <scans…> GRADE]
@@ -347,34 +350,44 @@ fn app(mut backend: AppBackend) -> Built {
     Built::App(Rc::new(RefCell::new(backend)))
 }
 
-/// The desktop's own settings file (the last workspace), in the private data folder.
+/// The desktop's own preferences file (the last workspace, the folders the file dialogs opened
+/// last, …), in the private data folder.
 fn settings_file() -> Option<PathBuf> {
     omr_app::keys::key_dir().map(|d| d.join("desktop.json"))
 }
 
-/// The workspace opened last time, if it still exists.
-fn last_workspace() -> Option<PathBuf> {
-    let v: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(settings_file()?).ok()?).ok()?;
-    Some(PathBuf::from(v["workspace"].as_str()?)).filter(|w| w.is_dir())
+/// The preferences saved last time; the defaults when there are none or they are unreadable.
+fn load_prefs() -> Prefs {
+    settings_file()
+        .and_then(|f| std::fs::read(f).ok())
+        .map(|b| Prefs::from_json(&b))
+        .unwrap_or_default()
 }
 
-/// Remembers `w` as the workspace to open next time (best effort).
-fn remember_workspace(w: &Path) {
-    let (Some(f), Ok(abs)) = (settings_file(), std::path::absolute(w)) else {
+/// Saves the preferences, readable by the user only (best effort).
+fn save_prefs(p: &Prefs) {
+    let Some(f) = settings_file() else {
         return;
     };
     if let Some(d) = f.parent() {
         let _ = omr_app::keys::create_private_dir(d);
     }
-    let body = serde_json::json!({ "workspace": abs.to_string_lossy() });
-    let _ = omr_app::keys::write_private(&f, body.to_string().as_bytes());
+    let _ = omr_app::keys::write_private(&f, &p.to_json());
 }
 
-/// The workspace of a launch without a source: the last one, else `~/OMR Exams` (created
-/// private to the user: it will hold Restricted data).
-fn default_workspace() -> Result<PathBuf, String> {
-    if let Some(w) = last_workspace() {
+/// Remembers `w` as the workspace to open next time (best effort).
+fn remember_workspace(prefs: &mut Prefs, w: &Path) {
+    let Ok(abs) = std::path::absolute(w) else {
+        return;
+    };
+    prefs.workspace = Some(abs);
+    save_prefs(prefs);
+}
+
+/// The workspace of a launch without a source: the last one if it still exists, else
+/// `~/OMR Exams` (created private to the user: it will hold Restricted data).
+fn default_workspace(prefs: &Prefs) -> Result<PathBuf, String> {
+    if let Some(w) = prefs.workspace.clone().filter(|w| w.is_dir()) {
         return Ok(w);
     }
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
@@ -390,7 +403,7 @@ fn default_workspace() -> Result<PathBuf, String> {
     Ok(w)
 }
 
-fn backend(a: &Args) -> Result<(Built, bool), String> {
+fn backend(a: &Args, prefs: &mut Prefs) -> Result<(Built, bool), String> {
     let op = operator(a);
     Ok(match &a.source {
         Source::Demo => (
@@ -403,13 +416,13 @@ fn backend(a: &Args) -> Result<(Built, bool), String> {
                 .parent()
                 .and_then(Path::parent)
             {
-                remember_workspace(w);
+                remember_workspace(prefs, w);
             }
             (app(b), false)
         }
         Source::Default => {
-            let w = default_workspace()?;
-            remember_workspace(&w);
+            let w = default_workspace(prefs)?;
+            remember_workspace(prefs, &w);
             (app(AppBackend::workspace(&w, &op)), false)
         }
         Source::Workspace(w) => {
@@ -419,7 +432,7 @@ fn backend(a: &Args) -> Result<(Built, bool), String> {
                     w.display()
                 ));
             }
-            remember_workspace(w);
+            remember_workspace(prefs, w);
             (app(AppBackend::workspace(w, &op)), false)
         }
         Source::Grade(g) => {
@@ -488,7 +501,8 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let (built, live) = match backend(&args) {
+    let mut prefs = load_prefs();
+    let (built, live) = match backend(&args, &mut prefs) {
         Ok(b) => b,
         Err(e) => {
             tell("Mizan cannot start", &format!("omr-desktop: {e}"));
@@ -498,7 +512,7 @@ fn main() -> ExitCode {
     if let Some(dir) = &args.screenshot {
         return screenshots(&args, dir, &built);
     }
-    match run_windowed(args.theme.unwrap_or(false), built.dynamic(), live) {
+    match run_windowed(args.theme.unwrap_or(false), built.dynamic(), live, prefs) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             // R10: the windowing system is missing (no display, no X11 or Wayland session)
@@ -597,16 +611,95 @@ fn workbooks(given: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     Ok(out)
 }
 
+/// Opens a native file dialog, parented to the main window, and answers on the UI thread when
+/// it closes. The dialog runs on a thread of its own (on Windows and through the desktop
+/// portal), so the window keeps painting meanwhile.
+fn picker(ui: &AppWindow) -> Pick {
+    let weak = ui.as_weak();
+    Rc::new(move |req: PickRequest, done| {
+        let kind = req.kind;
+        let mut d = rfd::AsyncFileDialog::new().set_title(req.title.as_str());
+        if let Some(start) = req.start.as_deref().filter(|s| s.is_dir()) {
+            d = d.set_directory(start);
+        }
+        for (name, extensions) in &req.filters {
+            d = d.add_filter(name.as_str(), extensions);
+        }
+        if let Some(ui) = weak.upgrade() {
+            d = d.set_parent(&ui.window().window_handle());
+        }
+        let dialog = async move {
+            let picked = match kind {
+                PickKind::File => d.pick_file().await.map(|f| vec![f]),
+                PickKind::Files => d.pick_files().await,
+                PickKind::Folder => d.pick_folder().await.map(|f| vec![f]),
+            };
+            done(picked.map(|v| v.into_iter().map(|f| f.path().to_path_buf()).collect()));
+        };
+        // without an event loop there is no dialog: the answer is dropped unanswered, which the
+        // shell takes as nothing picked
+        let _ = slint::spawn_local(dialog);
+    })
+}
+
+/// Shows `dir`, an existing folder, in the system's file manager. Never a file: the file
+/// manager would open it, or run it.
+fn reveal(dir: &Path) -> Result<(), String> {
+    if !dir.is_dir() {
+        return Err(format!("{}: no such folder", dir.display()));
+    }
+    let dir = std::path::absolute(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let program = if cfg!(windows) {
+        // by its full path, never looked up on PATH (its exit code is 1 even when it worked)
+        let root = std::env::var_os("SystemRoot")
+            .filter(|r| !r.is_empty())
+            .ok_or("cannot find Windows Explorer (SystemRoot is not set)")?;
+        PathBuf::from(root).join("explorer.exe")
+    } else if cfg!(target_os = "macos") {
+        PathBuf::from("open")
+    } else {
+        PathBuf::from("xdg-open")
+    };
+    let mut child = std::process::Command::new(program)
+        .arg(&dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("cannot open the file manager ({e})"))?;
+    // waited for on a thread of its own, so no finished process is left behind
+    std::thread::Builder::new()
+        .name("omr-reveal".into())
+        .spawn(move || {
+            let _ = child.wait();
+        })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// What the window may ask of the operating system: file dialogs, the file manager, and saving
+/// the preferences.
+fn host(ui: &AppWindow, prefs: Prefs) -> Host {
+    Host {
+        pick: Some(picker(ui)),
+        reveal: Some(Rc::new(reveal)),
+        save_prefs: Some(Rc::new(save_prefs)),
+        prefs,
+    }
+}
+
 fn run_windowed(
     dark: bool,
     backend: Rc<RefCell<dyn Backend>>,
     live: bool,
+    prefs: Prefs,
 ) -> Result<(), slint::PlatformError> {
     let ui = AppWindow::new()?;
     // the Wayland app id and X11 class, matched by packaging/linux/mizan.desktop (its icon)
     let _ = slint::set_xdg_app_id("mizan");
     ui.global::<Theme>().set_dark(dark);
     let shell = Shell::bind(&ui, backend);
+    shell.set_host(host(&ui, prefs));
     if live {
         shell.navigate(Page::Scan);
     }

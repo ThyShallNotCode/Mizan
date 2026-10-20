@@ -30,6 +30,11 @@ export global App {
     // last command result, e.g. "Recorded Q17: B" or a validation error
     in property <string> message;
     in property <Tone> message-tone: Tone.neutral;
+    // the window has file dialogs (the desktop app; not headless tests or screenshots): path
+    // fields offer Browse… beside the typed path
+    in property <bool> can-browse;
+    // the window can show a folder in the system's file manager
+    in property <bool> can-reveal;
     // settings
     in-out property <bool> single-key: true;
     in-out property <bool> show-all-default: false;
@@ -39,6 +44,9 @@ export global App {
     callback set-single-key(bool);
     // a command the shell forwards but the demo backend does not model (e.g. "New exam")
     callback request(string);
+    // a path field's Browse… or Folder… button: opens the file dialog of that field
+    // ("new-scans", "setup-key", …); what is picked fills the field
+    callback browse(string);
     // global keys (Ctrl+1..6, Ctrl+0/Ctrl+comma, Escape); returns true when handled
     callback key(string, bool, bool, bool) -> bool;
 }

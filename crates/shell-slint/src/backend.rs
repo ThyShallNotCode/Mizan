@@ -1338,6 +1338,10 @@ pub struct NewExam {
     /// points per version and the learning objectives come from that import, held by the
     /// backend since it was read ([`Backend::read_remark_import`] with no exam).
     pub remark: String,
+    /// The files a file dialog picked, by field (`scans`, `sheet`, `key`, `key_sheets`,
+    /// `roster`, `clo`), for the fields that still show them: used exactly in place of that
+    /// field's text, which shows them joined by `; ` (a `;` in a file name stays intact).
+    pub picked: std::collections::BTreeMap<String, Vec<std::path::PathBuf>>,
 }
 
 // ------------------------------------------------------------------ Remark migration (§3.5)
@@ -1737,6 +1741,12 @@ pub trait Backend {
     /// false.
     fn is_demo(&self) -> bool {
         false
+    }
+
+    /// The exams folder (a file dialog with no folder of its own opens there); `None` without
+    /// one.
+    fn workspace_dir(&self) -> Option<std::path::PathBuf> {
+        None
     }
 
     /// True when a new exam can be graded from the New-exam form (a workspace to grade into,

@@ -22,5 +22,6 @@ pub mod backend;
 pub mod bind;
 pub mod crops;
 pub mod demo;
+pub mod host;
 pub mod keymap;
 pub mod screenshot;

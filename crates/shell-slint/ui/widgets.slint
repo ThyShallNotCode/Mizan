@@ -4,7 +4,7 @@
 
 import {
     Theme, Tone, Severity, MarkState, FocusRing, SeverityGlyph, Keycap, Tag, MarkGlyph, IconButton,
-    BubbleOverlay, StatusPill, TopBar, StatusBar, PrimaryButton,
+    BubbleOverlay, StatusPill, TopBar, StatusBar, PrimaryButton, GhostButton,
 } from "theme.slint";
 import { BubbleVM, App, Page } from "state.slint";
 
@@ -753,6 +753,73 @@ export component TextField inherits Rectangle {
     FocusRing {
         active: input.has-focus;
         corner: Theme.radius-md;
+    }
+}
+
+// A field for file or folder paths: the typed path, and when the window has file dialogs
+// (App.can-browse) "Browse…" beside it, with "Folder…" where a folder of files is taken too (the
+// scans). The buttons open the dialog of `target` (and `folder-target`); what is picked fills
+// the field. Without file dialogs (headless tests, screenshots) the buttons do not exist.
+export component PathField inherits HorizontalLayout {
+    in-out property <string> text;
+    in property <string> label;
+    in property <string> placeholder;
+    in property <bool> mono: true;
+    in property <bool> enabled: true;
+    // the dialogs ("new-key"; "" for no button)
+    in property <string> target;
+    in property <string> folder-target;
+    out property <bool> has-focus: field.has-focus || root.browse-focused || root.folder-focused;
+    // the buttons made with App.can-browse have the keyboard (each reset when made)
+    property <bool> browse-focused;
+    property <bool> folder-focused;
+    callback accepted(string);
+    spacing: Theme.space-sm;
+    forward-focus: field;
+    field := TextField {
+        horizontal-stretch: 1;
+        label: root.label;
+        placeholder: root.placeholder;
+        text <=> root.text;
+        mono: root.mono;
+        enabled: root.enabled;
+        accepted(v) => {
+            root.accepted(v);
+        }
+    }
+    if App.can-browse && root.target != "": Centered {
+        GhostButton {
+            init => {
+                root.browse-focused = false;
+            }
+            changed has-focus => {
+                root.browse-focused = self.has-focus;
+            }
+            text: "Browse…";
+            accessible-label: "Browse for " + root.label;
+            accessible-description: "Opens the file dialog; what you choose fills the field";
+            enabled: root.enabled;
+            clicked => {
+                App.browse(root.target);
+            }
+        }
+    }
+    if App.can-browse && root.folder-target != "": Centered {
+        GhostButton {
+            init => {
+                root.folder-focused = false;
+            }
+            changed has-focus => {
+                root.folder-focused = self.has-focus;
+            }
+            text: "Folder…";
+            accessible-label: "Choose a folder for " + root.label;
+            accessible-description: "Opens the folder dialog; the folder you choose fills the field";
+            enabled: root.enabled;
+            clicked => {
+                App.browse(root.folder-target);
+            }
+        }
     }
 }
 

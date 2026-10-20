@@ -314,6 +314,9 @@ omr-desktop --demo                            # invented demo data, marked DEMO 
 - **Exams** lists every graded exam. **New exam** (Ctrl+N) grades a folder of scans into a new
   exam folder: the scans, the sheet (`iau-ccsit-v1`), the number of questions and, optionally,
   the key, roster and CLO files. Without a key file the key is inferred.
+- Every file or folder field has **Browse…** beside it (and **Folder…** for scans), which opens
+  your system's file dialog at the folder you picked from last; typing or pasting a path still
+  works.
 - **Setup** shows the key, versions and CLO mapping; **Replace key…** loads the real key from
   a file and rescores; **Read key from answer sheet…** reads the instructor's key sheets, shows
   the key summary and, once you confirm, adds them to the exam (stored and audited like key

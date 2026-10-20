@@ -32,7 +32,8 @@ to do (R10), a launch without a display included (run from a desktop session, or
 `--screenshot`).
 
 **First use** (CR-04). Without a source the app opens the workspace used last time (remembered
-in `<key dir>/desktop.json`), else `~/OMR Exams`, created owner-only. Demo data appears only
+in the preferences, `<key dir>/desktop.json`, owner-only), else `~/OMR Exams`, created
+owner-only. Demo data appears only
 with `--demo` (and for `--screenshot` without a source), and every screen then carries a DEMO
 DATA mark in the navigation rail whose label says how to open real exams. On a workspace,
 *New exam* (Ctrl+N) opens a form over the dashboard: scans, title, course, sheet
@@ -40,7 +41,14 @@ DATA mark in the navigation rail whose label says how to open real exams. On a w
 and CLO files. `AppBackend::create_exam` validates it with `omr_app::define` (the rules and
 file readers of `omr grade`; a blank key file infers the key), checks that the scans exist,
 and starts `run_grading` on the binary's spawner into a new folder of the workspace; the Scan
-screen follows the run and the exam opens when it finishes. Setup's *Replace key…* loads a key
+screen follows the run and the exam opens when it finishes. Every path field (`PathField`) has
+*Browse…* beside it, and *Folder…* for scans, when the window has file dialogs: the binary hands
+the shell a `host::Host` (`Shell::set_host`) with native dialogs (`rfd`, parented to the
+window), the file manager and the preferences; the library only describes each dialog
+(`PickRequest`: kind, title, filters, the folder it opens in). Paths a dialog picked are used
+exactly while the field still shows them (a `;` in a file name stays intact); an edited field
+is read as typed. Headless tests and screenshots have no host, so no Browse button.
+Setup's *Replace key…* loads a key
 file (`ExamProject::replace_key`, a new key version, rescored); the key reads "Key vN · in
 force" or "· released", never "draft". Results' *Release results…* asks for confirmation and
 releases (`ExamProject::release`), then writes the exports with the Blackboard upload.
@@ -389,6 +397,16 @@ real export.
 | `req_a11_remark_import_in_setup_replaces_the_key` | a quiz graded with an inferred key: Setup's import of an export with other points is shown as not applicable, with why (a graded exam's points are fixed with its stored form map) and what to do, *Apply* disabled; the export with the exam's points is shown (nothing changes), back to the matrix and to the waiting import, *Apply key and points*: key version +1, no longer INFERRED, every entry equal to Remark's Answer Key rows, the message says the objectives were not applied |
 | `req_a11_parallel_run_in_results_shows_the_differences_with_crops` | the synthetic midterm beside its three workbooks: the Restricted / Q-08 banner, tiles equal to omr-app's own comparison, the settled difference Remark read otherwise first with its bubble-row crop, the booklet with no row and the row with no student number (masked), the key sheet, the other section not compared; *Save report* writes every file with the banner and the manifest; the subtitle says the comparison holds nothing, *Queue for review* queues each settled difference (open blocking items rise by as many), the button goes and the subtitle names what waits in Review; *Back to results* |
 | `req_a11_remark_states_fit_the_minimum_window_in_both_themes` | the three states at 1280 × 800, light and dark: every control labelled once and inside the window |
+| `no_host_hides_browse_buttons` (`req_gui_workflow.rs`, real clicks and typed keys, a fake host) | without a host no Browse button exists and typed paths grade; with one, every path field of the New-exam form has its buttons |
+| `browse_fills_the_scans_field_with_the_picked_files` | three scans picked (one named `batch;1.jpg`) are graded as picked; the dialog offers the scan types, opens in the exams folder, then where the scans were picked (saved in the preferences) |
+| `a_cancelled_dialog_keeps_the_typed_text` | nothing picked leaves the typed text, says once to type the path if no dialog appeared, and the next click opens a dialog |
+| `editing_a_picked_field_falls_back_to_typed_paths` | picked files typed over with the folder: the folder is graded |
+| `browse_clicks_wait_for_the_open_dialog` | one dialog at a time; its answer fills its own field; a dialog that could not show does not block the next |
+| `roster_and_clo_browse_use_their_filters` | each New-exam file field's file types (key, roster, CLO, key sheets, spec) and the Remark panel's (graded exports only) |
+| `setup_replace_key_accepts_a_quoted_path` | Setup's key file quoted as "Copy as path" gives it, then a corrected key picked in the dialog: both in force |
+| `setup_scan_and_parallel_run_fields_browse` | Setup's CLO, key-sheet and Remark fields, Scan's added scans (files or a folder), the parallel run's workbooks (picked from a folder whose name holds a `;`) and report folder |
+| `prefs_reads_the_old_workspace_only_file`, `prefs_ignores_unknown_keys_and_bad_json`, `prefs_round_trip` (`host.rs` unit tests) | the preferences file of earlier versions (the workspace only) reads as version 1 with the defaults; unreadable, unknown or mistyped entries take their defaults; every preference survives a save and a read |
+| `browse_buttons_fit_the_smallest_window` | at 1280 × 800 in both themes, every Browse… and Folder… button (New exam, its Remark import, Setup's bars, Add scans, the comparison and the parallel run) is inside the window and leaves its field room for a path |
 | `req_a11_demo_data_is_marked_on_every_screen` (demo file) | the DEMO DATA mark on every screen, release refused on demo data, and New exam saying how to open real exams |
 | `req_a11_blind_items_never_show_a_leaked_engine_reading` (demo file) | a backend that sends the engine's reading with blind items: the frame, the sparkline and Enter never show or commit it |
 | `req_a11.rs` (demo) | the review flow, keyboard paths, labels, layouts and screens on the demo backend |

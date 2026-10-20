@@ -11,7 +11,7 @@ import {
 } from "remark.slint";
 import {
     Icons, ThemeToggle, Centered, SectionLabel, StatusText, KVLine, EditCell, StepIndicator,
-    EmptyState, NoExamState, MessageText, TextField, Segment, SegmentGroup,
+    EmptyState, NoExamState, MessageText, PathField, Segment, SegmentGroup,
 } from "../widgets.slint";
 import { ListView, ScrollView } from "std-widgets.slint";
 
@@ -588,15 +588,15 @@ component CloCard inherits Card {
             }
         }
     }
+    // the card is narrow: the file (and its Browse…) on a row of its own
+    PathField {
+        label: "CLO file";
+        placeholder: "clo.csv: the CLOs and item mapping (replaces any in force)";
+        text <=> SetupVM.clo-path;
+        target: "setup-clo";
+    }
     HorizontalLayout {
-        spacing: Theme.space-sm;
-        TextField {
-            horizontal-stretch: 1;
-            label: "CLO file";
-            placeholder: "clo.csv: the CLOs and item mapping (replaces any in force)";
-            text <=> SetupVM.clo-path;
-            mono: true;
-        }
+        alignment: end;
         Centered {
             GhostButton {
                 text: "Replace CLOs";
@@ -640,12 +640,12 @@ component KeyBar inherits Rectangle {
                 color: Theme.ink;
                 vertical-alignment: center;
             }
-            field := TextField {
+            field := PathField {
                 horizontal-stretch: 1;
                 label: "Key file";
                 placeholder: "Path of the key file, e.g. key.csv (question,A,B or form,Q1,Q2,…)";
                 text <=> SetupVM.key-path;
-                mono: true;
+                target: "setup-key";
                 accepted(v) => {
                     if (v != "") {
                         SetupVM.replace-key(v);
@@ -705,12 +705,12 @@ component KeySheetBar inherits Rectangle {
                 color: Theme.ink;
                 vertical-alignment: center;
             }
-            field := TextField {
+            field := PathField {
                 horizontal-stretch: 1;
                 label: "Key-sheet files";
                 placeholder: "Scans or photos of the filled key sheets (student number all 0 or all 9, version bubbled); ; between several";
                 text <=> SetupVM.ks-path;
-                mono: true;
+                target: "setup-key-sheets";
                 accepted(v) => {
                     if (v != "") {
                         SetupVM.ks-read(v);

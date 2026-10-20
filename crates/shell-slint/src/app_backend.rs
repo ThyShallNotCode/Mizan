@@ -575,7 +575,9 @@ impl AppBackend {
         };
         let bad = |m: String| BackendError::Invalid(m);
         let text = |s: &str| Some(s.trim().to_string()).filter(|s| !s.is_empty());
-        let inputs = crate::bind::scan_paths(&form.scans);
+        // the files a dialog picked are used exactly; typed text is read as typed
+        let picked = |k: &str| form.picked.get(k).filter(|p| !p.is_empty()).cloned();
+        let inputs = picked("scans").unwrap_or_else(|| crate::bind::scan_paths(&form.scans));
         if inputs.is_empty() {
             return Err(bad(
                 "Scans: type the folder or the scan files to grade (several: separate them \
@@ -605,13 +607,20 @@ impl AppBackend {
             })?),
         };
         // one path, quotes and a leading ~/ handled as for the scans
-        let path = |s: &str| crate::bind::scan_paths(s).into_iter().next();
+        let path = |k: &str, s: &str| {
+            picked(k)
+                .and_then(|p| p.into_iter().next())
+                .or_else(|| crate::bind::one_path(s))
+        };
         let sheet = text(&form.sheet).unwrap_or_else(|| "iau-ccsit-v1".into());
-        let sheet = match omr_app::define::Sheet::parse(&sheet) {
-            omr_app::define::Sheet::Spec(p) => {
-                omr_app::define::Sheet::Spec(path(&sheet).unwrap_or(p))
-            }
-            t => t,
+        let sheet = match picked("sheet") {
+            Some(p) => omr_app::define::Sheet::Spec(p[0].clone()),
+            None => match omr_app::define::Sheet::parse(&sheet) {
+                omr_app::define::Sheet::Spec(p) => {
+                    omr_app::define::Sheet::Spec(path("sheet", &sheet).unwrap_or(p))
+                }
+                t => t,
+            },
         };
         let mut i = omr_app::define::Inputs::new(sheet, questions);
         i.options = options;
@@ -621,12 +630,13 @@ impl AppBackend {
                 .filter(|x| !x.is_empty())
                 .collect()
         });
-        i.key = path(&form.key);
+        i.key = path("key", &form.key);
         i.infer_key = i.key.is_none();
         // key sheets named in the form: read with the exam, held until confirmed in Setup
-        let key_sheets = crate::bind::scan_paths(&form.key_sheets);
-        i.roster = path(&form.roster);
-        i.clo = path(&form.clo);
+        let key_sheets =
+            picked("key_sheets").unwrap_or_else(|| crate::bind::scan_paths(&form.key_sheets));
+        i.roster = path("roster", &form.roster);
+        i.clo = path("clo", &form.clo);
         i.title = text(&form.title);
         i.course = text(&form.course);
         // the key, its exact points per version and the learning objectives from a Remark
@@ -4746,6 +4756,10 @@ impl Backend for AppBackend {
 
     fn add_scans(&mut self, exam: &ExamId, inputs: &[PathBuf]) -> Result<String, BackendError> {
         self.start_append(exam, inputs)
+    }
+
+    fn workspace_dir(&self) -> Option<PathBuf> {
+        self.workspace.clone()
     }
 
     fn can_create_exam(&self) -> bool {
