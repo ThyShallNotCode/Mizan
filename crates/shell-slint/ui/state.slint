@@ -44,6 +44,21 @@ export global App {
     in-out property <bool> show-all-default: false;
     // the name recorded in the audit trail (Settings, the field shows it until saved)
     in-out property <string> operator-name;
+    // write the exports when a grading run, an added batch or a roster ends (Settings)
+    in-out property <bool> auto-export: true;
+    // the end of a background run (grading, scans added, a roster): what happened and the next
+    // steps, on every screen until it is dismissed or a step leads to another screen
+    in property <bool> notice-open;
+    in property <string> notice-title;
+    in property <string> notice-text;
+    in property <Tone> notice-tone: Tone.neutral;
+    // the steps' labels, the primary first
+    in property <[string]> notice-steps;
+    // closing the window while a run is in progress asks first: what runs, and whether the
+    // window waits for a cancelled run to stop
+    in property <bool> close-open;
+    in property <string> close-text;
+    in property <bool> closing;
     callback navigate(Page);
     callback set-dark(bool);
     callback set-reduce-motion(bool);
@@ -51,6 +66,12 @@ export global App {
     callback set-show-all-default(bool);
     // validated by the core; recorded on every decision from now on
     callback set-operator(string);
+    callback set-auto-export(bool);
+    // a step of the notice (its index), or -1: the notice is dismissed
+    callback notice-action(int);
+    // closing while a run is in progress: 0 keep it running (the window stays), 1 cancel it
+    // and close once it has stopped
+    callback close-action(int);
     // shows a folder in the system's file manager: "exam" (the current exam's folder),
     // "exports" (the same folder, where its exports are written) or "workspace"
     callback reveal(string);
@@ -623,6 +644,10 @@ export global ScanVM {
     in property <int> review-open;
     // a capture agent runs the batch (Pause and Stop); file imports cannot be paused
     in property <bool> pausable;
+    // a new exam being graded can be cancelled (nothing is saved): the bar asks first
+    in property <bool> can-cancel;
+    in-out property <bool> cancel-confirm;
+    callback cancel-job();
     // adding a later batch (another section, another day) to this exam, §8.1
     in property <bool> can-add;
     in property <string> add-note;

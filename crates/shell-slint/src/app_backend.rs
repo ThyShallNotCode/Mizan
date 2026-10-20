@@ -12,7 +12,8 @@
 //! does both); [`Backend::pump`] drains the worker's [`JobEvent`]s without blocking. Adding a
 //! later batch to an open exam runs [`run_append`] on a thread the binary's [`Spawn`] starts:
 //! the project is saved and closed on the UI thread, regraded with the new scans on the worker
-//! and reopened when the worker reports.
+//! and reopened when the worker reports. Each worker writes the exports when its run ends, as
+//! `omr grade` and `omr add` do, and a run can be cancelled through its [`Cancel`] token.
 
 use crate::backend::{self as b, Backend, BackendError, ExamId, ItemId};
 use omr_app::define::Sheet;
@@ -49,10 +50,60 @@ const THUMB_CACHE: usize = 256;
 pub enum JobEvent {
     /// A pipeline progress event (§4.5).
     Progress(Progress),
-    /// A line for the batch activity log (e.g. what an added batch changed).
+    /// A line for the batch activity log.
     Note(String),
+    /// What the run changed, in one line (an added batch): logged, and said again
+    /// when the run ends.
+    Summary(String),
+    /// What became of the exports the run writes when it ends: written, or why not (the key
+    /// read from key sheets waits for its confirmation, or the export failed).
+    Exports(Result<Exported, String>),
     /// The run ended: the project package (`project.omrproj`), or the error with remediation.
     Finished(Result<PathBuf, String>),
+    /// The operator cancelled the run ([`Cancel`]): a new exam stored nothing, a graded exam's
+    /// results are as they were.
+    Cancelled,
+}
+
+/// Exports a worker wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Exported {
+    /// The exam's folder (beside its `project.omrproj`).
+    pub dir: PathBuf,
+    pub files: usize,
+    /// The Blackboard upload is among them.
+    pub blackboard: bool,
+}
+
+/// Why the exports of a run whose key waits for the key-sheet confirmation are not written.
+const EXPORTS_WAIT: &str = "Exports wait for the key confirmation in Setup: they are written \
+                            once the key is confirmed and you write them in Results";
+
+/// Writes the exports of a finished run into `dir`, when given, as `omr grade` and `omr add`
+/// do, and reports what became of them on `tx`. A key read from key sheets and not confirmed
+/// yet holds them; a failed export leaves the run as it is.
+fn export_after(p: &mut ExamProject, dir: Option<&Path>, tx: &Sender<JobEvent>) {
+    let Some(dir) = dir else {
+        return;
+    };
+    let r = if p.session.key_unconfirmed() {
+        Err(EXPORTS_WAIT.to_string())
+    } else {
+        match p.export(dir) {
+            Ok(s) => Ok(Exported {
+                dir: dir.to_path_buf(),
+                files: s.files.len(),
+                blackboard: s
+                    .files
+                    .iter()
+                    .any(|f| f == omr_app::export::BLACKBOARD_FILE),
+            }),
+            Err(e) => Err(format!(
+                "Exports not written: {e}. Write all exports in Results writes them"
+            )),
+        }
+    };
+    let _ = tx.send(JobEvent::Exports(r));
 }
 
 /// Starts `work` on a thread the binary owns (rule R4: the library creates none); an error says
@@ -67,36 +118,48 @@ pub struct GradeRequest {
     pub inputs: Vec<PathBuf>,
     /// Files named as key sheets (§10.1): graded with the exam, held until confirmed.
     pub key_sheets: Vec<PathBuf>,
+    /// `options.cancel` stops the run before anything is stored.
     pub options: GradeOptions,
+    /// Where the exports are written when the run ends (`None`: not written).
+    pub export_to: Option<PathBuf>,
 }
 
-/// The body of a grading worker thread: grades, saves and closes the project, and reports every
-/// progress event and the outcome on `tx`. Never panics on bad input: errors arrive as
-/// [`JobEvent::Finished`]`(Err(..))` with the core's remediation text.
+/// The body of a grading worker thread: grades, writes the exports (`export_to`), saves and
+/// closes the project, and reports every progress event and the outcome on `tx`. Never panics
+/// on bad input: errors arrive as [`JobEvent::Finished`]`(Err(..))` with the core's remediation
+/// text; a cancelled run as [`JobEvent::Cancelled`] (nothing stored).
 pub fn run_grading(req: GradeRequest, tx: Sender<JobEvent>) {
     let progress_tx = tx.clone();
     let progress = move |p: &Progress| {
         // the window may be gone; the run still finishes and saves
         let _ = progress_tx.send(JobEvent::Progress(p.clone()));
     };
+    let fail = |e: AppError| {
+        format!(
+            "{e} (exit code {}). Fix the input and start again; `omr grade` prints the same \
+             message",
+            e.exit_code()
+        )
+    };
     let outcome = match &req.options.project_dir {
         None => Err("internal: a desktop grading run needs a project folder".to_string()),
-        Some(dir) => ExamProject::grade_with_key_sheets(
+        Some(dir) => match ExamProject::grade_with_key_sheets(
             &req.definition,
             &req.inputs,
             &req.key_sheets,
             &req.options,
             &progress,
-        )
-        .and_then(|p| p.close())
-        .map(|()| dir.clone())
-        .map_err(|e| {
-            format!(
-                "{e} (exit code {}). Fix the input and start again; `omr grade` prints \
-                         the same message",
-                e.exit_code()
-            )
-        }),
+        ) {
+            Err(AppError::Cancelled) => {
+                let _ = tx.send(JobEvent::Cancelled);
+                return;
+            }
+            Err(e) => Err(fail(e)),
+            Ok(mut p) => {
+                export_after(&mut p, req.export_to.as_deref(), &tx);
+                p.close().map(|()| dir.clone()).map_err(fail)
+            }
+        },
     };
     let _ = tx.send(JobEvent::Finished(outcome));
 }
@@ -108,12 +171,14 @@ pub struct AppendRequest {
     pub project: PathBuf,
     pub inputs: Vec<PathBuf>,
     pub options: GradeOptions,
+    /// Where the exports are written when the run ends (`None`: not written).
+    pub export_to: Option<PathBuf>,
 }
 
 /// The body of an append worker thread: opens the project, grades it again with the new scans
-/// ([`ExamProject::add_scans`]), saves and closes it, and reports progress, a summary line and
-/// the outcome on `tx`. The project stays usable when the batch is refused: the shell reopens
-/// it either way.
+/// ([`ExamProject::add_scans`]), writes the exports (`export_to`), saves and closes it, and
+/// reports progress, a summary line and the outcome on `tx`. The project stays usable when the
+/// batch is refused: the shell reopens it either way.
 pub fn run_append(req: AppendRequest, tx: Sender<JobEvent>) {
     let progress_tx = tx.clone();
     let progress = move |p: &Progress| {
@@ -130,12 +195,17 @@ pub fn run_append(req: AppendRequest, tx: Sender<JobEvent>) {
         Err(e) => Err(fail(e)),
         Ok(mut p) => {
             let added = p.add_scans(&req.inputs, &req.options, &progress);
+            if let Ok(r) = &added {
+                let _ = tx.send(JobEvent::Summary(append_summary(r)));
+                export_after(&mut p, req.export_to.as_deref(), &tx);
+            }
             let closed = p.close();
             match (added, closed) {
-                (Ok(r), Ok(())) => {
-                    let _ = tx.send(JobEvent::Note(append_summary(&r)));
-                    Ok(req.project.clone())
+                (Err(AppError::Cancelled), _) => {
+                    let _ = tx.send(JobEvent::Cancelled);
+                    return;
                 }
+                (Ok(_), Ok(())) => Ok(req.project.clone()),
                 (Err(e), _) | (Ok(_), Err(e)) => Err(fail(e)),
             }
         }
@@ -329,13 +399,38 @@ struct Job {
     outcome: Option<Result<PathBuf, String>>,
     /// Live sheet states by page ID, classified as the tracker does (auto, review, rejected).
     sheets: BTreeMap<String, u8>,
+    /// Stops the run before anything is stored (shared with the worker).
+    cancel: Cancel,
+    /// What became of the exports written when the run ended (`None`: none were asked for).
+    exports: Option<Result<Exported, String>>,
+    /// The run's summary line (an added batch), for the completion notice.
+    summary: Option<String>,
+    /// The run ended cancelled.
+    cancelled: bool,
 }
 
 impl Job {
+    fn new(exam: ExamId, kind: JobKind, rx: Receiver<JobEvent>, cancel: Cancel) -> Self {
+        Self {
+            exam,
+            kind,
+            rx,
+            tracker: ProgressTracker::default(),
+            activity: Vec::new(),
+            outcome: None,
+            sheets: BTreeMap::new(),
+            cancel,
+            exports: None,
+            summary: None,
+            cancelled: false,
+        }
+    }
+
     fn running(&self) -> bool {
         self.outcome.is_none()
     }
 
+    /// The run holds an existing project (closed here until it reports): an added batch.
     fn is_append(&self) -> bool {
         matches!(self.kind, JobKind::Append { .. })
     }
@@ -540,6 +635,10 @@ pub struct AppBackend {
     card: NewCard,
     /// Page thumbnails of every project opened (shared with each [`Opened`]).
     thumbs: Rc<RefCell<Thumbs>>,
+    /// Write the exports when a run ends (Settings; on unless switched off).
+    auto_export: bool,
+    /// How the last run ended, until [`Backend::take_completed`] hands it over.
+    completed: Option<b::JobDone>,
 }
 
 struct StabilityJob {
@@ -590,6 +689,8 @@ impl AppBackend {
             remark_new: None,
             card: NewCard::default(),
             thumbs: Rc::default(),
+            auto_export: true,
+            completed: None,
         }
     }
 
@@ -655,11 +756,13 @@ impl AppBackend {
         Ok(me)
     }
 
-    /// A grading run in progress: `rx` receives the worker's events (see [`run_grading`]).
-    /// The exams of `workspace`, if given, are listed beside it.
+    /// A grading run in progress: `rx` receives the worker's events (see [`run_grading`]) and
+    /// `cancel` is the token of its options (Cancel grading sets it). The exams of
+    /// `workspace`, if given, are listed beside it.
     pub fn grading(
         definition: &ExamDefinition,
         rx: Receiver<JobEvent>,
+        cancel: Cancel,
         workspace: Option<&Path>,
         operator: &str,
     ) -> Self {
@@ -667,13 +770,19 @@ impl AppBackend {
             Some(w) => Self::workspace(w, operator),
             None => Self::empty(operator, None),
         };
-        let exam = me.start_grade_job(definition, rx);
+        let exam = me.start_grade_job(definition, rx, cancel);
         me.default = Some(exam);
         me
     }
 
-    /// Shows a grading run of `definition` whose worker reports on `rx`; returns its exam ID.
-    fn start_grade_job(&mut self, definition: &ExamDefinition, rx: Receiver<JobEvent>) -> ExamId {
+    /// Shows a grading run of `definition` whose worker reports on `rx` (and stops on
+    /// `cancel`); returns its exam ID.
+    fn start_grade_job(
+        &mut self,
+        definition: &ExamDefinition,
+        rx: Receiver<JobEvent>,
+        cancel: Cancel,
+    ) -> ExamId {
         // the same definition graded again into another folder is another exam on the dashboard
         let mut exam = ExamId(definition.exam_id.to_string());
         let mut n = 2;
@@ -681,20 +790,19 @@ impl AppBackend {
             exam = ExamId(format!("{}#{n}", definition.exam_id));
             n += 1;
         }
-        self.job = Some(Job {
-            exam: exam.clone(),
-            kind: JobKind::Grade {
+        let mut job = Job::new(
+            exam.clone(),
+            JobKind::Grade {
                 definition: Box::new(definition.clone()),
             },
             rx,
-            tracker: ProgressTracker::default(),
-            activity: vec![format!(
-                "{} · queued for grading",
-                snapshot_label(&omr_app::pipeline::now_utc())
-            )],
-            outcome: None,
-            sheets: BTreeMap::new(),
-        });
+            cancel,
+        );
+        job.activity.push(format!(
+            "{} · queued for grading",
+            snapshot_label(&omr_app::pipeline::now_utc())
+        ));
+        self.job = Some(job);
         exam
     }
 
@@ -1055,6 +1163,7 @@ impl AppBackend {
         // the proposal's inputs, checked by the same rules once more: the definition graded
         let (definition, warnings) = omr_app::define::define(&inputs).map_err(app_err)?;
         let files = omr_app::ingest::collect_paths(&given.scans).map_err(app_err)?;
+        let cancel = Cancel::default();
         let req = GradeRequest {
             definition: definition.clone(),
             inputs: given.scans.clone(),
@@ -1065,8 +1174,10 @@ impl AppBackend {
                 snapshot_utc: None,
                 operator: self.operator.clone(),
                 max_pages: None,
-                cancel: Default::default(),
+                cancel: cancel.clone(),
             },
+            // beside the package, as `omr grade --out` writes them
+            export_to: self.auto_export.then(|| p.folder.clone()),
         };
         let (tx, rx) = std::sync::mpsc::channel::<JobEvent>();
         spawn(Box::new(move || run_grading(req, tx))).map_err(|e| {
@@ -1074,7 +1185,7 @@ impl AppBackend {
                 "Cannot start the grading worker ({e}); close other programs and try again"
             ))
         })?;
-        let exam = self.start_grade_job(&definition, rx);
+        let exam = self.start_grade_job(&definition, rx, cancel);
         if let Some(job) = self.job.as_mut() {
             let now = snapshot_label(&omr_app::pipeline::now_utc());
             for w in warnings {
@@ -1453,6 +1564,7 @@ impl AppBackend {
         };
         let mut changed = false;
         let mut finished = None;
+        let mut cancelled = false;
         loop {
             match job.rx.try_recv() {
                 Ok(JobEvent::Progress(p)) => {
@@ -1501,8 +1613,41 @@ impl AppBackend {
                     job.activity.insert(0, format!("{now} · {line}"));
                     changed = true;
                 }
+                Ok(JobEvent::Summary(line)) => {
+                    let now = snapshot_label(&omr_app::pipeline::now_utc());
+                    job.activity.insert(0, format!("{now} · {line}"));
+                    job.summary = Some(line);
+                    changed = true;
+                }
+                Ok(JobEvent::Exports(r)) => {
+                    let now = snapshot_label(&omr_app::pipeline::now_utc());
+                    let line = match &r {
+                        Ok(e) => format!(
+                            "wrote {} to {}",
+                            plural(e.files, "export file"),
+                            short_path(&e.dir)
+                        ),
+                        Err(why) => why.clone(),
+                    };
+                    job.activity.insert(0, format!("{now} · {line}"));
+                    job.exports = Some(r);
+                    changed = true;
+                }
                 Ok(JobEvent::Finished(r)) => {
                     finished = Some(r);
+                    break;
+                }
+                Ok(JobEvent::Cancelled) => {
+                    cancelled = true;
+                    finished = Some(Err(match job.kind {
+                        JobKind::Grade { .. } => {
+                            "cancelled: nothing was saved; your scan files are unchanged"
+                        }
+                        JobKind::Append { .. } => {
+                            "cancelled: the exam's results are as they were; nothing was added"
+                        }
+                    }
+                    .to_string()));
                     break;
                 }
                 Err(TryRecvError::Empty) => break,
@@ -1523,16 +1668,18 @@ impl AppBackend {
         };
         let exam = job.exam.clone();
         let now = snapshot_label(&omr_app::pipeline::now_utc());
-        match &r {
-            Ok(dir) => {
+        match (&r, cancelled) {
+            (Ok(dir), _) => {
                 job.activity
                     .insert(0, format!("{now} · saved {}", dir.display()));
             }
-            Err(e) => job.activity.insert(0, format!("{now} · failed: {e}")),
+            (Err(e), true) => job.activity.insert(0, format!("{now} · {e}")),
+            (Err(e), false) => job.activity.insert(0, format!("{now} · failed: {e}")),
         }
         job.outcome = Some(r.clone());
+        job.cancelled = cancelled;
         // a new project opens on success; an added batch reopens its project either way (a
-        // refused batch leaves the exam as it was)
+        // refused or cancelled batch leaves the exam as it was)
         let dir = match (&job.kind, r) {
             (JobKind::Append { project, .. }, _) => Some(project.clone()),
             (JobKind::Grade { .. }, Ok(dir)) => Some(dir),
@@ -1564,9 +1711,175 @@ impl AppBackend {
                     self.failed.borrow_mut().insert(exam.clone(), e);
                 }
             }
-            self.reloaded.push(exam);
+            self.reloaded.push(exam.clone());
+        }
+        self.completed = self.job_done(cancelled);
+        // a new exam cancelled stored nothing: it is no longer listed
+        if cancelled
+            && matches!(
+                self.job.as_ref().map(|j| &j.kind),
+                Some(JobKind::Grade { .. })
+            )
+        {
+            self.job = None;
+            if self.default.as_ref() == Some(&exam) {
+                self.default = self.entries.first().map(|e| e.id.clone());
+            }
         }
         true
+    }
+
+    /// The completion notice of the run that just ended (see [`b::JobDone`]): what it did,
+    /// what waits, and the next steps.
+    fn job_done(&self, cancelled: bool) -> Option<b::JobDone> {
+        use b::NextStep as S;
+        let j = self.job.as_ref()?;
+        let name = self.job_name(j);
+        let new_exam = matches!(j.kind, JobKind::Grade { .. });
+        let done = |outcome, title: String, text: String, tone, review_open, steps| b::JobDone {
+            exam: j.exam.clone(),
+            outcome,
+            title,
+            text,
+            tone,
+            review_open,
+            steps,
+        };
+        let error = match j.outcome.as_ref()? {
+            Ok(_) => None,
+            Err(e) => Some(e.clone()),
+        };
+        if cancelled {
+            let (title, text, steps) = match j.kind {
+                JobKind::Grade { .. } => (
+                    "Grading cancelled".to_string(),
+                    "Nothing was saved; your scan files are unchanged.".to_string(),
+                    vec![S::GradeAgain],
+                ),
+                JobKind::Append { .. } => (
+                    format!("Adding scans to {name} cancelled"),
+                    "The exam's results are as they were; your scan files are unchanged."
+                        .to_string(),
+                    vec![S::ScanLog],
+                ),
+            };
+            return Some(done(
+                b::JobOutcome::Cancelled,
+                title,
+                text,
+                b::Tone::Info,
+                0,
+                steps,
+            ));
+        }
+        if let Some(e) = error {
+            let title = match j.kind {
+                JobKind::Grade { .. } => format!("Grading {name} failed"),
+                JobKind::Append { .. } => format!("Adding scans to {name} failed"),
+            };
+            let steps = if new_exam {
+                vec![S::GradeAgain, S::ScanLog]
+            } else {
+                vec![S::ScanLog]
+            };
+            return Some(done(
+                b::JobOutcome::Failed,
+                title,
+                e,
+                b::Tone::Error,
+                0,
+                steps,
+            ));
+        }
+        let opened = self.with(&j.exam, |o| {
+            let s = &o.p.session;
+            (
+                s.booklets.len(),
+                s.key_unconfirmed(),
+                s.definition.key_inferred(),
+            )
+        });
+        let Some((booklets, held, inferred)) = opened else {
+            // saved, but it cannot be opened here: why, and the run's log
+            return Some(done(
+                b::JobOutcome::Failed,
+                format!("{name} cannot be opened"),
+                self.closed_reason(&j.exam),
+                b::Tone::Error,
+                0,
+                vec![S::ScanLog],
+            ));
+        };
+        let review_open: u32 = self
+            .review_queue(&j.exam, b::Lane::Marks)
+            .lanes
+            .iter()
+            .map(|l| l.open)
+            .sum();
+        let review = if review_open == 0 {
+            "nothing to review".to_string()
+        } else {
+            format!("{} to review", plural(review_open as usize, "item"))
+        };
+        let exported = matches!(j.exports, Some(Ok(_)));
+        let exports = match &j.exports {
+            Some(Ok(e)) => Some(format!("exports in {}", short_path(&e.dir))),
+            Some(Err(_)) if held => Some("the exports wait for it too".to_string()),
+            Some(Err(why)) => Some(why.clone()),
+            None => None,
+        };
+        let mut parts = Vec::new();
+        let (outcome, title) = match j.kind {
+            JobKind::Grade { .. } if held => (b::JobOutcome::Graded, format!("{name} is read")),
+            JobKind::Grade { .. } => (b::JobOutcome::Graded, format!("{name} is graded")),
+            JobKind::Append { .. } => (b::JobOutcome::Added, format!("Scans added to {name}")),
+        };
+        match &j.summary {
+            Some(line) => parts.push(line.clone()),
+            None => parts.push(plural(booklets, "booklet")),
+        }
+        if held {
+            parts.push(
+                "the key from the key sheets waits for your confirmation in Setup: nothing is \
+                 scored until then"
+                    .into(),
+            );
+        } else {
+            parts.push(review);
+        }
+        parts.extend(exports);
+        if inferred && !held {
+            parts.push("the results are provisional until you replace the key".into());
+        }
+        let mut steps = Vec::new();
+        if held {
+            steps.push(S::ConfirmKey);
+        } else {
+            if review_open > 0 {
+                steps.push(S::Review);
+            }
+            steps.push(if inferred && new_exam {
+                S::ReplaceKey
+            } else {
+                S::Results
+            });
+            if exported {
+                steps.push(S::ExportsFolder);
+            }
+        }
+        let tone = if held || inferred {
+            b::Tone::Warning
+        } else {
+            b::Tone::Success
+        };
+        Some(done(
+            outcome,
+            title,
+            parts.join(" · "),
+            tone,
+            review_open,
+            steps,
+        ))
     }
 
     /// Starts adding `inputs` to `exam` (see [`Backend::add_scans`]).
@@ -1589,25 +1902,9 @@ impl AppBackend {
                     .into(),
             ));
         }
-        // the project must be open for writing; it is saved and closed for the worker
-        self.with_mut(exam, |_| Ok(()))?;
-        let Some(o) = self.opened.borrow_mut().remove(exam) else {
-            return Err(BackendError::NotFound(format!("Exam {exam} is not open")));
-        };
-        let project = o.dir.clone();
-        // "batch-2" → the new batch is 3
-        let batch =
-            o.p.store()
-                .and_then(|st| st.batch_id().strip_prefix("batch-")?.parse::<u32>().ok())
-                .unwrap_or(1)
-                + 1;
-        let threads = o.p.session.timings.threads;
-        if let Err(e) = o.p.close() {
-            // nothing was handed over: reopen it as it was
-            self.with(exam, |_| ());
-            return Err(app_err(e));
-        }
+        let (project, batch, threads) = self.close_for_worker(exam, |_| Ok(()))?;
         let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = Cancel::default();
         let req = AppendRequest {
             project: project.clone(),
             inputs: inputs.to_vec(),
@@ -1617,8 +1914,12 @@ impl AppBackend {
                 snapshot_utc: None,
                 operator: self.operator.clone(),
                 max_pages: None,
-                cancel: Default::default(),
+                cancel: cancel.clone(),
             },
+            export_to: self
+                .auto_export
+                .then(|| project.parent().map(Path::to_path_buf))
+                .flatten(),
         };
         let started =
             (self.spawn.as_ref().expect("checked above"))(Box::new(move || run_append(req, tx)));
@@ -1637,22 +1938,46 @@ impl AppBackend {
             })
             .collect();
         let now = snapshot_label(&omr_app::pipeline::now_utc());
-        self.job = Some(Job {
-            exam: exam.clone(),
-            kind: JobKind::Append { project, batch },
-            rx,
-            tracker: ProgressTracker::default(),
-            activity: vec![format!(
-                "{now} · batch-{batch} · adding {}; every page is graded again",
-                names.join(", ")
-            )],
-            outcome: None,
-            sheets: BTreeMap::new(),
-        });
+        let mut job = Job::new(exam.clone(), JobKind::Append { project, batch }, rx, cancel);
+        job.activity.push(format!(
+            "{now} · batch-{batch} · adding {}; every page is graded again",
+            names.join(", ")
+        ));
+        self.job = Some(job);
         Ok(format!(
             "Adding scans as batch {batch}: the exam is graded again with them in the background; \
              review decisions carry over"
         ))
+    }
+
+    /// Saves and closes `exam`'s project for a worker that grades it again (an added batch),
+    /// once `check` accepts it: returns its package, the number of the batch the run
+    /// adds and the threads it was graded on. A project that cannot be closed is reopened as it
+    /// was.
+    fn close_for_worker(
+        &mut self,
+        exam: &ExamId,
+        check: impl FnOnce(&ExamProject) -> Result<(), BackendError>,
+    ) -> Result<(PathBuf, u32, usize), BackendError> {
+        // the project must be open for writing; it is saved and closed for the worker
+        self.with_mut(exam, |o| check(&o.p))?;
+        let Some(o) = self.opened.borrow_mut().remove(exam) else {
+            return Err(BackendError::NotFound(format!("Exam {exam} is not open")));
+        };
+        let project = o.dir.clone();
+        // "batch-2" → the new batch is 3
+        let batch =
+            o.p.store()
+                .and_then(|st| st.batch_id().strip_prefix("batch-")?.parse::<u32>().ok())
+                .unwrap_or(1)
+                + 1;
+        let threads = o.p.session.timings.threads;
+        if let Err(e) = o.p.close() {
+            // nothing was handed over: reopen it as it was
+            self.with(exam, |_| ());
+            return Err(app_err(e));
+        }
+        Ok((project, batch, threads))
     }
 
     /// Lists the exams below `dir` in place of the folder open (see
@@ -3976,6 +4301,7 @@ fn job_batch(j: &Job, opened: Option<&Opened>) -> b::BatchProgress {
             (None, JobKind::Append { .. }) => format!("Batch {n} of {n} · adding scans"),
             (None, _) => format!("Batch {n} of {n}"),
             (Some(Ok(_)), _) => format!("Batch {n} of {n} · complete"),
+            (Some(Err(_)), _) if j.cancelled => format!("Batch {n} of {n} · cancelled"),
             (Some(Err(_)), _) => format!("Batch {n} of {n} · failed"),
         },
         source: v.source.clone(),
@@ -5933,6 +6259,51 @@ impl Backend for AppBackend {
                 short_path(&out)
             ))
         })
+    }
+
+    fn set_auto_export(&mut self, on: bool) {
+        self.auto_export = on;
+    }
+
+    fn take_completed(&mut self) -> Option<b::JobDone> {
+        self.completed.take()
+    }
+
+    fn running(&self) -> Option<String> {
+        let j = self.job.as_ref().filter(|j| j.running())?;
+        let name = self.job_name(j);
+        Some(match j.kind {
+            JobKind::Grade { .. } => format!("{name} is being graded"),
+            JobKind::Append { .. } => format!("Scans are being added to {name}"),
+        })
+    }
+
+    fn can_cancel(&self, exam: &ExamId) -> bool {
+        self.job.as_ref().is_some_and(|j| {
+            j.running()
+                && &j.exam == exam
+                && matches!(j.kind, JobKind::Grade { .. })
+                && !j.cancel.is_cancelled()
+        })
+    }
+
+    fn cancel_job(&mut self) -> Result<String, BackendError> {
+        let Some(j) = self.job.as_mut().filter(|j| j.running()) else {
+            return Err(BackendError::Invalid("Nothing is being graded".into()));
+        };
+        j.cancel.cancel();
+        let now = snapshot_label(&omr_app::pipeline::now_utc());
+        j.activity.insert(
+            0,
+            format!("{now} · cancelling: stops after the pages being read"),
+        );
+        Ok(match j.kind {
+            JobKind::Grade { .. } => {
+                "Cancelling: grading stops after the pages being read, and nothing is saved"
+            }
+            _ => "Cancelling: the run stops after the pages being read; the exam stays as it was",
+        }
+        .into())
     }
 
     fn pump(&mut self) -> bool {

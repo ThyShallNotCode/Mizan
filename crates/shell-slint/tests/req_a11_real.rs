@@ -1183,10 +1183,12 @@ fn req_a11_real_backend_grades_live_through_pump() {
             max_pages: None,
             cancel: Default::default(),
         },
+        export_to: None,
     };
+    let cancel = req.options.cancel.clone();
     // the test plays the binary's part: it owns the worker thread
     let worker = std::thread::spawn(move || run_grading(req, tx));
-    let h = harness(AppBackend::grading(&def, rx, None, "principal:a11"));
+    let h = harness(AppBackend::grading(&def, rx, cancel, None, "principal:a11"));
     let ui = &h.ui;
     h.shell.navigate(Page::Scan);
     assert!(

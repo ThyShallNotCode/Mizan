@@ -509,6 +509,28 @@ struct State {
     picking: bool,
     /// What to do when no dialog appears has been said (once a session).
     pick_hint: bool,
+    /// The completion notice shown.
+    notice: Option<Notice>,
+    /// The New-exam card as it was last graded, for "Edit and grade again".
+    last_card: Option<SavedCard>,
+    /// The window closes once the run being cancelled has stopped.
+    closing: bool,
+}
+
+/// The completion notice of a run: its exam, the next steps the backend offers, those this
+/// window can take (its buttons, in order) and the open review items.
+struct Notice {
+    exam: ExamId,
+    steps: Vec<b::NextStep>,
+    shown: Vec<b::NextStep>,
+    review_open: u32,
+}
+
+/// The New-exam card's fields as they were graded, and the files a dialog picked for them.
+#[derive(Clone)]
+struct SavedCard {
+    form: b::NewExam,
+    picked: BTreeMap<PickTarget, (String, Vec<PathBuf>)>,
 }
 
 /// The shell controller: owns the backend handle and keeps the UI globals in sync.
@@ -572,6 +594,9 @@ impl Shell {
                 picked: BTreeMap::new(),
                 picking: false,
                 pick_hint: false,
+                notice: None,
+                last_card: None,
+                closing: false,
             }),
             timer: RefCell::new(None),
             host: RefCell::new(Host::default()),
@@ -636,7 +661,11 @@ impl Shell {
         self.st.borrow_mut().single_key = p.single_key;
         app.set_single_key(p.single_key);
         app.set_show_all_default(p.show_all_default);
+        app.set_auto_export(p.auto_export);
+        self.backend.borrow_mut().set_auto_export(p.auto_export);
         *self.host.borrow_mut() = host;
+        // the Open exports folder step needs the file manager
+        self.refresh_notice();
     }
 
     /// Changes the preferences with `change` and saves them (when the window can).
@@ -677,6 +706,11 @@ impl Shell {
     pub fn pump(&self) -> bool {
         let changed = self.backend.borrow_mut().pump();
         let reloaded = self.backend.borrow_mut().take_reloaded();
+        let done = self.backend.borrow_mut().take_completed();
+        if let Some(done) = done {
+            self.run_ended(done, &reloaded);
+            return true;
+        }
         if reloaded.is_empty() {
             if changed {
                 // twice a second during a run: the screen on show only (the others are
@@ -688,6 +722,13 @@ impl Shell {
             }
             return changed;
         }
+        self.reloaded(&reloaded);
+        true
+    }
+
+    /// Projects reloaded by a run that ended (grading, scans added): their review
+    /// item IDs are new, so the review selection of the current exam starts again.
+    fn reloaded(&self, reloaded: &[ExamId]) {
         let current = self.exam().is_some_and(|e| reloaded.contains(&e));
         if current {
             let mut st = self.st.borrow_mut();
@@ -699,18 +740,61 @@ impl Shell {
         self.refresh_all();
         if current {
             self.restart_review();
-            // "Grading N scan files into …" is no longer true once the run has ended (the Scan
-            // screen says how it ended)
-            if self
-                .ui()
-                .global::<s::App>()
-                .get_message()
-                .starts_with("Grading ")
-            {
-                self.say("", s::Tone::Neutral);
+        }
+    }
+
+    /// A background run ended: its projects are reloaded, and the completion notice says how
+    /// it ended with the next steps. A new exam that was cancelled is no longer listed: another
+    /// exam is shown in its place. The window closes now if it waited for the run to stop.
+    fn run_ended(&self, done: b::JobDone, reloaded: &[ExamId]) {
+        self.reloaded(reloaded);
+        let gone = !self
+            .backend
+            .borrow()
+            .dashboard()
+            .exams
+            .iter()
+            .any(|e| e.id == done.exam);
+        if gone && self.exam().as_ref() == Some(&done.exam) {
+            match self.backend.borrow().default_exam() {
+                Some(e) => self.select_exam(&e),
+                None => {
+                    Self::forget_exam(&mut self.st.borrow_mut());
+                    self.st.borrow_mut().exam = None;
+                    self.clear_exam_inputs();
+                    self.refresh_all();
+                }
             }
         }
-        true
+        // "Grading N scan files into …" is no longer true once the run has ended (the notice
+        // says how it ended)
+        let ui = self.ui();
+        let app = ui.global::<s::App>();
+        let msg = app.get_message();
+        if ["Grading ", "Adding ", "Cancelling"]
+            .iter()
+            .any(|p| msg.starts_with(p))
+        {
+            self.say("", s::Tone::Neutral);
+        }
+        self.st.borrow_mut().notice = Some(Notice {
+            exam: done.exam.clone(),
+            steps: done.steps.clone(),
+            shown: Vec::new(),
+            review_open: done.review_open,
+        });
+        app.set_notice_title(ss(&done.title));
+        app.set_notice_text(ss(&done.text));
+        app.set_notice_tone(tone(done.tone));
+        self.refresh_notice();
+        app.set_notice_open(true);
+        self.refresh_card();
+        if self.st.borrow().closing {
+            self.close_now();
+        } else if app.get_close_open() {
+            // nothing runs any more: the question of closing is moot
+            app.set_close_open(false);
+        }
     }
 
     // -------------------------------------------------------------------------- navigation
@@ -836,6 +920,7 @@ impl Shell {
         let sc = ui.global::<s::ScanVM>();
         sc.set_add_open(false);
         sc.set_add_path(SharedString::new());
+        sc.set_cancel_confirm(false);
         let rm = ui.global::<s::RemarkVM>();
         rm.set_setup_open(false);
         rm.set_setup_bar(false);
@@ -894,6 +979,23 @@ impl Shell {
         app.on_refresh(move || me.refresh_folder());
         let me = self.clone();
         app.on_set_operator(move |name| me.set_operator(&name));
+        let me = self.clone();
+        app.on_set_auto_export(move |v| {
+            me.backend.borrow_mut().set_auto_export(v);
+            me.ui().global::<s::App>().set_auto_export(v);
+            me.save_prefs(|p| p.auto_export = v);
+        });
+        let me = self.clone();
+        app.on_notice_action(move |i| me.notice_action(i));
+        let me = self.clone();
+        app.on_close_action(move |i| me.close_action(i));
+        // closing while a run is in progress asks first
+        let weak = Rc::downgrade(self);
+        ui.window()
+            .on_close_requested(move || match weak.upgrade() {
+                Some(me) if !me.close_requested() => slint::CloseRequestResponse::KeepWindowShown,
+                _ => slint::CloseRequestResponse::HideWindow,
+            });
         // the settings apply at once and are saved for the next start
         let me = self.clone();
         app.on_set_single_key(move |v| {
@@ -1037,6 +1139,8 @@ impl Shell {
         sc.on_toggle_pause(move || me.toggle_pause());
         let me = self.clone();
         sc.on_add_scans(move |text| me.add_scans(&text));
+        let me = self.clone();
+        sc.on_cancel_job(move || me.cancel_job());
 
         // review
         let rv = ui.global::<s::ReviewVM>();
@@ -1300,6 +1404,16 @@ impl Shell {
         let r = self.backend.borrow_mut().create_exam(&form);
         match r {
             Ok((exam, what)) => {
+                // kept for Edit and grade again (a run that fails or is cancelled)
+                let picked = self
+                    .st
+                    .borrow()
+                    .picked
+                    .iter()
+                    .filter(|(t, _)| t.card_field().is_some())
+                    .map(|(t, p)| (*t, p.clone()))
+                    .collect();
+                self.st.borrow_mut().last_card = Some(SavedCard { form, picked });
                 let ui = self.ui();
                 let ex = ui.global::<s::ExamsVM>();
                 ex.set_new_open(false);
@@ -1826,6 +1940,9 @@ impl Shell {
             .set_search_text(SharedString::new());
         ui.global::<s::RemarkVM>().set_new_panel(false);
         self.clear_exam_inputs();
+        // the last folder's run and card are not this folder's
+        self.dismiss_notice();
+        self.st.borrow_mut().last_card = None;
         self.refresh_all();
         self.restart_review();
         // the card grades into the folder opened now
@@ -1871,9 +1988,6 @@ impl Shell {
     /// exports are written there too, `exports`) or the exams folder (`workspace`). Only
     /// folders the backend names are shown, never a typed path or a file.
     fn reveal(&self, what: &str) {
-        let Some(reveal) = self.host.borrow().reveal.clone() else {
-            return;
-        };
         let dir = match what {
             "exam" | "exports" => self
                 .exam()
@@ -1881,11 +1995,21 @@ impl Shell {
             "workspace" => self.backend.borrow().workspace_dir(),
             _ => None,
         };
+        self.reveal_dir(dir, what == "workspace");
+    }
+
+    /// Shows `dir`, a folder the backend named (an exam's, or the exams folder when
+    /// `workspace`), in the file manager.
+    fn reveal_dir(&self, dir: Option<PathBuf>, workspace: bool) {
+        let Some(reveal) = self.host.borrow().reveal.clone() else {
+            return;
+        };
         let Some(dir) = dir else {
             self.say(
-                match what {
-                    "workspace" => "No exams folder is open",
-                    _ => "This exam has no folder yet: it is being graded",
+                if workspace {
+                    "No exams folder is open"
+                } else {
+                    "This exam has no folder yet: it is being graded"
                 },
                 s::Tone::Info,
             );
@@ -1898,6 +2022,210 @@ impl Shell {
                 s::Tone::Warning,
             ),
         }
+    }
+
+    // ------------------------------------------------------------------ the end of a run
+
+    /// The buttons of the completion notice: the steps the backend offers that this window can
+    /// take (Open exports folder needs the file manager; Edit and grade again, the card as it
+    /// was graded).
+    fn refresh_notice(&self) {
+        let can_reveal = self.host.borrow().reveal.is_some();
+        let labels = {
+            let mut st = self.st.borrow_mut();
+            let has_card = st.last_card.is_some();
+            let Some(n) = st.notice.as_mut() else {
+                return;
+            };
+            n.shown = n
+                .steps
+                .iter()
+                .copied()
+                .filter(|step| match step {
+                    b::NextStep::ExportsFolder => can_reveal,
+                    b::NextStep::GradeAgain => has_card,
+                    _ => true,
+                })
+                .collect();
+            let review = n.review_open;
+            n.shown
+                .iter()
+                .map(|step| {
+                    ss(match step {
+                        b::NextStep::Review => {
+                            format!("Review {review} item{}", if review == 1 { "" } else { "s" })
+                        }
+                        b::NextStep::Results => "Open results".into(),
+                        b::NextStep::ExportsFolder => "Open exports folder".into(),
+                        b::NextStep::ConfirmKey => "Confirm the key in Setup".into(),
+                        b::NextStep::ReplaceKey => "Replace the key in Setup".into(),
+                        b::NextStep::GradeAgain => "Edit and grade again".into(),
+                        b::NextStep::ScanLog => "Show the Scan log".into(),
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        self.ui().global::<s::App>().set_notice_steps(model(labels));
+    }
+
+    /// Takes step `i` of the completion notice, or dismisses it (`-1`). A step that leads to
+    /// another screen dismisses it too; Open exports folder leaves it on show.
+    fn notice_action(&self, i: i32) {
+        let step = {
+            let st = self.st.borrow();
+            st.notice.as_ref().and_then(|n| {
+                let step = *n.shown.get(usize::try_from(i).ok()?)?;
+                Some((n.exam.clone(), step))
+            })
+        };
+        let Some((exam, step)) = step else {
+            self.dismiss_notice();
+            return;
+        };
+        if step == b::NextStep::ExportsFolder {
+            let dir = self.backend.borrow().exam_folder(&exam);
+            self.reveal_dir(dir, false);
+            return;
+        }
+        self.dismiss_notice();
+        if step == b::NextStep::GradeAgain {
+            self.grade_again();
+            return;
+        }
+        if self.exam().as_ref() != Some(&exam) {
+            self.select_exam(&exam);
+        }
+        let ui = self.ui();
+        let su = ui.global::<s::SetupVM>();
+        match step {
+            b::NextStep::Review => self.navigate(s::Page::Review),
+            b::NextStep::Results => self.navigate(s::Page::Results),
+            b::NextStep::ConfirmKey => {
+                su.set_ks_open(true);
+                self.navigate(s::Page::Setup);
+            }
+            b::NextStep::ReplaceKey => {
+                self.navigate(s::Page::Setup);
+                su.set_ks_bar_open(false);
+                su.set_key_open(true);
+            }
+            b::NextStep::ScanLog => self.navigate(s::Page::Scan),
+            b::NextStep::ExportsFolder | b::NextStep::GradeAgain => {}
+        }
+    }
+
+    fn dismiss_notice(&self) {
+        self.st.borrow_mut().notice = None;
+        self.ui().global::<s::App>().set_notice_open(false);
+    }
+
+    /// Edit and grade again: the New-exam card opens filled as it was last graded (the files a
+    /// dialog picked included); the scans are checked again.
+    fn grade_again(&self) {
+        let Some(saved) = self.st.borrow().last_card.clone() else {
+            return;
+        };
+        let ui = self.ui();
+        let ex = ui.global::<s::ExamsVM>();
+        let f = &saved.form;
+        ex.set_new_title(ss(&f.title));
+        ex.set_new_course(ss(&f.course));
+        ex.set_new_scans(ss(&f.scans));
+        ex.set_new_sheet(ss(&f.sheet));
+        ex.set_new_questions(ss(&f.questions));
+        ex.set_new_options(ss(&f.options));
+        ex.set_new_forms(ss(&f.forms));
+        ex.set_new_key(ss(&f.key));
+        ex.set_new_roster(ss(&f.roster));
+        ex.set_new_clo(ss(&f.clo));
+        ex.set_new_key_sheets(ss(&f.key_sheets));
+        ex.set_new_term(ss(&f.term));
+        ex.set_new_id_scheme(ss(&f.id_scheme));
+        ex.set_new_cancel_mode(ss(&f.cancel_mode));
+        ex.set_new_multi_review(ss(&f.multi_review));
+        ex.set_new_out(ss(&f.out));
+        ex.set_new_high_stakes(f.high_stakes);
+        {
+            let mut st = self.st.borrow_mut();
+            st.picked.retain(|t, _| t.card_field().is_none());
+            st.picked.extend(saved.picked.clone());
+        }
+        self.navigate(s::Page::Exams);
+        ex.set_new_open(true);
+        self.propose_card();
+        self.say(
+            if f.remark.is_empty() {
+                "The card is filled as it was graded: check it, change what needs changing, then \
+                 Grade exam"
+            } else {
+                "The card is filled as it was graded, without the Remark import: import it again \
+                 (Answer key), then Grade exam"
+            },
+            s::Tone::Info,
+        );
+    }
+
+    /// Cancel grading (Scan, after its confirmation): the run stops after the pages being
+    /// read, and nothing is saved.
+    fn cancel_job(&self) {
+        let r = self.backend.borrow_mut().cancel_job();
+        self.ui().global::<s::ScanVM>().set_cancel_confirm(false);
+        match r {
+            Ok(what) => self.say(what, s::Tone::Info),
+            Err(e) => self.say(e.to_string(), s::Tone::Warning),
+        }
+        self.refresh_scan();
+    }
+
+    /// The window was asked to close: true when it may close now. While a run is in progress it
+    /// asks first (keep it running, or cancel it and close once it has stopped); asked again
+    /// while it waits for the run to stop, it closes at once.
+    pub fn close_requested(&self) -> bool {
+        if self.st.borrow().closing {
+            return true;
+        }
+        let Some(what) = self.backend.borrow().running() else {
+            return true;
+        };
+        let ui = self.ui();
+        let app = ui.global::<s::App>();
+        app.set_close_text(ss(format!(
+            "{what}. Closing cancels it: a new exam keeps nothing (your scan files are \
+             unchanged), and an exam graded before keeps its results."
+        )));
+        app.set_closing(false);
+        app.set_close_open(true);
+        false
+    }
+
+    /// The answer to closing while a run is in progress: keep it running (`0`), or cancel it
+    /// and close once it has stopped (`1`).
+    fn close_action(&self, i: i32) {
+        let ui = self.ui();
+        let app = ui.global::<s::App>();
+        if i != 1 {
+            app.set_close_open(false);
+            return;
+        }
+        let r = self.backend.borrow_mut().cancel_job();
+        if r.is_err() {
+            // it ended meanwhile
+            self.close_now();
+            return;
+        }
+        self.st.borrow_mut().closing = true;
+        app.set_closing(true);
+        app.set_close_text(ss(
+            "The window closes as soon as the pages being read are done.",
+        ));
+        self.refresh_scan();
+    }
+
+    /// Closes the window (its exams are saved and closed by the binary once it has).
+    fn close_now(&self) {
+        let ui = self.ui();
+        ui.global::<s::App>().set_close_open(false);
+        let _ = ui.hide();
     }
 
     /// Records `name` on every decision from now on (Settings); saved for the next start.
@@ -4078,6 +4406,13 @@ impl Shell {
             .and_then(|e| self.backend.borrow().batch_progress(e));
         sc.set_available(p.is_some());
         sc.set_review_open(exam.as_ref().map_or(0, |e| self.lane_total(e) as i32));
+        let can_cancel = exam
+            .as_ref()
+            .is_some_and(|e| self.backend.borrow().can_cancel(e));
+        sc.set_can_cancel(can_cancel);
+        if !can_cancel {
+            sc.set_cancel_confirm(false);
+        }
         let Some(p) = p else {
             // nothing of a previous exam's batch stays (the top bar shows its label, its Pause
             // and Stop, the status bar its engine)

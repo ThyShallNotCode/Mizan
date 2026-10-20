@@ -2,7 +2,7 @@
 
 import {
     Theme, Tone, Severity, Card, StatTile, TopBar, StatusBar, PrimaryButton, SecondaryButton,
-    GhostButton, StatusPill, Tag, Gauge, SeverityGlyph, Breadcrumb, FocusRing, Keycap,
+    GhostButton, DangerButton, StatusPill, Tag, Gauge, SeverityGlyph, Breadcrumb, FocusRing, Keycap,
 } from "../theme.slint";
 import { App, ScanVM, Thumb } from "../state.slint";
 import {
@@ -99,6 +99,68 @@ component AddScansBar inherits Rectangle {
                 font-size: Theme.text-xs;
                 color: Theme.ink-2;
                 wrap: word-wrap;
+            }
+        }
+    }
+}
+
+// Cancelling the grading of a new exam asks first: nothing is saved and the scan files are not
+// touched. Opens with the focus on Keep grading (Enter keeps it running).
+component CancelBar inherits Rectangle {
+    background: Theme.surface-raised;
+    border-radius: Theme.radius-lg;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    drop-shadow-blur: Theme.shadow-2-blur;
+    drop-shadow-offset-y: Theme.shadow-2-offset;
+    drop-shadow-color: Theme.shadow-2-color;
+    init => {
+        keep.focus();
+    }
+    // an overlay: a press on its background must not reach the page underneath
+    TouchArea {
+        scroll-event(event) => {
+            return accept;
+        }
+    }
+    FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                ScanVM.cancel-confirm = false;
+                return accept;
+            }
+            return reject;
+        }
+        HorizontalLayout {
+            padding-left: Theme.space-lg;
+            padding-right: Theme.space-lg;
+            padding-top: Theme.space-md;
+            padding-bottom: Theme.space-md;
+            spacing: Theme.space-md;
+            Text {
+                horizontal-stretch: 1;
+                text: "Cancel grading? Nothing is saved; your scan files are unchanged.";
+                font-size: Theme.text-sm;
+                color: Theme.ink;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+            Centered {
+                keep := SecondaryButton {
+                    text: "Keep grading";
+                    clicked => {
+                        ScanVM.cancel-confirm = false;
+                    }
+                }
+            }
+            Centered {
+                DangerButton {
+                    text: "Cancel grading";
+                    clicked => {
+                        ScanVM.cancel-job();
+                    }
+                }
             }
         }
     }
@@ -403,6 +465,16 @@ export component ScanScreen inherits Rectangle {
                         enabled: ScanVM.running;
                         clicked => {
                             App.request("Stop the batch");
+                        }
+                    }
+                }
+                // a new exam being graded: cancelled after a confirmation (the bar below)
+                if ScanVM.can-cancel: Centered {
+                    SecondaryButton {
+                        text: "Cancel grading…";
+                        accessible-description: "Stops grading this new exam: nothing is saved and your scan files are unchanged";
+                        clicked => {
+                            ScanVM.cancel-confirm = !ScanVM.cancel-confirm;
                         }
                     }
                 }
@@ -782,6 +854,12 @@ export component ScanScreen inherits Rectangle {
     // the bar floats over the screen, so opening it never pushes the status bar out of a
     // 1280 × 800 window
     if ScanVM.available && ScanVM.add-open: AddScansBar {
+        x: Theme.space-lg;
+        y: Theme.top-bar-height + Theme.space-sm;
+        width: root.width - 2 * Theme.space-lg;
+        height: self.preferred-height;
+    }
+    if ScanVM.can-cancel && ScanVM.cancel-confirm: CancelBar {
         x: Theme.space-lg;
         y: Theme.top-bar-height + Theme.space-sm;
         width: root.width - 2 * Theme.space-lg;

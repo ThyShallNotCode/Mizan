@@ -5,9 +5,12 @@
 // as a binding: `win-w: root.width` would close a loop (the window's layout constraints depend on
 // the screens, whose layout depends on the width), which Slint 1.18 deprecates and may panic on.
 
-import { Theme, Tone, NavRail, NavItem, PrimaryButton } from "theme.slint";
+import {
+    Theme, Tone, NavRail, NavItem, PrimaryButton, SecondaryButton, DangerButton, Button, ButtonKind,
+    IconButton,
+} from "theme.slint";
 import { App, ExamsVM, SetupVM, ScanVM, ReviewVM, ResultsVM, OutcomesVM, RemarkVM, Page } from "state.slint";
-import { Icons } from "widgets.slint";
+import { Icons, Centered } from "widgets.slint";
 import { ExamsScreen } from "screens/exams.slint";
 import { SetupScreen } from "screens/setup.slint";
 import { ScanScreen } from "screens/scan.slint";
@@ -18,6 +21,141 @@ import { SettingsScreen } from "screens/settings.slint";
 import { Palette } from "std-widgets.slint";
 
 export { Theme, App, ExamsVM, SetupVM, ScanVM, ReviewVM, ResultsVM, OutcomesVM, RemarkVM, Page }
+
+// The end of a background run (a new exam graded, scans added, a roster), on every screen: what
+// happened, what waits, and the next steps, the primary first. Dismissed with ×, or by a step
+// that leads to another screen. It floats above the status bar, so no screen loses height.
+component Notice inherits Rectangle {
+    background: Theme.surface-raised;
+    border-radius: Theme.radius-lg;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    drop-shadow-blur: Theme.shadow-2-blur;
+    drop-shadow-offset-y: Theme.shadow-2-offset;
+    drop-shadow-color: Theme.shadow-2-color;
+    accessible-role: AccessibleRole.groupbox;
+    accessible-label: App.notice-title;
+    accessible-description: App.notice-text;
+    // a press on its background never reaches the screen underneath
+    TouchArea { }
+    HorizontalLayout {
+        padding-left: Theme.space-lg;
+        padding-right: Theme.space-md;
+        padding-top: Theme.space-md;
+        padding-bottom: Theme.space-md;
+        spacing: Theme.space-md;
+        // the tone (success, warning, error) is also said in words: colour is never the only cue
+        Rectangle {
+            width: 4px;
+            border-radius: 2px;
+            background: Theme.tone-fg(App.notice-tone);
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            min-width: 240px;
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: App.notice-title;
+                font-size: Theme.text-sm;
+                font-weight: Theme.weight-semibold;
+                color: Theme.ink;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+            Text {
+                text: App.notice-text;
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+        }
+        for step[i] in App.notice-steps: Centered {
+            Button {
+                kind: i == 0 ? ButtonKind.primary : ButtonKind.secondary;
+                text: step;
+                clicked => {
+                    App.notice-action(i);
+                }
+            }
+        }
+        Centered {
+            IconButton {
+                icon: Icons.close;
+                label: "Dismiss the notice";
+                clicked => {
+                    App.notice-action(-1);
+                }
+            }
+        }
+    }
+}
+
+// Closing the window while a run is in progress asks first: keep it running, or cancel it and
+// close once it has stopped (nothing half-saved is left behind).
+component CloseConfirm inherits Rectangle {
+    background: Theme.scrim;
+    // modal: nothing underneath takes a press or a wheel turn
+    TouchArea {
+        scroll-event(event) => {
+            return accept;
+        }
+    }
+    card := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 3;
+        width: 520px;
+        height: self.preferred-height;
+        background: Theme.surface-raised;
+        border-radius: Theme.radius-lg;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+        drop-shadow-blur: Theme.shadow-2-blur;
+        drop-shadow-offset-y: Theme.shadow-2-offset;
+        drop-shadow-color: Theme.shadow-2-color;
+        accessible-role: AccessibleRole.groupbox;
+        accessible-label: "Close Mizan?";
+        accessible-description: App.close-text;
+        VerticalLayout {
+            padding: Theme.space-lg;
+            spacing: Theme.space-md;
+            Text {
+                text: App.closing ? "Cancelling…" : "Close Mizan?";
+                font-size: Theme.text-md;
+                font-weight: Theme.weight-semibold;
+                color: Theme.ink;
+                accessible-role: none;
+            }
+            Text {
+                text: App.close-text;
+                font-size: Theme.text-sm;
+                color: Theme.ink-2;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+            if !App.closing: HorizontalLayout {
+                alignment: end;
+                spacing: Theme.space-sm;
+                SecondaryButton {
+                    text: "Keep it running";
+                    init => {
+                        self.focus();
+                    }
+                    clicked => {
+                        App.close-action(0);
+                    }
+                }
+                DangerButton {
+                    text: "Cancel it and close";
+                    clicked => {
+                        App.close-action(1);
+                    }
+                }
+            }
+        }
+    }
+}
 
 export component AppWindow inherits Window {
     title: "Mizan";
@@ -195,6 +333,19 @@ export component AppWindow inherits Window {
                 win-w: root.win-w;
                 win-h: root.win-h;
             }
+        }
+        // inside the window's key scope, so the keys keep working after a click on it
+        if App.notice-open: Notice {
+            x: Theme.nav-rail-width + Theme.space-xl;
+            width: root.win-w - Theme.nav-rail-width - 2 * Theme.space-xl;
+            height: self.preferred-height;
+            y: root.win-h - Theme.status-bar-height - Theme.space-md - self.height;
+        }
+        if App.close-open: CloseConfirm {
+            x: 0;
+            y: 0;
+            width: root.win-w;
+            height: root.win-h;
         }
     }
 }

@@ -115,6 +115,14 @@ expectation tied to the real exams out of the repository.
     the window closes, an exam's folder and its exports shown in the file manager (Explorer,
     `xdg-open`, `open`). Settings keeps the operator's name (validated in `omr-app`, recorded
     from then on), the theme and the review settings for the next start.
+  - After a run (G-3 D6, D7): grading and an added batch write the exports on their worker as
+    `omr grade` does (Settings: *Write exports after grading*, on by
+    default; a key read from key sheets holds them until it is confirmed), and a notice on
+    every screen says how the run ended with its next steps (review, results, the exports
+    folder, confirming or replacing the key, the card again). A new exam's grading is
+    cancelled from the Scan screen after a confirmation (`omr_app::Cancel`: nothing is
+    saved, no folder is left); closing the window while a run is in progress asks first, and
+    a cancelled run is waited for before the window closes.
 
 **Deferred, with the spec section that owns each:**
 - The CNN/conformal stage of the cascade (§8.7 steps 3–6); the MVP uses calibrated classical features plus hysteresis.
@@ -187,6 +195,10 @@ expectation tied to the real exams out of the repository.
   unstable Slint feature and works on X11 and Windows only); a Folder… button for Remark's
   workbooks (the import reads named files only: the dialog picks several); the roster bar in
   Setup takes its Browse button with that step.
+- Parts of the end of a run (G-3 D6): Export… and Release… in Results still write on the UI
+  thread (a worker needs the project closed and reopened, as an added batch does: a run kind
+  of their own); Results does not say when the exports are older than the latest decisions;
+  *Edit and grade again* refills the card without a Remark import (it is read again).
 - Parts of the exams folder (G-3 D3, D9): a menu of the recent folders (the preferences keep
   the last five); Explorer selecting the results file (`explorer /select`); opening a large
   folder reads every exam on the UI thread, twice (the listing and the dashboard row), not on
@@ -201,8 +213,9 @@ expectation tied to the real exams out of the repository.
     that batch stays open in the log and the spooled originals and page rows stay; adding the
     same files again adds each page once (it keeps the stopped batch's ID), never refuses it;
   - `omr` sets no cancel on Ctrl+C: its exit code 130 is reserved for `AppError::Cancelled`,
-    which only a caller holding the token raises (the desktop's *Cancel grading*, the shell
-    step of G-3 D7).
+    which only a caller holding the token raises (the desktop's *Cancel grading*);
+  - the desktop's Scan screen cancels a new exam's grading only; an added batch is cancelled
+    only by closing the window while it runs (it ends as described above).
 - Parts of a roster after grading (G-3 D8; built in `omr-app`: `ExamProject::set_roster`
   identifies a graded exam again against a roster given later, or a replacing one):
   - the exam row's `identity_mode` stays the mode the exam was created with (`candidate_number`

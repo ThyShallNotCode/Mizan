@@ -1797,6 +1797,55 @@ pub struct ParallelRunView {
     pub key_differences: Vec<String>,
 }
 
+// ---------------------------------------------------------------------------- background runs
+
+/// How a background run ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobOutcome {
+    /// A new exam graded.
+    Graded,
+    /// A later batch of scans added to a graded exam.
+    Added,
+    Failed,
+    /// Cancelled by the operator: a new exam stored nothing.
+    Cancelled,
+}
+
+/// A next step the completion notice offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NextStep {
+    /// The exam's review queue (it has open items).
+    Review,
+    Results,
+    /// The exam's folder, where the run wrote its exports.
+    ExportsFolder,
+    /// Setup, on the key read from the key sheets: it waits for the confirmation.
+    ConfirmKey,
+    /// Setup's Replace key… (the key was inferred: the results are provisional).
+    ReplaceKey,
+    /// The New-exam card again, filled as it was when it was graded.
+    GradeAgain,
+    /// The Scan screen, whose activity log says what the run did.
+    ScanLog,
+}
+
+/// The end of a background run, for the completion notice ([`Backend::take_completed`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct JobDone {
+    /// The exam it ran on (no longer listed when a new exam was cancelled).
+    pub exam: ExamId,
+    pub outcome: JobOutcome,
+    /// "CS 213 Quiz 1 is graded".
+    pub title: String,
+    /// What the run did and what waits: "60 booklets · 12 items to review · exports in …".
+    pub text: String,
+    pub tone: Tone,
+    /// Open review items (the Review step's count).
+    pub review_open: u32,
+    /// The next steps, the primary first.
+    pub steps: Vec<NextStep>,
+}
+
 /// What the shell needs from the application core. Queries are cheap snapshots; commands
 /// validate, record an audited event and return the new state the shell should show.
 ///
@@ -2288,6 +2337,40 @@ pub trait Backend {
         Err(BackendError::Denied(
             "Pausing belongs to the capture agent, which is not connected".into(),
         ))
+    }
+
+    /// Writes the exports when a grading run or an added batch ends, as `omr grade`
+    /// does (Settings; on unless switched off). The default writes none.
+    fn set_auto_export(&mut self, on: bool) {
+        let _ = on;
+    }
+
+    /// How the last background run ended (graded, scans added, failed or cancelled), once:
+    /// the completion notice. `None` while it runs, after it was handed
+    /// over, and for a backend without background runs.
+    fn take_completed(&mut self) -> Option<JobDone> {
+        None
+    }
+
+    /// What runs in the background ("CS 213 Quiz 1 is being graded"); `None` when nothing
+    /// does. Closing the window asks first while something runs.
+    fn running(&self) -> Option<String> {
+        None
+    }
+
+    /// True while `exam` is being graded as a new exam: the Scan screen offers Cancel
+    /// grading. The default runs nothing.
+    fn can_cancel(&self, exam: &ExamId) -> bool {
+        let _ = exam;
+        false
+    }
+
+    /// Cancels the run in progress: it stops after the pages being read, before anything is
+    /// stored (a new exam leaves no folder; a graded exam keeps its results). How it ended
+    /// arrives through [`Backend::pump`] and [`Backend::take_completed`]. Returns what
+    /// happened. The default has nothing to cancel.
+    fn cancel_job(&mut self) -> Result<String, BackendError> {
+        Err(BackendError::Invalid("Nothing is being graded".into()))
     }
 
     // ---- live updates

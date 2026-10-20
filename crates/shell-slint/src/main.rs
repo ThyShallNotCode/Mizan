@@ -455,6 +455,7 @@ fn backend(a: &Args, prefs: &mut Prefs) -> Result<(Built, bool), String> {
             let out = out_dir(g, &def, a.workspace.as_deref())?;
             std::fs::create_dir_all(&out)
                 .map_err(|e| format!("{}: {e}; give a writable --out folder", out.display()))?;
+            let cancel = omr_app::Cancel::default();
             let req = GradeRequest {
                 definition: def.clone(),
                 inputs: g.inputs.clone(),
@@ -465,8 +466,10 @@ fn backend(a: &Args, prefs: &mut Prefs) -> Result<(Built, bool), String> {
                     snapshot_utc: None,
                     operator: op.clone(),
                     max_pages: None,
-                    cancel: Default::default(),
+                    cancel: cancel.clone(),
                 },
+                // as `omr grade --out` writes them, unless Settings switched them off
+                export_to: prefs.auto_export.then(|| out.clone()),
             };
             let (tx, rx) = std::sync::mpsc::channel::<JobEvent>();
             std::thread::Builder::new()
@@ -474,7 +477,13 @@ fn backend(a: &Args, prefs: &mut Prefs) -> Result<(Built, bool), String> {
                 .spawn(move || run_grading(req, tx))
                 .map_err(|e| format!("cannot start the grading worker: {e}"))?;
             (
-                app(AppBackend::grading(&def, rx, a.workspace.as_deref(), &op)),
+                app(AppBackend::grading(
+                    &def,
+                    rx,
+                    cancel,
+                    a.workspace.as_deref(),
+                    &op,
+                )),
                 true,
             )
         }

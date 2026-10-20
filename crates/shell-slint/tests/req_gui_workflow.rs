@@ -1209,6 +1209,7 @@ fn folder_and_settings_controls_fit_the_smallest_window() {
             "Change the exams folder…",
             reveal.as_str(),
             "Show blank-bubble overlays",
+            "Write exports after grading",
         ] {
             inside(l, &what);
         }
@@ -1856,4 +1857,486 @@ fn an_invalid_value_is_marked_on_its_field() {
     assert_eq!(ex.get_h_questions().error, "");
     assert!(enabled(ui, "Grade exam"));
     assert!(card_row(ui, "Questions").starts_with("Questions: 30 — typed"));
+}
+
+// ------------------------------------------------------- after a run: exports, the notice (D6)
+
+/// The New-exam card's fields for CS 213 Quiz 1 graded from `scans`.
+fn quiz_1(scans: &Path) -> [(&'static str, &str); 3] {
+    [
+        ("Scan files or folders", scans.to_str().unwrap()),
+        ("Exam title", "Quiz 1"),
+        ("Course code", "CS 213"),
+    ]
+}
+
+/// The completion notice as shown: its title, its text and its buttons, in order.
+fn notice(ui: &AppWindow) -> (String, String, Vec<String>) {
+    let app = ui.global::<App>();
+    assert!(app.get_notice_open(), "the notice is on show");
+    let group = one(ui, &app.get_notice_title());
+    assert_eq!(
+        group.accessible_description().unwrap_or_default(),
+        app.get_notice_text()
+    );
+    let steps = app
+        .get_notice_steps()
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    (
+        app.get_notice_title().to_string(),
+        app.get_notice_text().to_string(),
+        steps,
+    )
+}
+
+/// Makes the window the smallest it may be (1280 × 800).
+fn smallest_window(ui: &AppWindow) {
+    window_size(ui, 1280, 800);
+}
+
+/// Resizes the window. The screens follow the size on the next event, so the pointer is moved
+/// once (over the rail's logo).
+fn window_size(ui: &AppWindow, width: u32, height: u32) {
+    ui.window()
+        .set_size(slint::PhysicalSize::new(width, height));
+    ui.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+            position: slint::LogicalPosition::new(4.0, 4.0),
+        });
+}
+
+/// Asserts that the control labelled `label` lies inside the smallest window (1280 × 800).
+fn fits(ui: &AppWindow, label: &str) {
+    for e in by_label(ui, label) {
+        let (p, sz) = (e.absolute_position(), e.size());
+        assert!(
+            p.x >= 0.0 && p.y >= 0.0 && p.x + sz.width <= 1280.5 && p.y + sz.height <= 800.5,
+            "{label:?} at ({}, {}) size {}x{} is outside the window",
+            p.x,
+            p.y,
+            sz.width,
+            sz.height
+        );
+    }
+    assert!(!by_label(ui, label).is_empty(), "{label:?} is on show");
+}
+
+/// The files in `dir`, sorted.
+fn files_in(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)
+        .expect("folder")
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    v.sort();
+    v
+}
+
+/// The instructor's key file of the synthetic exam `spec`: one column per version.
+fn key_file(spec: &synth::Spec, path: &Path) {
+    let mut csv = "question,A,B\n".to_string();
+    for q in 0..synth::QUESTIONS {
+        csv.push_str(&(q + 1).to_string());
+        for f in 0..2 {
+            csv.push(',');
+            csv.push(char::from(b'A' + synth::key(spec, f, q)));
+        }
+        csv.push('\n');
+    }
+    std::fs::write(path, csv).expect("key file");
+}
+
+/// The open review items of `exam`, as the rail counts them.
+fn review_open(h: &Harness, exam: &ExamId) -> u32 {
+    let q = h
+        .app
+        .borrow()
+        .review_queue(exam, shell_slint::backend::Lane::Marks);
+    q.lanes.iter().map(|l| l.open).sum()
+}
+
+/// D6: grading writes the exports on the worker, as `omr grade` does (the same files beside
+/// the package), and the notice says where; with an inferred key its next step is replacing
+/// the key in Setup, which it opens.
+#[test]
+fn grading_writes_the_exports_like_omr_grade() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let host = FakeHost::new();
+    w.h.shell.set_host(host.host(Prefs::default()));
+    press(ui, "New exam");
+    grade_with_card(&w.h, &w.held, &quiz_1(&w.scans));
+    assert!(
+        !ui.global::<App>().get_notice_open(),
+        "no notice while it runs"
+    );
+    run_held(&w.h, &w.held);
+    let exam = w.h.app.borrow().default_exam().expect("the new exam");
+    let folder = w.h.app.borrow().exam_folder(&exam).expect("its folder");
+    let written = files_in(&folder);
+    for f in [
+        "results-INFERRED.csv",
+        "report-INFERRED.html",
+        "project.omrproj",
+    ] {
+        assert!(written.contains(&f.to_string()), "{f} in {written:?}");
+    }
+    // `omr grade` of the same definition and scans writes the same files
+    let def =
+        w.h.app
+            .borrow()
+            .with_project(&exam, |p| p.session.definition.clone())
+            .expect("project");
+    let cli = dir.path().join("cli");
+    let opts = omr_app::GradeOptions {
+        threads: 2,
+        project_dir: Some(cli.join("project.omrproj")),
+        snapshot_utc: None,
+        operator: "principal:a11".into(),
+        max_pages: None,
+        cancel: Default::default(),
+    };
+    let mut p =
+        ExamProject::grade(&def, std::slice::from_ref(&w.scans), &opts, &|_| {}).expect("grading");
+    p.export(&cli).expect("exports");
+    p.close().expect("close");
+    assert_eq!(written, files_in(&cli), "the files `omr grade` writes");
+
+    let (title, text, steps) = notice(ui);
+    assert_eq!(title, "CS 213 Quiz 1 is graded");
+    assert!(text.starts_with("6 booklets · "), "{text}");
+    // the folder, its last folders when the path is long
+    let sep = std::path::MAIN_SEPARATOR;
+    assert!(
+        text.contains("exports in ") && text.contains(&format!("exams{sep}cs-213-quiz-1 · ")),
+        "{text}"
+    );
+    assert!(
+        text.contains("provisional until you replace the key"),
+        "{text}"
+    );
+    let n = review_open(&w.h, &exam);
+    let mut expected = Vec::new();
+    if n > 0 {
+        expected.push(format!("Review {n} items"));
+    }
+    expected.extend(texts(&["Replace the key in Setup", "Open exports folder"]));
+    assert_eq!(steps, expected);
+    // the notice is on every screen until a step leads elsewhere
+    click(ui, &tab(ui, "Settings"));
+    assert!(ui.global::<App>().get_notice_open());
+    press(ui, "Replace the key in Setup");
+    assert_eq!(ui.global::<App>().get_page(), shell_slint::ui::Page::Setup);
+    assert!(ui.global::<SetupVM>().get_key_open(), "the key bar is open");
+    assert!(!ui.global::<App>().get_notice_open(), "the notice went");
+}
+
+/// D6: a keyed exam's notice leads to its review items and its results, and shows the exports
+/// folder (the notice stays for that one); × dismisses it.
+#[test]
+fn notice_offers_review_results_and_the_exports_folder() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let host = FakeHost::new();
+    w.h.shell.set_host(host.host(Prefs::default()));
+    let key = dir.path().join("key.csv");
+    key_file(
+        &synth::Spec {
+            sheets: 6,
+            ..synth::BARE
+        },
+        &key,
+    );
+    press(ui, "New exam");
+    for (label, text) in quiz_1(&w.scans) {
+        type_into(ui, label, text);
+    }
+    type_into(ui, "Answer key file", key.to_str().unwrap());
+    settle_card(&w.h, &w.held);
+    assert_eq!(ui.global::<ExamsVM>().get_new_block(), "");
+    press(ui, "Grade exam");
+    run_held(&w.h, &w.held);
+    let exam = w.h.app.borrow().default_exam().expect("the new exam");
+    let folder = w.h.app.borrow().exam_folder(&exam).expect("its folder");
+    assert!(
+        folder.join("results.csv").is_file(),
+        "{:?}",
+        files_in(&folder)
+    );
+    let n = review_open(&w.h, &exam);
+    assert!(n > 0, "the synthetic sheets leave items to review");
+    let (title, text, steps) = notice(ui);
+    assert_eq!(title, "CS 213 Quiz 1 is graded");
+    assert!(text.contains(&format!("{n} items to review")), "{text}");
+    assert!(!text.contains("provisional"), "{text}");
+    assert_eq!(
+        steps,
+        [
+            format!("Review {n} items"),
+            "Open results".into(),
+            "Open exports folder".into()
+        ]
+    );
+    assert_eq!(ui.global::<App>().get_page(), shell_slint::ui::Page::Scan);
+    // the notice and its buttons fit the smallest window, above the status bar
+    smallest_window(ui);
+    for l in steps
+        .iter()
+        .map(String::as_str)
+        .chain(["Dismiss the notice"])
+    {
+        fits(ui, l);
+    }
+    let group = one(ui, "CS 213 Quiz 1 is graded");
+    assert!(group.absolute_position().y + group.size().height <= 800.0 - 28.0);
+
+    // the folder is shown, and the notice stays
+    click(
+        ui,
+        &by_label(ui, "Open exports folder")
+            .into_iter()
+            .next()
+            .expect("the notice's button"),
+    );
+    assert_eq!(host.revealed.borrow().clone(), vec![folder.clone()]);
+    assert!(ui.global::<App>().get_notice_open());
+    press(ui, &format!("Review {n} items"));
+    assert_eq!(ui.global::<App>().get_page(), shell_slint::ui::Page::Review);
+    assert!(!ui.global::<App>().get_notice_open());
+
+    // another run's notice, dismissed with ×
+    click(ui, &tab(ui, "Exams"));
+    press(ui, "New exam");
+    grade_with_card(
+        &w.h,
+        &w.held,
+        &[
+            ("Scan files or folders", w.scans.to_str().unwrap()),
+            ("Exam title", "Quiz 2"),
+            ("Course code", "CS 213"),
+        ],
+    );
+    run_held(&w.h, &w.held);
+    let (title, ..) = notice(ui);
+    assert_eq!(title, "CS 213 Quiz 2 is graded");
+    press(ui, "Dismiss the notice");
+    assert!(!ui.global::<App>().get_notice_open());
+    assert_eq!(ui.global::<App>().get_page(), shell_slint::ui::Page::Scan);
+}
+
+/// D6: a key read from key sheets waits for the instructor's confirmation: nothing is exported
+/// yet, the notice and the log say why, and its one step is confirming the key in Setup.
+#[test]
+fn held_key_notice_points_to_setup() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let spec = synth::Spec {
+        sheets: 6,
+        ..synth::BARE
+    };
+    let keys = synth::write_key_sheets(&spec, &dir.path().join("keys"), false);
+    press(ui, "New exam");
+    for (label, text) in quiz_1(&w.scans) {
+        type_into(ui, label, text);
+    }
+    type_into(
+        ui,
+        "Key sheets",
+        &format!("{};{}", keys[0].display(), keys[1].display()),
+    );
+    settle_card(&w.h, &w.held);
+    assert_eq!(ui.global::<ExamsVM>().get_new_block(), "");
+    press(ui, "Grade exam");
+    run_held(&w.h, &w.held);
+    let exam = w.h.app.borrow().default_exam().expect("the new exam");
+    let folder = w.h.app.borrow().exam_folder(&exam).expect("its folder");
+    assert_eq!(files_in(&folder), ["project.omrproj"], "nothing exported");
+    let (title, text, steps) = notice(ui);
+    assert_eq!(title, "CS 213 Quiz 1 is read");
+    assert!(
+        text.contains("waits for your confirmation in Setup")
+            && text.contains("the exports wait for it too"),
+        "{text}"
+    );
+    assert_eq!(steps, ["Confirm the key in Setup"]);
+    let log: Vec<String> = ui
+        .global::<ScanVM>()
+        .get_activity()
+        .iter()
+        .map(|l| l.to_string())
+        .collect();
+    assert!(
+        log.iter()
+            .any(|l| l.contains("Exports wait for the key confirmation in Setup")),
+        "{log:?}"
+    );
+    press(ui, "Confirm the key in Setup");
+    assert_eq!(ui.global::<App>().get_page(), shell_slint::ui::Page::Setup);
+    assert!(ui.global::<SetupVM>().get_ks_open(), "on the key summary");
+    one(ui, "Confirm every version");
+}
+
+/// D6: with "Write exports after grading" switched off in Settings (saved), a run writes no
+/// export and its notice offers no exports folder.
+#[test]
+fn auto_export_off_writes_nothing() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let host = FakeHost::new();
+    w.h.shell.set_host(host.host(Prefs::default()));
+    click(ui, &tab(ui, "Settings"));
+    let switch = one(ui, "Write exports after grading");
+    assert_eq!(switch.accessible_checked(), Some(true), "on by default");
+    click(ui, &switch);
+    assert_eq!(
+        one(ui, "Write exports after grading").accessible_checked(),
+        Some(false)
+    );
+    assert!(!last_saved(&host).auto_export, "saved for the next start");
+    click(ui, &tab(ui, "Exams"));
+    press(ui, "New exam");
+    grade_with_card(&w.h, &w.held, &quiz_1(&w.scans));
+    run_held(&w.h, &w.held);
+    let exam = w.h.app.borrow().default_exam().expect("the new exam");
+    let folder = w.h.app.borrow().exam_folder(&exam).expect("its folder");
+    assert_eq!(files_in(&folder), ["project.omrproj"]);
+    let (_, text, steps) = notice(ui);
+    assert!(!text.contains("exports"), "{text}");
+    assert!(
+        !steps.contains(&"Open exports folder".to_string()),
+        "{steps:?}"
+    );
+
+    // the next start, with the switch saved off: the window as it opens writes none either
+    let saved = last_saved(&host);
+    w.h.shell.set_host(FakeHost::new().host(Prefs::default()));
+    assert!(ui.global::<App>().get_auto_export());
+    w.h.shell.set_host(FakeHost::new().host(saved));
+    assert!(!ui.global::<App>().get_auto_export());
+    click(ui, &tab(ui, "Exams"));
+    press(ui, "New exam");
+    grade_with_card(
+        &w.h,
+        &w.held,
+        &[
+            ("Scan files or folders", w.scans.to_str().unwrap()),
+            ("Exam title", "Quiz 2"),
+            ("Course code", "CS 213"),
+        ],
+    );
+    run_held(&w.h, &w.held);
+    let exam = w.h.app.borrow().default_exam().expect("the second exam");
+    let folder = w.h.app.borrow().exam_folder(&exam).expect("its folder");
+    assert!(folder.ends_with("cs-213-quiz-2"), "{}", folder.display());
+    assert_eq!(files_in(&folder), ["project.omrproj"]);
+}
+
+// ------------------------------------------------------------------ cancelling a run (D7)
+
+/// D7: a new exam being graded is cancelled from the Scan screen after a confirmation: nothing
+/// is saved (no exam folder is left, so the next run takes the same name), the scans are
+/// untouched, the notice says so and offers the card again, filled as it was.
+#[test]
+fn cancel_grading_from_the_scan_screen_leaves_no_project() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let scans_before = files_in(&w.scans);
+    press(ui, "New exam");
+    grade_with_card(&w.h, &w.held, &quiz_1(&w.scans));
+    assert_eq!(ui.global::<App>().get_page(), shell_slint::ui::Page::Scan);
+    assert!(by_label(ui, "Cancel grading").is_empty(), "asked first");
+    // the confirmation, and keeping it running (in the smallest window)
+    smallest_window(ui);
+    fits(ui, "Cancel grading…");
+    press(ui, "Cancel grading…");
+    for l in ["Keep grading", "Cancel grading"] {
+        fits(ui, l);
+    }
+    window_size(ui, 1440, 900);
+    press(ui, "Keep grading");
+    assert!(by_label(ui, "Cancel grading").is_empty());
+    assert!(w.h.app.borrow().grading_in_progress());
+    // cancelled
+    press(ui, "Cancel grading…");
+    press(ui, "Cancel grading");
+    assert!(message(ui).starts_with("Cancelling"), "{}", message(ui));
+    assert!(by_label(ui, "Cancel grading").is_empty(), "the bar closed");
+    run_held(&w.h, &w.held);
+    let (title, text, steps) = notice(ui);
+    assert_eq!(
+        format!("{title}. {text}"),
+        "Grading cancelled. Nothing was saved; your scan files are unchanged."
+    );
+    assert_eq!(steps, ["Edit and grade again"]);
+    assert!(!w.ws.join("cs-213-quiz-1").exists(), "no folder is left");
+    assert_eq!(files_in(&w.ws), Vec::<String>::new());
+    assert_eq!(files_in(&w.scans), scans_before, "the scans are untouched");
+    assert!(w.h.app.borrow().dashboard().exams.is_empty(), "not listed");
+    assert!(w.h.app.borrow().can_create_exam());
+    assert_eq!(w.h.app.borrow().create_exam_blocker(), None);
+    assert!(by_label(ui, "Cancel grading…").is_empty());
+
+    // Edit and grade again: the card as it was, checked again, graded into the same folder
+    press(ui, "Edit and grade again");
+    assert!(!ui.global::<App>().get_notice_open());
+    assert_eq!(ui.global::<App>().get_page(), shell_slint::ui::Page::Exams);
+    let ex = ui.global::<ExamsVM>();
+    assert!(ex.get_new_open());
+    assert_eq!(ex.get_new_scans(), w.scans.to_str().unwrap());
+    assert_eq!(ex.get_new_title(), "Quiz 1");
+    settle_card(&w.h, &w.held);
+    press(ui, PROVISIONAL);
+    assert!(card_row(ui, "Folder").contains("cs-213-quiz-1 —"));
+    press(ui, "Grade exam");
+    run_held(&w.h, &w.held);
+    assert!(w.ws.join("cs-213-quiz-1/project.omrproj").is_dir());
+}
+
+/// D7: closing the window while an exam is being graded asks first; kept, the run goes on;
+/// cancelled, the window waits for it to stop, then closes, and nothing half-saved is left.
+#[test]
+fn closing_the_window_while_grading_asks_and_cancels() {
+    use slint::platform::WindowEvent;
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let app = ui.global::<App>();
+    // nothing runs: the window closes at once
+    assert!(w.h.shell.close_requested());
+    press(ui, "New exam");
+    grade_with_card(&w.h, &w.held, &quiz_1(&w.scans));
+    ui.window().dispatch_event(WindowEvent::CloseRequested);
+    assert!(ui.window().is_visible(), "the window stays");
+    assert!(app.get_close_open());
+    smallest_window(ui);
+    for l in ["Close Mizan?", "Keep it running", "Cancel it and close"] {
+        fits(ui, l);
+    }
+    let card = one(ui, "Close Mizan?");
+    let why = card
+        .accessible_description()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        why.starts_with("CS 213 Quiz 1 is being graded. Closing cancels it"),
+        "{why}"
+    );
+    press(ui, "Keep it running");
+    assert!(!app.get_close_open());
+    assert!(w.h.app.borrow().grading_in_progress());
+
+    ui.window().dispatch_event(WindowEvent::CloseRequested);
+    press(ui, "Cancel it and close");
+    assert!(app.get_closing(), "waiting for the run to stop");
+    assert!(ui.window().is_visible());
+    run_held(&w.h, &w.held);
+    assert!(!ui.window().is_visible(), "closed once the run stopped");
+    assert!(!w.ws.join("cs-213-quiz-1").exists(), "nothing half-saved");
 }
