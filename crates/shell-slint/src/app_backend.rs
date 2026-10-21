@@ -4232,8 +4232,8 @@ impl Opened {
             } else if def.roster.is_none() {
                 Some(
                     "No roster: results without a roster are never pushed. Add the roster in \
-                     Setup (step 4, Roster): every student is matched again, your decisions \
-                     carry over"
+                     Setup (Add roster…): every student is matched again, your decisions carry \
+                     over"
                         .into(),
                 )
             } else if self.p.scoring.as_ref().is_none_or(|sc| sc.run.is_err()) {

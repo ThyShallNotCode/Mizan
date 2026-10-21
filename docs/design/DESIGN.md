@@ -437,7 +437,7 @@ The built shell has no Export screen: exports are written when a run ends and fr
 
   Rows sit in a sticky header grid with the CLO titles truncated and the full text in a tooltip. Below it, a **coverage strip** shows one `MeterBar` per CLO for Σ e<sub>i,c</sub> share and lint chips (unmapped items, thin evidence SCO-014, Bloom gap SCO-015). Keyboard: arrows move cells; digits type the weight; `Delete` clears; `Ctrl+Enter` approves the selected rows (role-gated).
 - **Roster.** An import drop zone and a table with masked national IDs (`••••••3456`, mono).
-  - Built so far: step **4 Roster** opens a bar under the top bar with the roster file (**Browse…**) and **Add roster and match students**, for an exam graded without one or to replace it. The file is checked first; the students are then matched again in the background, followed on the Scan screen and closed by the completion notice. There is no drop zone or roster table yet.
+  - Built so far: **Add roster…** in the top bar (while the exam has no roster) and step **4 Roster** open a bar under the top bar with the roster file (**Browse…**) and **Add roster and match students**, for an exam graded without one or to replace it. The file is checked first; the students are then matched again in the background, followed on the Scan screen and closed by the completion notice. There is no drop zone or roster table yet.
 
 ### 9.3 Scan and recognise, live batch (concept: `scan-live.png`)
 
@@ -539,7 +539,7 @@ Codes whose Appendix A severity varies by instance (e.g. MRK-003 INFO/ERROR, REG
 Two columns of `Card`s.
 - **Left.**
   - **Appearance**: Theme (segments Light · Dark, also the top bars' toggle) and Reduce motion.
-  - **Review**: "Your name in the audit trail" (a text field with **Save**; Enter saves too; the status bar says why a name is refused), recorded on every decision from then on; Single-key shortcuts; Show blank-bubble overlays.
+  - **Review**: "Your name in the audit trail" (a text field with **Save**; Enter saves too; the status bar says why a name is refused), recorded on every decision from then on; while the field differs from the name recorded, the line under it says it is not saved yet, and Settings shown again shows the name recorded; Single-key shortcuts; Show blank-bubble overlays.
   - **About**: Engine (mono), Exams folder, **Change…** (the folder dialog) and **Show folder** (*Show in Explorer* on Windows), and the data note.
 - **Right.**
   - **Grading**: Write exports after grading (on by default).

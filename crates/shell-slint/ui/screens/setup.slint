@@ -1338,6 +1338,21 @@ export component SetupScreen inherits VerticalLayout {
                     }
                 }
             }
+            // a roster for an exam graded without one (step 4 opens the same bar, and replaces
+            // a roster given)
+            if SetupVM.available && !SetupVM.has-roster: Centered {
+                SecondaryButton {
+                    text: "Add roster…";
+                    enabled: SetupVM.can-set-roster;
+                    accessible-description: SetupVM.roster-status;
+                    clicked => {
+                        SetupVM.key-open = false;
+                        SetupVM.ks-bar-open = false;
+                        RemarkVM.setup-bar = false;
+                        SetupVM.roster-open = !SetupVM.roster-open;
+                    }
+                }
+            }
             if SetupVM.available: Centered {
                 PrimaryButton {
                     text: "Replace key…";

@@ -82,10 +82,12 @@ it is being saved (`Backend::saving`, the token committed): the cancel is refuse
 and says so, and *Cancel grading…* goes. Closing the window while a run is in progress asks
 first (`Shell::close_requested`, wired to the window's close request): kept, it runs on;
 cancelled, the window closes once the run has stopped, and asked again meanwhile it still
-waits; a run being saved is kept, and the window offers to close once it is saved. Should the
+waits; a run being saved is kept, and the window offers to close once it is saved. The
+dialog is modal for the keyboard too: Escape answers *Keep it running*, Tab stays on its two
+buttons and no shortcut reaches the screen underneath. Should the
 event loop end while a run goes on, the binary cancels it and waits (`backend::wind_down`),
-so no worker is killed half-way. Setup's step *4
-Roster* opens the roster bar: `set_roster` reads and checks the file on the UI thread
+so no worker is killed half-way. Setup's *Add roster…* (while the exam has none) and step *4
+Roster* open the roster bar: `set_roster` reads and checks the file on the UI thread
 (`define::read_roster_path`, a dry `import_roster`), then `run_set_roster` identifies every
 booklet again on the spawner (`ExamProject::set_roster`, decisions carried over) as a run the
 Scan screen follows. Every path field (`PathField`) has
@@ -496,6 +498,10 @@ real export.
 | `review_opens_on_a_lane_with_items` | a lane with nothing open names the lanes that have items, and Review shown again opens one of them, never "Nothing to review" |
 | `exports_older_than_a_later_decision_are_said_to_be` | after the roster run wrote the exports, one decision makes the notice and Results' Export… say they are older; Write all exports makes them current |
 | `opening_new_exam_takes_down_the_last_runs_notice` | at 1280 × 800 New exam takes the last run's notice down, so Grade exam takes the click |
+| `answering_on_the_card_keeps_the_keyboard` | once a question's answer (a dialog's pick or a one-click answer) removes it with the button that had the keyboard, Grade exam takes the keyboard: Escape closes the card, Ctrl+4 works, Return grades |
+| `the_close_dialog_keeps_the_keyboard`, `escape_keeps_the_run_and_gives_the_keys_back` | Tab and Shift+Tab stay on the close dialog's two buttons; Ctrl+4 does not reach the screen under it; Escape keeps the run going and Ctrl+1 works again |
+| `an_unsaved_name_is_not_shown_as_recorded` | a name typed in Settings but not saved says so, decisions keep the saved name, and Settings shown again shows the saved name |
+| `setup_offers_add_roster_while_the_exam_has_none` | at 1280 × 800 Setup's top bar has Add roster… beside Replace key…; it opens the roster bar and goes once the roster is added |
 | `screenshots_show_the_notice_on_its_shot_only` | a grading run ended unseen: scan-notice shows its notice (in both themes), every other shot hides it; the Scan log names the project saved by its last folders, as the status bar does |
 | `screenshots_of_an_empty_folder_show_its_empty_state` | an empty exams folder has one shot, exams-empty, with New exam…, Open another folder… and the Remark import |
 | `the_proposed_report_folder_reads_a_tilde` | the parallel run's proposed report folder below the home folder reads `~/…` and is read back as the same folder (`bind::home_path`) |

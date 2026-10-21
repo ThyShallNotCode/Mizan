@@ -6,7 +6,7 @@
 // the screens, whose layout depends on the width), which Slint 1.18 deprecates and may panic on.
 
 import {
-    Theme, Tone, NavRail, NavItem, PrimaryButton, SecondaryButton, DangerButton, Button, ButtonKind,
+    Theme, Tone, NavRail, NavItem, PrimaryButton, SecondaryButton, Button, ButtonKind,
     IconButton,
 } from "theme.slint";
 import { App, ExamsVM, SetupVM, ScanVM, ReviewVM, ResultsVM, OutcomesVM, RemarkVM, Page } from "state.slint";
@@ -105,8 +105,12 @@ component Notice inherits Rectangle {
 
 // Closing the window while a run is in progress asks first: keep it running, or cancel it and
 // close once it has stopped (nothing half-saved is left behind); a run that has read its pages
-// is being saved and kept, and the window offers to close once it is saved.
+// is being saved and kept, and the window offers to close once it is saved. Modal for the
+// keyboard too: Escape keeps the run going, Tab and Shift+Tab stay on its two buttons, and no
+// key reaches the screen underneath.
 component CloseConfirm inherits Rectangle {
+    // the dialog is answered: the keyboard goes back to the window as it closes
+    callback answered();
     background: Theme.scrim;
     // modal: nothing underneath takes a press or a wheel turn
     TouchArea {
@@ -129,46 +133,69 @@ component CloseConfirm inherits Rectangle {
         accessible-role: AccessibleRole.groupbox;
         accessible-label: "Close Mizan?";
         accessible-description: App.close-text;
-        VerticalLayout {
-            padding: Theme.space-lg;
-            spacing: Theme.space-md;
-            Text {
-                text: !App.closing ? "Close Mizan?" : App.close-saving ? "Saving…" : "Cancelling…";
-                font-size: Theme.text-md;
-                font-weight: Theme.weight-semibold;
-                color: Theme.ink;
-                accessible-role: none;
-            }
-            Text {
-                text: App.close-text;
-                font-size: Theme.text-sm;
-                color: Theme.ink-2;
-                wrap: word-wrap;
-                accessible-role: none;
-            }
-            if !App.closing: HorizontalLayout {
-                alignment: end;
-                spacing: Theme.space-sm;
-                SecondaryButton {
-                    text: "Keep it running";
-                    init => {
-                        self.focus();
-                    }
-                    clicked => {
-                        App.close-action(0);
-                    }
+        keys := FocusScope {
+            key-pressed(event) => {
+                if (event.text == Key.Escape && !App.closing) {
+                    root.answered();
+                    App.close-action(0);
                 }
-                if !App.close-saving: DangerButton {
-                    text: "Cancel it and close";
-                    clicked => {
-                        App.close-action(1);
-                    }
+                // nothing reaches the screen underneath, its shortcuts included
+                return accept;
+            }
+            VerticalLayout {
+                padding: Theme.space-lg;
+                spacing: Theme.space-md;
+                Text {
+                    text: !App.closing ? "Close Mizan?" : App.close-saving ? "Saving…" : "Cancelling…";
+                    font-size: Theme.text-md;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.ink;
+                    accessible-role: none;
                 }
-                // too late to cancel: the run is kept, and the window waits for it
-                if App.close-saving: PrimaryButton {
-                    text: "Close once saved";
-                    clicked => {
-                        App.close-action(1);
+                Text {
+                    text: App.close-text;
+                    font-size: Theme.text-sm;
+                    color: Theme.ink-2;
+                    wrap: word-wrap;
+                    accessible-role: none;
+                }
+                if !App.closing: FocusScope {
+                    // Tab and Shift+Tab go between the two buttons, never out of the dialog
+                    key-pressed(event) => {
+                        if (event.text == Key.Tab || event.text == Key.Backtab) {
+                            if (keep.has-focus) {
+                                stop.focus();
+                            } else {
+                                keep.focus();
+                            }
+                            return accept;
+                        }
+                        return reject;
+                    }
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: Theme.space-sm;
+                        keep := SecondaryButton {
+                            text: "Keep it running";
+                            init => {
+                                self.focus();
+                            }
+                            clicked => {
+                                root.answered();
+                                App.close-action(0);
+                            }
+                        }
+                        // too late to cancel (being saved): the run is kept, and the window
+                        // waits for it
+                        stop := Button {
+                            kind: App.close-saving ? ButtonKind.primary : ButtonKind.danger;
+                            text: App.close-saving ? "Close once saved" : "Cancel it and close";
+                            clicked => {
+                                // the buttons go while it waits: the dialog keeps the keyboard
+                                keys.focus();
+                                App.close-action(1);
+                            }
+                        }
                     }
                 }
             }
@@ -218,12 +245,26 @@ export component AppWindow inherits Window {
         }
     }
 
-    // A control that had the keyboard goes away with what holds it (the notice): the keyboard
-    // goes back to the window, and on Review to its canvas.
+    // A control that had the keyboard goes away with what holds it (the notice, the close
+    // dialog): the keyboard goes back to the window, and on Review to its canvas.
     function keys-back() {
         root-keys.focus();
         if (App.page == Page.review) {
             App.keys-back += 1;
+        }
+    }
+    // the close dialog went without an answer (the run ended meanwhile): it had the keyboard
+    property <bool> close-open: App.close-open;
+    changed close-open => {
+        if (!self.close-open) {
+            root.keys-back();
+        }
+    }
+    // the New-exam card closed (Escape, Cancel) with the control that had the keyboard
+    property <bool> new-open: ExamsVM.new-open;
+    changed new-open => {
+        if (!self.new-open) {
+            root.keys-back();
         }
     }
     // the notice gone, no screen keeps room for it
@@ -391,6 +432,9 @@ export component AppWindow inherits Window {
             y: 0;
             width: root.win-w;
             height: root.win-h;
+            answered => {
+                root.keys-back();
+            }
         }
     }
 }

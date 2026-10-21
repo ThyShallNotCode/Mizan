@@ -625,6 +625,25 @@ component NewExamBar inherits Rectangle {
     // a control made and unmade with the card (an answer, Stop checking, Advanced options'
     // fields, the Remark import's Clear) has the keyboard (reset when one is made)
     property <bool> made-focused;
+    // A control that had the keyboard went away with what it did: Grade exam takes it when it
+    // can start, else the scans, so Escape, Tab and the shortcuts keep working.
+    function keys-on() {
+        root.made-focused = false;
+        if (grade.enabled) {
+            grade.focus();
+        } else {
+            scans.focus();
+        }
+    }
+    // Rust names a field to take the keyboard ("grade": Grade exam, as keys-on: an answer or a
+    // pick removed the question whose button had it)
+    property <int> focus-gen: ExamsVM.new-focus-gen;
+    changed focus-gen => {
+        if (ExamsVM.new-focus == "grade") {
+            ExamsVM.new-focus = "";
+            root.keys-on();
+        }
+    }
     // An overlay: a press on its background must not reach the page underneath. A click on it
     // gives the form the keyboard back (for Escape) unless a control inside has it.
     TouchArea {
@@ -719,6 +738,8 @@ component NewExamBar inherits Rectangle {
                                     accessible-description: "Stops reading the scans; nothing is graded until they are checked";
                                     clicked => {
                                         ExamsVM.stop-survey();
+                                        // the button goes with the check
+                                        root.keys-on();
                                     }
                                 }
                             }
@@ -784,6 +805,9 @@ component NewExamBar inherits Rectangle {
                                         accessible-description: "The card no longer uses the import: give a key file or key sheets";
                                         clicked => {
                                             RemarkVM.clear-new();
+                                            // the button goes with the import: the key is next
+                                            root.made-focused = false;
+                                            key-file.focus();
                                         }
                                     }
                                 }

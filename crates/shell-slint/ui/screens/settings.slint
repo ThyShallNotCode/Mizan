@@ -141,10 +141,11 @@ export component SettingsScreen inherits VerticalLayout {
                             }
                         }
                     }
+                    // typed but not saved yet: decisions are still recorded under the name saved
                     Text {
-                        text: "Your name, recorded on every decision from now on";
+                        text: App.operator-name != App.user-name ? "Not saved yet: press Save or Enter. Until then decisions are recorded as " + App.user-name : "Your name, recorded on every decision from now on";
                         font-size: Theme.text-xs;
-                        color: Theme.ink-2;
+                        color: App.operator-name != App.user-name ? Theme.warning : Theme.ink-2;
                         wrap: word-wrap;
                     }
                 }

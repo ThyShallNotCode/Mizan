@@ -522,6 +522,9 @@ struct State {
     picked: BTreeMap<PickTarget, (String, Vec<PathBuf>)>,
     /// A file dialog is open: Browse clicks wait until it is closed.
     picking: bool,
+    /// The dialog open was asked for by an answer on the New-exam card: once it fills its
+    /// field, the question (and the button that had the keyboard) is gone.
+    pick_for_ask: bool,
     /// What to do when no dialog appears has been said (once a session).
     pick_hint: bool,
     /// The completion notice shown.
@@ -610,6 +613,7 @@ impl Shell {
                 parallel_request: b::RemarkRequest::default(),
                 picked: BTreeMap::new(),
                 picking: false,
+                pick_for_ask: false,
                 pick_hint: false,
                 notice: None,
                 last_card: None,
@@ -836,6 +840,12 @@ impl Shell {
             // the exams table and drawer: a change made on another screen may not have
             // refreshed them
             s::Page::Exams => self.refresh_dashboard(),
+            // a name typed but never saved is not the one recorded: the field shows the name
+            // decisions are recorded under
+            s::Page::Settings => {
+                let name = self.backend.borrow().dashboard().user.name;
+                self.ui().global::<s::App>().set_operator_name(ss(name));
+            }
             page => self.refresh_page(page),
         }
     }
@@ -1734,17 +1744,33 @@ impl Shell {
     fn choose_on_card(self: &Rc<Self>, ask: usize, choice: usize) {
         let r = self.backend.borrow_mut().choose_on_card(ask, choice);
         match r {
-            Ok(b::CardAction::Done) => self.propose_card(),
+            Ok(b::CardAction::Done) => {
+                self.propose_card();
+                self.keys_after_answer(ask);
+            }
             Ok(b::CardAction::Pick(f)) => self.pick_for(f),
             Ok(b::CardAction::Clear(f)) => {
                 self.clear_field(f);
                 self.propose_card();
+                self.keys_after_answer(ask);
             }
             Ok(b::CardAction::Type(f)) => self.focus_field(f),
             Err(e) => {
                 self.refresh_card();
                 self.say(e.to_string(), s::Tone::Warning);
             }
+        }
+    }
+
+    /// Question `ask` was answered: when it went, the button that had the keyboard went with it,
+    /// so Grade exam takes the keyboard (the scans while Grade cannot start) and Escape, Tab and
+    /// the shortcuts keep working.
+    fn keys_after_answer(&self, ask: usize) {
+        let ui = self.ui();
+        let ex = ui.global::<s::ExamsVM>();
+        if ex.get_card_asks().row_count() <= ask {
+            ex.set_new_focus(ss("grade"));
+            ex.set_new_focus_gen(ex.get_new_focus_gen() + 1);
         }
     }
 
@@ -1768,7 +1794,10 @@ impl Shell {
             ui.global::<s::ExamsVM>().set_new_advanced(true);
         }
         match target {
-            Some(t) if self.host.borrow().pick.is_some() => self.browse(t.name()),
+            Some(t) if self.host.borrow().pick.is_some() => {
+                self.st.borrow_mut().pick_for_ask = true;
+                self.browse(t.name());
+            }
             _ => self.focus_field(f),
         }
     }
@@ -1875,6 +1904,7 @@ impl Shell {
     /// the kind. Nothing picked leaves the field as it was.
     fn picked(&self, target: PickTarget, paths: Option<Vec<PathBuf>>) {
         self.st.borrow_mut().picking = false;
+        let for_ask = std::mem::take(&mut self.st.borrow_mut().pick_for_ask);
         let Some(mut paths) = paths.filter(|p| !p.is_empty()) else {
             if !std::mem::replace(&mut self.st.borrow_mut().pick_hint, true) {
                 self.say(
@@ -1925,8 +1955,20 @@ impl Shell {
             save(&prefs);
         }
         // the card's files changed: proposed again at once (the scans are checked)
-        if field.card_field().is_some() {
+        if let Some(f) = field.card_field() {
             self.propose_card();
+            // a question answered by the pick went with the button that had the keyboard:
+            // Grade exam takes it once it can start, else the field just filled
+            if for_ask {
+                let ui = self.ui();
+                let ex = ui.global::<s::ExamsVM>();
+                if ex.get_new_block().is_empty() {
+                    ex.set_new_focus(ss("grade"));
+                    ex.set_new_focus_gen(ex.get_new_focus_gen() + 1);
+                } else {
+                    self.focus_field(f);
+                }
+            }
         }
     }
 

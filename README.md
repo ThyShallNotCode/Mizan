@@ -376,15 +376,16 @@ omr-desktop --demo                            # invented demo data, marked DEMO 
 - **Setup** shows the key, versions and CLO mapping; **Replace key…** loads the real key from
   a file and rescores; **Read key from answer sheet…** reads the instructor's key sheets, shows
   the key summary and, once you confirm, adds them to the exam (stored and audited like key
-  sheets graded with it). New exam also takes key sheets. Step **4 Roster** adds a roster to
-  an exam graded without one (or replaces it): every student is matched again in the
-  background and your review decisions carry over.
+  sheets graded with it). New exam also takes key sheets. **Add roster…** (or step **4
+  Roster**, which also replaces one) adds a roster to an exam graded without one: every
+  student is matched again in the background and your review decisions carry over.
 - **Scan** follows grading live; **Add scans…** adds a later batch.
 - **Review** is keyboard-first: the number or letter keys choose an answer, Enter accepts the
   proposal, Ctrl+Z undoes; F1 lists every key.
 - **Results** shows scores and grades; **Release results…** releases them and writes the
   Blackboard upload. **Outcomes** shows CLO attainment and the TP-154 tables.
-- **Settings** records your name in the audit trail (on every decision from then on), changes
+- **Settings** records your name in the audit trail (on every decision from then on, once you
+  press Save or Enter: until then the field says it is not saved), changes
   or shows the exams folder, and keeps the theme and the review settings for the next start.
 - **From Remark Office OMR:** **Import from Remark export…** on the New exam card (or in Setup,
   to replace a graded exam's key) reads Remark's graded `.xlsx` exports and shows the import for

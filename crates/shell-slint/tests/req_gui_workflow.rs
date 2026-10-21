@@ -1356,6 +1356,36 @@ fn operator_name_is_recorded_on_the_next_decision() {
     assert_eq!(last_saved(&host).operator.as_deref(), Some("هدى"));
 }
 
+/// D9: a name typed but never saved is not shown as the name recorded: the field says so while
+/// it differs, decisions keep the name saved, and Settings shown again shows that name.
+#[test]
+fn an_unsaved_name_is_not_shown_as_recorded() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let ws = exams_folder(&dir.path().join("exams"), &[&QUIZ_1]);
+    let (h, _held, host) = window_on(&ws);
+    let ui = &h.ui;
+    let app = ui.global::<App>();
+    click(ui, &tab(ui, "Settings"));
+    retype(ui, "Your name in the audit trail", "Huda Alharbi");
+    one(
+        ui,
+        "Not saved yet: press Save or Enter. Until then decisions are recorded as a11",
+    );
+    click(ui, &tab_of(ui, "Review"));
+    press(ui, "Accept suggestion");
+    assert_eq!(last_actor(&h, &h.exam), "principal:a11");
+    assert!(host.saved.borrow().is_empty(), "nothing saved");
+    click(ui, &tab(ui, "Settings"));
+    assert_eq!(app.get_operator_name(), "a11");
+    assert_eq!(
+        one(ui, "Your name in the audit trail")
+            .accessible_value()
+            .as_deref(),
+        Some("a11")
+    );
+    one(ui, "Your name, recorded on every decision from now on");
+}
+
 /// D9: a name that is empty, too long or holds a colon is refused and changes nothing.
 #[test]
 fn bad_operator_names_are_refused() {
@@ -2804,6 +2834,59 @@ fn exports_older_than_a_later_decision_are_said_to_be() {
     assert!(!text.contains("written before"), "{text}");
 }
 
+/// D5: answering a question of the card keeps the keyboard working: the answer (and the button
+/// that had the keyboard) goes, and Grade exam takes the keyboard once nothing waits, so Escape
+/// closes the card, Return grades and the shortcuts work, as before the answer.
+#[test]
+fn answering_on_the_card_keeps_the_keyboard() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let ex = ui.global::<ExamsVM>();
+    let app = ui.global::<App>();
+    let host = FakeHost::new();
+    w.h.shell.set_host(host.host(Prefs::default()));
+    let files = synth::write_exam_files(&synth::NEXT, &dir.path().join("files"));
+    chord(ui, Key::Control, "n");
+    type_into(ui, "Scan files or folders", files.scans.to_str().unwrap());
+    settle_card(&w.h, &w.held);
+    // the key file's dialog answers the question
+    host.will_pick(&[&files.key]);
+    press(ui, "Choose a key file…");
+    settle_card(&w.h, &w.held);
+    assert_eq!(ex.get_card_asks().row_count(), 0, "answered");
+    special(ui, Key::Escape);
+    assert!(!ex.get_new_open(), "Escape still closes the card");
+    chord(ui, Key::Control, "4");
+    assert_eq!(
+        app.get_page(),
+        shell_slint::ui::Page::Review,
+        "the keys work"
+    );
+    // a one-click answer, for other scans without a key: Return grades
+    click(ui, &tab(ui, "Exams"));
+    chord(ui, Key::Control, "n");
+    assert!(ex.get_new_open());
+    for (label, text) in [
+        ("Answer key file", ""),
+        ("Scan files or folders", w.scans.to_str().unwrap()),
+    ] {
+        click(ui, &one(ui, label));
+        chord(ui, Key::Control, "a");
+        special(ui, Key::Backspace);
+        type_text(ui, text);
+    }
+    settle_card(&w.h, &w.held);
+    press(ui, PROVISIONAL);
+    assert_eq!(ex.get_new_block(), "", "nothing waits");
+    special(ui, Key::Return);
+    assert!(
+        w.h.app.borrow().grading_in_progress(),
+        "Return on Grade exam: {}",
+        message(ui)
+    );
+}
+
 // ------------------------------------------------------------------ cancelling a run (D7)
 
 /// D7: a new exam being graded is cancelled from the Scan screen after a confirmation: nothing
@@ -2916,6 +2999,57 @@ fn closing_the_window_while_grading_asks_and_cancels() {
     run_held(&w.h, &w.held);
     assert!(!ui.window().is_visible(), "closed once the run stopped");
     assert!(!w.ws.join("cs-213-quiz-1").exists(), "nothing half-saved");
+}
+
+/// D7: the close dialog is modal for the keyboard too: Tab and Shift+Tab stay on its two
+/// buttons, never reaching the screen underneath.
+#[test]
+fn the_close_dialog_keeps_the_keyboard() {
+    use shell_slint::ui::Page;
+    use slint::platform::WindowEvent;
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let app = ui.global::<App>();
+    press(ui, "New exam");
+    grade_with_card(&w.h, &w.held, &quiz_1(&w.scans));
+    assert_eq!(app.get_page(), Page::Scan);
+    ui.window().dispatch_event(WindowEvent::CloseRequested);
+    assert!(app.get_close_open());
+    for _ in 0..2 {
+        special(ui, Key::Backtab);
+    }
+    special(ui, Key::Tab);
+    // three moves from Keep it running, between the two buttons only: on Cancel it and close
+    special(ui, Key::Return);
+    assert_eq!(app.get_page(), Page::Scan, "nothing underneath was pressed");
+    assert!(app.get_closing(), "the dialog's own button");
+    assert!(app.get_close_open());
+    run_held(&w.h, &w.held);
+    assert!(!ui.window().is_visible(), "closed once the run stopped");
+}
+
+/// D7: under the close dialog no shortcut reaches the screen; Escape answers Keep it running,
+/// and the keyboard works again once the dialog is gone.
+#[test]
+fn escape_keeps_the_run_and_gives_the_keys_back() {
+    use shell_slint::ui::Page;
+    use slint::platform::WindowEvent;
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let app = ui.global::<App>();
+    press(ui, "New exam");
+    grade_with_card(&w.h, &w.held, &quiz_1(&w.scans));
+    ui.window().dispatch_event(WindowEvent::CloseRequested);
+    chord(ui, Key::Control, "4");
+    assert_eq!(app.get_page(), Page::Scan, "no shortcut under the dialog");
+    assert!(app.get_close_open());
+    special(ui, Key::Escape);
+    assert!(!app.get_close_open(), "Escape keeps it running");
+    assert!(w.h.app.borrow().grading_in_progress());
+    chord(ui, Key::Control, "1");
+    assert_eq!(app.get_page(), Page::Exams, "the keys work again");
 }
 
 /// Runs the held work to its end on a thread without letting the window fold it in: the state
@@ -3034,6 +3168,42 @@ fn roster_file(spec: &synth::Spec, path: &Path, duplicate: bool) {
         csv.push_str(&format!("{},Someone Else,171\n", rows[0].id));
     }
     std::fs::write(path, csv).expect("roster file");
+}
+
+/// D8: an exam graded without a roster has Add roster… in Setup's top bar (beside Replace
+/// key…, at 1280 × 800 too); it opens the roster bar, and goes once the roster is added (step 4
+/// still replaces it).
+#[test]
+fn setup_offers_add_roster_while_the_exam_has_none() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let ws = exams_folder(&dir.path().join("exams"), &[&QUIZ_1]);
+    let roster = dir.path().join("roster.csv");
+    roster_file(&QUIZ_1, &roster, false);
+    let (h, held, _host) = window_on(&ws);
+    let ui = &h.ui;
+    let su = ui.global::<SetupVM>();
+    smallest_window(ui);
+    click(ui, &tab(ui, "Setup"));
+    for l in ["Add roster…", "Replace key…", "Import from Remark export…"] {
+        fits(ui, l);
+    }
+    let add = one(ui, "Add roster…");
+    assert!(
+        add.accessible_description()
+            .unwrap_or_default()
+            .starts_with("No roster"),
+        "{:?}",
+        add.accessible_description()
+    );
+    click(ui, &add);
+    assert!(su.get_roster_open());
+    type_into(ui, "Roster file", roster.to_str().unwrap());
+    press(ui, "Add roster and match students");
+    run_held(&h, &held);
+    click(ui, &tab(ui, "Setup"));
+    assert!(su.get_has_roster());
+    assert!(by_label(ui, "Add roster…").is_empty(), "the exam has one");
+    one(ui, "4 Roster, done");
 }
 
 /// D8: Setup's step 4 Roster opens the roster bar; the roster chosen in the dialog is checked,
