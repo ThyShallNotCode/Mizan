@@ -858,7 +858,7 @@ impl ExamProject {
                 for m in &members {
                     if m.severity == Severity::Blocker {
                         return Err(AppError::Review(format!(
-                            "item {} is a BLOCKER: batch confirm refused (§13.2)",
+                            "item {} is a BLOCKER: batch confirm refused",
                             m.id
                         )));
                     }
@@ -868,7 +868,7 @@ impl ExamProject {
                             .any(|b| b.state == crate::review::OverlayState::Unreadable)
                     }) {
                         return Err(AppError::Review(format!(
-                            "item {} has an UNREADABLE bubble: batch confirm refused (§13.2)",
+                            "item {} has an UNREADABLE bubble: batch confirm refused",
                             m.id
                         )));
                     }
@@ -879,7 +879,7 @@ impl ExamProject {
                         if m.sub_reason.as_deref() == Some(crate::infer::UNDECLARED_VERSION) {
                             return Err(AppError::Review(format!(
                                 "item {} is a sheet bubbling a version this exam does not \
-                                 declare: decide its version on its own (§10.3)",
+                                 declare: decide its version on its own",
                                 m.id
                             )));
                         }
@@ -891,7 +891,7 @@ impl ExamProject {
                             return Err(AppError::Review(format!(
                                 "item {}: the answers fit its suggested version by less than \
                                  {} nats, so it is not confirmed as a group; decide it on its \
-                                 own (§10.3)",
+                                 own",
                                 m.id,
                                 crate::infer::DELTA_LL_NATS
                             )));
@@ -2919,7 +2919,7 @@ impl ExamProject {
             return Err(AppError::Review(
                 "the results are already released: the parallel run's differences stay in its \
                  report and are not queued; correct an answer with a review decision after \
-                 release, which supersedes the release (§10.8), then release again"
+                 release, which supersedes the release, then release again"
                     .into(),
             ));
         }
@@ -2971,7 +2971,7 @@ impl ExamProject {
             let e = omr_model::Exception::must("MRK-001", Severity::Error, omr_model::Scope::Item)
                 .with_sub_reason(PARALLEL_SUB)
                 .with_detail(format!(
-                    "parallel run (§23.7): Remark Office OMR read {}, this exam auto-accepted \
+                    "parallel run: Remark Office OMR read {}, this exam auto-accepted \
                      {ours}; decide from the bubble row: accept keeps {ours}, or choose Remark's \
                      or another answer with a reason (e.g. AMBIGUOUS_MARK); the decision is \
                      recorded as a field label",

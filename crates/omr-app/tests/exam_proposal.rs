@@ -1153,7 +1153,14 @@ fn p11_no_key_is_asked_and_a_provisional_key_is_only_chosen() {
     let p = propose(&g, Some(&s), &c);
     assert!(p.inputs.is_none());
     let a = ask_on(&p, FieldId::Key);
-    assert!(a.text.starts_with("no answer key"), "{}", a.text);
+    // the field's label says what is missing: the question does not say it again
+    assert!(a.text.starts_with("choose the key file"), "{}", a.text);
+    assert!(
+        a.text
+            .ends_with("(the results cannot be released until the real key replaces it)"),
+        "{}",
+        a.text
+    );
     assert!(has_answer(&p, FieldId::Key, &Answer::InferKeyProvisionally));
     g.answers.push(Answer::InferKeyProvisionally);
     let p = propose(&g, Some(&s), &c);
@@ -1402,7 +1409,7 @@ fn p15_p16_labels_come_from_the_evidence_and_typed_values_stay() {
     let a = ask_on(&p, FieldId::IdScheme);
     assert!(
         a.text
-            .contains("only 0 of 6 student numbers fit pnu; 6 fit iau"),
+            .contains("only 0 of 6 student numbers fit PNU student number (pnu); 6 fit IAU student number (iau)"),
         "{}",
         a.text
     );
@@ -2523,4 +2530,200 @@ fn a_make_up_stack_bubbling_one_letter_declares_it() {
         .filter(|b| b.undeclared_version())
         .count();
     assert_eq!(held, 1);
+}
+
+/// The card writes a code's value in plain words (the code stays the value graded and typed),
+/// and the printed sheet fixes the cancel mode: the IAU sheet's and an own sheet's spec's alike.
+#[test]
+fn codes_are_written_in_plain_words_and_the_printed_cancel_mode_is_fixed() {
+    use omr_forms::TemplateSpec;
+    let tmp = tempfile::tempdir().unwrap();
+    let scans = vec![dummy_scans(tmp.path())];
+    let c = ctx(tmp.path());
+    let mut g = given(&scans);
+    g.key = Some(shared_key(tmp.path(), 20));
+    let p = propose(&g, None, &c);
+    let f = |p: &Proposal, id: FieldId| p.field(id).unwrap().clone();
+    let cancel = f(&p, FieldId::CancelMode);
+    assert_eq!(
+        (cancel.value.as_str(), cancel.plain.as_str(), cancel.fixed),
+        ("erase_only", "Erase to change", true)
+    );
+    assert!(
+        cancel
+            .detail
+            .starts_with("students erase to change an answer"),
+        "{}",
+        cancel.detail
+    );
+    let id = f(&p, FieldId::IdScheme);
+    assert_eq!(
+        (id.value.as_str(), id.plain.as_str(), id.fixed),
+        ("iau", "IAU student number", false)
+    );
+    let multi = f(&p, FieldId::MultiReview);
+    assert_eq!(
+        (multi.value.as_str(), multi.plain.as_str()),
+        ("never", "No second review")
+    );
+    for id in [FieldId::Questions, FieldId::Options, FieldId::Versions] {
+        let v = f(&p, id);
+        assert!(!v.fixed, "{id:?}");
+        assert_eq!(v.plain, v.value, "{id:?}: plain already");
+    }
+    let high = f(&p, FieldId::HighStakes);
+    assert_eq!(
+        high.detail,
+        "when on, stricter margins and erasures go to review (more items, never fewer)"
+    );
+    // a typed scheme of digits
+    g.typed.id_scheme = Some("digits:9".into());
+    assert_eq!(
+        f(&propose(&g, None, &c), FieldId::IdScheme).plain,
+        "9-digit number"
+    );
+    // an own sheet whose spec prints cross_cancels: fixed as well
+    let spec = TemplateSpec::standard(
+        omr_model::ExamId(uuid::Uuid::from_u128(
+            0x0190_aaaa_bbbb_7ccc_8ddd_0000_0000_0456,
+        )),
+        20,
+        4,
+        omr_model::CancelMode::CrossCancels,
+    );
+    let json = serde_json::json!({"template": spec, "exam_key_hex": hex::encode([0x6c; 32])});
+    let file = write(
+        tmp.path(),
+        "cross.json",
+        &serde_json::to_vec(&json).unwrap(),
+    );
+    let mut g = Given::new(Sheet::Spec(file), scans.clone());
+    g.key = Some(shared_key(tmp.path(), 20));
+    let cancel = f(&propose(&g, None, &c), FieldId::CancelMode);
+    assert_eq!(
+        (
+            cancel.value.as_str(),
+            cancel.plain.as_str(),
+            cancel.source,
+            cancel.fixed
+        ),
+        (
+            "cross_cancels",
+            "Cross out to cancel",
+            Source::SpecFile,
+            true
+        )
+    );
+}
+
+/// An answer that gives a field's value holds only while the field keeps the value it was
+/// given for: the field typed again drops it, and the new value is checked afresh.
+#[test]
+fn an_answer_is_dropped_when_its_field_is_typed_again() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scans = vec![dummy_scans(tmp.path())];
+    let c = ctx(tmp.path());
+    let mut g = given(&scans);
+    g.key = Some(shared_key(tmp.path(), 20));
+    g.typed.options = Some("9".into());
+    let use5 = Answer::UseValue(FieldId::Options, "5".into());
+    assert!(has_answer(&propose(&g, None, &c), FieldId::Options, &use5));
+    g.answers.push(use5.clone());
+    g.answers.push(Answer::UseQuestions(20));
+    g.answers.push(Answer::OneExam);
+    assert_eq!(
+        value(&propose(&g, None, &c), FieldId::Options),
+        ("5".into(), Source::Answer)
+    );
+    assert_eq!(use5.field(), Some(FieldId::Options));
+    assert_eq!(Answer::KeepQuestions(3).field(), Some(FieldId::Questions));
+    assert_eq!(Answer::InferKeyProvisionally.field(), None);
+    // the same value typed again (spaces aside): the answer stands
+    let before = g.typed.clone();
+    g.typed.options = Some(" 9 ".into());
+    g.drop_answers_for_retyped(&before);
+    assert_eq!(g.answers.len(), 3);
+    // another value: the answer about it goes, the others stay
+    let before = g.typed.clone();
+    g.typed.options = Some("4".into());
+    assert_eq!(before.retyped(&g.typed), vec![FieldId::Options]);
+    g.drop_answers_for_retyped(&before);
+    assert_eq!(g.answers, vec![Answer::UseQuestions(20), Answer::OneExam]);
+    let p = propose(&g, None, &c);
+    assert_eq!(value(&p, FieldId::Options), ("4".into(), Source::Typed));
+    // checked afresh: the key uses option E
+    assert!(
+        ask_on(&p, FieldId::Options)
+            .text
+            .contains("uses option E, but the exam has 4 options")
+    );
+    // the question count typed: its answer goes too
+    let before = g.typed.clone();
+    g.typed.questions = Some("15".into());
+    g.drop_answers_for_retyped(&before);
+    assert_eq!(g.answers, vec![Answer::OneExam]);
+}
+
+/// A folder typed as a name (not a whole path) is a folder below the exams folder, as shown;
+/// a whole path stays as typed.
+#[test]
+fn a_typed_folder_name_is_below_the_exams_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("exams");
+    let scans = vec![dummy_scans(tmp.path())];
+    let c = ctx(&ws);
+    let mut g = given(&scans);
+    g.key = Some(shared_key(tmp.path(), 20));
+    g.typed.folder = Some(PathBuf::from("quiz-rel"));
+    let p = propose(&g, None, &c);
+    assert_eq!(p.folder, ws.join("quiz-rel"));
+    assert_eq!(
+        value(&p, FieldId::Folder),
+        (ws.join("quiz-rel").display().to_string(), Source::Typed)
+    );
+    // an exam already in it is found there, not in the working folder
+    write(&ws.join("quiz-rel"), "project.omrproj", b"");
+    assert!(
+        ask_on(&propose(&g, None, &c), FieldId::Folder)
+            .text
+            .contains("already holds an exam")
+    );
+    let whole = tmp.path().join("elsewhere");
+    g.typed.folder = Some(whole.clone());
+    assert_eq!(propose(&g, None, &c).folder, whole);
+}
+
+/// A second review that is not one of its choices is asked on that field (never on the sheet),
+/// with the choices as answers in plain words.
+#[test]
+fn a_second_review_that_is_not_a_choice_is_asked_on_its_field() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scans = vec![dummy_scans(tmp.path())];
+    let c = ctx(tmp.path());
+    let mut g = given(&scans);
+    g.key = Some(shared_key(tmp.path(), 20));
+    g.typed.multi_review = Some("yes".into());
+    let p = propose(&g, None, &c);
+    assert!(p.inputs.is_none());
+    assert!(
+        p.asks().all(|a| a.field == FieldId::MultiReview),
+        "{:#?}",
+        p.issues
+    );
+    let a = ask_on(&p, FieldId::MultiReview);
+    let labels: Vec<&str> = a.choices.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        ["No second review", "Always", "On high-stakes exams"]
+    );
+    let codes: Vec<&str> = omr_app::propose::value_choices(FieldId::MultiReview)
+        .iter()
+        .map(|(c, _)| *c)
+        .collect();
+    assert_eq!(codes, ["never", "always", "high_stakes"]);
+    g.answers
+        .push(Answer::UseValue(FieldId::MultiReview, "always".into()));
+    let p = propose(&g, None, &c);
+    assert_eq!(ready(&p).multi_review.as_deref(), Some("always"));
+    assert_eq!(p.field(FieldId::MultiReview).unwrap().plain, "Always");
 }

@@ -1438,8 +1438,11 @@ pub struct CardValue {
     pub field: CardField,
     /// The field's label (`Versions`).
     pub label: String,
-    /// The value graded (`A, B`; empty: none yet).
+    /// The value graded, as typed (`A, B`, `erase_only`; empty: none yet).
     pub value: String,
+    /// The value in plain words, as the card writes it (`Erase to change`); the value itself
+    /// where it is plain already.
+    pub plain: String,
     /// Where it came from (`key file`, `the sheets`, `typed`, `default`).
     pub source: String,
     /// The evidence (`key.csv names A, B · sheets A 8 · B 8`).
@@ -1487,8 +1490,11 @@ pub struct NewExamCard {
     /// Why *Grade exam* cannot start (another exam being graded, the scans being read, a
     /// question open), `None` when it can.
     pub blocker: Option<String>,
-    /// The printed sheet's convention cannot change (the IAU sheet: erasures cancel).
+    /// The printed sheet fixes the cancel mode: the field shows it and takes nothing typed.
     pub cancel_locked: bool,
+    /// Second review's choices, each its value and its plain words (`never`, `No second
+    /// review`): offered to choose from, never typed.
+    pub review_choices: Vec<(String, String)>,
 }
 
 impl NewExamCard {
@@ -2081,6 +2087,11 @@ pub trait Backend {
     /// Starts afresh: the card's answers and survey are dropped (a survey running is
     /// stopped). The default has none.
     fn reset_new_exam(&mut self) {}
+
+    /// *Edit and grade again*: the card's answers are given again as they were when it was last
+    /// graded (the fields are the window's to fill); the scans are checked again. The default
+    /// has none.
+    fn restore_graded_card(&mut self) {}
 
     /// Grades the new exam exactly as the card last shown for `form` proposes it, in the
     /// background, into the card's folder; progress arrives through [`Backend::pump`] as for an

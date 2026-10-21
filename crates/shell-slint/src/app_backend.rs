@@ -756,6 +756,8 @@ pub struct AppBackend {
     remark_new: Option<HeldImport>,
     /// The New-exam card: its survey, answers and proposal.
     card: NewCard,
+    /// The answers of the card last graded, for *Edit and grade again*.
+    last_answers: Vec<Answer>,
     /// Page thumbnails of every project opened (shared with each [`Opened`]).
     thumbs: Rc<RefCell<Thumbs>>,
     /// Write the exports when a run ends (Settings; on unless switched off).
@@ -810,6 +812,7 @@ impl AppBackend {
             stability_jobs: RefCell::new(Vec::new()),
             remark_new: None,
             card: NewCard::default(),
+            last_answers: Vec::new(),
             thumbs: Rc::default(),
             auto_export: true,
             completed: None,
@@ -992,9 +995,23 @@ impl AppBackend {
         g
     }
 
+    /// Takes the form as it stands now: an answer about a field typed otherwise since it was
+    /// given is dropped ([`Given::drop_answers_for_retyped`]), and the new value is checked
+    /// afresh.
+    fn take_form(&mut self, form: &b::NewExam) {
+        if let Some(old) = self.card.form.as_ref() {
+            let before = self.given_of(old).typed;
+            let mut now = self.given_of(form);
+            now.drop_answers_for_retyped(&before);
+            self.card.answers = now.answers;
+        }
+        self.card.form = Some(form.clone());
+    }
+
     /// Proposes the card again for the form last given, with the survey as it stands. Scans,
     /// a sheet, key sheets or a roster other than those surveyed start a new survey (the one
-    /// running stops); other scans or another sheet drop the answers given for the old ones.
+    /// running stops); other scans or another sheet, or the scans taken away, drop the answers
+    /// given for the old ones (answers given before any scans stay).
     fn propose_card(&mut self) {
         let (Some(form), Some(workspace)) = (self.card.form.clone(), self.workspace.clone()) else {
             return;
@@ -1002,6 +1019,11 @@ impl AppBackend {
         let mut given = self.given_of(&form);
         let inputs = survey_inputs(&given);
         if given.scans.is_empty() {
+            // the scans the answers were given for are gone: other scans start afresh
+            if self.card.survey.is_some() {
+                self.card.answers.clear();
+                given.answers.clear();
+            }
             self.card.stop();
         } else if self.card.survey.as_ref().is_none_or(|s| s.inputs != inputs) {
             let restacked = self
@@ -1122,7 +1144,7 @@ impl AppBackend {
 
     /// The card as shown: the proposal, the survey as it stands and why *Grade exam* waits.
     fn card_view(&self) -> b::NewExamCard {
-        let Some((given, p)) = self.card.shown.as_ref() else {
+        let Some((_, p)) = self.card.shown.as_ref() else {
             return b::NewExamCard {
                 blocker: self
                     .create_exam_blocker()
@@ -1156,6 +1178,11 @@ impl AppBackend {
                     crate::bind::home_path(Path::new(&f.value))
                 } else {
                     f.value.clone()
+                },
+                plain: if f.id == FieldId::Folder {
+                    crate::bind::home_path(Path::new(&f.plain))
+                } else {
+                    f.plain.clone()
                 },
                 source: f.source.text().into(),
                 detail: f.detail.clone(),
@@ -1199,7 +1226,11 @@ impl AppBackend {
             notes: p.notes().map(card_issue).collect(),
             survey,
             blocker,
-            cancel_locked: matches!(given.sheet, Sheet::Template(_)),
+            cancel_locked: p.field(FieldId::CancelMode).is_some_and(|f| f.fixed),
+            review_choices: omr_app::propose::value_choices(FieldId::MultiReview)
+                .iter()
+                .map(|(v, plain)| (v.to_string(), plain.to_string()))
+                .collect(),
         }
     }
 
@@ -1275,7 +1306,7 @@ impl AppBackend {
         // again first
         let given = self.given_of(form);
         if !self.card.shown.as_ref().is_some_and(|(g, _)| **g == given) {
-            self.card.form = Some(form.clone());
+            self.take_form(form);
             self.propose_card();
             return Err(BackendError::Invalid(
                 "The card changed with your last change: check it, then grade the exam".into(),
@@ -1342,9 +1373,11 @@ impl AppBackend {
                 }
             }
         }
-        // the import and the card are used up: the next exam starts afresh
+        // the import and the card are used up: the next exam starts afresh (its answers kept
+        // for Edit and grade again)
         self.remark_new = None;
         self.card.stop();
+        self.last_answers = std::mem::take(&mut self.card.answers);
         self.card = NewCard::default();
         self.default = Some(exam.clone());
         let held = matches!(definition.key, omr_app::exam::KeySource::None);
@@ -5876,7 +5909,7 @@ impl Backend for AppBackend {
     }
 
     fn propose_new_exam(&mut self, form: &b::NewExam) -> b::NewExamCard {
-        self.card.form = Some(form.clone());
+        self.take_form(form);
         self.propose_card();
         self.card_view()
     }
@@ -5904,6 +5937,15 @@ impl Backend for AppBackend {
     fn reset_new_exam(&mut self) {
         self.card.stop();
         self.card = NewCard::default();
+        self.last_answers.clear();
+    }
+
+    fn restore_graded_card(&mut self) {
+        self.card.stop();
+        self.card = NewCard {
+            answers: self.last_answers.clone(),
+            ..NewCard::default()
+        };
     }
 
     fn create_exam(&mut self, form: &b::NewExam) -> Result<(ExamId, String), BackendError> {

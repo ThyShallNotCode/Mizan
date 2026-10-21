@@ -9,7 +9,7 @@ import { App, ExamsVM, ExamRow, Page, RemarkVM, CardValue, CardIssue } from "../
 import { RemarkFields, RemarkRefusal, RemarkImportCard, RemarkSideCard } from "remark.slint";
 import {
     Icons, ThemeToggle, Centered, KVLine, SectionLabel, StatusText, SeverityStack, SeverityCount,
-    CoverageRing, Avatar, MessageText, PathField, EmptyState, Switch,
+    CoverageRing, Avatar, MessageText, PathField, EmptyState, Switch, Segment, SegmentGroup,
 } from "../widgets.slint";
 import { ListView, ScrollView } from "std-widgets.slint";
 
@@ -458,6 +458,8 @@ component FormField inherits VerticalLayout {
     in property <bool> enabled: true;
     in property <string> target;
     in property <string> folder-target;
+    // `target` opens a folder dialog
+    in property <bool> folder;
     in property <string> field;
     in property <string> error;
     in-out property <string> text;
@@ -494,6 +496,7 @@ component FormField inherits VerticalLayout {
         enabled: root.enabled;
         target: root.target;
         folder-target: root.folder-target;
+        folder: root.folder;
         invalid: root.error != "";
         description: root.error;
         accepted(v) => {
@@ -893,6 +896,7 @@ component NewExamBar inherits Rectangle {
                                     label: "Output folder";
                                     placeholder: ExamsVM.h-out.proposed != "" ? ExamsVM.h-out.proposed : "a new folder in the exams folder";
                                     target: "new-out";
+                                    folder: true;
                                     field: "folder";
                                     error: ExamsVM.h-out.error;
                                     text <=> ExamsVM.new-out;
@@ -918,37 +922,61 @@ component NewExamBar inherits Rectangle {
                                         root.made-focused = self.has-focus;
                                     }
                                     label: "Student ID scheme";
-                                    placeholder: ExamsVM.h-id-scheme.proposed != "" ? ExamsVM.h-id-scheme.proposed : "iau, pnu, ksu or digits:N";
+                                    placeholder: ExamsVM.h-id-scheme.proposed != "" ? ExamsVM.h-id-scheme.proposed : "iau, or digits:9 for a 9-digit number";
                                     field: "id-scheme";
                                     error: ExamsVM.h-id-scheme.error;
                                     text <=> ExamsVM.new-id-scheme;
                                 }
                             }
-                            HorizontalLayout {
-                                spacing: Theme.space-md;
-                                FormField {
-                                    horizontal-stretch: 1;
-                                    changed has-focus => {
-                                        root.made-focused = self.has-focus;
-                                    }
-                                    label: "Cancel mode";
-                                    // the IAU sheet's convention is printed on it: erasures cancel
-                                    enabled: !ExamsVM.cancel-locked;
-                                    placeholder: ExamsVM.h-cancel-mode.proposed != "" ? ExamsVM.h-cancel-mode.proposed : "erase_only, cross_cancels or fill_cancels_check";
-                                    field: "cancel-mode";
-                                    error: ExamsVM.h-cancel-mode.error;
-                                    text <=> ExamsVM.new-cancel-mode;
+                            FormField {
+                                changed has-focus => {
+                                    root.made-focused = self.has-focus;
                                 }
-                                FormField {
-                                    horizontal-stretch: 1;
-                                    changed has-focus => {
-                                        root.made-focused = self.has-focus;
+                                label: "Cancel mode";
+                                // the printed sheet fixes how marks are cancelled: shown, never typed
+                                enabled: !ExamsVM.cancel-locked;
+                                placeholder: ExamsVM.h-cancel-mode.proposed != "" ? ExamsVM.h-cancel-mode.proposed : "the sheet's";
+                                field: "cancel-mode";
+                                error: ExamsVM.h-cancel-mode.error;
+                                text <=> ExamsVM.new-cancel-mode;
+                            }
+                            // Second review: one of its choices, in plain words, never typed;
+                            // the card's value is chosen until another is clicked
+                            VerticalLayout {
+                                spacing: 2px;
+                                Text {
+                                    text: "Second review";
+                                    font-size: Theme.text-xs;
+                                    font-weight: Theme.weight-semibold;
+                                    color: Theme.ink-2;
+                                    accessible-role: none;
+                                }
+                                HorizontalLayout {
+                                    alignment: start;
+                                    SegmentGroup {
+                                        accessible-role: AccessibleRole.groupbox;
+                                        accessible-label: "Second review";
+                                        accessible-description: ExamsVM.h-multi-review.proposed;
+                                        for c in ExamsVM.review-choices: Segment {
+                                            text: c.label;
+                                            selected: (ExamsVM.new-multi-review != "" ? ExamsVM.new-multi-review : ExamsVM.review-value) == c.value;
+                                            changed has-focus => {
+                                                root.made-focused = self.has-focus;
+                                            }
+                                            clicked => {
+                                                ExamsVM.new-multi-review = c.value;
+                                                ExamsVM.form-changed("multi-review");
+                                            }
+                                        }
                                     }
-                                    label: "Second review";
-                                    placeholder: ExamsVM.h-multi-review.proposed != "" ? ExamsVM.h-multi-review.proposed : "never, always or high_stakes";
-                                    field: "multi-review";
-                                    error: ExamsVM.h-multi-review.error;
-                                    text <=> ExamsVM.new-multi-review;
+                                }
+                                Text {
+                                    text: ExamsVM.h-multi-review.proposed;
+                                    font-size: Theme.text-xs;
+                                    color: Theme.ink-2;
+                                    wrap: word-wrap;
+                                    // the group's description carries it
+                                    accessible-role: none;
                                 }
                             }
                             Switch {
@@ -989,7 +1017,8 @@ component NewExamBar inherits Rectangle {
                                     root.made-focused = self.has-focus;
                                 }
                                 text: (ExamsVM.new-notes-open ? "Hide notes" : "Show notes") + " (" + ExamsVM.card-notes.length + ")";
-                                accessible-label: "Notes";
+                                // read as shown, the count included (voice control finds it by it)
+                                accessible-label: self.text;
                                 accessible-expandable: true;
                                 accessible-expanded: ExamsVM.new-notes-open;
                                 clicked => {

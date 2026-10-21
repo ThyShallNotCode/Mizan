@@ -1316,7 +1316,7 @@ impl ExamProject {
         readiness.push((
             !s.flags.computing() && miskeys == 0,
             if s.flags.computing() {
-                "Mis-key check (§12.2 flag stability): computing…".into()
+                "Mis-key check: computing…".into()
             } else {
                 format!("{miskeys} probable mis-keys (SCO-001) to decide")
             },

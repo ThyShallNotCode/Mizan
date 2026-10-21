@@ -59,7 +59,7 @@ fn survey_exits_2_while_a_question_is_open_and_0_once_answered() {
     assert_eq!(o.status.code(), Some(2), "{}{}", stdout(&o), stderr(&o));
     let out = stdout(&o);
     assert!(
-        out.contains("question 1 (Answer key): no answer key"),
+        out.contains("question 1 (Answer key): choose the key file"),
         "{out}"
     );
     assert!(out.contains("--answer provisional-key"), "{out}");

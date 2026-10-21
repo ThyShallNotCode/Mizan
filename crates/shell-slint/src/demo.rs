@@ -2706,6 +2706,7 @@ fn demo_card() -> NewExamCard {
             field,
             label: label.into(),
             value: value.into(),
+            plain: value.into(),
             source: source.into(),
             detail: detail.into(),
             state: CardState::Ok,
@@ -2752,7 +2753,8 @@ fn demo_card() -> NewExamCard {
             "Cancel mode",
             "erase_only",
             "the sheet",
-            "erasures cancel, as the IAU sheet prints",
+            "students erase to change an answer; a crossed-out mark goes to review: the only \
+             convention of this sheet",
         ),
         value(
             CardField::IdScheme,
@@ -2796,7 +2798,7 @@ fn demo_card() -> NewExamCard {
             "High stakes",
             "off",
             "default",
-            "on: stricter margins and erasures to review (more items, never fewer)",
+            "when on, stricter margins and erasures go to review (more items, never fewer)",
         ),
         value(
             CardField::Folder,
@@ -2808,6 +2810,14 @@ fn demo_card() -> NewExamCard {
     ];
     values[3].state = CardState::Note;
     values[4].state = CardState::Ask;
+    // the codes in plain words, as the core writes them
+    for (v, plain) in [
+        (6, "Erase to change"),
+        (7, "IAU student number"),
+        (13, "No second review"),
+    ] {
+        values[v].plain = plain.into();
+    }
     let ask = CardIssue {
         field: CardField::Questions,
         label: "Questions".into(),
@@ -2837,6 +2847,10 @@ fn demo_card() -> NewExamCard {
             took: Duration::from_millis(2400),
         },
         cancel_locked: true,
+        review_choices: omr_app::propose::value_choices(omr_app::propose::FieldId::MultiReview)
+            .iter()
+            .map(|(v, plain)| (v.to_string(), plain.to_string()))
+            .collect(),
     }
 }
 

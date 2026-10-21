@@ -123,7 +123,8 @@ fn no_host_hides_browse_buttons() {
     assert_eq!(d.exams[0].sheets_scanned, 6);
 
     // the desktop app's window: Browse… beside each path, Folder… for the scans
-    w.h.shell.set_host(FakeHost::new().host(Prefs::default()));
+    let host = FakeHost::new();
+    w.h.shell.set_host(host.host(Prefs::default()));
     assert!(ui.global::<App>().get_can_browse());
     click(ui, &tab(ui, "Exams"));
     press(ui, "New exam");
@@ -145,6 +146,22 @@ fn no_host_hides_browse_buttons() {
     ]));
     all.sort();
     assert_eq!(browse_buttons(ui), all);
+    // each button says which dialog it opens: a folder's, or a file's
+    for b in &all {
+        let said = one(ui, b).accessible_description().unwrap_or_default();
+        press(ui, b);
+        let folder = host.last_request().kind == PickKind::Folder;
+        let want = if folder {
+            "Opens the folder dialog; the folder you choose fills the field"
+        } else {
+            "Opens the file dialog; what you choose fills the field"
+        };
+        assert_eq!(said, want, "{b}");
+    }
+    assert_eq!(
+        one(ui, "Browse for Output folder").accessible_description(),
+        Some("Opens the folder dialog; the folder you choose fills the field".into())
+    );
 }
 
 /// D2: the scans picked in the dialog are graded exactly as picked, a `;` in a file name
@@ -529,6 +546,12 @@ fn setup_scan_and_parallel_run_fields_browse() {
         message(ui)
     );
     host.will_pick(&[&reports]);
+    assert!(
+        one(ui, "Browse for Report folder")
+            .accessible_description()
+            .is_some_and(|d| d.starts_with("Opens the folder dialog")),
+        "a folder's dialog"
+    );
     press(ui, "Browse for Report folder");
     assert_eq!(
         (host.last_request().target, host.last_request().kind),
@@ -1482,8 +1505,8 @@ fn the_survey_runs_at_once_and_fills_the_card() {
         ("Scans", "Scans: 6 files — typed (6 student sheets)"),
         ("Questions", "Questions: 30 — the sheets (sheets: rows 1–30"),
         ("Options", "Options: 5 — the sheet"),
-        ("Cancel mode", "Cancel mode: erase_only — the sheet"),
-        ("Student ID", "Student ID: iau — the sheet"),
+        ("Cancel mode", "Cancel mode: Erase to change — the sheet"),
+        ("Student ID", "Student ID: IAU student number — the sheet"),
         ("Answer key", "Answer key: none — default"),
     ] {
         let row = card_row(ui, label);
@@ -1505,19 +1528,44 @@ fn the_survey_runs_at_once_and_fills_the_card() {
         one(ui, choice);
     }
     assert!(!enabled(ui, "Grade exam"));
+    // the field's label says what is missing, once
+    let block = ex.get_new_block().to_string();
     assert!(
-        ex.get_new_block().starts_with("Answer key: no answer key"),
-        "{}",
-        ex.get_new_block()
+        block.starts_with("Answer key: choose the key file"),
+        "{block}"
     );
-    // the notes, folded
-    assert!(ex.get_card_notes().row_count() > 0);
-    let notes = one(ui, "Notes");
+    assert!(!block.contains("key: no answer key"), "{block}");
+    assert!(
+        block.ends_with("(the results cannot be released until the real key replaces it)"),
+        "{block}"
+    );
+    // a row is read with the marker shown beside it: the question, a note
+    let key = card_row(ui, "Answer key");
+    assert!(key.ends_with(", question"), "{key}");
+    let noted = ex
+        .get_card_values()
+        .iter()
+        .find(|v| v.state == 1)
+        .expect("a value with a note");
+    assert!(noted.a11y.ends_with(", note"), "{}", noted.a11y);
+    assert!(
+        card_row(ui, "Options").ends_with("printed)"),
+        "nothing to say"
+    );
+    // the notes, folded: the toggle is read as it shows, with the count
+    let n = ex.get_card_notes().row_count();
+    assert!(n > 0);
+    assert!(by_label(ui, "Notes").is_empty(), "named as shown");
+    let notes = one(ui, &format!("Show notes ({n})"));
     assert_eq!(notes.accessible_expanded(), Some(false));
     let note = ex.get_card_notes().row_data(0).unwrap();
     let note_text = format!("{}: {}", note.label, note.text);
     assert!(by_label(ui, &note_text).is_empty(), "folded");
-    press(ui, "Notes");
+    click(ui, &notes);
+    assert_eq!(
+        one(ui, &format!("Hide notes ({n})")).accessible_expanded(),
+        Some(true)
+    );
     one(ui, &note_text);
 }
 
@@ -1722,7 +1770,8 @@ fn editing_the_scans_discards_the_old_survey() {
 }
 
 /// D5: Advanced options are collapsed, and their fields do not exist, until clicked; the IAU
-/// sheet's cancel mode is shown locked with the value it grades.
+/// sheet's cancel mode is shown locked with the value it grades, in plain words; second review
+/// is chosen from its choices (never typed), and the high-stakes switch reads its state first.
 #[test]
 fn advanced_options_are_collapsed_until_clicked() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -1764,17 +1813,223 @@ fn advanced_options_are_collapsed_until_clicked() {
     );
     assert_eq!(
         cancel.accessible_placeholder_text().unwrap_or_default(),
-        "erase_only · the sheet"
+        "Erase to change · the sheet"
     );
     let second = one(ui, "Second review");
-    assert_eq!(
-        second.accessible_placeholder_text().unwrap_or_default(),
-        "never · default"
+    let said = second.accessible_description().unwrap_or_default();
+    assert!(
+        said.starts_with(
+            "No second review · default — confident double marks are scored as wrong without \
+             review"
+        ),
+        "{said}"
     );
+    let choices: Vec<(String, Option<bool>)> =
+        ["No second review", "Always", "On high-stakes exams"]
+            .into_iter()
+            .map(|l| {
+                let e = one(ui, l);
+                assert_eq!(
+                    e.accessible_role(),
+                    Some(AccessibleRole::RadioButton),
+                    "{l}"
+                );
+                (l.to_string(), e.accessible_checked())
+            })
+            .collect();
+    assert_eq!(
+        choices.iter().map(|c| c.1).collect::<Vec<_>>(),
+        [Some(true), Some(false), Some(false)],
+        "{choices:?}"
+    );
+    let high = one(ui, "High-stakes exam")
+        .accessible_description()
+        .unwrap_or_default();
+    assert!(
+        high.starts_with("off · default — when on, stricter margins"),
+        "{high}"
+    );
+    // a choice clicked is the value graded, as typed, and grading waits on nothing else
+    press(ui, "On high-stakes exams");
+    assert_eq!(
+        one(ui, "On high-stakes exams").accessible_checked(),
+        Some(true)
+    );
+    support::harness::pause_typing();
+    // (the row is below the open options, scrolled out of the card: read from what it shows)
+    let row = ui
+        .global::<ExamsVM>()
+        .get_card_values()
+        .iter()
+        .find(|v| v.label == "Second review")
+        .map(|v| v.a11y.to_string())
+        .unwrap_or_default();
+    assert!(
+        row.starts_with("Second review: On high-stakes exams — typed"),
+        "{row}"
+    );
+    press(ui, PROVISIONAL);
+    let block = ui.global::<ExamsVM>().get_new_block();
+    assert_eq!(block, "", "nothing asked of the sheet");
     press(ui, "Advanced options");
     for f in fields {
         assert!(by_label(ui, f).is_empty(), "{f} gone once folded");
     }
+}
+
+/// D5: a sheet that prints its cancel mode fixes it, whether it is the IAU template or an own
+/// sheet's spec file: the field is shown locked with the spec's mode in plain words, as the core
+/// says, never left open to type a mode the sheet does not print.
+#[test]
+fn a_spec_file_that_prints_its_cancel_mode_fixes_the_field() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let spec = omr_forms::TemplateSpec::standard(
+        omr_model::ExamId::new_v7(),
+        30,
+        5,
+        omr_model::CancelMode::CrossCancels,
+    );
+    let json = serde_json::json!({"template": spec, "exam_key_hex": "6c".repeat(32)});
+    let file = dir.path().join("own-sheet.json");
+    std::fs::write(&file, serde_json::to_vec(&json).expect("json")).expect("spec file");
+    press(ui, "New exam");
+    type_into(ui, "Scan files or folders", w.scans.to_str().unwrap());
+    settle_card(&w.h, &w.held);
+    press(ui, "Advanced options");
+    click(ui, &one(ui, "Sheet template or spec file"));
+    chord(ui, Key::Control, "a");
+    type_text(ui, file.to_str().unwrap());
+    settle_card(&w.h, &w.held);
+    let cancel = one(ui, "Cancel mode");
+    assert_eq!(
+        cancel.accessible_enabled(),
+        Some(false),
+        "the spec fixes it"
+    );
+    assert_eq!(
+        cancel.accessible_placeholder_text().unwrap_or_default(),
+        "Cross out to cancel · spec file"
+    );
+    let row = card_row(ui, "Cancel mode");
+    assert!(
+        row.starts_with("Cancel mode: Cross out to cancel — spec file"),
+        "{row}"
+    );
+}
+
+/// D5: a one-click answer that gives a field's value holds only while the field keeps the value
+/// it was given for: typed again, the field's new value is graded (and checked afresh), never
+/// the earlier answer.
+#[test]
+fn an_answer_holds_only_while_its_field_keeps_its_value() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let ex = ui.global::<ExamsVM>();
+    press(ui, "New exam");
+    type_into(ui, "Scan files or folders", w.scans.to_str().unwrap());
+    settle_card(&w.h, &w.held);
+    press(ui, PROVISIONAL);
+    // options: 9 is asked, 5 answered, then 4 typed
+    type_into(ui, "Options per question", "9");
+    support::harness::pause_typing();
+    press(ui, "Use 5");
+    assert!(card_row(ui, "Options").starts_with("Options: 5 — your answer"));
+    click(ui, &one(ui, "Options per question"));
+    chord(ui, Key::Control, "a");
+    type_text(ui, "4");
+    support::harness::pause_typing();
+    let row = card_row(ui, "Options");
+    assert!(row.starts_with("Options: 4 — typed"), "{row}");
+    assert_eq!(ex.get_new_block(), "", "4 options graded, nothing asked");
+    // the count: 25 is asked (the students answer 30 rows), 30 answered, then 20 typed
+    type_into(ui, "Number of questions", "25");
+    support::harness::pause_typing();
+    let use30 = with_prefix(ui, "Use 30");
+    let labels: Vec<&String> = use30.iter().map(|(l, _)| l).collect();
+    assert_eq!(use30.len(), 1, "{labels:?}");
+    click(ui, &use30[0].1);
+    assert!(card_row(ui, "Questions").starts_with("Questions: 30 — your answer"));
+    click(ui, &one(ui, "Number of questions"));
+    chord(ui, Key::Control, "a");
+    type_text(ui, "20");
+    support::harness::pause_typing();
+    let row = card_row(ui, "Questions");
+    assert!(row.starts_with("Questions: 20 — typed"), "{row}");
+    let asked: Vec<String> = ex
+        .get_card_asks()
+        .iter()
+        .map(|a| a.label.to_string())
+        .collect();
+    assert_eq!(asked, ["Questions"], "the rows beyond 20 are asked again");
+}
+
+/// D5: an exam folder typed as a name (not a whole path) is a folder in the exams folder: the
+/// card shows where, the exam is graded there, and it is listed when the folder is read again.
+#[test]
+fn a_typed_folder_name_grades_into_the_exams_folder() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    press(ui, "New exam");
+    type_into(ui, "Scan files or folders", w.scans.to_str().unwrap());
+    press(ui, "Advanced options");
+    type_into(ui, "Output folder", "quiz-rel");
+    settle_card(&w.h, &w.held);
+    press(ui, PROVISIONAL);
+    let row = card_row(ui, "Folder");
+    let want = w.ws.join("quiz-rel");
+    assert!(
+        row.starts_with(&format!("Folder: {} — typed", want.display())),
+        "{row}"
+    );
+    press(ui, "Grade exam");
+    run_held(&w.h, &w.held);
+    assert_eq!(w.h.app.borrow().grading_error(), None);
+    assert!(want.join("project.omrproj").is_dir(), "in the exams folder");
+    special(ui, Key::F5);
+    assert_eq!(ui.global::<ExamsVM>().get_rows().row_count(), 1, "listed");
+}
+
+/// D5: the answers given for scans are dropped once those scans are taken away, so other scans
+/// are asked afresh; answers given before any scans stay when the scans are given.
+#[test]
+fn emptying_the_scans_drops_the_answers_given_for_them() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    press(ui, "New exam");
+    // an answer given before any scans: it stays once they are given
+    type_into(ui, "Options per question", "9");
+    support::harness::pause_typing();
+    press(ui, "Use 5");
+    type_into(ui, "Scan files or folders", w.scans.to_str().unwrap());
+    settle_card(&w.h, &w.held);
+    assert!(card_row(ui, "Options").starts_with("Options: 5 — your answer"));
+    // the provisional key chosen for these scans
+    press(ui, PROVISIONAL);
+    assert!(card_row(ui, "Answer key").contains("— your answer"));
+    // the scans taken away, then others given
+    click(ui, &one(ui, "Scan files or folders"));
+    chord(ui, Key::Control, "a");
+    special(ui, Key::Backspace);
+    settle_card(&w.h, &w.held);
+    let other = synth::write_scans(
+        &synth::Spec {
+            sheets: 4,
+            ..synth::BARE
+        },
+        &dir.path().join("other scans"),
+    );
+    type_text(ui, other.to_str().unwrap());
+    settle_card(&w.h, &w.held);
+    assert!(card_row(ui, "Scans").starts_with("Scans: 4 files"));
+    let key = card_row(ui, "Answer key");
+    assert!(key.starts_with("Answer key: none — default"), "{key}");
+    one(ui, PROVISIONAL);
+    assert!(!enabled(ui, "Grade exam"), "asked again for these scans");
 }
 
 /// D5: the card opens while another exam is graded; Grade exam waits and says why, and is
@@ -2321,6 +2576,35 @@ fn auto_export_off_writes_nothing() {
     assert_eq!(files_in(&folder), ["project.omrproj"]);
 }
 
+/// D6: opening New exam takes down the last run's notice: at 1280 × 800 it lies over the
+/// card's Grade exam, which a click would then miss.
+#[test]
+fn opening_new_exam_takes_down_the_last_runs_notice() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let app = ui.global::<App>();
+    smallest_window(ui);
+    press(ui, "New exam");
+    grade_with_card(&w.h, &w.held, &quiz_1(&w.scans));
+    run_held(&w.h, &w.held);
+    assert!(app.get_notice_open());
+    click(ui, &tab(ui, "Exams"));
+    press(ui, "New exam");
+    assert!(!app.get_notice_open(), "the card has the window's foot");
+    grade_with_card(
+        &w.h,
+        &w.held,
+        &[
+            ("Scan files or folders", w.scans.to_str().unwrap()),
+            ("Exam title", "Quiz 2"),
+            ("Course code", "CS 213"),
+        ],
+    );
+    assert!(message(ui).starts_with("Grading"), "{}", message(ui));
+    assert!(w.h.app.borrow().grading_in_progress());
+}
+
 // ------------------------------------------------------------------ cancelling a run (D7)
 
 /// D7: a new exam being graded is cancelled from the Scan screen after a confirmation: nothing
@@ -2367,7 +2651,8 @@ fn cancel_grading_from_the_scan_screen_leaves_no_project() {
     assert_eq!(w.h.app.borrow().create_exam_blocker(), None);
     assert!(by_label(ui, "Cancel grading…").is_empty());
 
-    // Edit and grade again: the card as it was, checked again, graded into the same folder
+    // Edit and grade again: the card as it was, its answers included, checked again, graded
+    // into the same folder
     press(ui, "Edit and grade again");
     assert!(!ui.global::<App>().get_notice_open());
     assert_eq!(ui.global::<App>().get_page(), shell_slint::ui::Page::Exams);
@@ -2376,7 +2661,10 @@ fn cancel_grading_from_the_scan_screen_leaves_no_project() {
     assert_eq!(ex.get_new_scans(), w.scans.to_str().unwrap());
     assert_eq!(ex.get_new_title(), "Quiz 1");
     settle_card(&w.h, &w.held);
-    press(ui, PROVISIONAL);
+    assert!(by_label(ui, PROVISIONAL).is_empty(), "answered as before");
+    let key = card_row(ui, "Answer key");
+    assert!(key.contains("— your answer"), "{key}");
+    assert!(enabled(ui, "Grade exam"), "{}", ex.get_new_block());
     assert!(card_row(ui, "Folder").contains("cs-213-quiz-1 —"));
     press(ui, "Grade exam");
     run_held(&w.h, &w.held);
@@ -2889,7 +3177,7 @@ fn screenshots_make_the_card_from_an_exams_files() {
     // the scheme typed under Advanced options, open: the synthetic numbers fit it
     assert!(ex.get_new_advanced());
     assert!(
-        card_row(ui, "Student ID").starts_with("Student ID: digits:10 — typed"),
+        card_row(ui, "Student ID").starts_with("Student ID: 10-digit number — typed"),
         "{}",
         card_row(ui, "Student ID")
     );

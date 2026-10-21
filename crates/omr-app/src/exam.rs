@@ -2542,7 +2542,7 @@ pub fn check_roster(
     match RosterSnapshot::build(records, &s, &omr_identity::ImportOptions::default()) {
         Ok((_, report)) => Ok(report.issues.iter().map(text).collect()),
         Err(RosterError::Blocked(report)) => Err(AppError::Input(format!(
-            "roster refused (§9.2): {}",
+            "roster refused: {}",
             report
                 .issues
                 .iter()

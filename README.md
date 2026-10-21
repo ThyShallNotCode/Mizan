@@ -352,7 +352,7 @@ omr-desktop --demo                            # invented demo data, marked DEMO 
   over any value to change it; **Advanced options** has the sheet, term, student-number
   scheme, second review, high stakes and the exam's folder. When the evidence disagrees, or no
   key is given, the card asks, with one-click answers (a key inferred from the answers is used
-  only if you choose it, and cannot be released); **Grade exam** waits until nothing is left
+  only if you choose it, and cannot be released until the real key replaces it); **Grade exam** waits until nothing is left
   to answer and grades exactly what the card shows.
 - When grading ends (or added scans, or a roster), the exports are written into the exam's
   folder as `omr grade` writes them (Settings › **Write exports after grading**; a key read from

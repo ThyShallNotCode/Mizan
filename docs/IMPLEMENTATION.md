@@ -178,8 +178,9 @@ expectation tied to the real exams out of the repository.
   - `omr grade` keeps its defaults (`--cancel-mode erase_only`, versions A,B without a key
     file that names them) and does not take them from the proposal (`omr survey` prints them):
     the desktop takes an own sheet's cancel mode from its spec;
-  - the desktop's New-exam card (G-3 D5) takes the sheet, student-number scheme, cancel mode
-    and second review as typed text (checked by the proposal), not from lists; a survey it
+  - the desktop's New-exam card (G-3 D5) takes the sheet and the student-number scheme as
+    typed text (checked by the proposal), not from lists (the cancel mode is the sheet's;
+    second review is chosen from its three choices); a survey it
     stops or replaces runs to its next stage before it ends; `omr-desktop --grade` defines the
     exam from its flags, as `omr grade` does, without the card;
   - the setup's provenance (each value with its source, `ExamDefinition::provenance`) is

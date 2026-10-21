@@ -155,13 +155,20 @@ export struct CardValue {
     // the field's name (`versions`) and label (`Versions`)
     field: string,
     label: string,
+    // the value in plain words ("Erase to change")
     value: string,
     source: string,
     detail: string,
     // 0 nothing to say, 1 a note, 2 a question open
     state: int,
-    // the row's accessible text: "Versions: A, B — key file (…)"
+    // the row's accessible text: "Versions: A, B — key file (…), note"
     a11y: string,
+}
+
+// One value of a field chosen from a closed set: the value forwarded, and its plain words.
+export struct ValueChoice {
+    value: string,
+    label: string,
 }
 
 // A question of the New-exam card (with its answers' button texts) or a note.
@@ -259,8 +266,11 @@ export global ExamsVM {
     in property <float> survey-share;
     // why Grade exam waits ("": it can start)
     in property <string> new-block;
-    // the printed sheet fixes how marks are cancelled (the IAU sheet: erasures cancel)
+    // the printed sheet fixes how marks are cancelled: the field shows it, takes nothing typed
     in property <bool> cancel-locked;
+    // Second review's choices, and the value the card grades with (a choice's `value`)
+    in property <[ValueChoice]> review-choices;
+    in property <string> review-value;
     // per field the instructor may type in: the value proposed (its placeholder) and a question
     // open on it (shown under the field)
     in property <FieldHint> h-scans;

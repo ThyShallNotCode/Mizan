@@ -46,7 +46,8 @@ DATA mark in the navigation rail whose label says how to open real exams. On a w
 instructor gives: the scans, the key file or key sheets, the roster and CLO files, and any
 value typed over the proposed one (title, course, questions, versions, options; *Advanced
 options*, whose fields exist only once opened: sheet, output folder, term, student-ID scheme,
-cancel mode, locked on the IAU sheet, second review, high stakes). Right, what is graded:
+cancel mode, locked when the sheet prints it, second review, chosen from its three choices,
+high stakes; an output folder typed as a name is a folder in the exams folder). Right, what is graded:
 every value as `omr_app::propose` proposes it, "value — source (evidence)", the questions
 that stop grading with their one-click answers, and the notes, folded. The shell decides
 nothing: `Backend::propose_new_exam` takes the form, starts `run_survey` on the binary's
@@ -55,7 +56,8 @@ one running; each survey has a generation and a report of another is dropped) an
 `NewExamCard`; the survey's progress and end arrive through `Backend::pump`. A field edit
 proposes again after a 300 ms pause (`CARD_DEBOUNCE`), a dialog's pick at once; a choice goes
 back as `choose_on_card` (an answer is recorded; a file to pick, a field to empty or to type
-in is the window's to do); *Stop checking* is `stop_survey`. *Grade exam* is enabled only when
+in is the window's to do); an answer holds while its field keeps the value it was given for
+(`Given::drop_answers_for_retyped`) and while the scans it was given for stay; *Stop checking* is `stop_survey`. *Grade exam* is enabled only when
 the card has no blocker (`NewExamCard::blocker`: another exam being graded, the scans being
 checked or not checked, an open question); `create_exam` grades the proposal's `Inputs`
 exactly (with each value's provenance) into the proposal's folder, and refuses a form changed
@@ -70,7 +72,8 @@ the backend names (`NextStep`: review, results, the exports folder, Setup's key 
 or *Replace key*, the card again, the Scan log), dismissed with × or by a step that leads to
 another screen. A new exam being graded is cancelled from the Scan screen (*Cancel grading…*,
 then the confirmation; `cancel_job` sets the run's `omr_app::Cancel`): nothing is saved, no
-folder is left, and *Edit and grade again* refills the card. Once the run has read its pages
+folder is left, and *Edit and grade again* refills the card, the answers given on it included
+(`Backend::restore_graded_card`). Once the run has read its pages
 it is being saved (`Backend::saving`, the token committed): the cancel is refused as too late
 and says so, and *Cancel grading…* goes. Closing the window while a run is in progress asks
 first (`Shell::close_requested`, wired to the window's close request): kept, it runs on;
@@ -461,7 +464,7 @@ real export.
 | `req_a11_remark_import_in_setup_replaces_the_key` | a quiz graded with an inferred key: Setup's import of an export with other points is shown as not applicable, with why (a graded exam's points are fixed with its stored form map) and what to do, *Apply* disabled; the export with the exam's points is shown (nothing changes), back to the matrix and to the waiting import, *Apply key and points*: key version +1, no longer INFERRED, every entry equal to Remark's Answer Key rows, the message says the objectives were not applied |
 | `req_a11_parallel_run_in_results_shows_the_differences_with_crops` | the synthetic midterm beside its three workbooks: the Restricted / Q-08 banner, tiles equal to omr-app's own comparison, the settled difference Remark read otherwise first with its bubble-row crop, the booklet with no row and the row with no student number (masked), the key sheet, the other section not compared; *Save report* writes every file with the banner and the manifest; the subtitle says the comparison holds nothing, *Queue for review* queues each settled difference (open blocking items rise by as many), the button goes and the subtitle names what waits in Review; *Back to results* |
 | `req_a11_remark_states_fit_the_minimum_window_in_both_themes` | the three states at 1280 × 800, light and dark: every control labelled once and inside the window |
-| `no_host_hides_browse_buttons` (`req_gui_workflow.rs`, real clicks and typed keys, a fake host) | without a host no Browse button exists and typed paths grade; with one, every path field of the New-exam card has its buttons (the sheet's and the output folder's under *Advanced options*) |
+| `no_host_hides_browse_buttons` (`req_gui_workflow.rs`, real clicks and typed keys, a fake host) | without a host no Browse button exists and typed paths grade; with one, every path field of the New-exam card has its buttons (the sheet's and the output folder's under *Advanced options*), and each says which dialog it opens: the output folder's a folder dialog, the others a file dialog |
 | `browse_fills_the_scans_field_with_the_picked_files` | three scans picked (one named `batch;1.jpg`) are checked and graded as picked; the dialog offers the scan types, opens in the exams folder, then where the scans were picked (saved in the preferences) |
 | `a_cancelled_dialog_keeps_the_typed_text` | nothing picked leaves the typed text, says once to type the path if no dialog appeared, and the next click opens a dialog |
 | `editing_a_picked_field_falls_back_to_typed_paths` | picked files typed over with the folder: the folder is graded |
@@ -471,11 +474,15 @@ real export.
 | `setup_scan_and_parallel_run_fields_browse` | Setup's CLO, key-sheet and Remark fields, Scan's added scans (files or a folder), the parallel run's workbooks (picked from a folder whose name holds a `;`) and report folder |
 | `prefs_reads_the_old_workspace_only_file`, `prefs_ignores_unknown_keys_and_bad_json`, `prefs_round_trip` (`host.rs` unit tests) | the preferences file of earlier versions (the workspace only) reads as version 1 with the defaults; unreadable, unknown or mistyped entries take their defaults; every preference survives a save and a read |
 | `browse_buttons_fit_the_smallest_window` | at 1280 × 800 in both themes, every Browse… and Folder… button (New exam, its Remark import, Setup's bars, Add scans, the comparison and the parallel run) is inside the window and leaves its field room for a path |
-| `the_survey_runs_at_once_and_fills_the_card` | a picked folder is checked at once (progress, *Stop checking*, Grade exam waiting with why); then every value shows its source and evidence, the blank fields show the value they will grade, the "no answer key" question has its four answers and blocks Grade, the notes stay folded until *Notes* |
+| `the_survey_runs_at_once_and_fills_the_card` | a picked folder is checked at once (progress, *Stop checking*, Grade exam waiting with why); then every value shows its source and evidence, the blank fields show the value they will grade, the "no answer key" question has its four answers and blocks Grade ("Answer key: choose the key file, …", the label said once), rows read with their marker (", question", ", note"), the notes stay folded until *Show notes (N)* |
 | `an_ask_blocks_grade_and_a_choice_unblocks_it` | a click on Grade exam while a question is open grades nothing; *Grade with a provisional key* answers it (the key "provisional — your answer"); other scans drop that answer and ask again; the exam graded has an inferred key only after the second choice |
 | `the_graded_definition_equals_the_proposals_inputs` | typed title, course, versions and (under *Advanced options*) term: the definition graded equals `define` of the inputs `propose` gives on its own for the same scans and answers, in the card's folder, with each value's source recorded |
 | `editing_the_scans_discards_the_old_survey` | a typed title reaches the card only once typing pauses, without a new survey; other scans start one, and a survey of scans no longer on the card that ends later is dropped |
-| `advanced_options_are_collapsed_until_clicked` | the sheet, output folder, term, student-ID scheme, cancel mode, second review and high-stakes fields exist only once *Advanced options* is opened (and are gone when folded); the IAU sheet's cancel mode is locked, showing "erase_only · the sheet" |
+| `advanced_options_are_collapsed_until_clicked` | the sheet, output folder, term, student-ID scheme, cancel mode, second review and high-stakes fields exist only once *Advanced options* is opened (and are gone when folded); the IAU sheet's cancel mode is locked, showing "Erase to change · the sheet"; second review is chosen from "No second review", "Always" and "On high-stakes exams" (a click grades it, nothing asked); the high-stakes switch reads its state first |
+| `a_spec_file_that_prints_its_cancel_mode_fixes_the_field` | an own sheet's spec file that prints `cross_cancels` locks the cancel mode as the IAU sheet does, showing "Cross out to cancel · spec file" |
+| `an_answer_holds_only_while_its_field_keeps_its_value` | *Use 5* for 9 options, then 4 typed: 4 is graded; *Use 30* for 25 questions, then 20 typed: 20 is graded and the rows beyond it are asked again |
+| `a_typed_folder_name_grades_into_the_exams_folder` | "quiz-rel" typed as the output folder is shown, graded and listed in the exams folder, not the program's working folder |
+| `emptying_the_scans_drops_the_answers_given_for_them` | an answer given before any scans stays; the provisional key chosen for some scans is asked again once they are emptied and others typed |
 | `the_card_opens_during_a_run_and_says_why_grade_waits` | while one exam is graded the card opens, checks its scans and says why Grade exam waits; when the run ends Grade is available, into another folder than the first exam's |
 | `stopping_the_survey_holds_grade_until_checked_again` | *Stop checking* ends the check: a question on the scans blocks Grade, the stopped worker's end changes nothing, *Check the scans again* checks them |
 | `an_invalid_value_is_marked_on_its_field` | "thirty" questions: the question shows under the field (its description) and blocks Grade; *Type the count* puts the keyboard in the field, and 30 typed there unblocks it |

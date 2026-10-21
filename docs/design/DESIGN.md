@@ -405,7 +405,7 @@ The built shell has no Export screen: exports are written when a run ends and fr
 - **Left column: what the instructor gives.**
   - Path fields, each with **Browse…** beside it (and **Folder…** for the scans) when the window has file dialogs: Scan files or folders, Answer key file, Key sheets, Roster file, CLO mapping file.
   - Values typed over the proposal: Exam title, Course code, Number of questions, Versions, Options per question. An empty field shows, as its placeholder, the value it will grade and its source ("30 · key file").
-  - **Advanced options ▸**: the sheet, output folder, term, student-ID scheme, cancel mode (locked on the IAU sheet), second review and high stakes. Folded, these fields do not exist.
+  - **Advanced options ▸**: the sheet, output folder, term, student-ID scheme, cancel mode (locked when the sheet prints it, as the IAU sheet and most spec files do), second review (chosen from its three choices, never typed) and high stakes. Codes are written in plain words ("Erase to change", "IAU student number"). Folded, these fields do not exist.
   - Under the scans field, the check of the scans: "Checking the scans: 6 of 12 pages read" with a `ProgressBar` and **Stop checking**, then "Checked 12 pages in 0.5 s: the card is made from them".
   - A question about a typed value is also said under its field (its accessible description).
 - **Right column: What is graded.**

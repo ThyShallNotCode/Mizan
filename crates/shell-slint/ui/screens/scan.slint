@@ -548,7 +548,8 @@ export component ScanScreen inherits Rectangle {
                                     maximum: ScanVM.pps-max;
                                     floor-mark: ScanVM.pps-floor;
                                     value-text: ScanVM.pps-text;
-                                    unit: "pages / s · floor " + round(ScanVM.pps-floor);
+                                    // the floor is the tick on the arc
+                                    unit: "pages a second";
                                     label: "Throughput";
                                 }
                             }
@@ -588,7 +589,7 @@ export component ScanScreen inherits Rectangle {
                 }
                 Card {
                     title: "Pipeline";
-                    subtitle: "Progress is announced politely, at most every 5 s";
+                    subtitle: "Where the pages are, from file to result";
                     vertical-stretch: 0;
                     VerticalLayout {
                         spacing: Theme.space-md;
@@ -843,7 +844,7 @@ export component ScanScreen inherits Rectangle {
                 horizontal-stretch: 1;
             }
             StatusText {
-                text: "Deterministic: decisions are identical at any thread count";
+                text: "The same scans always give the same results";
             }
             StatusText {
                 text: App.engine;

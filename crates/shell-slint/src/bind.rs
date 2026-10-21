@@ -1371,6 +1371,8 @@ impl Shell {
     /// A real session hears why New exam cannot start, never a command line.
     fn request(&self, what: &str) {
         if what == "New exam" && self.backend.borrow().can_create_exam() {
+            // the last run's notice is done with: it would cover the card's Grade exam
+            self.dismiss_notice();
             self.ui().global::<s::ExamsVM>().set_new_open(true);
             self.propose_card();
             return;
@@ -1563,13 +1565,14 @@ impl Shell {
     fn show_card(&self, card: &b::NewExamCard) {
         let ui = self.ui();
         let ex = ui.global::<s::ExamsVM>();
+        // each value in plain words; read out with the marker shown beside it
         let values: Vec<s::CardValue> = card
             .values
             .iter()
             .map(|v| s::CardValue {
                 field: ss(v.field.name()),
                 label: ss(&v.label),
-                value: ss(&v.value),
+                value: ss(&v.plain),
                 source: ss(&v.source),
                 detail: ss(&v.detail),
                 state: match v.state {
@@ -1578,14 +1581,19 @@ impl Shell {
                     b::CardState::Ask => 2,
                 },
                 a11y: ss(format!(
-                    "{}: {} — {}{}",
+                    "{}: {} — {}{}{}",
                     v.label,
-                    if v.value.is_empty() { "none" } else { &v.value },
+                    if v.plain.is_empty() { "none" } else { &v.plain },
                     v.source,
                     if v.detail.is_empty() {
                         String::new()
                     } else {
                         format!(" ({})", v.detail)
+                    },
+                    match v.state {
+                        b::CardState::Ok => "",
+                        b::CardState::Note => ", note",
+                        b::CardState::Ask => ", question",
                     }
                 )),
             })
@@ -1633,13 +1641,30 @@ impl Shell {
         ex.set_survey_share(share);
         ex.set_new_block(ss(card.blocker.clone().unwrap_or_default()));
         ex.set_cancel_locked(card.cancel_locked);
-        // what each field proposes, and a question open on what was given in it
+        let multi = card.value(b::CardField::MultiReview);
+        ex.set_review_value(ss(multi.map(|v| v.value.as_str()).unwrap_or_default()));
+        let choices: Vec<s::ValueChoice> = card
+            .review_choices
+            .iter()
+            .map(|(value, label)| s::ValueChoice {
+                value: ss(value),
+                label: ss(label),
+            })
+            .collect();
+        ex.set_review_choices(sync(ex.get_review_choices(), choices));
+        // what each field proposes (a value to type as typed; a fixed one or one chosen in
+        // plain words, with its evidence), and a question open on what was given in it
         let hint = |f: b::CardField, given: &str| {
             let proposed = card
                 .value(f)
                 .filter(|v| !v.value.is_empty())
                 .map(|v| match f {
-                    b::CardField::HighStakes => format!("{} ({}, {})", v.detail, v.value, v.source),
+                    b::CardField::HighStakes | b::CardField::MultiReview => {
+                        format!("{} · {} — {}", v.plain, v.source, v.detail)
+                    }
+                    b::CardField::CancelMode if card.cancel_locked => {
+                        format!("{} · {}", v.plain, v.source)
+                    }
                     _ => format!("{} · {}", v.value, v.source),
                 })
                 .unwrap_or_default();
@@ -2169,6 +2194,8 @@ impl Shell {
         }
         self.navigate(s::Page::Exams);
         ex.set_new_open(true);
+        // the answers given on the card come back with its fields
+        self.backend.borrow_mut().restore_graded_card();
         self.propose_card();
         self.say(
             if f.remark.is_empty() {

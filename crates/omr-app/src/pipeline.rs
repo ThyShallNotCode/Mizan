@@ -1033,7 +1033,7 @@ pub fn grade_into(
                 .with_sub_reason(PHONE_UNCALIBRATED)
                 .with_detail(format!(
                     "{photos} student page(s) are phone photos: the phone capture is not \
-                     calibrated yet (§8.10 step 7), so every answer on them waits for a person; \
+                     calibrated yet, so every answer on them waits for a person; \
                      scan the sheets on a scanner instead"
                 )),
         );
@@ -1693,7 +1693,7 @@ fn uncalibrated_capture(booklet: Option<u32>, question: u16) -> Exception {
             ..Target::default()
         })
         .with_detail(
-            "phone photo: the phone capture is not calibrated (§8.10 step 7), so no answer on \
+            "phone photo: the phone capture is not calibrated, so no answer on \
              it is accepted on its own; confirm the answer shown (Enter) or correct it from the \
              crop, or rescan the sheet on a scanner",
         )

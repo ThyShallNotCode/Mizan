@@ -828,7 +828,8 @@ export component TextField inherits Rectangle {
 // A field for file or folder paths: the typed path, and when the window has file dialogs
 // (App.can-browse) "Browse…" beside it, with "Folder…" where a folder of files is taken too (the
 // scans). The buttons open the dialog of `target` (and `folder-target`); what is picked fills
-// the field. Without file dialogs (headless tests, screenshots) the buttons do not exist.
+// the field. `folder`: `target` opens a folder dialog (an exam's folder, a report's folder), and
+// Browse… says so. Without file dialogs (headless tests, screenshots) the buttons do not exist.
 export component PathField inherits HorizontalLayout {
     in-out property <string> text;
     in property <string> label;
@@ -838,6 +839,8 @@ export component PathField inherits HorizontalLayout {
     // the dialogs ("new-key"; "" for no button)
     in property <string> target;
     in property <string> folder-target;
+    // `target` opens a folder dialog
+    in property <bool> folder;
     in property <bool> invalid;
     in property <string> description;
     out property <bool> has-focus: field.has-focus || root.browse-focused || root.folder-focused;
@@ -874,7 +877,7 @@ export component PathField inherits HorizontalLayout {
             }
             text: "Browse…";
             accessible-label: "Browse for " + root.label;
-            accessible-description: "Opens the file dialog; what you choose fills the field";
+            accessible-description: root.folder ? "Opens the folder dialog; the folder you choose fills the field" : "Opens the file dialog; what you choose fills the field";
             enabled: root.enabled;
             clicked => {
                 App.browse(root.target);

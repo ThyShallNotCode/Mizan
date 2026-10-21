@@ -289,15 +289,38 @@ pub enum FieldState {
 pub struct FieldView {
     /// The field.
     pub id: FieldId,
-    /// Its value, as graded (`""`: none yet).
+    /// Its value, as graded and as typed (`""`: none yet), e.g. `erase_only`.
     pub value: String,
+    /// The value in plain words, as the card writes it (`Erase to change` for `erase_only`,
+    /// `IAU student number` for `iau`); the value itself where it is plain already.
+    #[serde(default)]
+    pub plain: String,
     /// Where the value came from.
     pub source: Source,
     /// The evidence, e.g. `key.csv names A, B · sheets A 8 · B 8 · blank 2`.
     pub detail: String,
     /// Its issues.
     pub state: FieldState,
+    /// The printed sheet fixes it (its cancel mode): the card shows it, never takes it typed.
+    #[serde(default)]
+    pub fixed: bool,
 }
+
+/// The values a field takes from a closed set (Second review), each with its plain words: the
+/// card offers them as choices, never as text to type. Empty for any other field.
+pub fn value_choices(f: FieldId) -> &'static [(&'static str, &'static str)] {
+    match f {
+        FieldId::MultiReview => MULTI_REVIEW,
+        _ => &[],
+    }
+}
+
+/// Second review's values (`define`'s multi-review policy) and their plain words.
+const MULTI_REVIEW: &[(&str, &str)] = &[
+    ("never", "No second review"),
+    ("always", "Always"),
+    ("high_stakes", "On high-stakes exams"),
+];
 
 /// A question or a note.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -349,11 +372,14 @@ pub enum ChoiceAction {
 }
 
 /// The instructor's answer to a question of the proposal ([`Given::answers`]). An answer that
-/// names a value wins over the typed one: it was given knowing both.
+/// names a value wins over the typed one: it was given knowing both. It holds only while the
+/// field keeps the value it was given for: a field typed again drops the answers about it
+/// ([`Given::drop_answers_for_retyped`]).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Answer {
-    /// Grade with a key inferred from the sheets: provisional, never releasable.
+    /// Grade with a key inferred from the sheets: provisional, not releasable until the real
+    /// key replaces it.
     InferKeyProvisionally,
     /// The one answer column of the key file is the key of every version the sheets bubble.
     SameKeyForEveryVersion,
@@ -384,6 +410,16 @@ pub enum Answer {
 }
 
 impl Answer {
+    /// The field whose value the answer gives or keeps (`None`: an answer about the files or
+    /// the stack, which holds while they stay).
+    pub fn field(&self) -> Option<FieldId> {
+        match self {
+            Answer::UseValue(f, _) | Answer::UseTypedValue(f) => Some(*f),
+            Answer::UseQuestions(_) | Answer::KeepQuestions(_) => Some(FieldId::Questions),
+            _ => None,
+        }
+    }
+
     /// The answer as one word for the command line (`omr survey --answer`): `provisional-key`,
     /// `same-key`, `hold:C,D`, `key-versions:A,B`, `unlabelled-rows`, `questions:40`,
     /// `keep-questions:30`, `key-gaps`, `keep:id-scheme`, `use:options=5`, `one-exam`,
@@ -463,8 +499,44 @@ pub struct Typed {
     pub high_stakes: Option<bool>,
     /// `iau`, `pnu`, `ksu` or `digits:N`.
     pub id_scheme: Option<String>,
-    /// The output folder (Advanced).
+    /// The output folder (Advanced); a relative one is below the exams folder.
     pub folder: Option<PathBuf>,
+}
+
+impl Typed {
+    /// The fields typed otherwise in `now` than here: given, changed or emptied (text compared
+    /// trimmed).
+    pub fn retyped(&self, now: &Typed) -> Vec<FieldId> {
+        let t = |s: &Option<String>| {
+            s.as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        };
+        let text = [
+            (FieldId::Questions, &self.questions, &now.questions),
+            (FieldId::Options, &self.options, &now.options),
+            (FieldId::Versions, &self.forms, &now.forms),
+            (FieldId::Title, &self.title, &now.title),
+            (FieldId::Course, &self.course, &now.course),
+            (FieldId::Term, &self.term, &now.term),
+            (FieldId::CancelMode, &self.cancel_mode, &now.cancel_mode),
+            (FieldId::MultiReview, &self.multi_review, &now.multi_review),
+            (FieldId::IdScheme, &self.id_scheme, &now.id_scheme),
+        ];
+        let mut v: Vec<FieldId> = text
+            .into_iter()
+            .filter(|(_, a, b)| t(a) != t(b))
+            .map(|(f, _, _)| f)
+            .collect();
+        if self.high_stakes != now.high_stakes {
+            v.push(FieldId::HighStakes);
+        }
+        if self.folder != now.folder {
+            v.push(FieldId::Folder);
+        }
+        v
+    }
 }
 
 /// What the instructor gave for a new exam.
@@ -504,6 +576,15 @@ impl Given {
             typed: Typed::default(),
             answers: Vec::new(),
         }
+    }
+
+    /// Drops the answers about a field typed otherwise now than in `before` ([`Typed::retyped`]):
+    /// an answer was given for the value the field held then, and the new value is checked
+    /// afresh.
+    pub fn drop_answers_for_retyped(&mut self, before: &Typed) {
+        let retyped = before.retyped(&self.typed);
+        self.answers
+            .retain(|a| a.field().is_none_or(|f| !retyped.contains(&f)));
     }
 
     /// The survey request for these scans (never cancelled: set its `cancel` to stop it).
@@ -715,6 +796,20 @@ fn scheme_name(c: &exam::IdSchemeChoice) -> String {
     }
 }
 
+/// A scheme's plain words (`IAU student number`, `9-digit number`); `None` for a typed text
+/// that names no scheme.
+fn scheme_plain(name: &str) -> Option<String> {
+    Some(match name {
+        "iau" => "IAU student number".into(),
+        "pnu" => "PNU student number".into(),
+        "ksu" => "KSU student number".into(),
+        s => format!(
+            "{}-digit number",
+            s.strip_prefix("digits:")?.parse::<usize>().ok()?
+        ),
+    })
+}
+
 fn cancel_name(m: CancelMode) -> &'static str {
     match m {
         CancelMode::EraseOnly => "erase_only",
@@ -723,16 +818,52 @@ fn cancel_name(m: CancelMode) -> &'static str {
     }
 }
 
+/// A marking convention in plain words, and what it means for a mark.
+fn cancel_plain(m: CancelMode) -> (&'static str, &'static str) {
+    match m {
+        CancelMode::EraseOnly => (
+            "Erase to change",
+            "students erase to change an answer; a crossed-out mark goes to review",
+        ),
+        CancelMode::CrossCancels => ("Cross out to cancel", "a crossed-out fill does not count"),
+        CancelMode::FillCancelsCheck => (
+            "Tick to answer, fill to cancel",
+            "a tick chooses an option and a filled bubble cancels it",
+        ),
+    }
+}
+
+/// The plain words of a typed cancel mode, when it names one.
+fn cancel_plain_of(name: &str) -> Option<&'static str> {
+    [
+        CancelMode::EraseOnly,
+        CancelMode::CrossCancels,
+        CancelMode::FillCancelsCheck,
+    ]
+    .into_iter()
+    .find(|m| cancel_name(*m) == name)
+    .map(|m| cancel_plain(m).0)
+}
+
 /// The card while it is built.
 #[derive(Default)]
 struct Card {
     fields: BTreeMap<FieldId, (String, Source, String)>,
+    /// A value's plain words, where it is a code ([`FieldView::plain`]).
+    plain: BTreeMap<FieldId, String>,
+    /// The fields the printed sheet fixes ([`FieldView::fixed`]).
+    fixed: BTreeSet<FieldId>,
     issues: Vec<Issue>,
 }
 
 impl Card {
     fn set(&mut self, id: FieldId, value: impl Into<String>, source: Source, detail: String) {
         self.fields.insert(id, (value.into(), source, detail));
+    }
+
+    /// The plain words of the field's value (a code).
+    fn plain(&mut self, id: FieldId, plain: impl Into<String>) {
+        self.plain.insert(id, plain.into());
     }
 
     fn ask(&mut self, field: FieldId, text: String, choices: Vec<Choice>) {
@@ -770,17 +901,22 @@ impl Card {
                 } else {
                     FieldState::Ok
                 };
+                // The folder is a path the instructor chose, shown as it is.
+                let shown = |v: &str| {
+                    if id == FieldId::Folder {
+                        v.to_string()
+                    } else {
+                        mask_numbers(v)
+                    }
+                };
                 Some(FieldView {
                     id,
-                    // The folder is a path the instructor chose, shown as it is.
-                    value: if id == FieldId::Folder {
-                        value
-                    } else {
-                        mask_numbers(&value)
-                    },
+                    plain: shown(self.plain.get(&id).unwrap_or(&value)),
+                    value: shown(&value),
                     source,
                     detail: mask_numbers(&detail),
                     state,
+                    fixed: self.fixed.contains(&id),
                 })
             })
             .collect()
@@ -881,6 +1017,15 @@ fn error_field(msg: &str) -> (FieldId, Vec<Choice>) {
         pick(FieldId::Remark, "Import another Remark export…")
     } else if m.contains("key") || m.contains("points") {
         pick(FieldId::Key, "Choose another key file…")
+    } else if m.contains("multi-review") || m.contains("second review") {
+        // chosen, never typed: its choices are the answers
+        (
+            FieldId::MultiReview,
+            MULTI_REVIEW
+                .iter()
+                .map(|(c, p)| answer(*p, Answer::UseValue(FieldId::MultiReview, (*c).into())))
+                .collect(),
+        )
     } else if m.contains("cancel") {
         pick(FieldId::Sheet, "Choose the sheet's spec file…")
     } else if m.contains("id scheme") || m.contains("student-id") {
@@ -1033,8 +1178,8 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
             let folder = given
                 .typed
                 .folder
-                .clone()
-                .unwrap_or_else(|| ctx.workspace.join("exam"));
+                .as_ref()
+                .map_or_else(|| ctx.workspace.join("exam"), |d| ctx.workspace.join(d));
             return Proposal {
                 fields: card.views(),
                 issues: card.issues,
@@ -1199,16 +1344,18 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
     } else if answered(&Answer::InferKeyProvisionally) {
         Plan::Provisional
     } else {
-        let what = if seen_sheets.is_empty() {
-            "no answer key"
+        // the field's label says what is missing; key sheets that cannot give one say why
+        let why = if seen_sheets.is_empty() {
+            ""
         } else {
-            "the key sheets cannot give a key (see the notes on them)"
+            "the key sheets cannot give a key (see the notes on them): "
         };
         card.ask(
             FieldId::Key,
             format!(
-                "{what}: choose the key file, import it from Remark, give the key sheets, or \
-                 grade with a provisional key inferred from the answers (it can never be released)"
+                "{why}choose the key file, import it from Remark, give the key sheets, or grade \
+                 with a provisional key inferred from the answers (the results cannot be released \
+                 until the real key replaces it)"
             ),
             vec![
                 choice("Choose a key file…", ChoiceAction::Pick(FieldId::Key)),
@@ -2302,7 +2449,9 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
         card.set(FieldId::Options, o.to_string(), src, d.join(" · "));
     }
 
-    // ---- Cancel mode (§3.5): the sheet's own convention.
+    // ---- Cancel mode (§3.5): the sheet's own convention. The printed sheet fixes it: the card
+    // shows it and takes nothing typed (the command line's typed mode must agree).
+    card.fixed.insert(FieldId::CancelMode);
     let typed_c = use_value(FieldId::CancelMode)
         .map(|v| (v, Source::Answer))
         .or_else(|| text(&typed.cancel_mode).map(|v| (v, Source::Typed)));
@@ -2310,14 +2459,15 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
     match printed.cancel_mode {
         Some(m) => {
             let name = cancel_name(m);
+            let (plain, meaning) = cancel_plain(m);
             let (detail, src) = if legacy {
                 (
-                    "erase to change: the only convention of this sheet".to_string(),
+                    format!("{meaning}: the only convention of this sheet"),
                     Source::Template,
                 )
             } else {
                 (
-                    format!("printed on the sheets ({sheet_value})"),
+                    format!("{meaning}: printed on the sheets ({sheet_value})"),
                     Source::SpecFile,
                 )
             };
@@ -2325,19 +2475,29 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
                 Some((v, s)) if v != name => {
                     card.ask(
                         FieldId::CancelMode,
-                        format!("the sheets print the cancel mode {name}, not {v}"),
+                        format!(
+                            "the sheets print the cancel mode {name} ({}), not {v}",
+                            plain.to_lowercase()
+                        ),
                         vec![answer(
                             format!("Use {name}"),
                             Answer::UseValue(FieldId::CancelMode, name.into()),
                         )],
                     );
+                    if let Some(p) = cancel_plain_of(&v) {
+                        card.plain(FieldId::CancelMode, p);
+                    }
                     card.set(FieldId::CancelMode, v, s, detail);
                 }
                 Some((v, s)) => {
                     cancel_input = Some(v.clone());
+                    card.plain(FieldId::CancelMode, plain);
                     card.set(FieldId::CancelMode, v, s, detail);
                 }
-                None => card.set(FieldId::CancelMode, name, src, detail),
+                None => {
+                    card.plain(FieldId::CancelMode, plain);
+                    card.set(FieldId::CancelMode, name, src, detail);
+                }
             }
         }
         None => {
@@ -2345,7 +2505,7 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
                 FieldId::CancelMode,
                 format!(
                     "{sheet_value} sets no cancel_mode, so the marking convention printed on the \
-                     sheets is unknown (lint L14): set it in the spec to the one the sheets print"
+                     sheets is unknown: set it in the spec to the one the sheets print"
                 ),
                 vec![choice(
                     "Choose the sheet's spec file…",
@@ -2390,18 +2550,28 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
             t.id_fit_permille,
         );
         if scheme != default_scheme && misfit && theirs && !keep_typed(FieldId::IdScheme) {
+            // the scheme by its plain words, its code (what is typed) beside them
+            let named = |c: &str| match scheme_plain(c) {
+                Some(p) => format!("{p} ({c})"),
+                None => c.to_string(),
+            };
             card.ask(
                 FieldId::IdScheme,
                 format!(
-                    "only {ours} of {complete} student numbers fit {scheme}; {} fit {default_scheme}",
-                    fit(&default_scheme)
+                    "only {ours} of {complete} student numbers fit {}; {} fit {}",
+                    named(&scheme),
+                    fit(&default_scheme),
+                    named(&default_scheme)
                 ),
                 vec![
                     answer(
-                        format!("Use {default_scheme}"),
+                        format!("Use {}", named(&default_scheme)),
                         Answer::UseValue(FieldId::IdScheme, default_scheme.clone()),
                     ),
-                    answer(format!("Keep {scheme}"), Answer::UseTypedValue(FieldId::IdScheme)),
+                    answer(
+                        format!("Keep {}", named(&scheme)),
+                        Answer::UseTypedValue(FieldId::IdScheme),
+                    ),
                 ],
             );
         } else if !share_at_least(ours.into(), complete.into(), t.id_fit_permille) {
@@ -2415,26 +2585,58 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
             );
         }
     }
+    if let Some(p) = scheme_plain(&scheme) {
+        card.plain(FieldId::IdScheme, p);
+    }
     card.set(FieldId::IdScheme, scheme.clone(), scheme_src, scheme_detail);
 
-    // ---- Second review and high stakes: never and off unless typed (§3.7).
-    let multi = text(&typed.multi_review);
+    // ---- Second review and high stakes: never and off unless chosen (§3.7).
+    let multi_src = use_value(FieldId::MultiReview)
+        .map(|v| (v, Source::Answer))
+        .or_else(|| text(&typed.multi_review).map(|v| (v, Source::Typed)));
+    let plain_multi = |v: &str| MULTI_REVIEW.iter().find(|(c, _)| *c == v).map(|(_, p)| *p);
+    if let Some((v, _)) = &multi_src
+        && plain_multi(v).is_none()
+    {
+        card.ask(
+            FieldId::MultiReview,
+            format!(
+                "`{v}` is not a second review: choose {}",
+                MULTI_REVIEW
+                    .iter()
+                    .map(|(_, p)| p.to_lowercase())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            MULTI_REVIEW
+                .iter()
+                .map(|(c, p)| answer(*p, Answer::UseValue(FieldId::MultiReview, (*c).into())))
+                .collect(),
+        );
+    }
+    let (multi, multi_from) = multi_src.unwrap_or_else(|| ("never".into(), Source::Default));
     let doubles = survey.map(|s| s.multi_marks).unwrap_or(0);
+    let multi_detail = match multi.as_str() {
+        "always" => "every double mark goes to review".to_string(),
+        "high_stakes" if typed.high_stakes == Some(true) => {
+            "this exam is high-stakes: every double mark goes to review".into()
+        }
+        "high_stakes" => "this exam is not high-stakes: confident double marks are scored as \
+                          wrong without review"
+            .into(),
+        _ => "confident double marks are scored as wrong without review".into(),
+    };
+    if let Some(p) = plain_multi(&multi) {
+        card.plain(FieldId::MultiReview, p);
+    }
     card.set(
         FieldId::MultiReview,
-        multi.clone().unwrap_or_else(|| "never".into()),
-        if multi.is_some() {
-            Source::Typed
-        } else {
-            Source::Default
-        },
+        multi.clone(),
+        multi_from,
         if survey.is_some() {
-            format!(
-                "confident double marks are scored as wrong without review ({doubles} on these \
-                 sheets)"
-            )
+            format!("{multi_detail} ({doubles} on these sheets)")
         } else {
-            "confident double marks are scored as wrong without review".into()
+            multi_detail
         },
     );
     let high_stakes = typed.high_stakes.unwrap_or(false);
@@ -2446,7 +2648,7 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
         } else {
             Source::Default
         },
-        "on: stricter margins and erasures to review (more items, never fewer)".into(),
+        "when on, stricter margins and erasures go to review (more items, never fewer)".into(),
     );
 
     // ---- Title, course, term (§3.8): labels only, harmless to scores.
@@ -2600,8 +2802,8 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
         }
         Plan::Provisional => (
             Source::Answer,
-            "the most common answers of each version: results stay provisional and can never be \
-             released"
+            "the most common answers of each version: the results stay provisional and cannot be \
+             released until you replace the key in Setup"
                 .into(),
         ),
         Plan::Broken | Plan::Missing => (Source::Default, String::new()),
@@ -2697,7 +2899,8 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
         d.course_code = course.to_string();
         define::new_exam_dir(&ctx.workspace, &d)
     };
-    let typed_folder = typed.folder.clone();
+    // a typed name (not a whole path) is a folder below the exams folder
+    let typed_folder = typed.folder.as_ref().map(|d| ctx.workspace.join(d));
     if let Some(dir) = &typed_folder
         && (dir.join("project.omrproj").exists() || dir.extension().is_some_and(|e| e == "omrproj"))
     {
@@ -2744,7 +2947,7 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
         i.course = Some(course.0.clone()).filter(|c| !c.is_empty());
         i.term = Some(term.0.clone()).filter(|c| !c.is_empty());
         i.cancel_mode = cancel_input;
-        i.multi_review = Some(multi.unwrap_or_else(|| "never".into()));
+        i.multi_review = Some(multi.clone());
         i.high_stakes = high_stakes;
         i.id_scheme = Some(scheme);
         i.provenance = card

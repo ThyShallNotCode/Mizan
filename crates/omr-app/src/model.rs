@@ -606,8 +606,7 @@ impl Session {
         if self.flags.computing() && !self.key_unconfirmed() {
             why.push(
                 "the item analysis of the current results has not checked for a probable \
-                 mis-key yet (§12.2 flag stability: computing…); it runs with the next export \
-                 (omr export) or release"
+                 mis-key yet (it is computing…); it runs with the next export or release"
                     .to_string(),
             );
         }
