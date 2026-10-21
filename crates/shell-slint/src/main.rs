@@ -785,8 +785,11 @@ fn host(ui: &AppWindow, prefs: Prefs) -> Host {
     }
 }
 
-/// Runs the window until it is closed; then every exam open is saved and closed (each writes
-/// its signed checkpoint). `theme` is `--theme` (dark when true), which wins over the theme
+/// How long the closed window waits for a background run that is still going to end.
+const WIND_DOWN: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Runs the window until it is closed; then a run still going is ended (cancelled, or saved
+/// whole) and every exam open is saved and closed (each writes its signed checkpoint). `theme` is `--theme` (dark when true), which wins over the theme
 /// saved in Settings.
 fn run_windowed(
     theme: Option<bool>,
@@ -808,6 +811,11 @@ fn run_windowed(
     }
     shell.start_live_updates();
     let ran = ui.run();
+    // the window waits for a run to stop before it closes; should the event loop end anyway
+    // (the system logs out), the run still ends here, cancelled or saved whole
+    if !shell_slint::backend::wind_down(&backend, WIND_DOWN) {
+        eprintln!("omr-desktop: a background run did not stop in time");
+    }
     for e in backend.borrow_mut().close_all() {
         eprintln!("omr-desktop: not saved and closed properly: {e}");
     }

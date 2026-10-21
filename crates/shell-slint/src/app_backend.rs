@@ -6448,20 +6448,45 @@ impl Backend for AppBackend {
         })
     }
 
+    fn saving(&self) -> bool {
+        self.job
+            .as_ref()
+            .is_some_and(|j| j.running() && j.cancel.is_committed())
+    }
+
     fn can_cancel(&self, exam: &ExamId) -> bool {
         self.job.as_ref().is_some_and(|j| {
             j.running()
                 && &j.exam == exam
                 && matches!(j.kind, JobKind::Grade { .. })
                 && !j.cancel.is_cancelled()
+                && !j.cancel.is_committed()
         })
     }
 
     fn cancel_job(&mut self) -> Result<String, BackendError> {
-        let Some(j) = self.job.as_mut().filter(|j| j.running()) else {
+        let Some(j) = self.job.as_ref().filter(|j| j.running()) else {
             return Err(BackendError::Invalid("Nothing is being graded".into()));
         };
-        j.cancel.cancel();
+        let name = self.job_name(j);
+        let j = self.job.as_mut().expect("checked above");
+        if !j.cancel.cancel() {
+            // past its last check: the run is being saved whole, and that is said as it is
+            return Err(BackendError::Denied(match j.kind {
+                JobKind::Grade { .. } => format!(
+                    "Too late to cancel: the pages are read and {name} is being saved, so it is \
+                     kept; once it opens, change what needs changing in Setup"
+                ),
+                JobKind::Append { .. } => format!(
+                    "Too late to cancel: the pages are read and the scans are being saved into \
+                     {name}"
+                ),
+                JobKind::Roster { .. } => format!(
+                    "Too late to cancel: the booklets are matched and the roster of {name} is \
+                     being saved"
+                ),
+            }));
+        }
         let now = snapshot_label(&omr_app::pipeline::now_utc());
         j.activity.insert(
             0,

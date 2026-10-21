@@ -2183,7 +2183,7 @@ impl Shell {
     }
 
     /// Cancel grading (Scan, after its confirmation): the run stops after the pages being
-    /// read, and nothing is saved.
+    /// read, and nothing is saved; once it is being saved, the cancel is too late and says so.
     fn cancel_job(&self) {
         let r = self.backend.borrow_mut().cancel_job();
         self.ui().global::<s::ScanVM>().set_cancel_confirm(false);
@@ -2195,28 +2195,40 @@ impl Shell {
     }
 
     /// The window was asked to close: true when it may close now. While a run is in progress it
-    /// asks first (keep it running, or cancel it and close once it has stopped); asked again
-    /// while it waits for the run to stop, it closes at once.
+    /// asks first: keep it running, or cancel it and close once it has stopped; a run whose
+    /// pages are read is being saved and is kept, so it offers to close once it is saved.
+    /// Asked again while it waits for the run to stop, the window stays until it has stopped:
+    /// a worker killed half-way would leave a half-made exam behind.
     pub fn close_requested(&self) -> bool {
-        if self.st.borrow().closing {
-            return true;
-        }
         let Some(what) = self.backend.borrow().running() else {
             return true;
         };
+        if self.st.borrow().closing {
+            return false;
+        }
+        let saving = self.backend.borrow().saving();
         let ui = self.ui();
         let app = ui.global::<s::App>();
-        app.set_close_text(ss(format!(
-            "{what}. Closing cancels it: a new exam keeps nothing (your scan files are \
-             unchanged), and an exam graded before keeps its results."
-        )));
+        app.set_close_text(ss(if saving {
+            format!(
+                "{what}. Its pages are read and it is being saved, so it is kept: the window \
+                 can close once it is saved."
+            )
+        } else {
+            format!(
+                "{what}. Closing cancels it: a new exam keeps nothing (your scan files are \
+                 unchanged), and an exam graded before keeps its results."
+            )
+        }));
+        app.set_close_saving(saving);
         app.set_closing(false);
         app.set_close_open(true);
         false
     }
 
     /// The answer to closing while a run is in progress: keep it running (`0`), or cancel it
-    /// and close once it has stopped (`1`).
+    /// and close once it has stopped (`1`; a run being saved, which a cancel no longer stops:
+    /// close once it is saved).
     fn close_action(&self, i: i32) {
         let ui = self.ui();
         let app = ui.global::<s::App>();
@@ -2224,17 +2236,25 @@ impl Shell {
             app.set_close_open(false);
             return;
         }
-        let r = self.backend.borrow_mut().cancel_job();
-        if r.is_err() {
-            // it ended meanwhile
-            self.close_now();
-            return;
+        let mut text = "The window closes as soon as the pages being read are done.".to_string();
+        if !self.backend.borrow().saving() {
+            let r = self.backend.borrow_mut().cancel_job();
+            if let Err(e) = r {
+                if self.backend.borrow().running().is_none() {
+                    // it ended meanwhile
+                    self.close_now();
+                    return;
+                }
+                // too late: it is being saved, and kept
+                text = format!("{e}. The window closes once it is saved.");
+                app.set_close_saving(true);
+            }
+        } else {
+            text = "The window closes as soon as the exam is saved.".to_string();
         }
         self.st.borrow_mut().closing = true;
         app.set_closing(true);
-        app.set_close_text(ss(
-            "The window closes as soon as the pages being read are done.",
-        ));
+        app.set_close_text(ss(text));
         self.refresh_scan();
     }
 

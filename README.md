@@ -360,7 +360,9 @@ omr-desktop --demo                            # invented demo data, marked DEMO 
   with the next step: **Review N items**, **Open results**, **Open exports folder**, **Confirm
   the key in Setup** or **Replace the key in Setup**. **Cancel grading…** on the Scan screen
   stops a new exam's grading: nothing is saved, and **Edit and grade again** brings the card
-  back as it was. Closing the window while something is being graded asks first.
+  back as it was. Once the pages are read the exam is being saved, and a cancel is too late
+  (the window says so). Closing the window while something is being graded asks first, and
+  waits for a cancelled run to stop.
 - Every file or folder field has **Browse…** beside it (and **Folder…** for scans), which opens
   your system's file dialog at the folder you picked from last; typing or pasting a path still
   works.

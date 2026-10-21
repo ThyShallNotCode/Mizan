@@ -59,6 +59,9 @@ export global App {
     in property <bool> close-open;
     in property <string> close-text;
     in property <bool> closing;
+    // the run has read its pages and is being saved (a cancel is too late): the window offers
+    // to close once it is saved
+    in property <bool> close-saving;
     callback navigate(Page);
     callback set-dark(bool);
     callback set-reduce-motion(bool);
@@ -70,7 +73,7 @@ export global App {
     // a step of the notice (its index), or -1: the notice is dismissed
     callback notice-action(int);
     // closing while a run is in progress: 0 keep it running (the window stays), 1 cancel it
-    // and close once it has stopped
+    // and close once it has stopped (a run being saved: close once it is saved)
     callback close-action(int);
     // shows a folder in the system's file manager: "exam" (the current exam's folder),
     // "exports" (the same folder, where its exports are written) or "workspace"

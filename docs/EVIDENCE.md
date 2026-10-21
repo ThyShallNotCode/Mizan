@@ -598,15 +598,17 @@ alone.
 
 `omr_app::Cancel` is the operator's cancel of a new exam's grading, of scans added to a graded
 exam, or of a survey: the run checks it before the project package is created, before each
-page is decoded and between stages, never once the store stage has begun (synthetic IAU
-sheets; `omr-app/tests/cancel.rs`). The desktop's *Cancel grading* is the shell's part of G-3.
+page is decoded and between stages, never once the store stage has begun: its last check
+commits the run in the same step, and from then on `Cancel::cancel` refuses (returns false) so
+the desktop can say the cancel came too late (synthetic IAU sheets; `omr-app/tests/cancel.rs`). The desktop's *Cancel grading* is the shell's part of G-3.
 
 | Case | What happens | Test (`cancel.rs::…`) |
 |---|---|---|
 | Cancelled before the run starts | `AppError::Cancelled` ("cancelled by the operator; nothing was saved", exit code 130); no package created, no page read | `a_run_cancelled_before_it_starts_creates_no_package` |
 | Cancelled while the first page is read | No further page is decoded and no stage runs; the package (its originals already spooled) and the exam folder the run made are removed; the same folder then grades from scratch. **Was:** an empty exam folder stayed behind after a failed run | `a_cancel_during_the_page_stage_removes_the_package_and_its_new_folder` |
 | Cancelled at the batch, identity or scoring stage | Stops before the next stage; nothing stored | `a_cancel_between_stages_stops_before_the_next_one` |
-| Cancelled once the store stage has begun | Too late: the exam is written whole, opens and passes the audit checks | `a_cancel_once_the_store_stage_has_begun_is_too_late` |
+| Cancelled at the scoring stage, asked twice | Both cancels are accepted; the run stops, nothing stored, and the token is never committed | `a_cancel_before_the_last_check_is_accepted_and_never_committed` |
+| Cancelled once the store stage has begun | Too late: the token was committed before the store stage and refuses the cancel (it stays uncancelled); the exam is written whole, opens and passes the audit checks. **Was:** the cancel was accepted silently, and the desktop said "nothing is saved" while the exam was saved | `a_cancel_once_the_store_stage_has_begun_is_too_late` |
 | Scans added to a graded exam, cancelled while the first new page is read | The exam's results stay as they were; the run's spool stays (its scan batch left open, the new originals and page rows); adding the same files again adds their 2 pages and 2 booklets, and the exam reopens and passes the audit checks. **Was:** adding them again failed for good (`UNIQUE constraint failed: page.page_id`), opening another batch each time | `a_cancelled_append_keeps_its_spool_and_the_same_scans_add_again` |
 | A survey cancelled while it reads | Stops with `Cancelled`; a survey with a fresh token runs to its end | `a_survey_honours_the_cancel` |
 

@@ -28,30 +28,51 @@ use omr_model::{Exception, Response, Scope, Severity};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-/// The operator's cancel of a grading run or a survey (G-3): a shared flag the shell sets from
-/// another thread. The run checks it before the project package is created, before each
-/// page's decoding and between stages, never once the store stage has begun: a cancelled new
-/// exam stores nothing ([`AppError::Cancelled`]; its package is removed). A cancelled run of a
-/// graded exam (scans added, a roster given) leaves its results as they were but keeps what its
-/// spool stored: a new scan batch, left open, with the originals and page rows of the scans
-/// added; adding the same files again adds each page once. Clones share the flag; a token
-/// nobody cancels (the default) never stops a run.
+/// The operator's cancel of a grading run or a survey (G-3): a token the shell sets from another
+/// thread. The run checks it before the project package is created, before each page's
+/// decoding and between stages. Its last check, before the store stage, commits the run: from
+/// then on it is written whole, and the token refuses a cancel ([`Self::cancel`] returns false)
+/// so the shell can say the cancel came too late. A cancelled new exam stores nothing
+/// ([`AppError::Cancelled`]; its package is removed). A cancelled run of a graded exam (scans
+/// added, a roster given) leaves its results as they were but keeps what its spool stored: a new
+/// scan batch, left open, with the originals and page rows of the scans added; adding the same
+/// files again adds each page once. Clones share the token; a token nobody cancels (the
+/// default) never stops a run.
 #[derive(Clone, Debug, Default)]
-pub struct Cancel(Arc<AtomicBool>);
+pub struct Cancel(Arc<AtomicU8>);
+
+/// [`Cancel`]'s states: the run may still be cancelled, it was, or it is being written whole.
+const LIVE: u8 = 0;
+const CANCELLED: u8 = 1;
+const COMMITTED: u8 = 2;
 
 impl Cancel {
-    /// Asks every run holding this token (or a clone) to stop at its next check.
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+    /// Asks every run holding this token (or a clone) to stop at its next check. False when it
+    /// comes too late: the run has passed its last check and is being written whole (the token
+    /// then stays uncancelled).
+    pub fn cancel(&self) -> bool {
+        match self
+            .0
+            .compare_exchange(LIVE, CANCELLED, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => true,
+            Err(state) => state == CANCELLED,
+        }
     }
 
-    /// True once [`Self::cancel`] was called on this token or a clone.
+    /// True once [`Self::cancel`] was called on this token or a clone, in time.
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.0.load(Ordering::Acquire) == CANCELLED
+    }
+
+    /// True once a run holding the token has passed its last check: it is being written whole,
+    /// and a cancel comes too late.
+    pub fn is_committed(&self) -> bool {
+        self.0.load(Ordering::Acquire) == COMMITTED
     }
 
     /// [`AppError::Cancelled`] once cancelled.
@@ -60,6 +81,20 @@ impl Cancel {
             Err(AppError::Cancelled)
         } else {
             Ok(())
+        }
+    }
+
+    /// The run's last check: [`AppError::Cancelled`] once cancelled, else the run is committed
+    /// in the same step (a cancel from then on is refused), so no cancel falls between the
+    /// check and the writing.
+    pub(crate) fn commit(&self) -> Result<(), AppError> {
+        match self
+            .0
+            .compare_exchange(LIVE, COMMITTED, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => Ok(()),
+            Err(CANCELLED) => Err(AppError::Cancelled),
+            Err(_) => Ok(()),
         }
     }
 }
@@ -1073,9 +1108,9 @@ pub fn grade_into(
     let scoring = Scoring::build(&session)?;
     timings.scoring_ms = ms(t_sc);
 
-    // ---- Store: recognition run, identity, exceptions, score run. The last check: once the
-    // store stage has begun the run is written whole.
-    opts.cancel.check()?;
+    // ---- Store: recognition run, identity, exceptions, score run. The last check commits the
+    // run: once the store stage has begun it is written whole, and a cancel is refused.
+    opts.cancel.commit()?;
     progress(&Progress::Stage("store"));
     let t_st = Instant::now();
     if let Some(st) = store.as_mut() {

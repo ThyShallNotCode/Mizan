@@ -2,8 +2,8 @@
 //! checks the token before the project package is created, before each page and between
 //! stages, never once the store stage has begun: a cancelled new exam stores nothing (its
 //! package and the folder made for it are removed), a cancelled append keeps its spool and the
-//! same scans add again, a cancel during the store stage is too late and the exam is written
-//! whole, and a token nobody cancels never stops a run.
+//! same scans add again, a cancel during the store stage is too late (the token says so, and
+//! the exam is written whole), and a token nobody cancels never stops a run.
 
 mod common;
 
@@ -189,19 +189,46 @@ fn a_cancel_once_the_store_stage_has_begun_is_too_late() {
     let out = dir.path().join("out");
     let opts = options(&out, 2);
     let token = opts.cancel.clone();
+    // what the cancel answered, and whether the run was committed by then
+    let answer = Mutex::new(None);
     let progress = |p: &Progress| {
         if matches!(p, Progress::Stage("store")) {
-            token.cancel();
+            *answer.lock().unwrap() = Some((token.is_committed(), token.cancel()));
         }
     };
     let p = ExamProject::grade(&definition(), &[scans], &opts, &progress).unwrap();
-    assert!(token.is_cancelled());
+    assert_eq!(
+        answer.into_inner().unwrap(),
+        Some((true, false)),
+        "committed before the store stage, and the cancel refused"
+    );
+    assert!(!token.is_cancelled() && token.is_committed());
+    assert!(!token.cancel(), "refused again");
     assert_eq!(p.session.booklets.len(), usize::from(SHEETS));
     p.close().unwrap();
     // Written whole: the exam opens and passes the audit checks.
     let p = ExamProject::open(&out.join("project.omrproj"), "principal:test").unwrap();
     p.check_audited().unwrap();
     p.store().unwrap().verify().unwrap();
+}
+
+#[test]
+fn a_cancel_before_the_last_check_is_accepted_and_never_committed() {
+    let dir = tempfile::tempdir().unwrap();
+    let scans = sheets(&dir.path().join("scans"));
+    let out = dir.path().join("out");
+    let opts = options(&out, 2);
+    let token = opts.cancel.clone();
+    let progress = |p: &Progress| {
+        if matches!(p, Progress::Stage("scoring")) {
+            assert!(token.cancel(), "in time");
+            assert!(token.cancel(), "asked again: still cancelled");
+        }
+    };
+    let e = ExamProject::grade(&definition(), &[scans], &opts, &progress).expect_err("cancelled");
+    assert!(is_cancelled(&e), "{e}");
+    assert!(token.is_cancelled() && !token.is_committed());
+    assert!(!out.exists(), "nothing stored");
 }
 
 #[test]

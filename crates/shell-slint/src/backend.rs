@@ -2360,6 +2360,12 @@ pub trait Backend {
         None
     }
 
+    /// True once the run in progress has read its pages and is being saved: a cancel comes too
+    /// late, and what it read is kept. The default runs nothing.
+    fn saving(&self) -> bool {
+        false
+    }
+
     /// True while `exam` is being graded as a new exam: the Scan screen offers Cancel
     /// grading. The default runs nothing.
     fn can_cancel(&self, exam: &ExamId) -> bool {
@@ -2370,7 +2376,8 @@ pub trait Backend {
     /// Cancels the run in progress: it stops after the pages being read, before anything is
     /// stored (a new exam leaves no folder; a graded exam keeps its results). How it ended
     /// arrives through [`Backend::pump`] and [`Backend::take_completed`]. Returns what
-    /// happened. The default has nothing to cancel.
+    /// happened; refused once the run is being saved ([`Backend::saving`]: too late, it is
+    /// kept). The default has nothing to cancel.
     fn cancel_job(&mut self) -> Result<String, BackendError> {
         Err(BackendError::Invalid("Nothing is being graded".into()))
     }
@@ -2418,4 +2425,25 @@ pub trait Backend {
     fn take_reloaded(&mut self) -> Vec<ExamId> {
         Vec::new()
     }
+}
+
+/// Lets a background run that is still going end before the process exits, so its worker is
+/// never killed half-way (a new exam would leave a half-made package behind): the run is
+/// cancelled where it still can be (a cancelled new exam removes what it made), or else saved
+/// whole, and folded in. Waits at most `limit`; true when nothing runs any more.
+pub fn wind_down(backend: &std::cell::RefCell<dyn Backend>, limit: Duration) -> bool {
+    if backend.borrow().running().is_none() {
+        return true;
+    }
+    // refused once it is being saved: it is then waited for
+    let _ = backend.borrow_mut().cancel_job();
+    let t0 = std::time::Instant::now();
+    while backend.borrow().running().is_some() {
+        if t0.elapsed() >= limit {
+            return false;
+        }
+        backend.borrow_mut().pump();
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    true
 }

@@ -2420,9 +2420,117 @@ fn closing_the_window_while_grading_asks_and_cancels() {
     press(ui, "Cancel it and close");
     assert!(app.get_closing(), "waiting for the run to stop");
     assert!(ui.window().is_visible());
+    // asked again while it waits: the window stays until the run has stopped (closed at
+    // once, the run would be killed with the process and leave a half-made exam behind)
+    ui.window().dispatch_event(WindowEvent::CloseRequested);
+    assert!(ui.window().is_visible(), "still waiting for the run");
+    assert!(app.get_closing() && app.get_close_open());
+    assert!(w.h.app.borrow().grading_in_progress());
     run_held(&w.h, &w.held);
     assert!(!ui.window().is_visible(), "closed once the run stopped");
     assert!(!w.ws.join("cs-213-quiz-1").exists(), "nothing half-saved");
+}
+
+/// Runs the held work to its end on a thread without letting the window fold it in: the state
+/// of a run that has read its pages and is being saved, as a click finds it then.
+fn run_held_unseen(held: &Held) {
+    let work = held.borrow_mut().pop().expect("work was started");
+    std::thread::spawn(work).join().expect("worker");
+}
+
+/// D7: once the pages are read the run is being saved: Cancel grading is too late, says so
+/// and never promises that nothing is saved; the exam is graded and kept, as the notice says.
+#[test]
+fn a_cancel_once_the_run_is_being_saved_is_too_late() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    press(ui, "New exam");
+    grade_with_card(&w.h, &w.held, &quiz_1(&w.scans));
+    let exam = w.h.app.borrow().default_exam().expect("the run's exam");
+    run_held_unseen(&w.held);
+    assert!(w.h.app.borrow().saving(), "being saved, not folded in yet");
+    assert!(!w.h.app.borrow().can_cancel(&exam), "no Cancel once saving");
+    // the Scan screen as last shown still offers it: the click is answered honestly
+    press(ui, "Cancel grading…");
+    press(ui, "Cancel grading");
+    let msg = message(ui);
+    assert!(
+        msg.starts_with("Too late to cancel: the pages are read and CS 213 Quiz 1 is being saved"),
+        "{msg}"
+    );
+    assert!(!msg.contains("nothing is saved"), "{msg}");
+    assert!(
+        by_label(ui, "Cancel grading…").is_empty(),
+        "the button went"
+    );
+    let log: Vec<String> = ui
+        .global::<ScanVM>()
+        .get_activity()
+        .iter()
+        .map(|l| l.to_string())
+        .collect();
+    assert!(!log.iter().any(|l| l.contains("cancelling")), "{log:?}");
+    w.h.shell.pump();
+    let (title, text, _) = notice(ui);
+    assert_eq!(title, "CS 213 Quiz 1 is graded");
+    assert!(!text.contains("Nothing was saved"), "{text}");
+    assert!(w.ws.join("cs-213-quiz-1/project.omrproj").is_dir());
+}
+
+/// D7: closing the window while the run is being saved: a cancel is too late, so the window
+/// says the exam is kept and offers to close once it is saved, never that nothing is kept.
+#[test]
+fn closing_while_the_run_is_being_saved_waits_and_keeps_it() {
+    use slint::platform::WindowEvent;
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let app = ui.global::<App>();
+    press(ui, "New exam");
+    grade_with_card(&w.h, &w.held, &quiz_1(&w.scans));
+    run_held_unseen(&w.held);
+    ui.window().dispatch_event(WindowEvent::CloseRequested);
+    assert!(ui.window().is_visible());
+    let why = one(ui, "Close Mizan?")
+        .accessible_description()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        why.starts_with("CS 213 Quiz 1 is being graded. Its pages are read")
+            && why.contains("so it is kept"),
+        "{why}"
+    );
+    assert!(!why.contains("keeps nothing"), "{why}");
+    assert!(by_label(ui, "Cancel it and close").is_empty());
+    press(ui, "Close once saved");
+    assert!(app.get_closing() && ui.window().is_visible());
+    ui.window().dispatch_event(WindowEvent::CloseRequested);
+    assert!(ui.window().is_visible(), "still waiting");
+    w.h.shell.pump();
+    assert!(!ui.window().is_visible(), "closed once saved");
+    assert!(w.ws.join("cs-213-quiz-1/project.omrproj").is_dir(), "kept");
+}
+
+/// D7: should the window's event loop end while a run is still going, the run is cancelled
+/// and waited for before the program ends: a new exam leaves nothing half-made behind.
+#[test]
+fn a_run_still_going_at_exit_is_cancelled_and_waited_for() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    press(ui, "New exam");
+    grade_with_card(&w.h, &w.held, &quiz_1(&w.scans));
+    let work = w.held.borrow_mut().pop().expect("the run");
+    let worker = std::thread::spawn(work);
+    let backend: &std::cell::RefCell<dyn Backend> = &*w.h.app;
+    assert!(shell_slint::backend::wind_down(
+        backend,
+        std::time::Duration::from_secs(300)
+    ));
+    worker.join().expect("worker");
+    assert!(!w.h.app.borrow().grading_in_progress());
+    assert!(!w.ws.join("cs-213-quiz-1").exists(), "nothing half-made");
 }
 
 // ------------------------------------------------------------------ roster after grading (D8)

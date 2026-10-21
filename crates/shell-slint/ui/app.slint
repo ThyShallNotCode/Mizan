@@ -93,7 +93,8 @@ component Notice inherits Rectangle {
 }
 
 // Closing the window while a run is in progress asks first: keep it running, or cancel it and
-// close once it has stopped (nothing half-saved is left behind).
+// close once it has stopped (nothing half-saved is left behind); a run that has read its pages
+// is being saved and kept, and the window offers to close once it is saved.
 component CloseConfirm inherits Rectangle {
     background: Theme.scrim;
     // modal: nothing underneath takes a press or a wheel turn
@@ -121,7 +122,7 @@ component CloseConfirm inherits Rectangle {
             padding: Theme.space-lg;
             spacing: Theme.space-md;
             Text {
-                text: App.closing ? "Cancelling…" : "Close Mizan?";
+                text: !App.closing ? "Close Mizan?" : App.close-saving ? "Saving…" : "Cancelling…";
                 font-size: Theme.text-md;
                 font-weight: Theme.weight-semibold;
                 color: Theme.ink;
@@ -146,8 +147,15 @@ component CloseConfirm inherits Rectangle {
                         App.close-action(0);
                     }
                 }
-                DangerButton {
+                if !App.close-saving: DangerButton {
                     text: "Cancel it and close";
+                    clicked => {
+                        App.close-action(1);
+                    }
+                }
+                // too late to cancel: the run is kept, and the window waits for it
+                if App.close-saving: PrimaryButton {
+                    text: "Close once saved";
                     clicked => {
                         App.close-action(1);
                     }

@@ -70,9 +70,14 @@ the backend names (`NextStep`: review, results, the exports folder, Setup's key 
 or *Replace key*, the card again, the Scan log), dismissed with × or by a step that leads to
 another screen. A new exam being graded is cancelled from the Scan screen (*Cancel grading…*,
 then the confirmation; `cancel_job` sets the run's `omr_app::Cancel`): nothing is saved, no
-folder is left, and *Edit and grade again* refills the card. Closing the window while a run
-is in progress asks first (`Shell::close_requested`, wired to the window's close request):
-kept, it runs on; cancelled, the window closes once the run has stopped. Setup's step *4
+folder is left, and *Edit and grade again* refills the card. Once the run has read its pages
+it is being saved (`Backend::saving`, the token committed): the cancel is refused as too late
+and says so, and *Cancel grading…* goes. Closing the window while a run is in progress asks
+first (`Shell::close_requested`, wired to the window's close request): kept, it runs on;
+cancelled, the window closes once the run has stopped, and asked again meanwhile it still
+waits; a run being saved is kept, and the window offers to close once it is saved. Should the
+event loop end while a run goes on, the binary cancels it and waits (`backend::wind_down`),
+so no worker is killed half-way. Setup's step *4
 Roster* opens the roster bar: `set_roster` reads and checks the file on the UI thread
 (`define::read_roster_path`, a dry `import_roster`), then `run_set_roster` identifies every
 booklet again on the spawner (`ExamProject::set_roster`, decisions carried over) as a run the
