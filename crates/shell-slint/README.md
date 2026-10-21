@@ -19,11 +19,12 @@ cargo run -p shell-slint -- --workspace W --screenshot D --size 1280x800 --shots
 cargo run -p shell-slint --example synthetic_exam -- W         # the synthetic IAU workspace
 cargo run -p shell-slint -- --workspace W --screenshot D --size 1280x800 --shots setup-keysheet
 cargo run -p shell-slint -- --workspace W --screenshot D --remark W/remark-cs211-midterm-1 \
-    --remark-setup W/remark-cs212-quiz-2 \
+    --remark-setup W/remark-cs212-quiz-2 --id-scheme digits:10 \
     --new-exam "W/new-cs213-quiz-1/CS213 Quiz 1"              # + the Remark screens and the card
 cargo run -p shell-slint -- --grade "W/new-cs213-quiz-1/CS213 Quiz 1" --template iau-ccsit-v1 \
-    --questions 30 --key W/new-cs213-quiz-1/key.csv --workspace W --screenshot D \
-    --shots scan-notice                                        # the completion notice (grades W)
+    --questions 30 --key W/new-cs213-quiz-1/key.csv --roster W/new-cs213-quiz-1/roster.csv \
+    --clo W/new-cs213-quiz-1/clo.csv --course "CS 213" --title "Quiz 1" --id-scheme digits:10 \
+    --workspace W --screenshot D --shots scan-notice           # the completion notice (grades W)
 cargo run -p shell-slint -- --workspace EMPTY --screenshot D   # an empty exams folder
 cargo test -p shell-slint                                      # unit + A11 tests (demo and real)
 ```
@@ -135,7 +136,8 @@ import, of `--remark-setup` when given, shown for the first exam it applies to).
 `--new-exam <scans folder>` (`key.csv`, `roster.csv` and `clo.csv` beside it; the example writes
 `W/new-cs213-quiz-1/`): the New-exam card made from them, its scans checked, exams-new-ask (the
 scans alone: the answer key asked, Grade exam waiting) and exams-new-ready (with the files:
-every value with its source, the title and course from the scans' folder name, nothing asked).
+every value with its source, the title and course from the scans' folder name, nothing asked;
+`--id-scheme` is typed under *Advanced options*, as the synthetic student numbers need).
 With `--grade` the shots are taken once grading has finished, and scan-notice adds the
 completion notice of that run over the Scan screen (it grades into `--workspace`: use a copy).
 An exams folder with no exam gives one shot, exams-empty (its empty state). There is no
