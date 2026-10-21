@@ -2015,8 +2015,13 @@ fn a_typed_folder_name_grades_into_the_exams_folder() {
     press(ui, PROVISIONAL);
     let row = card_row(ui, "Folder");
     let want = w.ws.join("quiz-rel");
+    // written as the window writes a folder: `~` when it lies in the home folder (as the
+    // temporary folder does on some systems)
     assert!(
-        row.starts_with(&format!("Folder: {} — typed", want.display())),
+        row.starts_with(&format!(
+            "Folder: {} — typed",
+            shell_slint::bind::home_path(&want)
+        )),
         "{row}"
     );
     press(ui, "Grade exam");
@@ -2693,7 +2698,18 @@ fn the_notice_lies_over_no_control() {
         "Grade exam is under the notice"
     );
     press(ui, "Grade exam");
-    assert!(message(ui).starts_with("Grading"), "{}", message(ui));
+    let ex = ui.global::<ExamsVM>();
+    assert!(
+        message(ui).starts_with("Grading"),
+        "message {:?}; Grade exam waits for {:?}; asks {:?}; grading error {:?}",
+        message(ui),
+        ex.get_new_block(),
+        ex.get_card_asks()
+            .iter()
+            .map(|a| a.label.to_string())
+            .collect::<Vec<_>>(),
+        w.h.app.borrow().grading_error()
+    );
     assert!(
         !app.get_notice_open(),
         "the earlier run's notice is done with"
