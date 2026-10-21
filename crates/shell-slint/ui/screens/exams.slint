@@ -1535,6 +1535,10 @@ export component ExamsScreen inherits Rectangle {
             short: root.short;
         }
         }
+        // the run's notice sits here, above the status bar: nothing of the screen lies under it
+        if App.notice-room > 0: Rectangle {
+            height: App.notice-room;
+        }
         StatusBar {
             StatusText {
                 text: App.workspace;
@@ -1559,8 +1563,9 @@ export component ExamsScreen inherits Rectangle {
         y: Theme.top-bar-height + Theme.space-sm;
         width: min(root.width - 2 * Theme.space-lg, 1240px);
         height: self.preferred-height;
-        // the status bar stays in view: it says why a click did nothing
-        max-h: root.height - Theme.top-bar-height - Theme.status-bar-height - 2 * Theme.space-sm;
+        // the status bar stays in view (it says why a click did nothing), and so does a run's
+        // notice above it
+        max-h: root.height - Theme.top-bar-height - Theme.status-bar-height - App.notice-room - 2 * Theme.space-sm;
     }
     if ExamsVM.new-open && RemarkVM.new-panel: RemarkNewPanel {
         x: (root.width - self.width) / 2;

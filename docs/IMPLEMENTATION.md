@@ -120,7 +120,10 @@ expectation tied to the real exams out of the repository.
     on their worker as `omr grade` does (Settings: *Write exports after grading*, on by
     default; a key read from key sheets holds them until it is confirmed), and a notice on
     every screen says how the run ended with its next steps (review, results, the exports
-    folder, confirming or replacing the key, the card again). A new exam's grading is
+    folder, confirming or replacing the key, the card again), in room every screen gives up
+    for it; once a decision or a key change follows, the notice and Results' Export… say the
+    exports are older (`omr_app::export::exports_state` compares what they hold with what they
+    would hold now). A new exam's grading is
     cancelled from the Scan screen after a confirmation (`omr_app::Cancel`: nothing is
     saved, no folder is left); closing the window while a run is in progress asks first, and
     a cancelled run is waited for before the window closes.
@@ -201,8 +204,8 @@ expectation tied to the real exams out of the repository.
   workbooks (the import reads named files only: the dialog picks several).
 - Parts of the end of a run (G-3 D6): Export… and Release… in Results still write on the UI
   thread (a worker needs the project closed and reopened, as an added batch does: a run kind
-  of their own); Results does not say when the exports are older than the latest decisions;
-  *Edit and grade again* refills the card without a Remark import (it is read again).
+  of their own); *Edit and grade again* refills the card without a Remark import (it is read
+  again).
 - Parts of the exams folder (G-3 D3, D9): a menu of the recent folders (the preferences keep
   the last five); Explorer selecting the results file (`explorer /select`); opening a large
   folder reads every exam on the UI thread, twice (the listing and the dashboard row), not on

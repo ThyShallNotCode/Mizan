@@ -23,9 +23,13 @@ import { Palette } from "std-widgets.slint";
 export { Theme, App, ExamsVM, SetupVM, ScanVM, ReviewVM, ResultsVM, OutcomesVM, RemarkVM, Page }
 
 // The end of a background run (a new exam graded, scans added, a roster), on every screen: what
-// happened, what waits, and the next steps, the primary first. Dismissed with ×, or by a step
-// that leads to another screen. It floats above the status bar, so no screen loses height.
+// happened, what waits, and the next steps, the primary first. Dismissed with × or Escape, or by
+// a step that leads to another screen. It sits above the status bar, in room every screen gives
+// up for it (App.notice-room), so it never lies over a control.
 component Notice inherits Rectangle {
+    // a button of it is pressed: the keyboard goes back to the window before the notice (and the
+    // button) may go away
+    callback stepping();
     background: Theme.surface-raised;
     border-radius: Theme.radius-lg;
     border-width: 1px;
@@ -36,6 +40,10 @@ component Notice inherits Rectangle {
     accessible-role: AccessibleRole.groupbox;
     accessible-label: App.notice-title;
     accessible-description: App.notice-text;
+    // it appears without taking the keyboard: screen readers announce it as it appears, at once
+    // when the run failed (VoiceOver reads the value)
+    accessible-live-region: App.notice-tone == Tone.error ? AccessibleLiveness.assertive : AccessibleLiveness.polite;
+    accessible-value: App.notice-title;
     // a press on its background never reaches the screen underneath
     TouchArea { }
     HorizontalLayout {
@@ -76,6 +84,7 @@ component Notice inherits Rectangle {
                 kind: i == 0 ? ButtonKind.primary : ButtonKind.secondary;
                 text: step;
                 clicked => {
+                    root.stepping();
                     App.notice-action(i);
                 }
             }
@@ -84,7 +93,9 @@ component Notice inherits Rectangle {
             IconButton {
                 icon: Icons.close;
                 label: "Dismiss the notice";
+                accessible-description: "Or press Escape";
                 clicked => {
+                    root.stepping();
                     App.notice-action(-1);
                 }
             }
@@ -204,6 +215,22 @@ export component AppWindow inherits Window {
     changed page => {
         if (self.page != Page.review) {
             root-keys.focus();
+        }
+    }
+
+    // A control that had the keyboard goes away with what holds it (the notice): the keyboard
+    // goes back to the window, and on Review to its canvas.
+    function keys-back() {
+        root-keys.focus();
+        if (App.page == Page.review) {
+            App.keys-back += 1;
+        }
+    }
+    // the notice gone, no screen keeps room for it
+    property <bool> notice-open: App.notice-open;
+    changed notice-open => {
+        if (!self.notice-open) {
+            App.notice-room = 0;
         }
     }
 
@@ -348,6 +375,16 @@ export component AppWindow inherits Window {
             width: root.win-w - Theme.nav-rail-width - 2 * Theme.space-xl;
             height: self.preferred-height;
             y: root.win-h - Theme.status-bar-height - Theme.space-md - self.height;
+            // the screens give up its height and the gaps around it
+            init => {
+                App.notice-room = self.height + 2 * Theme.space-md;
+            }
+            changed height => {
+                App.notice-room = self.height + 2 * Theme.space-md;
+            }
+            stepping => {
+                root.keys-back();
+            }
         }
         if App.close-open: CloseConfirm {
             x: 0;

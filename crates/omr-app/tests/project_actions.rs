@@ -541,3 +541,57 @@ fn an_export_file_that_cannot_be_written_is_named_with_what_to_do() {
         "{msg}"
     );
 }
+
+/// Exports written before a change are known to be older than the exam: a decision, or a key
+/// entry corrected, after they were written makes them older; writing them again makes them
+/// current. A folder without exports holds none.
+#[test]
+fn exports_written_before_a_change_are_known_to_be_older() {
+    use omr_app::export::{ExportsState, exports_state};
+    let dir = tempfile::tempdir().unwrap();
+    let input = scans(dir.path());
+    let out = dir.path().join("out");
+    let mut p = grade(&definition(provided(true), true), &[input], &out, 2);
+    assert_eq!(exports_state(&p, &out), ExportsState::Current);
+    assert_eq!(
+        exports_state(&p, &dir.path().join("elsewhere")),
+        ExportsState::None
+    );
+    // one review decision
+    let (id, kind, b, q) = p
+        .queue(None)
+        .iter()
+        .find(|i| i.kind == ItemKind::Mark)
+        .map(|i| (i.id, i.kind, i.booklet, i.question))
+        .expect("a mark to review");
+    assert_eq!(kind, ItemKind::Mark);
+    let d = answer(sheet_no(&p, b.unwrap()), q.unwrap()).map_or(Decision::Blank, Decision::Option);
+    let reason = p
+        .overrides_engine(id, &d)
+        .then(|| ReviewReason::code("AMBIGUOUS_MARK"));
+    p.apply_with_reason(
+        id,
+        Action::Resolve {
+            decision: d,
+            accepted_suggestion: false,
+            note: String::new(),
+        },
+        reason,
+    )
+    .unwrap();
+    assert_eq!(exports_state(&p, &out), ExportsState::Older);
+    p.export(&out).unwrap();
+    assert_eq!(exports_state(&p, &out), ExportsState::Current);
+    // a key entry corrected
+    let right = char::from(b'A' + key(0, 2)).to_string();
+    p.set_key_with_reason(
+        0,
+        3,
+        &right,
+        Some(ReviewReason::with_note("KEY_ERROR", "typo")),
+    )
+    .unwrap();
+    assert_eq!(exports_state(&p, &out), ExportsState::Older);
+    p.export(&out).unwrap();
+    assert_eq!(exports_state(&p, &out), ExportsState::Current);
+}

@@ -1819,6 +1819,20 @@ pub enum JobOutcome {
     Cancelled,
 }
 
+/// Whether the exports in an exam's folder show the exam as it stands
+/// ([`Backend::exports_state`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExportsState {
+    /// None written (or nothing to say).
+    #[default]
+    None,
+    /// They show the exam as it stands.
+    Current,
+    /// Written before a later change (a decision, the key, the roster): Write all exports
+    /// updates them.
+    Older,
+}
+
 /// A next step the completion notice offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NextStep {
@@ -2022,6 +2036,14 @@ pub trait Backend {
     fn exam_folder(&self, exam: &ExamId) -> Option<std::path::PathBuf> {
         let _ = exam;
         None
+    }
+
+    /// Whether the exports in `exam`'s folder show it as it stands, or were written before a
+    /// later change (the core compares what they hold with what they would hold now). The
+    /// default has nothing to say.
+    fn exports_state(&self, exam: &ExamId) -> ExportsState {
+        let _ = exam;
+        ExportsState::None
     }
 
     /// Saves and closes every exam open (each writes its signed checkpoint), as the window

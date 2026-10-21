@@ -54,6 +54,12 @@ export global App {
     in property <Tone> notice-tone: Tone.neutral;
     // the steps' labels, the primary first
     in property <[string]> notice-steps;
+    // the height the notice takes above the status bar (0: none on show): every screen gives it
+    // up, so the notice never lies over a control (set by the window as the notice is laid out)
+    in-out property <length> notice-room;
+    // counted up when the keyboard goes back to the window from a control that went away (the
+    // notice's buttons, the close dialog's): the review canvas takes it on Review
+    in-out property <int> keys-back;
     // closing the window while a run is in progress asks first: what runs, and whether the
     // window waits for a cancelled run to stop
     in property <bool> close-open;
@@ -935,6 +941,9 @@ export global ResultsVM {
     in property <string> release-reason;
     // exports (§16.3): every file next to the project, and the Blackboard grade-center upload
     in property <bool> can-export;
+    // the exports in the exam's folder were written before a later change ("": they are
+    // current, or none were written)
+    in property <string> exports-note;
     in property <bool> blackboard-ready;
     in property <string> blackboard-note;
     in-out property <bool> export-open;

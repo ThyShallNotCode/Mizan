@@ -193,6 +193,55 @@ pub fn review_json(p: &ExamProject) -> Value {
     })
 }
 
+/// Whether the exports in a folder show the exam as it stands ([`exports_state`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportsState {
+    /// The folder holds no exports of the exam.
+    None,
+    /// They show the exam as it stands.
+    Current,
+    /// They were written before a later change (a decision, the key, the roster): writing the
+    /// exports again updates them.
+    Older,
+}
+
+/// Whether the exports written into `dir` show the exam as it stands: the booklets file they
+/// hold (every answer, its status, every score, grade and student) is compared with the one
+/// they would hold now, so exports the command line wrote count too. Nothing is analysed: it
+/// is cheap enough to ask after every change.
+pub fn exports_state(p: &ExamProject, dir: &Path) -> ExportsState {
+    let Ok((name, now)) = booklets_file(p) else {
+        return ExportsState::Older;
+    };
+    match std::fs::read(dir.join(&name)) {
+        Ok(written) if written == now => ExportsState::Current,
+        Ok(_) => ExportsState::Older,
+        // exports of the other key (an inferred one, or the real one since) are older
+        Err(_) => {
+            let other = if name.contains("-INFERRED") {
+                "booklets.json"
+            } else {
+                "booklets-INFERRED.json"
+            };
+            if dir.join(other).exists() {
+                ExportsState::Older
+            } else {
+                ExportsState::None
+            }
+        }
+    }
+}
+
+/// The booklets file as the exports write it: its name and bytes.
+fn booklets_file(p: &ExamProject) -> Result<(String, Vec<u8>), AppError> {
+    let inferred = p.session.key.as_ref().is_some_and(|k| k.inferred);
+    let sfx = if inferred { "-INFERRED" } else { "" };
+    let mut bk = booklets_json(p);
+    bk["banner"] = json!(inferred.then_some(INFERRED_BANNER));
+    let bytes = serde_json::to_vec_pretty(&bk).map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok((format!("booklets{sfx}.json"), bytes))
+}
+
 /// Per-booklet responses, forms, identity and scores.
 pub fn booklets_json(p: &ExamProject) -> Value {
     let s = &p.session;
@@ -897,9 +946,7 @@ pub fn write_all(p: &ExamProject, dir: &Path) -> Result<ExportSummary, AppError>
     let mut rq = review_json(p);
     rq["banner"] = json!(inferred.then_some(INFERRED_BANNER));
     files.push((format!("review_queue{sfx}.json"), js(rq)?));
-    let mut bk = booklets_json(p);
-    bk["banner"] = json!(inferred.then_some(INFERRED_BANNER));
-    files.push((format!("booklets{sfx}.json"), js(bk)?));
+    files.push(booklets_file(p)?);
     match blackboard_csv(p, None)? {
         Some(bb) => files.push((BLACKBOARD_FILE.into(), bb)),
         // No upload now (not released, or a later change superseded the release): an upload

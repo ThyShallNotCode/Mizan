@@ -5863,6 +5863,19 @@ impl Backend for AppBackend {
         e.dir.parent().map(Path::to_path_buf)
     }
 
+    fn exports_state(&self, exam: &ExamId) -> b::ExportsState {
+        let Some(dir) = self.exam_folder(exam) else {
+            return b::ExportsState::None;
+        };
+        use omr_app::export::ExportsState as S;
+        self.with(exam, |o| match omr_app::export::exports_state(&o.p, &dir) {
+            S::None => b::ExportsState::None,
+            S::Current => b::ExportsState::Current,
+            S::Older => b::ExportsState::Older,
+        })
+        .unwrap_or_default()
+    }
+
     fn close_all(&mut self) -> Vec<String> {
         let opened = std::mem::take(&mut *self.opened.borrow_mut());
         self.failed.borrow_mut().clear();

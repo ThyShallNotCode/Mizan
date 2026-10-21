@@ -67,10 +67,14 @@ added scans, a roster) writes the exports when its run ends, as `omr grade` does
 (`GradeRequest`/`AppendRequest`/`RosterRequest::export_to`, from Settings' *Write exports after
 grading*, `Backend::set_auto_export`; a key read from key sheets holds them until it is
 confirmed), and reports how it ended once (`Backend::take_completed`, a `JobDone`): a notice
-floats above the status bar of every screen with what happened, what waits and the next steps
-the backend names (`NextStep`: review, results, the exports folder, Setup's key confirmation
-or *Replace key*, the card again, the Scan log), dismissed with × or by a step that leads to
-another screen. A new exam being graded is cancelled from the Scan screen (*Cancel grading…*,
+sits above the status bar of every screen, in room each screen gives up for it
+(`App.notice-room`), with what happened, what waits and the next steps the backend names
+(`NextStep`: review, results, the exports folder, Setup's key confirmation or *Replace key*,
+the card again, the Scan log). It is a live region (assertive when the run failed), dismissed
+with ×, Escape, a step that leads to another screen, New exam or grading another exam; the
+keyboard goes back to the window as it goes. Once a decision or a key change follows, the
+notice and Results' *Export…* say its exports are older (`Backend::exports_state`, from
+`omr_app::export::exports_state`). Review opens on a lane with open items. A new exam being graded is cancelled from the Scan screen (*Cancel grading…*,
 then the confirmation; `cancel_job` sets the run's `omr_app::Cancel`): nothing is saved, no
 folder is left, and *Edit and grade again* refills the card, the answers given on it included
 (`Backend::restore_graded_card`). Once the run has read its pages
@@ -487,6 +491,11 @@ real export.
 | `stopping_the_survey_holds_grade_until_checked_again` | *Stop checking* ends the check: a question on the scans blocks Grade, the stopped worker's end changes nothing, *Check the scans again* checks them |
 | `an_invalid_value_is_marked_on_its_field` | "thirty" questions: the question shows under the field (its description) and blocks Grade; *Type the count* puts the keyboard in the field, and 30 typed there unblocks it |
 | `screenshots_make_the_card_from_an_exams_files` | the card shots type the exam's files as an instructor types them (`~` for the home folder) and wait for the check of the scans: the scans alone ask for the answer key and Grade exam waits; with the key, roster and CLO files nothing is asked, title and course come from the scans' folder name and the card's folder reads `~`; the Browse buttons are shown; the card as it opens is empty |
+| `the_notice_lies_over_no_control` | at 1280 × 800 the card opened during a run keeps Grade exam clear of the run's notice, grading from it takes that notice down, and the exams drawer's buttons are clear of the next one |
+| `the_notice_is_dismissed_with_escape_and_the_keys_keep_working` | Escape dismisses the notice; dismissed with a click on ×, Ctrl+5 still opens Results |
+| `review_opens_on_a_lane_with_items` | a lane with nothing open names the lanes that have items, and Review shown again opens one of them, never "Nothing to review" |
+| `exports_older_than_a_later_decision_are_said_to_be` | after the roster run wrote the exports, one decision makes the notice and Results' Export… say they are older; Write all exports makes them current |
+| `opening_new_exam_takes_down_the_last_runs_notice` | at 1280 × 800 New exam takes the last run's notice down, so Grade exam takes the click |
 | `screenshots_show_the_notice_on_its_shot_only` | a grading run ended unseen: scan-notice shows its notice (in both themes), every other shot hides it; the Scan log names the project saved by its last folders, as the status bar does |
 | `screenshots_of_an_empty_folder_show_its_empty_state` | an empty exams folder has one shot, exams-empty, with New exam…, Open another folder… and the Remark import |
 | `the_proposed_report_folder_reads_a_tilde` | the parallel run's proposed report folder below the home folder reads `~/…` and is read back as the same folder (`bind::home_path`) |

@@ -321,6 +321,10 @@ fn decision_word(d: Decision, labels: &[String]) -> String {
 const FIRST_REASONS: usize = 4;
 /// The last reason chip: shows every code on offer, or the first ones again.
 const MORE_REASONS: &str = "\u{0}more";
+
+/// Said of exports written before a later change (a decision, the key, the roster).
+const OLDER_EXPORTS: &str = "these exports were written before your latest changes: Write all exports in Results updates them";
+
 /// The New-exam card is proposed again once typing in its fields pauses this long.
 pub const CARD_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(300);
 
@@ -535,6 +539,8 @@ struct Notice {
     steps: Vec<b::NextStep>,
     shown: Vec<b::NextStep>,
     review_open: u32,
+    /// What the run said (the exports it wrote are named as they were then).
+    text: String,
 }
 
 /// The New-exam card's fields as they were graded, and the files a dialog picked for them.
@@ -793,11 +799,12 @@ impl Shell {
             steps: done.steps.clone(),
             shown: Vec::new(),
             review_open: done.review_open,
+            text: done.text.clone(),
         });
         app.set_notice_title(ss(&done.title));
-        app.set_notice_text(ss(&done.text));
         app.set_notice_tone(tone(done.tone));
         self.refresh_notice();
+        self.refresh_notice_text();
         app.set_notice_open(true);
         self.refresh_card();
         if self.st.borrow().closing {
@@ -818,6 +825,7 @@ impl Shell {
         match page {
             s::Page::Review => {
                 if self.st.borrow().item.is_none() {
+                    self.lane_with_items();
                     self.refresh_review();
                     let first = self.st.borrow().order.first().copied();
                     self.select_item(first);
@@ -829,6 +837,21 @@ impl Shell {
             // refreshed them
             s::Page::Exams => self.refresh_dashboard(),
             page => self.refresh_page(page),
+        }
+    }
+
+    /// Review opens on a lane with open items: the lane shown has none while another lane has
+    /// (the notice's "Review N items" counts every lane), so the first such lane is shown.
+    fn lane_with_items(&self) {
+        let Some(exam) = self.exam() else { return };
+        let lane = self.st.borrow().lane;
+        let q = self.backend.borrow().review_queue(&exam, lane);
+        let open = |l: Lane| q.lanes.iter().find(|c| c.lane == l).map_or(0, |c| c.open);
+        if open(lane) > 0 {
+            return;
+        }
+        if let Some(l) = Lane::ALL.iter().copied().find(|&l| open(l) > 0) {
+            self.st.borrow_mut().lane = l;
         }
     }
 
@@ -1421,6 +1444,9 @@ impl Shell {
         let r = self.backend.borrow_mut().create_exam(&form);
         match r {
             Ok((exam, what)) => {
+                // an earlier run's notice is done with: its Edit and grade again would fill the
+                // card of this run
+                self.dismiss_notice();
                 // kept for Edit and grade again (a run that fails or is cancelled)
                 let picked = self
                     .st
@@ -2107,6 +2133,32 @@ impl Shell {
                 .collect::<Vec<_>>()
         };
         self.ui().global::<s::App>().set_notice_steps(model(labels));
+    }
+
+    /// The notice's text: what the run said, and, once a decision or a key change came after
+    /// the exports it wrote, that those files are older than the exam (the core compares them).
+    fn refresh_notice_text(&self) {
+        let Some((exam, text, exported)) = self.st.borrow().notice.as_ref().map(|n| {
+            (
+                n.exam.clone(),
+                n.text.clone(),
+                n.steps.contains(&b::NextStep::ExportsFolder),
+            )
+        }) else {
+            return;
+        };
+        let older =
+            exported && self.backend.borrow().exports_state(&exam) == b::ExportsState::Older;
+        let text = if older {
+            format!("{text} · {OLDER_EXPORTS}")
+        } else {
+            text
+        };
+        let ui = self.ui();
+        let app = ui.global::<s::App>();
+        if app.get_notice_text() != text.as_str() {
+            app.set_notice_text(ss(text));
+        }
     }
 
     /// Takes step `i` of the completion notice, or dismisses it (`-1`). A step that leads to
@@ -2822,6 +2874,9 @@ impl Shell {
             Ok(where_) => self.say(where_, s::Tone::Success),
             Err(e) => self.say(e.to_string(), s::Tone::Warning),
         }
+        // the files written are current again
+        self.refresh_if_shown(s::Page::Results);
+        self.refresh_notice_text();
     }
 
     /// Writes the Blackboard grade-center upload, into an existing column when one is given.
@@ -2966,6 +3021,10 @@ impl Shell {
                     true
                 } else if page == s::Page::Review && self.st.borrow().help {
                     self.toggle(|st| st.help = false);
+                    true
+                } else if self.st.borrow().notice.is_some() {
+                    // the notice never takes the keyboard: Escape dismisses it from anywhere
+                    self.dismiss_notice();
                     true
                 } else {
                     false
@@ -3719,6 +3778,8 @@ impl Shell {
         )));
         // a run that started or ended changes why Grade exam waits
         self.refresh_card();
+        // a change since the run's exports were written makes them older
+        self.refresh_notice_text();
         ex.set_term_label(ss(join(&[&d.term.label, &d.term.gregorian], " · ")));
         ex.set_sheets_week(ss(thousands(d.stats.sheets_this_week)));
         // a caption in colour only when there is something to count
@@ -4883,7 +4944,22 @@ impl Shell {
             }
             None => {
                 rv.set_empty_title(ss("Lane clear"));
-                rv.set_empty_text(ss(format!("No open items in the {} lane", lane.label())));
+                // where the items left are (the lanes above)
+                let others: Vec<String> = q
+                    .lanes
+                    .iter()
+                    .filter(|c| c.lane != lane && c.open > 0)
+                    .map(|c| format!("{} {}", c.lane.label(), c.open))
+                    .collect();
+                rv.set_empty_text(ss(if others.is_empty() {
+                    format!("No open items in the {} lane", lane.label())
+                } else {
+                    format!(
+                        "No open items in the {} lane; still open: {} (choose the lane above)",
+                        lane.label(),
+                        others.join(", ")
+                    )
+                }));
             }
         }
         {
@@ -5592,6 +5668,18 @@ impl Shell {
         rs.set_release_blocked(r.release_blocked.is_some());
         rs.set_release_reason(ss(r.release_blocked.unwrap_or_default()));
         rs.set_can_export(true);
+        let older = exam
+            .as_ref()
+            .is_some_and(|e| self.backend.borrow().exports_state(e) == b::ExportsState::Older);
+        // said as a sentence of its own: capitalised
+        let note = if older {
+            let mut n = OLDER_EXPORTS.to_string();
+            n[..1].make_ascii_uppercase();
+            n
+        } else {
+            String::new()
+        };
+        rs.set_exports_note(ss(note));
         rs.set_blackboard_ready(r.blackboard_blocked.is_none());
         rs.set_blackboard_note(ss(r.blackboard_blocked.unwrap_or_else(|| {
             "Only final results go into the upload (Username = roster student ID, the raw score); \

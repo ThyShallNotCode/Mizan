@@ -827,6 +827,10 @@ export component ScanScreen inherits Rectangle {
                 }
             }
         }
+        // the run's notice sits here, above the status bar: nothing of the screen lies under it
+        if App.notice-room > 0: Rectangle {
+            height: App.notice-room;
+        }
         StatusBar {
             Centered {
                 StatusPill {

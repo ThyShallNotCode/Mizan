@@ -114,7 +114,7 @@ component ExportBar inherits Rectangle {
                             root.reveal-focused = self.has-focus;
                         }
                         text: "Open exports folder";
-                        accessible-description: "Shows the exam's folder, where its exports are written, in the file manager";
+                        accessible-description: ResultsVM.exports-note != "" ? ResultsVM.exports-note : "Shows the exam's folder, where its exports are written, in the file manager";
                         clicked => {
                             App.reveal("exports");
                         }
@@ -128,6 +128,14 @@ component ExportBar inherits Rectangle {
                         }
                     }
                 }
+            }
+            // the files in the folder are older than the exam (a decision, the key since)
+            if ResultsVM.exports-note != "": Text {
+                text: ResultsVM.exports-note;
+                font-size: Theme.text-xs;
+                font-weight: Theme.weight-semibold;
+                color: Theme.warning;
+                wrap: word-wrap;
             }
             Text {
                 text: ResultsVM.blackboard-note;
@@ -996,6 +1004,10 @@ export component ResultsScreen inherits Rectangle {
                     }
                 }
             }
+        }
+        // the run's notice sits here, above the status bar: nothing of the screen lies under it
+        if App.notice-room > 0: Rectangle {
+            height: App.notice-room;
         }
         StatusBar {
             MessageText {

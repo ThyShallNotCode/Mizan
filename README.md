@@ -331,7 +331,8 @@ omr-desktop --demo                            # invented demo data, marked DEMO 
    card shows into a new folder of the exams folder (*Folder* on the card). The Scan screen
    follows the run; **Cancel grading…** stops it, after a confirmation, and saves nothing.
 5. **When it ends** a notice says how it went, for example *CS 213 Quiz 1 is graded*, with
-   **Review N items**, **Open results** and **Open exports folder**.
+   **Review N items**, **Open results** and **Open exports folder** (Escape or × dismisses
+   it). Review opens on a lane with items.
 6. **Review.** Each item shows the bubble row as scanned with the reading: Enter accepts the
    proposal, the letter or number keys choose another answer (with a reason when it overrides
    the proposal), Ctrl+Z undoes. Results update as you go.
@@ -358,7 +359,9 @@ omr-desktop --demo                            # invented demo data, marked DEMO 
   folder as `omr grade` writes them (Settings › **Write exports after grading**; a key read from
   key sheets holds them until you confirm it), and a notice on every screen says how it went,
   with the next step: **Review N items**, **Open results**, **Open exports folder**, **Confirm
-  the key in Setup** or **Replace the key in Setup**. **Cancel grading…** on the Scan screen
+  the key in Setup** or **Replace the key in Setup**. Once you decide an item or change the
+  key, the notice and Results › **Export…** say the exports in the folder are older than the
+  exam until **Write all exports** writes them again. **Cancel grading…** on the Scan screen
   stops a new exam's grading: nothing is saved, and **Edit and grade again** brings the card
   back as it was. Once the pages are read the exam is being saved, and a cancel is too late
   (the window says so). Closing the window while something is being graded asks first, and

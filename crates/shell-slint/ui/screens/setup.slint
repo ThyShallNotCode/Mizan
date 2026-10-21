@@ -1453,6 +1453,10 @@ export component SetupScreen inherits VerticalLayout {
             CloCard { }
         }
     }
+    // the run's notice sits here, above the status bar: nothing of the screen lies under it
+    if App.notice-room > 0: Rectangle {
+        height: App.notice-room;
+    }
     StatusBar {
         MessageText {
             text: App.message;

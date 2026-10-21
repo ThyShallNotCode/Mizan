@@ -9,7 +9,7 @@
 
 mod support;
 
-use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+use i_slint_backend_testing::{AccessibleLiveness, AccessibleRole, ElementHandle};
 use omr_app::ExamProject;
 use omr_app::define::Sheet;
 use omr_app::propose::{Answer, Context, Given, propose};
@@ -17,7 +17,9 @@ use shell_slint::app_backend::AppBackend;
 use shell_slint::backend::{Backend, ExamId};
 use shell_slint::host::{PickKind, PickTarget, Prefs};
 use shell_slint::screenshot;
-use shell_slint::ui::{App, AppWindow, ExamsVM, RemarkVM, ResultsVM, ScanVM, SetupVM, Theme};
+use shell_slint::ui::{
+    App, AppWindow, ExamsVM, RemarkVM, ResultsVM, ReviewVM, ScanVM, SetupVM, Theme,
+};
 use slint::platform::Key;
 use slint::{ComponentHandle, Model};
 use std::path::{Path, PathBuf};
@@ -1457,6 +1459,14 @@ fn card_row(ui: &AppWindow, label: &str) -> String {
     rows[0].clone()
 }
 
+/// The card's row `label` as it reads, from what the card shows: a row scrolled out of the
+/// card's view (below open options, or with a run's notice on show) is not in the tree.
+fn card_value(ui: &AppWindow, label: &str) -> String {
+    let rows = ui.global::<ExamsVM>().get_card_values();
+    let row = rows.iter().find(|v| v.label == label);
+    row.map(|v| v.a11y.to_string()).unwrap_or_default()
+}
+
 /// True when the button labelled `label` can be pressed.
 fn enabled(ui: &AppWindow, label: &str) -> bool {
     one(ui, label).accessible_enabled() != Some(false)
@@ -1856,14 +1866,8 @@ fn advanced_options_are_collapsed_until_clicked() {
         Some(true)
     );
     support::harness::pause_typing();
-    // (the row is below the open options, scrolled out of the card: read from what it shows)
-    let row = ui
-        .global::<ExamsVM>()
-        .get_card_values()
-        .iter()
-        .find(|v| v.label == "Second review")
-        .map(|v| v.a11y.to_string())
-        .unwrap_or_default();
+    // (the row is below the open options, scrolled out of the card's view)
+    let row = card_value(ui, "Second review");
     assert!(
         row.starts_with("Second review: On high-stakes exams — typed"),
         "{row}"
@@ -2077,7 +2081,8 @@ fn the_card_opens_during_a_run_and_says_why_grade_waits() {
     run_held(&w.h, &w.held);
     assert_eq!(ex.get_new_block(), "", "{}", ex.get_new_block());
     assert!(enabled(ui, "Grade exam"));
-    let folder = card_row(ui, "Folder");
+    // (the run's notice takes room: the last row is scrolled out of the card's view)
+    let folder = card_value(ui, "Folder");
     assert!(folder.contains("cs-213-quiz-1-2 —"), "{folder}");
 }
 
@@ -2188,6 +2193,13 @@ fn notice(ui: &AppWindow) -> (String, String, Vec<String>) {
         group.accessible_description().unwrap_or_default(),
         app.get_notice_text()
     );
+    // it appears without the keyboard: announced as it appears, at once when the run failed
+    let live = if format!("{:?}", app.get_notice_tone()) == "Error" {
+        AccessibleLiveness::Assertive
+    } else {
+        AccessibleLiveness::Polite
+    };
+    assert_eq!(group.accessible_live_region(), Some(live), "announced");
     let steps = app
         .get_notice_steps()
         .iter()
@@ -2605,6 +2617,193 @@ fn opening_new_exam_takes_down_the_last_runs_notice() {
     assert!(w.h.app.borrow().grading_in_progress());
 }
 
+/// True when the two elements share no point (one lies over the other otherwise).
+fn apart(a: &ElementHandle, b: &ElementHandle) -> bool {
+    let (pa, sa, pb, sb) = (
+        a.absolute_position(),
+        a.size(),
+        b.absolute_position(),
+        b.size(),
+    );
+    pa.x + sa.width <= pb.x
+        || pb.x + sb.width <= pa.x
+        || pa.y + sa.height <= pb.y
+        || pb.y + sb.height <= pa.y
+}
+
+/// D6: the notice lies over no control: every screen gives up its height (the exams drawer's
+/// buttons, a card opened while a run went on), and grading from that card takes the earlier
+/// run's notice down (its Edit and grade again would fill the card of this run).
+#[test]
+fn the_notice_lies_over_no_control() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let app = ui.global::<App>();
+    smallest_window(ui);
+    press(ui, "New exam");
+    grade_with_card(&w.h, &w.held, &quiz_1(&w.scans));
+    // the next exam's card, opened while Quiz 1 is graded
+    click(ui, &tab(ui, "Exams"));
+    press(ui, "New exam");
+    for (label, text) in [
+        ("Scan files or folders", w.scans.to_str().unwrap()),
+        ("Exam title", "Quiz 2"),
+        ("Course code", "CS 213"),
+    ] {
+        type_into(ui, label, text);
+    }
+    settle_card(&w.h, &w.held);
+    press(ui, PROVISIONAL);
+    run_held(&w.h, &w.held);
+    assert!(app.get_notice_open(), "Quiz 1 is graded");
+    let over = one(ui, &app.get_notice_title());
+    assert!(
+        apart(&one(ui, "Grade exam"), &over),
+        "Grade exam is under the notice"
+    );
+    press(ui, "Grade exam");
+    assert!(message(ui).starts_with("Grading"), "{}", message(ui));
+    assert!(
+        !app.get_notice_open(),
+        "the earlier run's notice is done with"
+    );
+    run_held(&w.h, &w.held);
+    // the drawer of the exam graded, with the notice of its run
+    click(ui, &tab(ui, "Exams"));
+    assert!(ui.global::<ExamsVM>().get_drawer_open());
+    let over = one(ui, &app.get_notice_title());
+    for l in ["Scan and recognise", "Open results"] {
+        assert!(apart(&one(ui, l), &over), "{l} is under the notice");
+    }
+}
+
+/// D6: the notice from the keyboard: Escape dismisses it, and once it is dismissed with a click
+/// on × the screen keys still work (the button that had the keyboard went with it).
+#[test]
+fn the_notice_is_dismissed_with_escape_and_the_keys_keep_working() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let app = ui.global::<App>();
+    press(ui, "New exam");
+    grade_with_card(&w.h, &w.held, &quiz_1(&w.scans));
+    run_held(&w.h, &w.held);
+    assert!(app.get_notice_open());
+    assert_eq!(app.get_page(), shell_slint::ui::Page::Scan);
+    special(ui, Key::Escape);
+    assert!(!app.get_notice_open(), "Escape dismisses it");
+    chord(ui, Key::Control, "5");
+    assert_eq!(app.get_page(), shell_slint::ui::Page::Results);
+    // another run, its notice dismissed with the mouse
+    click(ui, &tab(ui, "Exams"));
+    press(ui, "New exam");
+    grade_with_card(
+        &w.h,
+        &w.held,
+        &[
+            ("Scan files or folders", w.scans.to_str().unwrap()),
+            ("Exam title", "Quiz 2"),
+            ("Course code", "CS 213"),
+        ],
+    );
+    run_held(&w.h, &w.held);
+    assert_eq!(app.get_page(), shell_slint::ui::Page::Scan);
+    press(ui, "Dismiss the notice");
+    assert!(!app.get_notice_open());
+    chord(ui, Key::Control, "5");
+    assert_eq!(
+        app.get_page(),
+        shell_slint::ui::Page::Results,
+        "the keys still work"
+    );
+}
+
+/// D6: Review opens on a lane with open items: a lane that has none while others do (cleared,
+/// or chosen) says where the items are, and Review shown again from another screen (the rail,
+/// the notice's Review N items) opens a lane with items, never "Nothing to review".
+#[test]
+fn review_opens_on_a_lane_with_items() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let ws = exams_folder(&dir.path().join("exams"), &[&QUIZ_1]);
+    let (h, _held, _host) = window_on(&ws);
+    let ui = &h.ui;
+    let rv = ui.global::<ReviewVM>();
+    click(ui, &tab_of(ui, "Review"));
+    let empty = rv
+        .get_lanes()
+        .iter()
+        .find(|l| l.count == 0)
+        .expect("a lane with nothing open");
+    press(ui, &format!("{}, 0", empty.label));
+    assert_eq!(rv.get_queue().row_count(), 0);
+    let said = rv.get_empty_text().to_string();
+    assert!(said.contains("; still open: "), "{said}");
+    click(ui, &tab(ui, "Results"));
+    click(ui, &tab_of(ui, "Review"));
+    let shown = rv
+        .get_lanes()
+        .iter()
+        .find(|l| l.selected)
+        .expect("a lane shown");
+    assert!(shown.count > 0, "{} has items", shown.label);
+    assert!(rv.get_queue().row_count() > 0);
+    assert!(by_label(ui, "Nothing to review").is_empty());
+}
+
+/// D6: exports written before a change are said to be older than the exam: once a decision
+/// follows the run that wrote them, its notice and Results' Export… say so, until Write all
+/// exports writes them again.
+#[test]
+fn exports_older_than_a_later_decision_are_said_to_be() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let ws = exams_folder(&dir.path().join("exams"), &[&QUIZ_1]);
+    let roster = dir.path().join("roster.csv");
+    roster_file(&QUIZ_1, &roster, false);
+    let (h, held, _host) = window_on(&ws);
+    let ui = &h.ui;
+    // a run that writes the exports: the roster, added from Setup
+    click(ui, &tab(ui, "Setup"));
+    press(ui, "4 Roster, warnings");
+    type_into(ui, "Roster file", roster.to_str().unwrap());
+    press(ui, "Add roster and match students");
+    run_held(&h, &held);
+    let (_, text, steps) = notice(ui);
+    assert!(
+        steps.contains(&"Open exports folder".to_string()),
+        "{steps:?}"
+    );
+    assert!(!text.contains("written before"), "{text}");
+    // a decision after them, the notice on show
+    click(ui, &tab_of(ui, "Review"));
+    press(ui, "Accept suggestion");
+    let (_, text, _) = notice(ui);
+    assert!(
+        text.ends_with(
+            "these exports were written before your latest changes: Write all exports in \
+             Results updates them"
+        ),
+        "{text}"
+    );
+    click(ui, &tab(ui, "Results"));
+    press(ui, "Export…");
+    let note = "These exports were written before your latest changes: Write all exports in \
+                Results updates them";
+    one(ui, note);
+    // the bar's button says it too (the notice has its own)
+    let said: Vec<String> = by_label(ui, "Open exports folder")
+        .iter()
+        .filter_map(|e| e.accessible_description())
+        .map(|d| d.to_string())
+        .filter(|d| !d.is_empty())
+        .collect();
+    assert_eq!(said, [note]);
+    press(ui, "Write all exports");
+    assert!(by_label(ui, note).is_empty(), "written again: current");
+    let (_, text, _) = notice(ui);
+    assert!(!text.contains("written before"), "{text}");
+}
+
 // ------------------------------------------------------------------ cancelling a run (D7)
 
 /// D7: a new exam being graded is cancelled from the Scan screen after a confirmation: nothing
@@ -2990,6 +3189,11 @@ fn a_failed_run_says_what_to_do_in_this_window() {
     run_held(&h, &held);
     let (title, text, steps) = notice(ui);
     assert_eq!(title, "Adding scans to CS 213 Quiz 1 failed");
+    assert_eq!(
+        format!("{:?}", ui.global::<App>().get_notice_tone()),
+        "Error",
+        "announced at once"
+    );
     assert!(
         text.contains("day 2 scnas: no such file or folder")
             && text.contains("Nothing was added; the exam is as it was")
