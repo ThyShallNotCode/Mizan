@@ -679,10 +679,18 @@ fn browse_buttons_fit_the_smallest_window() {
         press(ui, "New exam");
         buttons_inside(ui, &what("New exam"));
         press(ui, "Advanced options");
-        // the card scrolls to them in the smallest window
-        wheel(ui, "Advanced options", -2000.0);
+        // the card scrolls to them in the smallest window, step by step (how far depends on
+        // how tall the card's texts are, which the fonts decide)
+        let height = ui.window().size().height as f32;
+        for _ in 0..40 {
+            let b = one(ui, "Browse for Output folder");
+            if b.absolute_position().y + b.size().height <= height {
+                break;
+            }
+            wheel(ui, "Advanced options", -60.0);
+        }
         buttons_inside(ui, &what("New exam, advanced options"));
-        wheel(ui, "Output folder", 2000.0);
+        wheel(ui, "Output folder", 4000.0);
         press(ui, "Advanced options");
         press(ui, "Import from Remark export…");
         buttons_inside(ui, &what("New exam, Remark import"));

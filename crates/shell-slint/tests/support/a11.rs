@@ -41,10 +41,43 @@ pub fn one(ui: &AppWindow, label: &str) -> ElementHandle {
     assert_eq!(
         v.len(),
         1,
-        "exactly one control labelled {label:?}, found {}",
-        v.len()
+        "exactly one control labelled {label:?}, found {}; {}",
+        v.len(),
+        near(ui, label)
     );
     v.into_iter().next().unwrap()
+}
+
+/// Where things are, for a failure message: the window's size and every element whose label
+/// shares a word with `label`, with its place.
+pub fn near(ui: &AppWindow, label: &str) -> String {
+    let size = ui.window().size();
+    let words: Vec<&str> = label.split_whitespace().filter(|w| w.len() > 3).collect();
+    let mut found = Vec::new();
+    for e in ElementQuery::from_root(ui).match_descendants().find_all() {
+        if let Some(l) = e.accessible_label()
+            && words.iter().any(|w| l.contains(w))
+        {
+            let (p, sz) = (e.absolute_position(), e.size());
+            let item = format!(
+                "{:?} at ({:.0}, {:.0}) {:.0}x{:.0}",
+                l.as_str(),
+                p.x,
+                p.y,
+                sz.width,
+                sz.height
+            );
+            if !found.contains(&item) {
+                found.push(item);
+            }
+        }
+    }
+    format!(
+        "window {}x{}; near: [{}]",
+        size.width,
+        size.height,
+        found.join("; ")
+    )
 }
 
 /// All distinct elements whose label starts with `prefix`.
@@ -100,7 +133,17 @@ pub fn chord(ui: &AppWindow, modifier: Key, text: &str) {
 pub fn click(ui: &AppWindow, e: &ElementHandle) {
     let p = e.absolute_position();
     let s = e.size();
-    click_at(ui, p.x + s.width / 2.0, p.y + s.height / 2.0);
+    let (x, y) = (p.x + s.width / 2.0, p.y + s.height / 2.0);
+    // a click past the window's edge reaches nothing, and the test would go on as if it had
+    let size = ui.window().size();
+    assert!(
+        x >= 0.0 && y >= 0.0 && x < size.width as f32 && y < size.height as f32,
+        "{:?} is clicked at ({x:.0}, {y:.0}), outside the {}x{} window",
+        e.accessible_label().unwrap_or_default().as_str(),
+        size.width,
+        size.height
+    );
+    click_at(ui, x, y);
 }
 
 /// One left click at a window position (for a spot that is no control, such as an overlay's
