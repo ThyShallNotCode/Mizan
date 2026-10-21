@@ -11,7 +11,7 @@ import {
 } from "remark.slint";
 import {
     Icons, ThemeToggle, Centered, SectionLabel, StatusText, KVLine, EditCell, StepIndicator,
-    EmptyState, MessageText, TextField, Segment, SegmentGroup,
+    StepButton, EmptyState, NoExamState, MessageText, PathField, Segment, SegmentGroup,
 } from "../widgets.slint";
 import { ListView, ScrollView } from "std-widgets.slint";
 
@@ -20,7 +20,8 @@ component KeyCell inherits Rectangle {
     in property <string> letter;
     in property <string> label;
     callback cycle();
-    callback set(string);
+    // false: the text is no key entry (a key that types nothing)
+    callback set(string) -> bool;
     width: 28px;
     height: 24px;
     border-radius: Theme.radius-sm;
@@ -43,6 +44,8 @@ component KeyCell inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
                 root.cycle();
@@ -52,9 +55,9 @@ component KeyCell inherits Rectangle {
                 root.set("");
                 return accept;
             }
+            // Shift, the arrows and Escape go on to the screen: Rust tells typed text apart
             if (!event.modifiers.control && !event.modifiers.alt && event.text.character-count == 1 && event.text != Key.Tab) {
-                root.set(event.text);
-                return accept;
+                return root.set(event.text) ? accept : reject;
             }
             return reject;
         }
@@ -103,7 +106,7 @@ component MappingRow inherits Rectangle {
                         SetupVM.cycle-key(root.index, v);
                     }
                     set(t) => {
-                        SetupVM.set-key(root.index, v, t);
+                        return SetupVM.set-key(root.index, v, t);
                     }
                 }
             }
@@ -248,6 +251,7 @@ component MatrixCard inherits Card {
                     accessible-description: "Reads the key from the instructor's filled answer sheets and shows it for your confirmation";
                     clicked => {
                         SetupVM.key-open = false;
+                        SetupVM.roster-open = false;
                         SetupVM.ks-bar-open = !SetupVM.ks-bar-open;
                     }
                 }
@@ -403,6 +407,12 @@ component LintCard inherits Card {
         VerticalLayout {
         spacing: Theme.space-md;
         alignment: start;
+        if SetupVM.lints.length == 0: Text {
+            text: "No findings.";
+            font-size: Theme.text-xs;
+            color: Theme.ink-2;
+            wrap: word-wrap;
+        }
         for l in SetupVM.lints: HorizontalLayout {
             spacing: Theme.space-sm;
             VerticalLayout {
@@ -438,6 +448,10 @@ component CellCard inherits Card {
     title: SetupVM.sel-title;
     subtitle: SetupVM.sel-clo;
     vertical-stretch: 0;
+    // The cell the editors below write to, taken when one of them takes the focus: a click on
+    // another matrix cell selects that cell before this editor loses the focus and commits.
+    property <int> edit-row;
+    property <int> edit-col;
     VerticalLayout {
         spacing: Theme.space-sm;
         SectionLabel {
@@ -452,8 +466,12 @@ component CellCard inherits Card {
             border-width: 1px;
             border-color: Theme.border-strong;
             background: Theme.surface-raised;
+            focused => {
+                root.edit-row = SetupVM.sel-row;
+                root.edit-col = SetupVM.sel-col;
+            }
             committed(v) => {
-                SetupVM.set-weight(SetupVM.sel-row, SetupVM.sel-col, v);
+                SetupVM.set-weight(root.edit-row, root.edit-col, v);
             }
         }
         SectionLabel {
@@ -463,6 +481,8 @@ component CellCard inherits Card {
             label: "Note of " + SetupVM.sel-title;
             text: SetupVM.sel-note;
             placeholder: "Why this item evidences the CLO";
+            // free text: a click puts the caret where it lands, to add to the note
+            select-on-click: false;
             mono: false;
             arabic: true;
             align: left;
@@ -470,8 +490,12 @@ component CellCard inherits Card {
             border-width: 1px;
             border-color: Theme.border-strong;
             background: Theme.surface-raised;
+            focused => {
+                root.edit-row = SetupVM.sel-row;
+                root.edit-col = SetupVM.sel-col;
+            }
             committed(v) => {
-                SetupVM.set-note(SetupVM.sel-row, SetupVM.sel-col, v);
+                SetupVM.set-note(root.edit-row, root.edit-col, v);
             }
         }
         if SetupVM.error != "": Text {
@@ -565,15 +589,15 @@ component CloCard inherits Card {
             }
         }
     }
+    // the card is narrow: the file (and its Browse…) on a row of its own
+    PathField {
+        label: "CLO file";
+        placeholder: "clo.csv: the CLOs and item mapping (replaces any in force)";
+        text <=> SetupVM.clo-path;
+        target: "setup-clo";
+    }
     HorizontalLayout {
-        spacing: Theme.space-sm;
-        TextField {
-            horizontal-stretch: 1;
-            label: "CLO file";
-            placeholder: "clo.csv: the CLOs and item mapping (replaces any in force)";
-            text <=> SetupVM.clo-path;
-            mono: true;
-        }
+        alignment: end;
         Centered {
             GhostButton {
                 text: "Replace CLOs";
@@ -617,12 +641,12 @@ component KeyBar inherits Rectangle {
                 color: Theme.ink;
                 vertical-alignment: center;
             }
-            field := TextField {
+            field := PathField {
                 horizontal-stretch: 1;
                 label: "Key file";
                 placeholder: "Path of the key file, e.g. key.csv (question,A,B or form,Q1,Q2,…)";
                 text <=> SetupVM.key-path;
-                mono: true;
+                target: "setup-key";
                 accepted(v) => {
                     if (v != "") {
                         SetupVM.replace-key(v);
@@ -651,6 +675,81 @@ component KeyBar inherits Rectangle {
     }
 }
 
+
+// A roster for the graded exam (§9.1, §9.6): every booklet's student number is matched again in
+// the background and the review decisions carry over. The Blackboard upload needs one.
+component RosterBar inherits Rectangle {
+    background: Theme.surface-raised;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    init => {
+        field.focus();
+    }
+    FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                SetupVM.roster-open = false;
+                return accept;
+            }
+            return reject;
+        }
+        VerticalLayout {
+            padding-left: Theme.space-xl;
+            padding-right: Theme.space-xl;
+            padding-top: Theme.space-sm;
+            padding-bottom: Theme.space-sm;
+            spacing: Theme.space-xs;
+            HorizontalLayout {
+                spacing: Theme.space-md;
+                Text {
+                    text: "Roster";
+                    font-size: Theme.text-md;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                }
+                field := PathField {
+                    horizontal-stretch: 1;
+                    label: "Roster file";
+                    placeholder: "The class list, CSV or Excel: a student-number column, and names and sections";
+                    text <=> SetupVM.roster-path;
+                    target: "setup-roster";
+                    enabled: SetupVM.can-set-roster;
+                    accepted(v) => {
+                        if (SetupVM.can-set-roster && v != "") {
+                            SetupVM.set-roster(v);
+                        }
+                    }
+                }
+                Centered {
+                    PrimaryButton {
+                        text: "Add roster and match students";
+                        key-hint: "Enter";
+                        enabled: SetupVM.can-set-roster && SetupVM.roster-path != "";
+                        accessible-description: "Every booklet's student number is matched again in the background; your review decisions carry over";
+                        clicked => {
+                            SetupVM.set-roster(SetupVM.roster-path);
+                        }
+                    }
+                }
+                Centered {
+                    GhostButton {
+                        text: "Cancel";
+                        clicked => {
+                            SetupVM.roster-open = false;
+                        }
+                    }
+                }
+            }
+            Text {
+                text: SetupVM.roster-status + ". Every booklet's student number is matched again and your review decisions carry over; it takes about as long as grading.";
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
 
 // Read the key from the instructor's filled answer sheets (§10.1): key-sheet files, read by the
 // same recognizer as the students' sheets and shown for confirmation; nothing changes until then.
@@ -682,12 +781,12 @@ component KeySheetBar inherits Rectangle {
                 color: Theme.ink;
                 vertical-alignment: center;
             }
-            field := TextField {
+            field := PathField {
                 horizontal-stretch: 1;
                 label: "Key-sheet files";
                 placeholder: "Scans or photos of the filled key sheets (student number all 0 or all 9, version bubbled); ; between several";
                 text <=> SetupVM.ks-path;
-                mono: true;
+                target: "setup-key-sheets";
                 accepted(v) => {
                     if (v != "") {
                         SetupVM.ks-read(v);
@@ -785,6 +884,8 @@ component PickChip inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
                 root.clicked();
@@ -1164,49 +1265,66 @@ export component SetupScreen inherits VerticalLayout {
         Breadcrumb {
             parts: [App.course, App.assessment, "Setup"];
         }
+        // without a setup no step is done or wanting: every step shows as not started
         HorizontalLayout {
             spacing: Theme.space-lg;
             StepIndicator {
                 number: 1;
                 text: "Template";
                 compact: root.compact-bar;
-                state: 1;
+                state: SetupVM.available ? 1 : 0;
             }
             StepIndicator {
                 number: 2;
                 text: "Forms and key";
                 compact: root.compact-bar;
-                state: SetupVM.key-published ? 1 : 2;
+                state: !SetupVM.available ? 0 : SetupVM.key-published ? 1 : 2;
             }
             StepIndicator {
                 number: 3;
                 text: "CLO mapping";
                 compact: root.compact-bar;
-                state: SetupVM.lints.length > 0 || SetupVM.clos.length == 0 ? 2 : 1;
+                state: !SetupVM.available ? 0 : SetupVM.lints.length > 0 || SetupVM.clos.length == 0 ? 2 : 1;
             }
-            // without a roster no identity is matched: shown as a warning, never as done
-            StepIndicator {
+            // without a roster no identity is matched: shown as a warning, never as done; the
+            // step opens the roster bar (a roster can be given after grading)
+            if SetupVM.available: StepButton {
                 number: 4;
                 text: "Roster";
                 compact: root.compact-bar;
                 state: SetupVM.has-roster ? 1 : 2;
+                active: SetupVM.roster-open;
+                description: SetupVM.roster-status;
+                clicked => {
+                    SetupVM.key-open = false;
+                    SetupVM.ks-bar-open = false;
+                    RemarkVM.setup-bar = false;
+                    SetupVM.roster-open = !SetupVM.roster-open;
+                }
+            }
+            if !SetupVM.available: StepIndicator {
+                number: 4;
+                text: "Roster";
+                compact: root.compact-bar;
+                state: 0;
             }
             StepIndicator {
                 number: 5;
                 text: "Policies";
                 compact: root.compact-bar;
-                state: 1;
+                state: SetupVM.available ? 1 : 0;
             }
         }
         HorizontalLayout {
             spacing: Theme.space-sm;
-            Centered {
+            if SetupVM.available && SetupVM.key-status != "": Centered {
                 Tag {
                     text: SetupVM.key-status;
                     tone: SetupVM.key-published ? Tone.success : Tone.accent;
                 }
             }
-            Centered {
+            // the key and the Remark import change an exam's setup: none without one
+            if SetupVM.available: Centered {
                 SecondaryButton {
                     text: root.compact-bar ? "Remark…" : "Import from Remark…";
                     enabled: RemarkVM.can-setup;
@@ -1215,11 +1333,27 @@ export component SetupScreen inherits VerticalLayout {
                     clicked => {
                         SetupVM.key-open = false;
                         SetupVM.ks-bar-open = false;
+                        SetupVM.roster-open = false;
                         RemarkVM.setup-bar = !RemarkVM.setup-bar;
                     }
                 }
             }
-            Centered {
+            // a roster for an exam graded without one (step 4 opens the same bar, and replaces
+            // a roster given)
+            if SetupVM.available && !SetupVM.has-roster: Centered {
+                SecondaryButton {
+                    text: "Add roster…";
+                    enabled: SetupVM.can-set-roster;
+                    accessible-description: SetupVM.roster-status;
+                    clicked => {
+                        SetupVM.key-open = false;
+                        SetupVM.ks-bar-open = false;
+                        RemarkVM.setup-bar = false;
+                        SetupVM.roster-open = !SetupVM.roster-open;
+                    }
+                }
+            }
+            if SetupVM.available: Centered {
                 PrimaryButton {
                     text: "Replace key…";
                     enabled: SetupVM.can-replace-key;
@@ -1227,6 +1361,7 @@ export component SetupScreen inherits VerticalLayout {
                     clicked => {
                         SetupVM.ks-bar-open = false;
                         RemarkVM.setup-bar = false;
+                        SetupVM.roster-open = false;
                         SetupVM.key-open = !SetupVM.key-open;
                     }
                 }
@@ -1238,11 +1373,15 @@ export component SetupScreen inherits VerticalLayout {
     }
     if SetupVM.available && SetupVM.key-open: KeyBar { }
     if SetupVM.available && SetupVM.ks-bar-open: KeySheetBar { }
+    if SetupVM.available && SetupVM.roster-open: RosterBar { }
     if SetupVM.available && RemarkVM.setup-bar: RemarkBar { }
-    if !SetupVM.available: EmptyState {
+    if !App.has-exam: NoExamState {
         vertical-stretch: 1;
-        title: "No setup for this exam yet";
-        text: "Choose a template to start.";
+    }
+    if App.has-exam && !SetupVM.available: EmptyState {
+        vertical-stretch: 1;
+        title: "No setup to show";
+        text: SetupVM.empty-text;
     }
     // the Remark import read here, for review (it replaces the matrix until applied or put aside)
     if SetupVM.available && RemarkVM.setup-open && RemarkVM.context == 2: HorizontalLayout {
@@ -1329,20 +1468,18 @@ export component SetupScreen inherits VerticalLayout {
             CloCard { }
         }
     }
+    // the run's notice sits here, above the status bar: nothing of the screen lies under it
+    if App.notice-room > 0: Rectangle {
+        height: App.notice-room;
+    }
     StatusBar {
-        Centered {
-            StatusPill {
-                text: "Saved";
-                tone: Tone.success;
-            }
-        }
         MessageText {
             text: App.message;
             tone: App.message-tone;
             horizontal-stretch: 1;
         }
         StatusText {
-            text: "Key and mapping edits are recorded as audited events (§14.4)";
+            text: SetupVM.available ? "Key and mapping edits are recorded as audited events" : "";
         }
         StatusText {
             text: App.engine;

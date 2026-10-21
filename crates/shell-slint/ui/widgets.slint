@@ -4,9 +4,9 @@
 
 import {
     Theme, Tone, Severity, MarkState, FocusRing, SeverityGlyph, Keycap, Tag, MarkGlyph, IconButton,
-    BubbleOverlay, StatusPill, TopBar, StatusBar,
+    BubbleOverlay, StatusPill, TopBar, StatusBar, PrimaryButton, GhostButton,
 } from "theme.slint";
-import { BubbleVM } from "state.slint";
+import { BubbleVM, App, Page } from "state.slint";
 
 export global Icons {
     out property <image> exams: @image-url("assets/icons/exams.svg");
@@ -34,10 +34,11 @@ export global Icons {
     out property <image> zoom-in: @image-url("assets/icons/zoom-in.svg");
     out property <image> overlay: @image-url("assets/icons/overlay.svg");
     out property <image> release: @image-url("assets/icons/release.svg");
-    out property <image> logo: @image-url("assets/icon.svg");
+    out property <image> logo: @image-url("assets/brand/glyph.svg");
     out property <image> close: @image-url("assets/icons/close.svg");
     out property <image> pause: @image-url("assets/icons/pause.svg");
     out property <image> play: @image-url("assets/icons/play.svg");
+    out property <image> refresh: @image-url("assets/icons/refresh.svg");
 }
 
 // Small-caps section label ("WHAT IS MARKED?").
@@ -51,10 +52,15 @@ export component SectionLabel inherits Text {
 
 // Theme switch for every top bar (one per visible screen, so the label stays unique).
 export component ThemeToggle inherits IconButton {
+    // after the switch: a screen whose keys live in a focus scope of their own (Review) takes
+    // the keyboard back
+    callback toggled();
     icon: Theme.dark ? Icons.sun : Icons.moon;
     label: Theme.dark ? "Light theme" : "Dark theme";
     clicked => {
-        Theme.dark = !Theme.dark;
+        // applied and saved by Rust (the next start opens in it)
+        App.set-dark(!Theme.dark);
+        root.toggled();
     }
 }
 
@@ -98,6 +104,7 @@ export component Switch inherits Rectangle {
     in property <string> label;
     in property <string> description;
     in-out property <bool> checked;
+    out property <bool> has-focus: fs.has-focus;
     callback toggled(bool);
     min-height: 40px;
     accessible-role: AccessibleRole.switch;
@@ -117,6 +124,8 @@ export component Switch inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
                 root.checked = !root.checked;
@@ -179,6 +188,7 @@ export component Segment inherits Rectangle {
     in property <string> text;
     in property <string> label: self.text;
     in property <bool> selected;
+    out property <bool> has-focus: fs.has-focus;
     callback clicked();
     height: 28px;
     min-width: seg-text.preferred-width + 2 * Theme.space-md;
@@ -203,6 +213,8 @@ export component Segment inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
                 root.clicked();
@@ -274,6 +286,61 @@ export component StepIndicator inherits HorizontalLayout {
 }
 
 // Status bar text helpers.
+// A step of a stepper that opens what the step needs (the roster bar): a button that reads as
+// its step ("4 Roster, warnings").
+export component StepButton inherits Rectangle {
+    in property <int> number;
+    in property <string> text;
+    in property <int> state;
+    in property <bool> compact;
+    in property <string> description;
+    in property <bool> active;
+    callback clicked();
+    border-radius: Theme.radius-sm;
+    background: root.active ? Theme.surface-pressed : ta.has-hover ? Theme.surface-hover : transparent;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.number + " " + root.text + (root.state == 1 ? ", done" : root.state == 2 ? ", warnings" : ", to do");
+    accessible-description: root.description;
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            fs.focus();
+            root.clicked();
+        }
+    }
+    fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    HorizontalLayout {
+        padding-left: Theme.space-xs;
+        padding-right: Theme.space-xs;
+        StepIndicator {
+            number: root.number;
+            text: root.text;
+            state: root.state;
+            compact: root.compact;
+            // the button reads as the step
+            accessible-role: none;
+            accessible-label: "";
+        }
+    }
+    FocusRing {
+        active: fs.has-focus;
+        corner: Theme.radius-sm;
+    }
+}
+
 export component StatusText inherits Text {
     in property <bool> mono;
     font-family: root.mono ? Theme.font-mono : Theme.font-sans;
@@ -282,7 +349,8 @@ export component StatusText inherits Text {
     vertical-alignment: center;
 }
 
-// Shown when a screen has nothing to show for the current exam.
+// Shown when a screen has nothing to show for the current exam. The element's children are
+// its actions (buttons that lead on), centred in a row under the text.
 export component EmptyState inherits Rectangle {
     in property <string> title;
     in property <string> text;
@@ -306,12 +374,30 @@ export component EmptyState inherits Rectangle {
             color: Theme.ink;
             horizontal-alignment: center;
         }
-        Text {
+        if root.text != "": Text {
             text: root.text;
             font-size: Theme.text-sm;
             color: Theme.ink-2;
             horizontal-alignment: center;
             wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: center;
+            spacing: Theme.space-sm;
+            @children
+        }
+    }
+}
+
+// The empty state of a screen that shows one exam while none is open (an empty exams folder,
+// or none chosen yet): exams are opened and created on the Exams screen.
+export component NoExamState inherits EmptyState {
+    title: "No exam open";
+    text: "Open an exam on the Exams screen, or create one there with New exam.";
+    PrimaryButton {
+        text: "Go to Exams";
+        clicked => {
+            App.navigate(Page.exams);
         }
     }
 }
@@ -539,18 +625,38 @@ export component EditCell inherits Rectangle {
     in property <bool> invalid;
     in property <bool> highlighted;
     in property <TextHorizontalAlignment> align: right;
+    // A click on the cell selects its value, so what is typed replaces it, as in a spreadsheet
+    // (weights). Off for free text (a note), where a click puts the caret where it lands.
+    in property <bool> select-on-click: true;
     callback committed(string);
     callback focused();
     property <bool> editing: input.has-focus;
+    // The text the edit started from (when the cell took the focus, or at its last commit).
+    // Leaving commits what was typed since: compared with this, never with `text`, which may
+    // already show another cell (the Setup cell editor follows the selection).
+    property <string> started;
+    // Whether anything was typed since the cell took the focus or last committed.
+    property <bool> typed;
     // Commits, then shows the backend's canonical value (a refused edit snaps back).
     function commit(v: string) {
         root.committed(v);
         input.text = root.text;
+        root.started = input.text;
+        root.typed = false;
     }
-    // The view-model is the source of truth: follow it unless the user is typing.
+    // The view-model is the source of truth: follow it unless the user is typing. A focused
+    // cell with nothing typed follows it too: the cell left behind saves after this one took
+    // the focus (the Setup cell editor shows the cell being saved), and Enter must save what is
+    // shown, never the value from before.
     changed text => {
         if (!input.has-focus) {
             input.text = root.text;
+        } else if (!root.typed && input.text != root.text) {
+            input.text = root.text;
+            root.started = root.text;
+            if (root.select-on-click) {
+                input.select-all();
+            }
         }
     }
     height: 26px;
@@ -569,12 +675,17 @@ export component EditCell inherits Rectangle {
     }
     accessible-action-default => {
         input.focus();
+        if (root.select-on-click) {
+            input.select-all();
+        }
         root.focused();
     }
+    // a click beside the text (the cell's padding) edits the cell too; the text input reports
+    // the focus (`changed has-focus`), after the cell left behind has saved
     TouchArea {
+        mouse-cursor: MouseCursor.text;
         clicked => {
             input.focus();
-            root.focused();
         }
     }
     if input.text == "" && !root.editing: Text {
@@ -602,15 +713,36 @@ export component EditCell inherits Rectangle {
         vertical-alignment: center;
         selection-background-color: Theme.primary-soft;
         accessible-role: none;
+        // Never selects on its own: Tab selects all by itself, and a window or popup made
+        // active again gives the focus back with the caret where it was (what is typed next
+        // adds to what was typed before).
         changed has-focus => {
             if (self.has-focus) {
+                root.started = self.text;
                 root.focused();
-            } else if (self.text != root.text) {
+            } else if (self.text != root.started) {
                 root.commit(self.text);
+            } else {
+                self.text = root.text;
+                root.typed = false;
             }
+        }
+        edited => {
+            root.typed = true;
         }
         accepted => {
             root.commit(self.text);
+        }
+    }
+    // A click on a cell not being edited selects its value. Over the text input, so the press
+    // never reaches it: a pointer that moves a pixel before the release would drag the caret
+    // and undo the selection. Disabled while editing: clicks then place the caret.
+    TouchArea {
+        enabled: root.select-on-click && !root.editing;
+        mouse-cursor: MouseCursor.text;
+        clicked => {
+            input.focus();
+            input.select-all();
         }
     }
 }
@@ -625,20 +757,29 @@ export component TextField inherits Rectangle {
     in property <bool> mono;
     in property <bool> arabic;
     in property <bool> enabled: true;
+    // a question is open on the value (its text is shown beside the field, and read here)
+    in property <bool> invalid;
+    in property <string> description;
+    out property <bool> has-focus: input.has-focus;
     callback accepted(string);
+    // the user changed the text (typed, pasted, deleted), never a change made by the app
+    callback edited(string);
     height: Theme.control-height;
     border-radius: Theme.radius-md;
     background: root.enabled ? Theme.surface-raised : Theme.surface-sunken;
-    border-width: 1px;
-    border-color: input.has-focus ? Theme.primary : Theme.border-strong;
+    border-width: root.invalid && !input.has-focus ? 2px : 1px;
+    border-color: input.has-focus ? Theme.primary : root.invalid ? Theme.error : Theme.border-strong;
     forward-focus: input;
     accessible-role: AccessibleRole.text-input;
     accessible-label: root.label;
     accessible-placeholder-text: root.placeholder;
+    accessible-description: root.description;
     accessible-value: root.text;
     accessible-enabled: root.enabled;
     accessible-action-set-value(v) => {
         root.text = v;
+        // assistive technology typed it: the user's edit
+        root.edited(v);
     }
     TouchArea {
         enabled: root.enabled;
@@ -674,10 +815,91 @@ export component TextField inherits Rectangle {
         accepted => {
             root.accepted(self.text);
         }
+        edited => {
+            root.edited(self.text);
+        }
     }
     FocusRing {
         active: input.has-focus;
         corner: Theme.radius-md;
+    }
+}
+
+// A field for file or folder paths: the typed path, and when the window has file dialogs
+// (App.can-browse) "Browse…" beside it, with "Folder…" where a folder of files is taken too (the
+// scans). The buttons open the dialog of `target` (and `folder-target`); what is picked fills
+// the field. `folder`: `target` opens a folder dialog (an exam's folder, a report's folder), and
+// Browse… says so. Without file dialogs (headless tests, screenshots) the buttons do not exist.
+export component PathField inherits HorizontalLayout {
+    in-out property <string> text;
+    in property <string> label;
+    in property <string> placeholder;
+    in property <bool> mono: true;
+    in property <bool> enabled: true;
+    // the dialogs ("new-key"; "" for no button)
+    in property <string> target;
+    in property <string> folder-target;
+    // `target` opens a folder dialog
+    in property <bool> folder;
+    in property <bool> invalid;
+    in property <string> description;
+    out property <bool> has-focus: field.has-focus || root.browse-focused || root.folder-focused;
+    // the buttons made with App.can-browse have the keyboard (each reset when made)
+    property <bool> browse-focused;
+    property <bool> folder-focused;
+    callback accepted(string);
+    callback edited(string);
+    spacing: Theme.space-sm;
+    forward-focus: field;
+    field := TextField {
+        horizontal-stretch: 1;
+        label: root.label;
+        placeholder: root.placeholder;
+        text <=> root.text;
+        mono: root.mono;
+        enabled: root.enabled;
+        invalid: root.invalid;
+        description: root.description;
+        accepted(v) => {
+            root.accepted(v);
+        }
+        edited(v) => {
+            root.edited(v);
+        }
+    }
+    if App.can-browse && root.target != "": Centered {
+        GhostButton {
+            init => {
+                root.browse-focused = false;
+            }
+            changed has-focus => {
+                root.browse-focused = self.has-focus;
+            }
+            text: "Browse…";
+            accessible-label: "Browse for " + root.label;
+            accessible-description: root.folder ? "Opens the folder dialog; the folder you choose fills the field" : "Opens the file dialog; what you choose fills the field";
+            enabled: root.enabled;
+            clicked => {
+                App.browse(root.target);
+            }
+        }
+    }
+    if App.can-browse && root.folder-target != "": Centered {
+        GhostButton {
+            init => {
+                root.folder-focused = false;
+            }
+            changed has-focus => {
+                root.folder-focused = self.has-focus;
+            }
+            text: "Folder…";
+            accessible-label: "Choose a folder for " + root.label;
+            accessible-description: "Opens the folder dialog; the folder you choose fills the field";
+            enabled: root.enabled;
+            clicked => {
+                App.browse(root.folder-target);
+            }
+        }
     }
 }
 

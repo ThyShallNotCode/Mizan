@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <title>Mizan</title>
+  <!-- 32 px: drawn on the pixel grid (no lattice or shadow) for crisp small icons; the 48 px and
+       larger icons render ../icon.svg. -->
+  <defs>
+    <linearGradient id="bgS32" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#14735F"/>
+      <stop offset="1" stop-color="#0C463F"/>
+    </linearGradient>
+    <radialGradient id="glowS32" cx="0.3" cy="0.12" r="0.75">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="goldS32" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#EDC979"/>
+      <stop offset="1" stop-color="#C38F3A"/>
+    </linearGradient>
+    <radialGradient id="panS32" cx="0.36" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#F6DA97"/>
+      <stop offset="0.55" stop-color="#EDC979"/>
+      <stop offset="1" stop-color="#C38F3A"/>
+    </radialGradient>
+  </defs>
+  <rect x="1" y="1" width="30" height="30" rx="7.0" fill="url(#bgS32)"/>
+  <rect x="1" y="1" width="30" height="30" rx="7.0" fill="url(#glowS32)"/>
+  <rect x="1.5" y="1.5" width="29" height="29" rx="6.5" fill="none" stroke="#2A8A7C" stroke-width="1"/>
+  <rect x="4.5" y="10.5" width="23.0" height="2" rx="1.0" fill="url(#goldS32)"/>
+  <rect x="15.0" y="10.5" width="2" height="13.5" fill="url(#goldS32)"/>
+  <rect x="10.0" y="24.0" width="12.0" height="3.0" rx="1.5" fill="url(#goldS32)"/>
+  <rect x="8.0" y="12.5" width="1" height="1.5" fill="url(#goldS32)"/>
+  <rect x="23.0" y="12.5" width="1" height="1.5" fill="url(#goldS32)"/>
+  <circle cx="8.5" cy="18.5" r="5.0" fill="url(#panS32)"/>
+  <circle cx="23.5" cy="18.5" r="5.0" fill="url(#panS32)"/>
+  <path d="M16.00,7.00 L17.32,8.32 L19.18,8.32 L19.18,10.18 L20.50,11.50 L19.18,12.82 L19.18,14.68 L17.32,14.68 L16.00,16.00 L14.68,14.68 L12.82,14.68 L12.82,12.82 L11.50,11.50 L12.82,10.18 L12.82,8.32 L14.68,8.32 Z" fill="url(#goldS32)"/>
+</svg>

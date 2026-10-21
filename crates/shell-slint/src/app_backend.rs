@@ -12,20 +12,26 @@
 //! does both); [`Backend::pump`] drains the worker's [`JobEvent`]s without blocking. Adding a
 //! later batch to an open exam runs [`run_append`] on a thread the binary's [`Spawn`] starts:
 //! the project is saved and closed on the UI thread, regraded with the new scans on the worker
-//! and reopened when the worker reports.
+//! and reopened when the worker reports. A roster given to a graded exam runs
+//! [`run_set_roster`] the same way. Each worker writes the exports when its run ends, as
+//! `omr grade` and `omr add` do, and a run can be cancelled through its [`Cancel`] token.
 
 use crate::backend::{self as b, Backend, BackendError, ExamId, ItemId};
-use omr_app::exam::{DomainLetter, ExamDefinition};
+use omr_app::define::Sheet;
+use omr_app::exam::{DomainLetter, ExamDefinition, RosterStudent};
 use omr_app::model::{PageStatus, ResponseStatus};
+use omr_app::propose::{Answer, ChoiceAction, Context, FieldId, Given, Proposal, RecentExam};
 use omr_app::review::{
     Action, Decision as AppDecision, ItemKind, Lane as AppLane, OverlayState, ReviewReason,
 };
+use omr_app::survey::{Survey, SurveyRequest};
 use omr_app::vm::{self, ProgressTracker};
-use omr_app::{AppError, ExamProject, GradeOptions, Progress};
+use omr_app::{AppError, Cancel, ExamProject, GradeOptions, Progress};
 use omr_model::Severity as AppSeverity;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::Duration;
 
@@ -35,6 +41,8 @@ const THUMBS: usize = 30;
 const MIN_IDENTITY_SUGGESTION: f32 = 0.5;
 /// Width of a page thumbnail in pixels (the tile is about 100 px wide at 1440 px).
 const THUMB_WIDTH: usize = 120;
+/// Page thumbnails kept (about 40 kB each): the Scan screens of several exams.
+const THUMB_CACHE: usize = 256;
 
 // ------------------------------------------------------------------------------------ grading
 
@@ -43,10 +51,65 @@ const THUMB_WIDTH: usize = 120;
 pub enum JobEvent {
     /// A pipeline progress event (§4.5).
     Progress(Progress),
-    /// A line for the batch activity log (e.g. what an added batch changed).
+    /// A line for the batch activity log.
     Note(String),
+    /// What the run changed, in one line (an added batch, a roster): logged, and said again
+    /// when the run ends.
+    Summary(String),
+    /// What the run did is saved in the exam (graded, scans added, a roster given): it stands
+    /// even if closing the project after it fails.
+    Saved,
+    /// What became of the exports the run writes when it ends: written, or why not (the key
+    /// read from key sheets waits for its confirmation, or the export failed).
+    Exports(Result<Exported, String>),
     /// The run ended: the project package (`project.omrproj`), or the error with remediation.
     Finished(Result<PathBuf, String>),
+    /// The operator cancelled the run ([`Cancel`]): a new exam stored nothing, a graded exam's
+    /// results are as they were.
+    Cancelled,
+}
+
+/// Exports a worker wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Exported {
+    /// The exam's folder (beside its `project.omrproj`).
+    pub dir: PathBuf,
+    pub files: usize,
+    /// The Blackboard upload is among them.
+    pub blackboard: bool,
+}
+
+/// Why the exports of a run whose key waits for the key-sheet confirmation are not written.
+const EXPORTS_WAIT: &str = "Exports wait for the key confirmation in Setup: they are written \
+                            once the key is confirmed and you write them in Results";
+
+/// Writes the exports of a finished run into `dir`, when given, as `omr grade` and `omr add`
+/// do, and reports what became of them on `tx`. A key read from key sheets and not confirmed
+/// yet holds them; a failed export leaves the run as it is.
+fn export_after(p: &mut ExamProject, dir: Option<&Path>, tx: &Sender<JobEvent>) {
+    let Some(dir) = dir else {
+        return;
+    };
+    let r = if p.session.key_unconfirmed() {
+        Err(EXPORTS_WAIT.to_string())
+    } else {
+        match p.export(dir) {
+            Ok(s) => Ok(Exported {
+                dir: dir.to_path_buf(),
+                files: s.files.len(),
+                blackboard: s
+                    .files
+                    .iter()
+                    .any(|f| f == omr_app::export::BLACKBOARD_FILE),
+            }),
+            Err(e) => Err(format!(
+                "The exports were not written: {}. Write them again with Write all exports in \
+                 Results",
+                app_message(&e)
+            )),
+        }
+    };
+    let _ = tx.send(JobEvent::Exports(r));
 }
 
 /// Starts `work` on a thread the binary owns (rule R4: the library creates none); an error says
@@ -61,36 +124,55 @@ pub struct GradeRequest {
     pub inputs: Vec<PathBuf>,
     /// Files named as key sheets (§10.1): graded with the exam, held until confirmed.
     pub key_sheets: Vec<PathBuf>,
+    /// `options.cancel` stops the run before anything is stored.
     pub options: GradeOptions,
+    /// Where the exports are written when the run ends (`None`: not written).
+    pub export_to: Option<PathBuf>,
 }
 
-/// The body of a grading worker thread: grades, saves and closes the project, and reports every
-/// progress event and the outcome on `tx`. Never panics on bad input: errors arrive as
-/// [`JobEvent::Finished`]`(Err(..))` with the core's remediation text.
+/// The body of a grading worker thread: grades, writes the exports (`export_to`), saves and
+/// closes the project, and reports every progress event and the outcome on `tx`. Never panics
+/// on bad input: errors arrive as [`JobEvent::Finished`]`(Err(..))` with the core's remediation
+/// text; a cancelled run as [`JobEvent::Cancelled`] (nothing stored).
 pub fn run_grading(req: GradeRequest, tx: Sender<JobEvent>) {
     let progress_tx = tx.clone();
     let progress = move |p: &Progress| {
         // the window may be gone; the run still finishes and saves
         let _ = progress_tx.send(JobEvent::Progress(p.clone()));
     };
+    let fail = |e: AppError| {
+        format!(
+            "{}. Nothing was saved; your scan files are unchanged. Fix what this names, then \
+             Edit and grade again",
+            app_message(&e)
+        )
+    };
     let outcome = match &req.options.project_dir {
         None => Err("internal: a desktop grading run needs a project folder".to_string()),
-        Some(dir) => ExamProject::grade_with_key_sheets(
+        Some(dir) => match ExamProject::grade_with_key_sheets(
             &req.definition,
             &req.inputs,
             &req.key_sheets,
             &req.options,
             &progress,
-        )
-        .and_then(|p| p.close())
-        .map(|()| dir.clone())
-        .map_err(|e| {
-            format!(
-                "{e} (exit code {}). Fix the input and start again; `omr grade` prints \
-                         the same message",
-                e.exit_code()
-            )
-        }),
+        ) {
+            Err(AppError::Cancelled) => {
+                let _ = tx.send(JobEvent::Cancelled);
+                return;
+            }
+            Err(e) => Err(fail(e)),
+            Ok(mut p) => {
+                let _ = tx.send(JobEvent::Saved);
+                export_after(&mut p, req.export_to.as_deref(), &tx);
+                p.close().map(|()| dir.clone()).map_err(|e| {
+                    unclosed(
+                        "The exam was graded and saved",
+                        "refresh the exams folder (F5) to open it",
+                        &e,
+                    )
+                })
+            }
+        },
     };
     let _ = tx.send(JobEvent::Finished(outcome));
 }
@@ -102,12 +184,14 @@ pub struct AppendRequest {
     pub project: PathBuf,
     pub inputs: Vec<PathBuf>,
     pub options: GradeOptions,
+    /// Where the exports are written when the run ends (`None`: not written).
+    pub export_to: Option<PathBuf>,
 }
 
 /// The body of an append worker thread: opens the project, grades it again with the new scans
-/// ([`ExamProject::add_scans`]), saves and closes it, and reports progress, a summary line and
-/// the outcome on `tx`. The project stays usable when the batch is refused: the shell reopens
-/// it either way.
+/// ([`ExamProject::add_scans`]), writes the exports (`export_to`), saves and closes it, and
+/// reports progress, a summary line and the outcome on `tx`. The project stays usable when the
+/// batch is refused: the shell reopens it either way.
 pub fn run_append(req: AppendRequest, tx: Sender<JobEvent>) {
     let progress_tx = tx.clone();
     let progress = move |p: &Progress| {
@@ -115,26 +199,240 @@ pub fn run_append(req: AppendRequest, tx: Sender<JobEvent>) {
     };
     let fail = |e: AppError| {
         format!(
-            "{e} (exit code {}). Nothing was added; `omr add --project {}` prints the same message",
-            e.exit_code(),
-            req.project.display()
+            "{}. Nothing was added; the exam is as it was. Check the scans, then choose them \
+             again with Add scans…",
+            app_message(&e)
         )
     };
     let outcome = match ExamProject::open(&req.project, &req.options.operator) {
         Err(e) => Err(fail(e)),
         Ok(mut p) => {
             let added = p.add_scans(&req.inputs, &req.options, &progress);
+            if let Ok(r) = &added {
+                let _ = tx.send(JobEvent::Saved);
+                let _ = tx.send(JobEvent::Summary(append_summary(r)));
+                export_after(&mut p, req.export_to.as_deref(), &tx);
+            }
             let closed = p.close();
             match (added, closed) {
-                (Ok(r), Ok(())) => {
-                    let _ = tx.send(JobEvent::Note(append_summary(&r)));
-                    Ok(req.project.clone())
+                (Err(AppError::Cancelled), _) => {
+                    let _ = tx.send(JobEvent::Cancelled);
+                    return;
                 }
-                (Err(e), _) | (Ok(_), Err(e)) => Err(fail(e)),
+                (Ok(_), Ok(())) => Ok(req.project.clone()),
+                (Err(e), _) => Err(fail(e)),
+                // added and saved: only closing the exam after it failed
+                (Ok(_), Err(e)) => Err(unclosed("The scans were added and saved", REOPEN, &e)),
             }
         }
     };
     let _ = tx.send(JobEvent::Finished(outcome));
+}
+
+/// A roster to give to a graded exam: its project package, the roster's rows (read and checked
+/// on the UI thread first) and the pipeline options (`threads`, `operator`, `cancel`).
+#[derive(Debug, Clone)]
+pub struct RosterRequest {
+    pub project: PathBuf,
+    pub rows: Vec<RosterStudent>,
+    pub options: GradeOptions,
+    /// Where the exports are written when the run ends (`None`: not written).
+    pub export_to: Option<PathBuf>,
+}
+
+/// The body of a roster worker thread: opens the project, identifies every booklet again
+/// against the roster ([`ExamProject::set_roster`]), writes the exports (`export_to`), saves and
+/// closes it, and reports progress, a summary line and the outcome on `tx`. A refused roster
+/// leaves the exam as it was: the shell reopens it either way.
+pub fn run_set_roster(req: RosterRequest, tx: Sender<JobEvent>) {
+    let progress_tx = tx.clone();
+    let progress = move |p: &Progress| {
+        let _ = progress_tx.send(JobEvent::Progress(p.clone()));
+    };
+    let fail = |e: AppError| {
+        format!(
+            "{}. The exam is as it was: no roster was added",
+            app_message(&e)
+        )
+    };
+    let outcome = match ExamProject::open(&req.project, &req.options.operator) {
+        Err(e) => Err(fail(e)),
+        Ok(mut p) => {
+            let set = p.set_roster(req.rows, &req.options, &progress);
+            if let Ok(r) = &set {
+                let _ = tx.send(JobEvent::Saved);
+                let _ = tx.send(JobEvent::Summary(roster_summary(r)));
+                for w in &r.warnings {
+                    let _ = tx.send(JobEvent::Note(format!("roster: {w}")));
+                }
+                export_after(&mut p, req.export_to.as_deref(), &tx);
+            }
+            let closed = p.close();
+            match (set, closed) {
+                (Err(AppError::Cancelled), _) => {
+                    let _ = tx.send(JobEvent::Cancelled);
+                    return;
+                }
+                (Ok(_), Ok(())) => Ok(req.project.clone()),
+                (Err(e), _) => Err(fail(e)),
+                // given and saved: only closing the exam after it failed
+                (Ok(_), Err(e)) => Err(unclosed("The roster was added and saved", REOPEN, &e)),
+            }
+        }
+    };
+    let _ = tx.send(JobEvent::Finished(outcome));
+}
+
+/// Why closing an exam failed after the run saved what it did (`done`: "The scans were added
+/// and saved"), say when the disk filled up as the exports were written: the change stands,
+/// and is said to, with what to do (`then`).
+fn unclosed(done: &str, then: &str, e: &AppError) -> String {
+    format!(
+        "{}. {done}, but the exam could not be closed cleanly: free disk space if the disk is \
+         full, then {then}",
+        app_message(e)
+    )
+}
+
+/// What to do once an exam that was not closed cleanly can be opened again.
+const REOPEN: &str = "open the exam again";
+
+/// What a survey worker reports, tagged with the survey's generation ([`run_survey`]): counts
+/// only (no page's provisional result crosses).
+#[derive(Debug)]
+pub enum SurveyEvent {
+    /// Pages read of the pages found.
+    Pages { done: usize, total: usize },
+    /// The survey ended, and how long it took.
+    Finished(Result<Box<Survey>, AppError>, Duration),
+}
+
+/// The body of a survey worker thread: reads the scans of `req` once, in memory, counts only
+/// ([`omr_app::survey::survey`]), and reports on `tx` with `generation`, so a survey whose
+/// scans were changed meanwhile is told apart (and dropped). Nothing is written.
+pub fn run_survey(req: SurveyRequest, generation: u64, tx: Sender<(u64, SurveyEvent)>) {
+    let progress_tx = tx.clone();
+    let progress = move |p: &Progress| {
+        let pages = match p {
+            Progress::Started { pages, .. } => Some((0, *pages)),
+            Progress::Page { done, total, .. } => Some((*done, *total)),
+            _ => None,
+        };
+        if let Some((done, total)) = pages {
+            let _ = progress_tx.send((generation, SurveyEvent::Pages { done, total }));
+        }
+    };
+    let t0 = std::time::Instant::now();
+    let r = omr_app::survey::survey(&req, &progress).map(Box::new);
+    let _ = tx.send((generation, SurveyEvent::Finished(r, t0.elapsed())));
+}
+
+/// What a survey reads: the sheet, the scans, the named key sheets and the roster. Another of
+/// these is another survey.
+type SurveyInputs = (Sheet, Vec<PathBuf>, Vec<PathBuf>, Option<PathBuf>);
+
+fn survey_inputs(g: &Given) -> SurveyInputs {
+    (
+        g.sheet.clone(),
+        g.scans.clone(),
+        g.key_sheets.clone(),
+        g.roster.clone(),
+    )
+}
+
+/// A survey of the New-exam card's scans.
+struct SurveyRun {
+    generation: u64,
+    inputs: SurveyInputs,
+    cancel: Cancel,
+    rx: Receiver<(u64, SurveyEvent)>,
+    /// Pages read of the pages found.
+    done: usize,
+    total: usize,
+    /// The survey and how long it took, or why there is none (stopped, or the scans could not
+    /// be read); `None` while it runs.
+    outcome: Option<Result<(Box<Survey>, Duration), String>>,
+}
+
+/// The New-exam card (G-3): the form last proposed, the instructor's answers, the survey of its
+/// scans and the proposal shown.
+#[derive(Default)]
+struct NewCard {
+    form: Option<b::NewExam>,
+    answers: Vec<Answer>,
+    survey: Option<SurveyRun>,
+    /// Counts the surveys started: a report of any but the last is dropped.
+    generation: u64,
+    /// What the card shown was proposed from, and the proposal.
+    shown: Option<(Box<Given>, Box<Proposal>)>,
+}
+
+/// Why a survey stopped by the instructor has no result.
+const STOPPED: &str = "You stopped checking the scans: nothing is graded until they are checked";
+
+impl NewCard {
+    /// The survey of `inputs`, when it ended well.
+    fn survey_of(&self, inputs: &SurveyInputs) -> Option<&Survey> {
+        let s = self.survey.as_ref().filter(|s| &s.inputs == inputs)?;
+        match &s.outcome {
+            Some(Ok((survey, _))) => Some(survey),
+            _ => None,
+        }
+    }
+
+    /// The question the survey's state puts on the card, ahead of the proposal's: it was
+    /// stopped, or the scans could not be read. Its answers: check again, choose other scans.
+    fn survey_ask(&self) -> Option<b::CardIssue> {
+        let why = match &self.survey.as_ref()?.outcome {
+            Some(Err(why)) => why.clone(),
+            _ => return None,
+        };
+        Some(b::CardIssue {
+            field: b::CardField::Scans,
+            label: FieldId::Scans.label().into(),
+            text: why,
+            choices: vec!["Check the scans again".into(), "Choose scans…".into()],
+        })
+    }
+
+    /// Stops the survey running (its report is dropped).
+    fn stop(&mut self) {
+        if let Some(s) = self.survey.take() {
+            s.cancel.cancel();
+        }
+    }
+}
+
+fn card_field(f: FieldId) -> b::CardField {
+    match f {
+        FieldId::Scans => b::CardField::Scans,
+        FieldId::Sheet => b::CardField::Sheet,
+        FieldId::Key => b::CardField::Key,
+        FieldId::KeySheets => b::CardField::KeySheets,
+        FieldId::Remark => b::CardField::Remark,
+        FieldId::Versions => b::CardField::Versions,
+        FieldId::Questions => b::CardField::Questions,
+        FieldId::Options => b::CardField::Options,
+        FieldId::CancelMode => b::CardField::CancelMode,
+        FieldId::IdScheme => b::CardField::IdScheme,
+        FieldId::Roster => b::CardField::Roster,
+        FieldId::Clo => b::CardField::Clo,
+        FieldId::Title => b::CardField::Title,
+        FieldId::Course => b::CardField::Course,
+        FieldId::Term => b::CardField::Term,
+        FieldId::MultiReview => b::CardField::MultiReview,
+        FieldId::HighStakes => b::CardField::HighStakes,
+        FieldId::Folder => b::CardField::Folder,
+    }
+}
+
+fn card_issue(i: &omr_app::propose::Issue) -> b::CardIssue {
+    b::CardIssue {
+        field: card_field(i.field),
+        label: i.field.label().into(),
+        text: i.text.clone(),
+        choices: i.choices.iter().map(|c| c.label.clone()).collect(),
+    }
 }
 
 /// "batch-2 · 4 files · 4 new pages · 60 → 64 booklets · 3 decisions kept · 0 conflicts".
@@ -163,6 +461,38 @@ fn append_summary(r: &omr_app::append::AppendReport) -> String {
     parts.join(" · ")
 }
 
+/// "142 students on the roster · 138 booklets matched · 4 not on the roster · 6 absent · 3
+/// decisions kept". A decision the run disagrees with (a student chosen by hand that the roster
+/// now matches otherwise) is kept and listed for review, and said so.
+fn roster_summary(r: &omr_app::append::RosterReport) -> String {
+    let mut parts = vec![
+        format!("{} on the roster", plural(r.students, "student")),
+        format!("{} matched", plural(r.matched, "booklet")),
+        format!("{} not on the roster", r.not_on_roster),
+        format!("{} absent", r.absent),
+    ];
+    // "0 decisions kept" beside a decision kept for review would contradict it
+    if r.carried_over > 0 || r.conflicts == 0 {
+        parts.push(format!(
+            "{} decision{} kept",
+            r.carried_over,
+            if r.carried_over == 1 { "" } else { "s" }
+        ));
+    }
+    if r.conflicts > 0 {
+        parts.push(format!(
+            "{} of yours {} with this run: kept, and listed for review (SYS-032)",
+            plural(r.conflicts, "decision"),
+            if r.conflicts == 1 {
+                "disagrees"
+            } else {
+                "disagree"
+            }
+        ));
+    }
+    parts.join(" · ")
+}
+
 fn plural(n: usize, word: &str) -> String {
     format!("{n} {word}{}", if n == 1 { "" } else { "s" })
 }
@@ -173,6 +503,9 @@ enum JobKind {
     Grade { definition: Box<ExamDefinition> },
     /// A later batch added to an existing project, reopened from `project` when done.
     Append { project: PathBuf, batch: u32 },
+    /// A roster given to an existing project (every booklet identified again, as a new batch
+    /// of the same scans), reopened from `project` when done.
+    Roster { project: PathBuf, batch: u32 },
 }
 
 struct Job {
@@ -185,15 +518,44 @@ struct Job {
     outcome: Option<Result<PathBuf, String>>,
     /// Live sheet states by page ID, classified as the tracker does (auto, review, rejected).
     sheets: BTreeMap<String, u8>,
+    /// Stops the run before anything is stored (shared with the worker).
+    cancel: Cancel,
+    /// What became of the exports written when the run ended (`None`: none were asked for).
+    exports: Option<Result<Exported, String>>,
+    /// The run's summary line (an added batch, a roster), for the completion notice.
+    summary: Option<String>,
+    /// What the run did is saved ([`JobEvent::Saved`]): a failure after it is only the closing.
+    saved: bool,
+    /// The run ended cancelled.
+    cancelled: bool,
 }
 
 impl Job {
+    fn new(exam: ExamId, kind: JobKind, rx: Receiver<JobEvent>, cancel: Cancel) -> Self {
+        Self {
+            exam,
+            kind,
+            rx,
+            tracker: ProgressTracker::default(),
+            activity: Vec::new(),
+            outcome: None,
+            sheets: BTreeMap::new(),
+            cancel,
+            exports: None,
+            summary: None,
+            saved: false,
+            cancelled: false,
+        }
+    }
+
     fn running(&self) -> bool {
         self.outcome.is_none()
     }
 
+    /// The run holds an existing project (closed here until it reports): an added batch or a
+    /// roster.
     fn is_append(&self) -> bool {
-        matches!(self.kind, JobKind::Append { .. })
+        matches!(self.kind, JobKind::Append { .. } | JobKind::Roster { .. })
     }
 
     fn sheet_counts(&self) -> b::SheetCounts {
@@ -221,6 +583,78 @@ struct Entry {
     page_stage_ms: f64,
 }
 
+/// A page thumbnail's key: its project folder and page ID (a stored page never changes).
+type ThumbKey = (PathBuf, String);
+
+/// Page thumbnails of the projects opened, decoded from the stored originals at first sight
+/// (about 28 ms a page). With the binary's spawner the decoding runs on its threads, so the
+/// first look at a Scan screen does not wait for it: a page shows the placeholder until its
+/// thumbnail arrives through [`Backend::pump`]. Without one (headless use) a page is decoded
+/// when it is first shown. The cache outlives the project's reopening after an added batch and
+/// keeps the [`THUMB_CACHE`] thumbnails shown last.
+#[derive(Default)]
+struct Thumbs {
+    /// Decoded thumbnails (`None`: the page has no image to show), with when each was last
+    /// shown.
+    done: BTreeMap<ThumbKey, (u64, Option<b::CropImage>)>,
+    /// The use counter of `done`.
+    clock: u64,
+    /// Decode on the spawner's threads (the binary gave one).
+    background: bool,
+    /// Pages shown without a thumbnail and not handed to a worker yet: key and page index.
+    wanted: Vec<(ThumbKey, usize)>,
+    /// Pages being decoded (in `wanted` or in a job).
+    pending: BTreeSet<ThumbKey>,
+    jobs: Vec<ThumbJob>,
+}
+
+/// A decode job on the spawner's threads: its pages in order, and the channel each thumbnail
+/// comes back on with its position.
+struct ThumbJob {
+    keys: Vec<ThumbKey>,
+    rx: Receiver<(usize, Option<b::CropImage>)>,
+}
+
+impl Thumbs {
+    /// The thumbnail of `key` if it was decoded (`Some(None)`: there is no image).
+    fn get(&mut self, key: &ThumbKey) -> Option<Option<b::CropImage>> {
+        self.clock += 1;
+        let clock = self.clock;
+        self.done.get_mut(key).map(|(used, image)| {
+            *used = clock;
+            image.clone()
+        })
+    }
+
+    /// Keeps a decoded thumbnail, dropping the ones shown longest ago beyond [`THUMB_CACHE`].
+    fn put(&mut self, key: ThumbKey, image: Option<b::CropImage>) {
+        self.clock += 1;
+        self.pending.remove(&key);
+        self.done.insert(key, (self.clock, image));
+        while self.done.len() > THUMB_CACHE {
+            let oldest = self
+                .done
+                .iter()
+                .min_by_key(|(_, (used, _))| *used)
+                .map(|(k, _)| k.clone());
+            match oldest {
+                Some(k) => self.done.remove(&k),
+                None => break,
+            };
+        }
+    }
+}
+
+/// A page thumbnail, from the page's whole view at [`THUMB_WIDTH`]
+/// (`omr_app::crops::thumbnail`).
+fn thumb_of(c: omr_app::crops::Crop) -> b::CropImage {
+    b::CropImage {
+        width: c.width,
+        height: c.height,
+        rgba: c.rgba,
+    }
+}
+
 /// An opened project and the derived view-models cached until its next change.
 struct Opened {
     p: ExamProject,
@@ -230,8 +664,8 @@ struct Opened {
     items: RefCell<BTreeMap<u64, Option<b::ReviewItem>>>,
     results: RefCell<Option<Option<b::Results>>>,
     outcomes: RefCell<Option<Option<b::Outcomes>>>,
-    /// Page thumbnails by page index (pages never change after grading).
-    thumbs: RefCell<BTreeMap<usize, Option<b::CropImage>>>,
+    /// The backend's page thumbnails (see [`Thumbs`]).
+    thumbs: Rc<RefCell<Thumbs>>,
     /// Key-sheet files read for this exam and not confirmed yet (nothing in the exam changes
     /// until the confirmation replaces its key).
     preview: Option<Preview>,
@@ -259,7 +693,12 @@ struct Preview {
 }
 
 impl Opened {
-    fn new(p: ExamProject, dir: PathBuf, read_only: Option<String>) -> Self {
+    fn new(
+        p: ExamProject,
+        dir: PathBuf,
+        read_only: Option<String>,
+        thumbs: Rc<RefCell<Thumbs>>,
+    ) -> Self {
         Self {
             p,
             read_only,
@@ -267,7 +706,7 @@ impl Opened {
             items: RefCell::new(BTreeMap::new()),
             results: RefCell::new(None),
             outcomes: RefCell::new(None),
-            thumbs: RefCell::new(BTreeMap::new()),
+            thumbs,
             preview: None,
             keysheets: RefCell::new(None),
             stability: RefCell::new(None),
@@ -289,7 +728,7 @@ impl Opened {
             None => Ok(()),
             Some(why) => Err(BackendError::Denied(format!(
                 "This exam is open read-only ({why}). Close the other program that has {} open \
-                 (an `omr review` command or another window), then reopen the exam",
+                 (another window, or a command run on it), then reopen the exam",
                 self.dir.display()
             ))),
         }
@@ -315,6 +754,16 @@ pub struct AppBackend {
     stability_jobs: RefCell<Vec<StabilityJob>>,
     /// A Remark import read on the New-exam form and not used yet (§3.5).
     remark_new: Option<HeldImport>,
+    /// The New-exam card: its survey, answers and proposal.
+    card: NewCard,
+    /// The answers of the card last graded, for *Edit and grade again*.
+    last_answers: Vec<Answer>,
+    /// Page thumbnails of every project opened (shared with each [`Opened`]).
+    thumbs: Rc<RefCell<Thumbs>>,
+    /// Write the exports when a run ends (Settings; on unless switched off).
+    auto_export: bool,
+    /// How the last run ended, until [`Backend::take_completed`] hands it over.
+    completed: Option<b::JobDone>,
 }
 
 struct StabilityJob {
@@ -324,7 +773,6 @@ struct StabilityJob {
 }
 
 fn app_err(e: AppError) -> BackendError {
-    let code = e.exit_code();
     match e {
         AppError::NotFound(m) => BackendError::NotFound(format!(
             "{m}. The item may have been resolved elsewhere: reopen the exam"
@@ -332,7 +780,7 @@ fn app_err(e: AppError) -> BackendError {
         AppError::Review(m) | AppError::Definition(m) | AppError::Scoring(m) => {
             BackendError::Invalid(m)
         }
-        AppError::Input(m) => BackendError::Invalid(format!("{m} (input error, code {code})")),
+        AppError::Input(m) => BackendError::Invalid(m),
         AppError::Store(m) => BackendError::Denied(format!(
             "The project store refused the change: {m}. Check that the folder is writable and \
              not open elsewhere, then reopen the exam"
@@ -343,6 +791,9 @@ fn app_err(e: AppError) -> BackendError {
         AppError::Internal(m) => BackendError::Denied(format!(
             "Internal error: {m}. Nothing was changed; please report it with the project folder"
         )),
+        AppError::Cancelled => BackendError::Denied(
+            "Cancelled: nothing was saved; your scan files are unchanged".into(),
+        ),
     }
 }
 
@@ -360,19 +811,56 @@ impl AppBackend {
             reloaded: Vec::new(),
             stability_jobs: RefCell::new(Vec::new()),
             remark_new: None,
+            card: NewCard::default(),
+            last_answers: Vec::new(),
+            thumbs: Rc::default(),
+            auto_export: true,
+            completed: None,
         }
     }
 
-    /// Lets the backend start background work (adding scans) on threads the caller owns.
+    /// Lets the backend start background work (adding scans, flag stability, page thumbnails)
+    /// on threads the caller owns.
     pub fn set_spawner(&mut self, spawn: Spawn) {
         self.spawn = Some(spawn);
+        self.thumbs.borrow_mut().background = true;
     }
 
     /// True while `exam`'s project is closed for an added batch.
-    fn busy(&self, exam: &ExamId) -> bool {
-        self.job
+    /// Why `exam` has no project open, once [`AppBackend::with`] found none: it is being
+    /// graded, its grading failed or its folder could not be opened, or it is not graded.
+    fn closed_reason(&self, exam: &ExamId) -> String {
+        if self
+            .job
             .as_ref()
-            .is_some_and(|j| j.is_append() && j.running() && &j.exam == exam)
+            .is_some_and(|j| &j.exam == exam && j.running())
+        {
+            "The exam is being graded: it opens here when the Scan screen says the batch is \
+             complete"
+                .to_string()
+        } else if let Some(why) = self.failed.borrow().get(exam) {
+            why.clone()
+        } else {
+            "No graded project is open for this exam".to_string()
+        }
+    }
+
+    fn busy(&self, exam: &ExamId) -> bool {
+        self.busy_text(exam).is_some()
+    }
+
+    /// What holds `exam` while a run grades it again (scans added, a roster matched), named
+    /// as the rest of the window names it; `None` when nothing does.
+    fn busy_text(&self, exam: &ExamId) -> Option<String> {
+        let j = self
+            .job
+            .as_ref()
+            .filter(|j| j.is_append() && j.running() && &j.exam == exam)?;
+        let name = self.job_name(j);
+        Some(match j.kind {
+            JobKind::Roster { .. } => format!("The roster of {name} is being matched"),
+            _ => format!("Scans are being added to {name}"),
+        })
     }
 
     /// Every graded exam below `workspace` (folders holding `project.omrproj`, via
@@ -386,25 +874,32 @@ impl AppBackend {
         me
     }
 
-    /// One graded project: `dir` is the exam folder or its `project.omrproj`.
+    /// One graded project: `dir` is the exam folder or its `project.omrproj`. Its exams folder
+    /// (where a new exam is graded into) is the folder the exam folder sits in.
     pub fn project(dir: &Path, operator: &str) -> Result<Self, String> {
         let dir = project_dir(dir);
-        let mut me = Self::empty(operator, dir.parent().map(Path::to_path_buf));
+        // absolute, so a relative `exam/` still has a folder above it
+        let dir = std::path::absolute(&dir).unwrap_or(dir);
+        let workspace = dir.parent().and_then(Path::parent).map(Path::to_path_buf);
+        let mut me = Self::empty(operator, workspace);
         let (p, read_only) = open_project(&dir, operator)?;
         let summary = p.summary_vm();
         let id = me.add_entry(dir.clone(), summary, Some(&p));
-        me.opened
-            .borrow_mut()
-            .insert(id.clone(), Opened::new(p, dir, read_only));
+        me.opened.borrow_mut().insert(
+            id.clone(),
+            Opened::new(p, dir, read_only, me.thumbs.clone()),
+        );
         me.default = Some(id);
         Ok(me)
     }
 
-    /// A grading run in progress: `rx` receives the worker's events (see [`run_grading`]).
-    /// The exams of `workspace`, if given, are listed beside it.
+    /// A grading run in progress: `rx` receives the worker's events (see [`run_grading`]) and
+    /// `cancel` is the token of its options (Cancel grading sets it). The exams of
+    /// `workspace`, if given, are listed beside it.
     pub fn grading(
         definition: &ExamDefinition,
         rx: Receiver<JobEvent>,
+        cancel: Cancel,
         workspace: Option<&Path>,
         operator: &str,
     ) -> Self {
@@ -412,13 +907,19 @@ impl AppBackend {
             Some(w) => Self::workspace(w, operator),
             None => Self::empty(operator, None),
         };
-        let exam = me.start_grade_job(definition, rx);
+        let exam = me.start_grade_job(definition, rx, cancel);
         me.default = Some(exam);
         me
     }
 
-    /// Shows a grading run of `definition` whose worker reports on `rx`; returns its exam ID.
-    fn start_grade_job(&mut self, definition: &ExamDefinition, rx: Receiver<JobEvent>) -> ExamId {
+    /// Shows a grading run of `definition` whose worker reports on `rx` (and stops on
+    /// `cancel`); returns its exam ID.
+    fn start_grade_job(
+        &mut self,
+        definition: &ExamDefinition,
+        rx: Receiver<JobEvent>,
+        cancel: Cancel,
+    ) -> ExamId {
         // the same definition graded again into another folder is another exam on the dashboard
         let mut exam = ExamId(definition.exam_id.to_string());
         let mut n = 2;
@@ -426,134 +927,433 @@ impl AppBackend {
             exam = ExamId(format!("{}#{n}", definition.exam_id));
             n += 1;
         }
-        self.job = Some(Job {
-            exam: exam.clone(),
-            kind: JobKind::Grade {
+        let mut job = Job::new(
+            exam.clone(),
+            JobKind::Grade {
                 definition: Box::new(definition.clone()),
             },
             rx,
-            tracker: ProgressTracker::default(),
-            activity: vec![format!(
-                "{} · queued for grading",
-                snapshot_label(&omr_app::pipeline::now_utc())
-            )],
-            outcome: None,
-            sheets: BTreeMap::new(),
-        });
+            cancel,
+        );
+        job.activity.push(format!(
+            "{} · queued for grading",
+            snapshot_label(&omr_app::pipeline::now_utc())
+        ));
+        self.job = Some(job);
         exam
     }
 
-    /// Starts grading the New-exam form (see [`Backend::create_exam`]).
+    /// What the New-exam form gives, as the proposal takes it: the files (a dialog's picks
+    /// exactly, typed text as typed), the values typed over the proposed ones, the Remark import
+    /// the form uses, and the answers given on the card so far.
+    fn given_of(&self, form: &b::NewExam) -> Given {
+        let text = |s: &str| Some(s.trim().to_string()).filter(|s| !s.is_empty());
+        let picked = |k: &str| form.picked.get(k).filter(|p| !p.is_empty()).cloned();
+        // one path, quotes and a leading ~/ handled as for the scans
+        let path = |k: &str, s: &str| {
+            picked(k)
+                .and_then(|p| p.into_iter().next())
+                .or_else(|| crate::bind::one_path(s))
+        };
+        let sheet = text(&form.sheet).unwrap_or_else(|| "iau-ccsit-v1".into());
+        let sheet = match picked("sheet") {
+            Some(p) => Sheet::Spec(p[0].clone()),
+            None => match Sheet::parse(&sheet) {
+                Sheet::Spec(p) => Sheet::Spec(path("sheet", &sheet).unwrap_or(p)),
+                t => t,
+            },
+        };
+        let scans = picked("scans").unwrap_or_else(|| crate::bind::scan_paths(&form.scans));
+        let mut g = Given::new(sheet, scans);
+        g.key = path("key", &form.key);
+        g.key_sheets =
+            picked("key_sheets").unwrap_or_else(|| crate::bind::scan_paths(&form.key_sheets));
+        g.roster = path("roster", &form.roster);
+        g.clo = path("clo", &form.clo);
+        // the Remark import read on this form, while the form uses it
+        g.remark = self
+            .remark_new
+            .as_ref()
+            .filter(|h| {
+                let files: Vec<String> = h.files.iter().map(|f| file_label(f)).collect();
+                text(&form.remark).is_some_and(|named| named == files.join("; "))
+            })
+            .map(|h| h.imp.clone());
+        let t = &mut g.typed;
+        t.questions = text(&form.questions);
+        t.options = text(&form.options);
+        t.forms = text(&form.forms);
+        t.title = text(&form.title);
+        t.course = text(&form.course);
+        t.term = text(&form.term);
+        t.cancel_mode = text(&form.cancel_mode);
+        t.multi_review = text(&form.multi_review);
+        t.high_stakes = form.high_stakes.then_some(true);
+        t.id_scheme = text(&form.id_scheme);
+        t.folder = path("out", &form.out);
+        g.answers = self.card.answers.clone();
+        g
+    }
+
+    /// Takes the form as it stands now: an answer about a field typed otherwise since it was
+    /// given is dropped ([`Given::drop_answers_for_retyped`]), and the new value is checked
+    /// afresh.
+    fn take_form(&mut self, form: &b::NewExam) {
+        if let Some(old) = self.card.form.as_ref() {
+            let before = self.given_of(old).typed;
+            let mut now = self.given_of(form);
+            now.drop_answers_for_retyped(&before);
+            self.card.answers = now.answers;
+        }
+        self.card.form = Some(form.clone());
+    }
+
+    /// Proposes the card again for the form last given, with the survey as it stands. Scans,
+    /// a sheet, key sheets or a roster other than those surveyed start a new survey (the one
+    /// running stops); other scans or another sheet, or the scans taken away, drop the answers
+    /// given for the old ones (answers given before any scans stay).
+    fn propose_card(&mut self) {
+        let (Some(form), Some(workspace)) = (self.card.form.clone(), self.workspace.clone()) else {
+            return;
+        };
+        let mut given = self.given_of(&form);
+        let inputs = survey_inputs(&given);
+        if given.scans.is_empty() {
+            // the scans the answers were given for are gone: other scans start afresh
+            if self.card.survey.is_some() {
+                self.card.answers.clear();
+                given.answers.clear();
+            }
+            self.card.stop();
+        } else if self.card.survey.as_ref().is_none_or(|s| s.inputs != inputs) {
+            let restacked = self
+                .card
+                .survey
+                .as_ref()
+                .is_some_and(|s| (&s.inputs.0, &s.inputs.1) != (&inputs.0, &inputs.1));
+            if restacked {
+                self.card.answers.clear();
+                given.answers.clear();
+            }
+            self.start_survey(&given);
+        }
+        let mut ctx = Context::new(workspace);
+        ctx.recent = self
+            .entries
+            .iter()
+            .map(|e| RecentExam {
+                term: e.summary.term.clone(),
+                course: e.summary.course_code.clone(),
+                graded_utc: e.snapshot_utc.clone(),
+            })
+            .collect();
+        let p = omr_app::propose::propose(&given, self.card.survey_of(&inputs), &ctx);
+        self.card.shown = Some((Box::new(given), Box::new(p)));
+    }
+
+    /// Starts surveying the scans of `given` on the spawner; the survey running stops.
+    fn start_survey(&mut self, given: &Given) {
+        self.card.stop();
+        self.card.generation += 1;
+        let generation = self.card.generation;
+        let cancel = Cancel::default();
+        let mut req = given.survey_request(0);
+        req.cancel = cancel.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let outcome = match self.spawn.as_ref() {
+            None => Some(Err(
+                "The scans cannot be checked in this window: it starts no background work".into(),
+            )),
+            Some(spawn) => spawn(Box::new(move || run_survey(req, generation, tx)))
+                .err()
+                .map(|e| {
+                    Err(format!(
+                        "The scans could not be checked: no worker could start ({e}); close \
+                         other programs and check them again"
+                    ))
+                }),
+        };
+        self.card.survey = Some(SurveyRun {
+            generation,
+            inputs: survey_inputs(given),
+            cancel,
+            rx,
+            done: 0,
+            total: 0,
+            outcome,
+        });
+    }
+
+    /// Surveys the card's scans again (the instructor asked), and proposes the card again.
+    fn resurvey(&mut self) {
+        let Some(form) = self.card.form.clone() else {
+            return;
+        };
+        let given = self.given_of(&form);
+        if !given.scans.is_empty() {
+            self.start_survey(&given);
+        }
+        self.propose_card();
+    }
+
+    /// Folds in the survey's reports (`wait`: blocks until it has ended); when it ends, the
+    /// card is proposed again with it.
+    fn drain_survey(&mut self, wait: bool) -> bool {
+        let Some(s) = self.card.survey.as_mut() else {
+            return false;
+        };
+        let mut changed = false;
+        while s.outcome.is_none() {
+            let got = if wait {
+                s.rx.recv().map_err(|_| TryRecvError::Disconnected)
+            } else {
+                s.rx.try_recv()
+            };
+            match got {
+                // a report of any other survey is dropped
+                Ok((g, _)) if g != s.generation => {}
+                Ok((_, SurveyEvent::Pages { done, total })) => {
+                    (s.done, s.total) = (done, total);
+                    changed = true;
+                }
+                Ok((_, SurveyEvent::Finished(r, took))) => {
+                    s.outcome = Some(match r {
+                        Ok(survey) => Ok((survey, took)),
+                        Err(AppError::Cancelled) => Err(STOPPED.into()),
+                        Err(e) => Err(format!(
+                            "The scans could not be checked: {}",
+                            app_message(&e)
+                        )),
+                    });
+                    changed = true;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    s.outcome = Some(Err("The check of the scans stopped without a result: \
+                                          check them again"
+                        .into()));
+                    changed = true;
+                }
+            }
+        }
+        if changed && s.outcome.is_some() {
+            self.propose_card();
+        }
+        changed
+    }
+
+    /// The card as shown: the proposal, the survey as it stands and why *Grade exam* waits.
+    fn card_view(&self) -> b::NewExamCard {
+        let Some((_, p)) = self.card.shown.as_ref() else {
+            return b::NewExamCard {
+                blocker: self
+                    .create_exam_blocker()
+                    .or_else(|| Some("Choose the scans to grade".into())),
+                ..b::NewExamCard::default()
+            };
+        };
+        let survey = match &self.card.survey {
+            None => b::SurveyState::None,
+            Some(s) => match &s.outcome {
+                None => b::SurveyState::Running {
+                    done: s.done,
+                    total: s.total,
+                },
+                Some(Ok((sv, took))) => b::SurveyState::Done {
+                    pages: sv.pages,
+                    took: *took,
+                },
+                Some(Err(why)) => b::SurveyState::Failed(why.clone()),
+            },
+        };
+        let survey_ask = self.card.survey_ask();
+        let values = p
+            .fields
+            .iter()
+            .map(|f| b::CardValue {
+                field: card_field(f.id),
+                label: f.id.label().into(),
+                // where the exam goes, whole, as the card's heading writes the exams folder
+                value: if f.id == FieldId::Folder {
+                    crate::bind::home_path(Path::new(&f.value))
+                } else {
+                    f.value.clone()
+                },
+                plain: if f.id == FieldId::Folder {
+                    crate::bind::home_path(Path::new(&f.plain))
+                } else {
+                    f.plain.clone()
+                },
+                source: f.source.text().into(),
+                detail: f.detail.clone(),
+                state: match f.state {
+                    _ if f.id == FieldId::Scans && survey_ask.is_some() => b::CardState::Ask,
+                    omr_app::propose::FieldState::Ok => b::CardState::Ok,
+                    omr_app::propose::FieldState::Note => b::CardState::Note,
+                    omr_app::propose::FieldState::Ask => b::CardState::Ask,
+                },
+            })
+            .collect();
+        let reading = match &survey {
+            b::SurveyState::Running { done, total } if *total > 0 => Some(format!(
+                "Checking the scans ({done} of {total} pages): Grade exam is available when \
+                 every page is checked"
+            )),
+            b::SurveyState::Running { .. } => Some(
+                "Checking the scans: Grade exam is available when every page is checked".into(),
+            ),
+            _ => None,
+        };
+        let blocker = self
+            .create_exam_blocker()
+            .or(reading)
+            .or_else(|| {
+                survey_ask
+                    .as_ref()
+                    .map(|a| format!("{}: {}", a.label, a.text))
+            })
+            .or_else(|| p.blocker())
+            .or_else(|| {
+                p.inputs.is_none().then(|| {
+                    "The card is not complete: give the scans and answer its questions".into()
+                })
+            });
+        let mut asks: Vec<b::CardIssue> = survey_ask.into_iter().collect();
+        asks.extend(p.asks().map(card_issue));
+        b::NewExamCard {
+            values,
+            asks,
+            notes: p.notes().map(card_issue).collect(),
+            survey,
+            blocker,
+            cancel_locked: p.field(FieldId::CancelMode).is_some_and(|f| f.fixed),
+            review_choices: omr_app::propose::value_choices(FieldId::MultiReview)
+                .iter()
+                .map(|(v, plain)| (v.to_string(), plain.to_string()))
+                .collect(),
+        }
+    }
+
+    /// The instructor's answer `choice` to question `ask` of the card shown (see
+    /// [`Backend::choose_on_card`]).
+    fn choose(&mut self, ask: usize, choice: usize) -> Result<b::CardAction, BackendError> {
+        let gone = || {
+            BackendError::NotFound(
+                "That question is no longer on the card: answer the ones it shows now".into(),
+            )
+        };
+        let mut ask = ask;
+        if self.card.survey_ask().is_some() {
+            if ask == 0 {
+                return match choice {
+                    0 => {
+                        self.resurvey();
+                        Ok(b::CardAction::Done)
+                    }
+                    1 => Ok(b::CardAction::Pick(b::CardField::Scans)),
+                    _ => Err(gone()),
+                };
+            }
+            ask -= 1;
+        }
+        let action = self
+            .card
+            .shown
+            .as_ref()
+            .and_then(|(_, p)| Some(p.asks().nth(ask)?.choices.get(choice)?.action.clone()))
+            .ok_or_else(gone)?;
+        Ok(match action {
+            ChoiceAction::Answer(a) => {
+                if !self.card.answers.contains(&a) {
+                    self.card.answers.push(a);
+                }
+                self.propose_card();
+                b::CardAction::Done
+            }
+            ChoiceAction::Pick(f) => b::CardAction::Pick(card_field(f)),
+            ChoiceAction::Clear(f) => b::CardAction::Clear(card_field(f)),
+            ChoiceAction::Type(f) => b::CardAction::Type(card_field(f)),
+            ChoiceAction::Survey => {
+                self.resurvey();
+                b::CardAction::Done
+            }
+        })
+    }
+
+    /// What the running job grades: the course and title of a new exam, else its exam.
+    fn job_name(&self, j: &Job) -> String {
+        let named = |course: &str, title: &str| {
+            Some(format!("{course} {title}").trim().to_string()).filter(|s| !s.is_empty())
+        };
+        match &j.kind {
+            JobKind::Grade { definition } => named(&definition.course_code, &definition.title),
+            JobKind::Append { .. } | JobKind::Roster { .. } => self
+                .entries
+                .iter()
+                .find(|e| e.id == j.exam)
+                .and_then(|e| named(&e.summary.course_code, &e.summary.assessment)),
+        }
+        .unwrap_or_else(|| "Another exam".into())
+    }
+
+    /// Grades the new exam as the card shown for `form` proposes it (see
+    /// [`Backend::create_exam`]).
     fn start_new_exam(&mut self, form: &b::NewExam) -> Result<(ExamId, String), BackendError> {
-        let Some(workspace) = self.workspace.clone() else {
-            return Err(BackendError::Denied(
-                "No exams folder is open: start omr-desktop with --workspace DIR (or without \
-                 flags, for ~/OMR Exams)"
-                    .into(),
+        if let Some(why) = self.create_exam_blocker() {
+            return Err(BackendError::Denied(why));
+        }
+        // what is shown is what is graded: a form changed since the card was shown is shown
+        // again first
+        let given = self.given_of(form);
+        if !self.card.shown.as_ref().is_some_and(|(g, _)| **g == given) {
+            self.take_form(form);
+            self.propose_card();
+            return Err(BackendError::Invalid(
+                "The card changed with your last change: check it, then grade the exam".into(),
+            ));
+        }
+        if let Some(why) = self.card_view().blocker {
+            return Err(BackendError::Invalid(why));
+        }
+        let Some((given, p)) = self.card.shown.clone() else {
+            return Err(BackendError::Invalid("Choose the scans to grade".into()));
+        };
+        let Some(inputs) = p.inputs.clone() else {
+            return Err(BackendError::Invalid(
+                "The card is not complete: answer its questions first".into(),
             ));
         };
-        if let Some(j) = self.job.as_ref().filter(|j| j.running()) {
-            return Err(BackendError::Denied(format!(
-                "{} is still being graded: create the next exam when the Scan screen says \
-                 complete",
-                j.exam
+        if p.folder.join("project.omrproj").exists() {
+            self.propose_card();
+            return Err(BackendError::Invalid(format!(
+                "{} holds an exam already: the card now proposes another folder; check it, then \
+                 grade the exam",
+                p.folder.display()
             )));
         }
         let Some(spawn) = self.spawn.as_ref() else {
             return Err(BackendError::Denied(
-                "This window cannot start background work; grade with `omr grade <scans…> \
-                 --out <folder in the exams folder>` and reopen the workspace"
-                    .into(),
+                "This window cannot grade in the background".into(),
             ));
         };
-        let bad = |m: String| BackendError::Invalid(m);
-        let text = |s: &str| Some(s.trim().to_string()).filter(|s| !s.is_empty());
-        let inputs = crate::bind::scan_paths(&form.scans);
-        if inputs.is_empty() {
-            return Err(bad(
-                "Scans: type the folder or the scan files to grade (several: separate them \
-                 with ;)"
-                    .into(),
-            ));
-        }
-        let questions: u16 = form
-            .questions
-            .trim()
-            .parse()
-            .ok()
-            .filter(|q| *q > 0)
-            .ok_or_else(|| {
-                bad(format!(
-                    "Questions: type how many questions this exam uses, e.g. 30 (not {:?})",
-                    form.questions.trim()
-                ))
-            })?;
-        let options = match text(&form.options) {
-            None => None,
-            Some(o) => Some(o.parse::<u8>().map_err(|_| {
-                bad(format!(
-                    "Options: type the options per question, e.g. 4 or 5 (not {o:?}), or leave \
-                     it blank for the sheet's"
-                ))
-            })?),
-        };
-        // one path, quotes and a leading ~/ handled as for the scans
-        let path = |s: &str| crate::bind::scan_paths(s).into_iter().next();
-        let sheet = text(&form.sheet).unwrap_or_else(|| "iau-ccsit-v1".into());
-        let sheet = match omr_app::define::Sheet::parse(&sheet) {
-            omr_app::define::Sheet::Spec(p) => {
-                omr_app::define::Sheet::Spec(path(&sheet).unwrap_or(p))
-            }
-            t => t,
-        };
-        let mut i = omr_app::define::Inputs::new(sheet, questions);
-        i.options = options;
-        i.forms = text(&form.forms).map(|f| {
-            f.split([',', ' '])
-                .map(|x| x.trim().to_uppercase())
-                .filter(|x| !x.is_empty())
-                .collect()
-        });
-        i.key = path(&form.key);
-        i.infer_key = i.key.is_none();
-        // key sheets named in the form: read with the exam, held until confirmed in Setup
-        let key_sheets = crate::bind::scan_paths(&form.key_sheets);
-        i.roster = path(&form.roster);
-        i.clo = path(&form.clo);
-        i.title = text(&form.title);
-        i.course = text(&form.course);
-        // the key, its exact points per version and the learning objectives from a Remark
-        // import read on this form (§3.5): applied to the definition as omr-app gives them
-        let remark = match text(&form.remark) {
-            None => None,
-            Some(named) => Some(self.remark_for_new_exam(&named, &mut i, &key_sheets)?),
-        };
-        let (mut definition, warnings) = omr_app::define::define(&i).map_err(app_err)?;
-        if let Some(imp) = &remark {
-            definition.key = omr_app::exam::KeySource::Provided {
-                forms: imp.form_keys(),
-            };
-            definition.set_key_points(&imp.key_points());
-            if let Some(o) = imp.outcome_setup() {
-                definition.outcomes = Some(o);
-            }
-            definition.exam_id = definition.derived_exam_id();
-            definition.validate().map_err(app_err)?;
-        }
-        // the inputs exist and hold scans before anything is created
-        let files = omr_app::ingest::collect_paths(&inputs).map_err(app_err)?;
-        let dir = omr_app::define::new_exam_dir(&workspace, &definition);
+        // the proposal's inputs, checked by the same rules once more: the definition graded
+        let (definition, warnings) = omr_app::define::define(&inputs).map_err(app_err)?;
+        let files = omr_app::ingest::collect_paths(&given.scans).map_err(app_err)?;
+        let cancel = Cancel::default();
         let req = GradeRequest {
             definition: definition.clone(),
-            inputs,
-            key_sheets: key_sheets.clone(),
+            inputs: given.scans.clone(),
+            key_sheets: p.key_sheets.clone(),
             options: GradeOptions {
                 threads: 0,
-                project_dir: Some(dir.join("project.omrproj")),
+                project_dir: Some(p.folder.join("project.omrproj")),
                 snapshot_utc: None,
                 operator: self.operator.clone(),
                 max_pages: None,
+                cancel: cancel.clone(),
             },
+            // beside the package, as `omr grade --out` writes them
+            export_to: self.auto_export.then(|| p.folder.clone()),
         };
         let (tx, rx) = std::sync::mpsc::channel::<JobEvent>();
         spawn(Box::new(move || run_grading(req, tx))).map_err(|e| {
@@ -561,30 +1361,34 @@ impl AppBackend {
                 "Cannot start the grading worker ({e}); close other programs and try again"
             ))
         })?;
-        let exam = self.start_grade_job(&definition, rx);
+        let exam = self.start_grade_job(&definition, rx, cancel);
         if let Some(job) = self.job.as_mut() {
             let now = snapshot_label(&omr_app::pipeline::now_utc());
             for w in warnings {
-                job.activity.insert(0, format!("{now} · roster: {w}"));
+                job.activity.insert(0, format!("{now} · {w}"));
+            }
+            if let Some(imp) = &given.remark {
+                for line in remark_activity(imp) {
+                    job.activity.insert(0, format!("{now} · {line}"));
+                }
             }
         }
-        if let (Some(imp), Some(job)) = (&remark, self.job.as_mut()) {
-            let now = snapshot_label(&omr_app::pipeline::now_utc());
-            for line in remark_activity(imp) {
-                job.activity.insert(0, format!("{now} · {line}"));
-            }
-        }
+        // the import and the card are used up: the next exam starts afresh (its answers kept
+        // for Edit and grade again)
         self.remark_new = None;
+        self.card.stop();
+        self.last_answers = std::mem::take(&mut self.card.answers);
+        self.card = NewCard::default();
         self.default = Some(exam.clone());
-        let key = if remark.is_some() {
-            "; the key and its points per version come from the Remark import, the learning \
-             objectives as CLO mappings flagged imported, needs review"
-        } else if !key_sheets.is_empty() {
+        let held = matches!(definition.key, omr_app::exam::KeySource::None);
+        let key = if given.remark.is_some() {
+            "; the key and its points per version come from the Remark import"
+        } else if held {
             "; the key is read from the key sheets and waits for your confirmation in Setup \
              (nothing is scored until then)"
-        } else if i.infer_key {
-            "; no key file, so the key is inferred and the results stay provisional until you \
-             replace it in Setup"
+        } else if matches!(definition.key, omr_app::exam::KeySource::Inferred) {
+            "; the key is provisional, inferred from the answers as you chose: the results \
+             cannot be released until you replace it in Setup"
         } else {
             ""
         };
@@ -593,79 +1397,17 @@ impl AppBackend {
             format!(
                 "Grading {} into {}{key}",
                 plural(files.len(), "scan file"),
-                dir.display()
+                p.folder.display()
             ),
         ))
     }
 
-    /// The Remark import held for the New-exam form, checked against what the form says
-    /// (`named`: the workbooks it lists) and the form's other fields; sets the questions and
-    /// versions it gives and that no key is inferred.
-    fn remark_for_new_exam(
-        &self,
-        named: &str,
-        i: &mut omr_app::define::Inputs,
-        key_sheets: &[PathBuf],
-    ) -> Result<omr_app::remark::RemarkImport, BackendError> {
-        let bad = |m: String| BackendError::Invalid(m);
-        let held = self.remark_new.as_ref().ok_or_else(|| {
-            bad(
-                "Remark import: the export read on this form is no longer held; read it again \
-                 with Import from Remark export…"
-                    .into(),
-            )
-        })?;
-        let files: Vec<String> = held.files.iter().map(|f| file_label(f)).collect();
-        if files.join("; ") != named.trim() {
-            return Err(bad(format!(
-                "Remark import: the form lists {named} but the export read is {}; read it again \
-                 with Import from Remark export…",
-                files.join("; ")
-            )));
-        }
-        let imp = &held.imp;
-        if i.key.is_some() {
-            return Err(bad(
-                "Answer key file: the key comes from the Remark import; clear the key file, or \
-                 clear the import"
-                    .into(),
-            ));
-        }
-        if !key_sheets.is_empty() {
-            return Err(bad(
-                "Key sheets: the key comes from the Remark import; clear the key sheets, or \
-                 clear the import"
-                    .into(),
-            ));
-        }
-        if i.questions != imp.questions {
-            return Err(bad(format!(
-                "Number of questions: the Remark export has {} questions (not {}); type {} or \
-                 clear the import",
-                imp.questions, i.questions, imp.questions
-            )));
-        }
-        let forms = imp.forms();
-        if let Some(f) = i.forms.as_ref().filter(|f| !f.is_empty() && **f != forms) {
-            return Err(bad(format!(
-                "Form letters: the Remark export gives versions {} (not {}); type {} or clear \
-                 the import",
-                forms.join(","),
-                f.join(","),
-                forms.join(",")
-            )));
-        }
-        let objectives = imp.versions.iter().any(|v| !v.groups.is_empty());
-        if objectives && i.clo.is_some() {
-            return Err(bad(
-                "CLO mapping file: the learning objectives come from the Remark import; clear \
-                 the CLO file, or clear the import"
-                    .into(),
-            ));
-        }
-        i.forms = Some(forms);
-        i.infer_key = false;
-        Ok(imp.clone())
+    /// True while the New-exam card's scans are being checked.
+    pub fn surveying(&self) -> bool {
+        self.card
+            .survey
+            .as_ref()
+            .is_some_and(|s| s.outcome.is_none())
     }
 
     /// True while a grading run or an added batch is in progress (screenshots wait for it).
@@ -736,7 +1478,7 @@ impl AppBackend {
                 Ok((p, ro)) => {
                     self.opened
                         .borrow_mut()
-                        .insert(exam.clone(), Opened::new(p, dir, ro));
+                        .insert(exam.clone(), Opened::new(p, dir, ro, self.thumbs.clone()));
                 }
                 Err(e) => {
                     self.failed.borrow_mut().insert(exam.clone(), e);
@@ -752,10 +1494,9 @@ impl AppBackend {
         exam: &ExamId,
         f: impl FnOnce(&mut Opened) -> Result<R, BackendError>,
     ) -> Result<R, BackendError> {
-        if self.busy(exam) {
+        if let Some(what) = self.busy_text(exam) {
             return Err(BackendError::Denied(format!(
-                "Scans are being added to {exam}: nothing can change until the Scan screen says \
-                 the batch is complete"
+                "{what}: nothing can change until the Scan screen says it is complete"
             )));
         }
         // open it first (a command may be the first touch, e.g. from a test)
@@ -765,10 +1506,11 @@ impl AppBackend {
         }
         let mut map = self.opened.borrow_mut();
         let o = map.get_mut(exam).ok_or_else(|| {
-            BackendError::NotFound(format!(
-                "Exam {exam} is not open yet: wait for grading to finish, or open its folder \
-                 with --project"
-            ))
+            BackendError::NotFound(
+                "This exam is not open yet: wait for grading to finish, then open it from the \
+                 Exams screen"
+                    .into(),
+            )
         })?;
         o.writable()?;
         let r = f(o);
@@ -873,6 +1615,126 @@ impl AppBackend {
         changed
     }
 
+    /// The batch view of `exam`: a grading run's live view, or the finished batch from the
+    /// session.
+    fn batch_view(&self, exam: &ExamId) -> Option<b::BatchProgress> {
+        if let Some(j) = self.job.as_ref().filter(|j| &j.exam == exam) {
+            let opened = self.opened.borrow();
+            return Some(match (opened.get(exam), &j.outcome) {
+                // finished and open: the whole batch from the session (codes, reconciliation,
+                // timings), after the run's own activity lines (a refused added batch leaves
+                // the exam as it was, with the reason on top)
+                (Some(o), Some(_)) => {
+                    let mut b = o.batch(exam);
+                    let mut activity = j.activity.clone();
+                    activity.append(&mut b.activity);
+                    b.activity = activity;
+                    b
+                }
+                (o, _) => job_batch(j, o),
+            });
+        }
+        self.with(exam, |o| o.batch(exam))
+    }
+
+    /// Hands the pages shown without a thumbnail to a worker, one job per project: it reads,
+    /// verifies and decodes their stored originals ([`omr_app::pages::PageBatch`]) and sends each
+    /// thumbnail back as it is made. A project that can no longer be read (closed, or open
+    /// read-only) shows no image for them; if no thread can be started they are decoded here.
+    fn decode_thumbs(&self) {
+        let wanted = std::mem::take(&mut self.thumbs.borrow_mut().wanted);
+        let mut by_dir: BTreeMap<PathBuf, Vec<(ThumbKey, usize)>> = BTreeMap::new();
+        for (key, page) in wanted {
+            by_dir.entry(key.0.clone()).or_default().push((key, page));
+        }
+        for (dir, wanted) in by_dir {
+            let (keys, pages): (Vec<ThumbKey>, Vec<usize>) = wanted.into_iter().unzip();
+            let batch = || {
+                self.opened
+                    .borrow()
+                    .values()
+                    .find(|o| o.dir == dir)
+                    .and_then(|o| o.p.page_batch(&pages))
+            };
+            let Some(work) = batch() else {
+                let mut t = self.thumbs.borrow_mut();
+                for key in keys {
+                    t.put(key, None);
+                }
+                continue;
+            };
+            let (tx, rx) = std::sync::mpsc::channel();
+            let job: Box<dyn FnOnce() + Send> = Box::new(move || {
+                work.decode(|i, img| {
+                    // the window may be gone: nobody waits for the rest
+                    let thumb = img
+                        .ok()
+                        .map(|g| thumb_of(omr_app::crops::thumbnail(&g, THUMB_WIDTH)));
+                    let _ = tx.send((i, thumb));
+                });
+            });
+            if let Some(spawn) = &self.spawn
+                && spawn(job).is_ok()
+            {
+                self.thumbs.borrow_mut().jobs.push(ThumbJob { keys, rx });
+                continue;
+            }
+            // no thread to run it on: here
+            let mut made: Vec<Option<b::CropImage>> = vec![None; keys.len()];
+            if let Some(work) = batch() {
+                work.decode(|i, img| {
+                    made[i] = img
+                        .ok()
+                        .map(|g| thumb_of(omr_app::crops::thumbnail(&g, THUMB_WIDTH)));
+                });
+            }
+            let mut t = self.thumbs.borrow_mut();
+            for (key, image) in keys.into_iter().zip(made) {
+                t.put(key, image);
+            }
+        }
+    }
+
+    /// Folds the thumbnails decoded meanwhile (`wait`: blocks until every running job is done);
+    /// returns true when any arrived.
+    fn drain_thumbs(&self, wait: bool) -> bool {
+        let mut t = self.thumbs.borrow_mut();
+        let jobs = std::mem::take(&mut t.jobs);
+        let mut changed = false;
+        for job in jobs {
+            let ended = loop {
+                let got = if wait {
+                    job.rx.recv().map_err(|_| TryRecvError::Disconnected)
+                } else {
+                    job.rx.try_recv()
+                };
+                match got {
+                    Ok((i, image)) => {
+                        if let Some(key) = job.keys.get(i) {
+                            t.put(key.clone(), image);
+                            changed = true;
+                        }
+                    }
+                    Err(TryRecvError::Empty) => break false,
+                    Err(TryRecvError::Disconnected) => break true,
+                }
+            };
+            if !ended {
+                t.jobs.push(job);
+                continue;
+            }
+            // a job that stopped short (it died): its other pages show no image, never
+            // decoded again in a loop
+            for key in job.keys {
+                if t.pending.contains(&key) {
+                    t.put(key, None);
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
     /// Folds the worker's events; returns true when anything changed.
     fn drain_job(&mut self) -> bool {
         let Some(job) = self.job.as_mut() else {
@@ -880,6 +1742,7 @@ impl AppBackend {
         };
         let mut changed = false;
         let mut finished = None;
+        let mut cancelled = false;
         loop {
             match job.rx.try_recv() {
                 Ok(JobEvent::Progress(p)) => {
@@ -928,16 +1791,53 @@ impl AppBackend {
                     job.activity.insert(0, format!("{now} · {line}"));
                     changed = true;
                 }
+                Ok(JobEvent::Saved) => job.saved = true,
+                Ok(JobEvent::Summary(line)) => {
+                    let now = snapshot_label(&omr_app::pipeline::now_utc());
+                    job.activity.insert(0, format!("{now} · {line}"));
+                    job.summary = Some(line);
+                    changed = true;
+                }
+                Ok(JobEvent::Exports(r)) => {
+                    let now = snapshot_label(&omr_app::pipeline::now_utc());
+                    let line = match &r {
+                        Ok(e) => format!(
+                            "wrote {} to {}",
+                            plural(e.files, "export file"),
+                            short_path(&e.dir)
+                        ),
+                        Err(why) => why.clone(),
+                    };
+                    job.activity.insert(0, format!("{now} · {line}"));
+                    job.exports = Some(r);
+                    changed = true;
+                }
                 Ok(JobEvent::Finished(r)) => {
                     finished = Some(r);
+                    break;
+                }
+                Ok(JobEvent::Cancelled) => {
+                    cancelled = true;
+                    finished = Some(Err(match job.kind {
+                        JobKind::Grade { .. } => {
+                            "cancelled: nothing was saved; your scan files are unchanged"
+                        }
+                        JobKind::Append { .. } => {
+                            "cancelled: the exam's results are as they were; nothing was added"
+                        }
+                        JobKind::Roster { .. } => {
+                            "cancelled: the exam is as it was; no roster was added"
+                        }
+                    }
+                    .to_string()));
                     break;
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     if job.outcome.is_none() {
-                        finished = Some(Err("The grading worker stopped without a result. Run \
-                                             the same `omr grade` (or `omr add`) command to see \
-                                             the error"
+                        finished = Some(Err("The background run stopped without a result. \
+                                             Refresh the exams folder (F5) to see what it \
+                                             saved, then try again"
                             .to_string()));
                     }
                     break;
@@ -950,18 +1850,22 @@ impl AppBackend {
         };
         let exam = job.exam.clone();
         let now = snapshot_label(&omr_app::pipeline::now_utc());
-        match &r {
-            Ok(dir) => {
+        match (&r, cancelled) {
+            (Ok(dir), _) => {
                 job.activity
-                    .insert(0, format!("{now} · saved {}", dir.display()));
+                    .insert(0, format!("{now} · saved {}", short_path(dir)));
             }
-            Err(e) => job.activity.insert(0, format!("{now} · failed: {e}")),
+            (Err(e), true) => job.activity.insert(0, format!("{now} · {e}")),
+            (Err(e), false) => job.activity.insert(0, format!("{now} · failed: {e}")),
         }
         job.outcome = Some(r.clone());
-        // a new project opens on success; an added batch reopens its project either way (a
-        // refused batch leaves the exam as it was)
+        job.cancelled = cancelled;
+        // a new project opens on success; an added batch or a roster reopens its project
+        // either way (a refused or cancelled run leaves the exam as it was)
         let dir = match (&job.kind, r) {
-            (JobKind::Append { project, .. }, _) => Some(project.clone()),
+            (JobKind::Append { project, .. } | JobKind::Roster { project, .. }, _) => {
+                Some(project.clone())
+            }
             (JobKind::Grade { .. }, Ok(dir)) => Some(dir),
             (JobKind::Grade { .. }, Err(_)) => None,
         };
@@ -985,15 +1889,196 @@ impl AppBackend {
                     self.failed.borrow_mut().remove(&exam);
                     self.opened
                         .borrow_mut()
-                        .insert(exam.clone(), Opened::new(p, dir, ro));
+                        .insert(exam.clone(), Opened::new(p, dir, ro, self.thumbs.clone()));
                 }
                 Err(e) => {
                     self.failed.borrow_mut().insert(exam.clone(), e);
                 }
             }
-            self.reloaded.push(exam);
+            self.reloaded.push(exam.clone());
+        }
+        self.completed = self.job_done(cancelled);
+        // a new exam cancelled stored nothing: it is no longer listed
+        if cancelled
+            && matches!(
+                self.job.as_ref().map(|j| &j.kind),
+                Some(JobKind::Grade { .. })
+            )
+        {
+            self.job = None;
+            if self.default.as_ref() == Some(&exam) {
+                self.default = self.entries.first().map(|e| e.id.clone());
+            }
         }
         true
+    }
+
+    /// The completion notice of the run that just ended (see [`b::JobDone`]): what it did,
+    /// what waits, and the next steps.
+    fn job_done(&self, cancelled: bool) -> Option<b::JobDone> {
+        use b::NextStep as S;
+        let j = self.job.as_ref()?;
+        let name = self.job_name(j);
+        let new_exam = matches!(j.kind, JobKind::Grade { .. });
+        let done = |outcome, title: String, text: String, tone, review_open, steps| b::JobDone {
+            exam: j.exam.clone(),
+            outcome,
+            title,
+            text,
+            tone,
+            review_open,
+            steps,
+        };
+        let error = match j.outcome.as_ref()? {
+            Ok(_) => None,
+            Err(e) => Some(e.clone()),
+        };
+        if cancelled {
+            let (title, text, steps) = match j.kind {
+                JobKind::Grade { .. } => (
+                    "Grading cancelled".to_string(),
+                    "Nothing was saved; your scan files are unchanged.".to_string(),
+                    vec![S::GradeAgain],
+                ),
+                JobKind::Append { .. } => (
+                    format!("Adding scans to {name} cancelled"),
+                    "The exam's results are as they were; your scan files are unchanged."
+                        .to_string(),
+                    vec![S::ScanLog],
+                ),
+                JobKind::Roster { .. } => (
+                    format!("The roster of {name} was not added"),
+                    "Cancelled: the exam is as it was.".to_string(),
+                    vec![S::ScanLog],
+                ),
+            };
+            return Some(done(
+                b::JobOutcome::Cancelled,
+                title,
+                text,
+                b::Tone::Info,
+                0,
+                steps,
+            ));
+        }
+        if let Some(e) = error {
+            let title = match (&j.kind, j.saved) {
+                // what it did is saved: only closing the exam after it failed
+                (JobKind::Grade { .. }, true) => {
+                    format!("{name} is graded, but was not closed cleanly")
+                }
+                (JobKind::Append { .. }, true) => {
+                    format!("Scans added to {name}, but the exam was not closed cleanly")
+                }
+                (JobKind::Roster { .. }, true) => {
+                    format!("Roster added to {name}, but the exam was not closed cleanly")
+                }
+                (JobKind::Grade { .. }, false) => format!("Grading {name} failed"),
+                (JobKind::Append { .. }, false) => format!("Adding scans to {name} failed"),
+                (JobKind::Roster { .. }, false) => format!("The roster of {name} was not added"),
+            };
+            let steps = if new_exam && !j.saved {
+                vec![S::GradeAgain, S::ScanLog]
+            } else {
+                vec![S::ScanLog]
+            };
+            let tone = if j.saved {
+                b::Tone::Warning
+            } else {
+                b::Tone::Error
+            };
+            return Some(done(b::JobOutcome::Failed, title, e, tone, 0, steps));
+        }
+        let opened = self.with(&j.exam, |o| {
+            let s = &o.p.session;
+            (
+                s.booklets.len(),
+                s.key_unconfirmed(),
+                s.definition.key_inferred(),
+            )
+        });
+        let Some((booklets, held, inferred)) = opened else {
+            // saved, but it cannot be opened here: why, and the run's log
+            return Some(done(
+                b::JobOutcome::Failed,
+                format!("{name} cannot be opened"),
+                self.closed_reason(&j.exam),
+                b::Tone::Error,
+                0,
+                vec![S::ScanLog],
+            ));
+        };
+        let review_open: u32 = self
+            .review_queue(&j.exam, b::Lane::Marks)
+            .lanes
+            .iter()
+            .map(|l| l.open)
+            .sum();
+        let review = if review_open == 0 {
+            "nothing to review".to_string()
+        } else {
+            format!("{} to review", plural(review_open as usize, "item"))
+        };
+        let exported = matches!(j.exports, Some(Ok(_)));
+        let exports = match &j.exports {
+            Some(Ok(e)) => Some(format!("exports in {}", short_path(&e.dir))),
+            Some(Err(_)) if held => Some("the exports wait for it too".to_string()),
+            Some(Err(why)) => Some(why.clone()),
+            None => None,
+        };
+        let mut parts = Vec::new();
+        let (outcome, title) = match j.kind {
+            JobKind::Grade { .. } if held => (b::JobOutcome::Graded, format!("{name} is read")),
+            JobKind::Grade { .. } => (b::JobOutcome::Graded, format!("{name} is graded")),
+            JobKind::Append { .. } => (b::JobOutcome::Added, format!("Scans added to {name}")),
+            JobKind::Roster { .. } => (b::JobOutcome::Roster, format!("Roster added to {name}")),
+        };
+        match &j.summary {
+            Some(line) => parts.push(line.clone()),
+            None => parts.push(plural(booklets, "booklet")),
+        }
+        if held {
+            parts.push(
+                "the key from the key sheets waits for your confirmation in Setup: nothing is \
+                 scored until then"
+                    .into(),
+            );
+        } else {
+            parts.push(review);
+        }
+        parts.extend(exports);
+        if inferred && !held {
+            parts.push("the results are provisional until you replace the key".into());
+        }
+        let mut steps = Vec::new();
+        if held {
+            steps.push(S::ConfirmKey);
+        } else {
+            if review_open > 0 {
+                steps.push(S::Review);
+            }
+            steps.push(if inferred && new_exam {
+                S::ReplaceKey
+            } else {
+                S::Results
+            });
+            if exported {
+                steps.push(S::ExportsFolder);
+            }
+        }
+        let tone = if held || inferred {
+            b::Tone::Warning
+        } else {
+            b::Tone::Success
+        };
+        Some(done(
+            outcome,
+            title,
+            parts.join(" · "),
+            tone,
+            review_open,
+            steps,
+        ))
     }
 
     /// Starts adding `inputs` to `exam` (see [`Backend::add_scans`]).
@@ -1005,19 +2090,74 @@ impl AppBackend {
         }
         if let Some(j) = self.job.as_ref().filter(|j| j.running()) {
             return Err(BackendError::Denied(format!(
-                "{} is still being graded: add the scans when the Scan screen says complete",
-                j.exam
+                "{} is still being graded: add the scans when the Scan screen says it is complete",
+                self.job_name(j)
             )));
         }
         if self.spawn.is_none() {
             return Err(BackendError::Denied(
-                "This window cannot start background work; add the scans with `omr add \
-                 --project <exam folder> <scans…>` and reopen the exam"
-                    .into(),
+                "This window cannot start background work, so scans cannot be added here".into(),
             ));
         }
+        let (project, batch, threads) = self.close_for_worker(exam, |_| Ok(()))?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = Cancel::default();
+        let req = AppendRequest {
+            project: project.clone(),
+            inputs: inputs.to_vec(),
+            options: GradeOptions {
+                threads,
+                project_dir: None,
+                snapshot_utc: None,
+                operator: self.operator.clone(),
+                max_pages: None,
+                cancel: cancel.clone(),
+            },
+            export_to: self
+                .auto_export
+                .then(|| project.parent().map(Path::to_path_buf))
+                .flatten(),
+        };
+        let started =
+            (self.spawn.as_ref().expect("checked above"))(Box::new(move || run_append(req, tx)));
+        if let Err(e) = started {
+            self.with(exam, |_| ());
+            return Err(BackendError::Denied(format!(
+                "Cannot start the grading worker ({e}); nothing was added. Close other \
+                 programs and try again"
+            )));
+        }
+        let names: Vec<String> = inputs
+            .iter()
+            .map(|p| {
+                p.file_name()
+                    .map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into())
+            })
+            .collect();
+        let now = snapshot_label(&omr_app::pipeline::now_utc());
+        let mut job = Job::new(exam.clone(), JobKind::Append { project, batch }, rx, cancel);
+        job.activity.push(format!(
+            "{now} · batch-{batch} · adding {}; every page is graded again",
+            names.join(", ")
+        ));
+        self.job = Some(job);
+        Ok(format!(
+            "Adding scans as batch {batch}: the exam is graded again with them in the background; \
+             review decisions carry over"
+        ))
+    }
+
+    /// Saves and closes `exam`'s project for a worker that grades it again (an added batch, a
+    /// roster), once `check` accepts it: returns its package, the number of the batch the run
+    /// adds and the threads it was graded on. A project that cannot be closed is reopened as it
+    /// was.
+    fn close_for_worker(
+        &mut self,
+        exam: &ExamId,
+        check: impl FnOnce(&ExamProject) -> Result<(), BackendError>,
+    ) -> Result<(PathBuf, u32, usize), BackendError> {
         // the project must be open for writing; it is saved and closed for the worker
-        self.with_mut(exam, |_| Ok(()))?;
+        self.with_mut(exam, |o| check(&o.p))?;
         let Some(o) = self.opened.borrow_mut().remove(exam) else {
             return Err(BackendError::NotFound(format!("Exam {exam} is not open")));
         };
@@ -1034,50 +2174,193 @@ impl AppBackend {
             self.with(exam, |_| ());
             return Err(app_err(e));
         }
+        Ok((project, batch, threads))
+    }
+
+    /// Starts giving `exam` the roster in `path` (see [`Backend::set_roster`]).
+    fn start_roster(&mut self, exam: &ExamId, path: &Path) -> Result<String, BackendError> {
+        if let Some(j) = self.job.as_ref().filter(|j| j.running()) {
+            return Err(BackendError::Denied(format!(
+                "{} is being graded: add the roster when the Scan screen says it is complete",
+                self.job_name(j)
+            )));
+        }
+        if self.spawn.is_none() {
+            return Err(BackendError::Denied(
+                "This window cannot start background work".into(),
+            ));
+        }
+        // read and checked here first, as the run imports it: a refused roster changes nothing
+        let rows = omr_app::define::read_roster_path(path).map_err(app_err)?;
+        let (project, batch, threads) = self.close_for_worker(exam, |p| {
+            if p.session.key_unconfirmed() {
+                return Err(BackendError::Invalid(
+                    "The key read from the key sheets waits for your confirmation: confirm it in \
+                     Setup (Forms and key), then add the roster"
+                        .into(),
+                ));
+            }
+            let mut def = p.session.definition.clone();
+            def.import_roster(rows.clone()).map_err(app_err)?;
+            Ok(())
+        })?;
+        let students = rows.len();
         let (tx, rx) = std::sync::mpsc::channel();
-        let req = AppendRequest {
+        let cancel = Cancel::default();
+        let req = RosterRequest {
             project: project.clone(),
-            inputs: inputs.to_vec(),
+            rows,
             options: GradeOptions {
                 threads,
                 project_dir: None,
                 snapshot_utc: None,
                 operator: self.operator.clone(),
                 max_pages: None,
+                cancel: cancel.clone(),
             },
+            export_to: self
+                .auto_export
+                .then(|| project.parent().map(Path::to_path_buf))
+                .flatten(),
         };
-        let started =
-            (self.spawn.as_ref().expect("checked above"))(Box::new(move || run_append(req, tx)));
+        let started = (self.spawn.as_ref().expect("checked above"))(Box::new(move || {
+            run_set_roster(req, tx)
+        }));
         if let Err(e) = started {
             self.with(exam, |_| ());
             return Err(BackendError::Denied(format!(
-                "Cannot start the grading worker ({e}); nothing was added. Close other \
-                 programs and try again, or use `omr add`"
+                "Cannot start the grading worker ({e}); no roster was added. Close other \
+                 programs and try again"
             )));
         }
-        let names: Vec<String> = inputs
-            .iter()
-            .map(|p| {
-                p.file_name()
-                    .map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into())
-            })
-            .collect();
         let now = snapshot_label(&omr_app::pipeline::now_utc());
-        self.job = Some(Job {
-            exam: exam.clone(),
-            kind: JobKind::Append { project, batch },
-            rx,
-            tracker: ProgressTracker::default(),
-            activity: vec![format!(
-                "{now} · batch-{batch} · adding {}; every page is graded again",
-                names.join(", ")
-            )],
-            outcome: None,
-            sheets: BTreeMap::new(),
-        });
+        let mut job = Job::new(exam.clone(), JobKind::Roster { project, batch }, rx, cancel);
+        job.activity.push(format!(
+            "{now} · batch-{batch} · roster {} ({}): every booklet is matched again",
+            file_label(path),
+            plural(students, "student")
+        ));
+        self.job = Some(job);
         Ok(format!(
-            "Adding scans as batch {batch}: the exam is graded again with them in the background; \
-             review decisions carry over"
+            "Adding the roster ({}): every booklet's student number is matched again in the \
+             background; your review decisions carry over",
+            plural(students, "student")
+        ))
+    }
+
+    /// Lists the exams below `dir` in place of the folder open (see
+    /// [`Backend::open_workspace`]); the exams open are saved and closed first.
+    fn open_folder(&mut self, dir: &Path) -> Result<String, BackendError> {
+        if let Some(j) = self.job.as_ref().filter(|j| j.running()) {
+            return Err(BackendError::Denied(format!(
+                "{} is being graded: open another folder when the Scan screen says it is complete",
+                self.job_name(j)
+            )));
+        }
+        if !dir.is_dir() {
+            return Err(BackendError::Invalid(format!(
+                "{}: no such folder; choose the folder that holds your exam folders",
+                dir.display()
+            )));
+        }
+        let dir = std::path::absolute(dir)
+            .map_err(|e| BackendError::Invalid(format!("{}: {e}", dir.display())))?;
+        let unclosed = self.close_all();
+        // nothing of the last folder stays: its exams, a finished run's view, a held import
+        self.entries.clear();
+        self.job = None;
+        self.default = None;
+        self.remark_new = None;
+        self.reset_new_exam();
+        self.reloaded.clear();
+        self.stability_jobs.borrow_mut().clear();
+        for (d, summary) in vm::list_exams(&dir) {
+            self.add_entry(d, summary, None);
+        }
+        self.default = self.entries.first().map(|e| e.id.clone());
+        let what = match self.entries.len() {
+            0 => format!(
+                "Opened {}: no exams in it yet; grade one with New exam",
+                short_path(&dir)
+            ),
+            n => format!("Opened {}: {}", short_path(&dir), plural(n, "exam")),
+        };
+        self.workspace = Some(dir);
+        Ok(if unclosed.is_empty() {
+            what
+        } else {
+            format!(
+                "{what}. Not saved and closed properly: {}",
+                unclosed.join("; ")
+            )
+        })
+    }
+
+    /// Lists the exams folder again (see [`Backend::refresh_workspace`]).
+    fn reread_folder(&mut self) -> Result<String, BackendError> {
+        let Some(ws) = self.workspace.clone() else {
+            return Err(BackendError::Denied(
+                "No exams folder is open: open one with Open folder…".into(),
+            ));
+        };
+        let listed = vm::list_exams(&ws);
+        let open: BTreeSet<ExamId> = self.opened.borrow().keys().cloned().collect();
+        let running = self
+            .job
+            .as_ref()
+            .filter(|j| j.running())
+            .map(|j| j.exam.clone());
+        // an exam open here (or being graded) stays even when its folder is not listed
+        let mut gone = 0;
+        for e in std::mem::take(&mut self.entries) {
+            let stays = listed.iter().any(|(d, _)| *d == e.dir)
+                || open.contains(&e.id)
+                || running.as_ref() == Some(&e.id);
+            if stays {
+                self.entries.push(e);
+            } else {
+                self.failed.borrow_mut().remove(&e.id);
+                gone += 1;
+            }
+        }
+        let mut added = 0;
+        for (dir, summary) in listed {
+            match self.entries.iter_mut().find(|e| e.dir == dir) {
+                // another program may have changed an exam not open here
+                Some(e) if !open.contains(&e.id) => e.summary = summary,
+                Some(_) => {}
+                None => {
+                    self.add_entry(dir, summary, None);
+                    added += 1;
+                }
+            }
+        }
+        // newest first, as the folder was listed when it was opened
+        self.entries.sort_by(|a, b| {
+            b.snapshot_utc
+                .cmp(&a.snapshot_utc)
+                .then_with(|| a.dir.cmp(&b.dir))
+        });
+        let known =
+            |id: &ExamId| self.entries.iter().any(|e| &e.id == id) || running.as_ref() == Some(id);
+        if !self.default.as_ref().is_some_and(known) {
+            self.default = self.entries.first().map(|e| e.id.clone());
+        }
+        let mut changes = Vec::new();
+        if added > 0 {
+            changes.push(format!("{added} new"));
+        }
+        if gone > 0 {
+            changes.push(format!("{gone} no longer in the folder"));
+        }
+        if changes.is_empty() {
+            changes.push("nothing changed".to_string());
+        }
+        Ok(format!(
+            "{} in {}: {}",
+            plural(self.entries.len(), "exam"),
+            short_path(&ws),
+            changes.join(", ")
         ))
     }
 }
@@ -1099,8 +2382,8 @@ fn open_project(dir: &Path, operator: &str) -> Result<(ExamProject, Option<Strin
     match ExamProject::open(dir, operator) {
         Ok(p) => Ok((p, None)),
         Err(e @ AppError::NotFound(_)) => Err(format!(
-            "{e}. Point --project at an exam folder that `omr grade --out` or `omr-desktop \
-             --grade` wrote"
+            "{}. Open an exam folder that holds a graded exam",
+            app_message(&e)
         )),
         Err(AppError::Store(m)) if m.contains("locked by another writer") => {
             match ExamProject::open_read_only(dir) {
@@ -1326,8 +2609,33 @@ fn same_entry(a: &str, b: &str) -> bool {
     norm(a) == norm(b)
 }
 
+/// A note of the key-sheet summary in this window's words: the core writes for the command
+/// line ("name key sheets with --key-sheet", "the DIGITS10 student-ID scheme").
+fn key_sheet_note(note: &str) -> String {
+    let mut n = note.to_string();
+    if let Some(at) = n.find("under the DIGITS") {
+        let rest = &n[at + "under the DIGITS".len()..];
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        if let Some(end) = rest.find(" student-ID scheme") {
+            let tail = rest[end + " student-ID scheme".len()..].to_string();
+            n = format!("{}with {digits}-digit student numbers{tail}", &n[..at]);
+        }
+    }
+    n.replace(
+        "(name key sheets with --key-sheet)",
+        "(give the key sheets in the Key sheets field, or Read key from answer sheets… in \
+         Setup)",
+    )
+}
+
+/// The catalogue title of a code, in words a reviewer reads: the catalogue keeps a few
+/// identifiers (MRK-016 `calibration_fallback`) that the window says in words.
 fn title_of(code: &str) -> String {
-    omr_model::exceptions::lookup(code).map_or_else(String::new, |d| d.title.to_string())
+    match code {
+        "MRK-016" => "Calibration fallback (small batch)".to_string(),
+        _ => omr_model::exceptions::lookup(code)
+            .map_or_else(String::new, |d| d.title.replace('`', "")),
+    }
 }
 
 /// An exact rational of the outcome engine (`Ratio<i128>`) as `f64`, for display only.
@@ -1573,8 +2881,8 @@ fn trim(x: f64) -> String {
 
 // ------------------------------------------------------------------------------------ views
 
-/// The worst open item (code, severity) per page or booklet index.
-type Worst = BTreeMap<usize, (String, AppSeverity)>;
+/// The worst open item (code, severity, item) per page or booklet index.
+type Worst = BTreeMap<usize, (String, AppSeverity, ItemId)>;
 
 impl Opened {
     fn summary(&self, entry: Option<&Entry>) -> b::ExamSummary {
@@ -1689,7 +2997,12 @@ impl Opened {
                     omr_model::CancelMode::FillCancelsCheck => b::CancelMode::FillCancelsCheck,
                 },
                 dpi: v.template.dpi,
-                page_identity: v.template.page_identity.clone(),
+                // what identifies a page, in words (the core names its methods)
+                page_identity: if v.template.legacy {
+                    "Bubble grid (no corner marks)".into()
+                } else {
+                    "Page code and corner tags".into()
+                },
                 digest: v.template.digest.clone(),
             },
             keys: v
@@ -1872,7 +3185,15 @@ impl Opened {
             unusable: sum.unusable.iter().map(scan).collect(),
             other_versions: sum.other_versions.clone(),
             consequence,
-            notes: sum.notes.clone(),
+            notes: {
+                // the key sheets were named: a marker left out of the stack changes nothing
+                let named = !p.session.definition.key_sheets.declared.is_empty();
+                sum.notes
+                    .iter()
+                    .filter(|n| !(named && n.contains("--key-sheet")))
+                    .map(|n| key_sheet_note(n))
+                    .collect()
+            },
         })
     }
 
@@ -1928,20 +3249,31 @@ impl Opened {
             .map(|(_, r)| r.clone())
     }
 
-    /// A page thumbnail (decoded from the stored original once, then cached).
+    /// A page thumbnail (decoded from the stored original once, then cached; see [`Thumbs`]).
+    /// `None` while it is decoded in the background, or when the page has no image.
     fn thumbnail(&self, page: usize) -> Option<b::CropImage> {
-        if let Some(hit) = self.thumbs.borrow().get(&page) {
-            return hit.clone();
-        }
-        let made = self.p.page_image(page).ok().map(|img| {
-            let c = omr_app::crops::thumbnail(&img, THUMB_WIDTH);
-            b::CropImage {
-                width: c.width,
-                height: c.height,
-                rgba: c.rgba,
+        let key = (
+            self.dir.clone(),
+            self.p.session.pages.get(page)?.page_id.clone(),
+        );
+        {
+            let mut t = self.thumbs.borrow_mut();
+            if let Some(hit) = t.get(&key) {
+                return hit;
             }
-        });
-        self.thumbs.borrow_mut().insert(page, made.clone());
+            if t.background {
+                if t.pending.insert(key.clone()) {
+                    t.wanted.push((key, page));
+                }
+                return None;
+            }
+        }
+        let made = self
+            .p
+            .page_image(page)
+            .ok()
+            .map(|img| thumb_of(omr_app::crops::thumbnail(&img, THUMB_WIDTH)));
+        self.thumbs.borrow_mut().put(key, made.clone());
         made
     }
 
@@ -1950,17 +3282,18 @@ impl Opened {
         let mut by_page = Worst::new();
         let mut by_booklet = Worst::new();
         for it in self.p.session.review.items.iter().filter(|i| i.is_open()) {
-            let worse = |cur: Option<&(String, AppSeverity)>| {
-                cur.is_none_or(|(c, s)| it.severity > *s || (it.severity == *s && it.code < *c))
+            let worse = |cur: Option<&(String, AppSeverity, ItemId)>| {
+                cur.is_none_or(|(c, s, _)| it.severity > *s || (it.severity == *s && it.code < *c))
             };
+            let worst = (it.code.clone(), it.severity, ItemId(it.id));
             if let Some(bk) = it.booklet {
                 if worse(by_booklet.get(&bk)) {
-                    by_booklet.insert(bk, (it.code.clone(), it.severity));
+                    by_booklet.insert(bk, worst);
                 }
             } else if let Some(pg) = it.page
                 && worse(by_page.get(&pg))
             {
-                by_page.insert(pg, (it.code.clone(), it.severity));
+                by_page.insert(pg, worst);
             }
         }
         (by_page, by_booklet)
@@ -1987,17 +3320,26 @@ impl Opened {
                 severity: sev(e.severity),
             };
         }
-        let worst = pg
-            .booklet
-            .and_then(|bk| by_booklet.get(&bk))
-            .or_else(|| by_page.get(&page));
-        match worst {
-            Some((c, s)) => b::ThumbState::Review {
+        match self.worst_of(page, by_page, by_booklet) {
+            Some((c, s, _)) => b::ThumbState::Review {
                 code: c.clone(),
                 severity: sev(*s),
             },
             None => b::ThumbState::Auto,
         }
+    }
+
+    /// The worst open item of a page: its booklet's, else the page's own.
+    fn worst_of<'w>(
+        &self,
+        page: usize,
+        by_page: &'w Worst,
+        by_booklet: &'w Worst,
+    ) -> Option<&'w (String, AppSeverity, ItemId)> {
+        self.p.session.pages[page]
+            .booklet
+            .and_then(|bk| by_booklet.get(&bk))
+            .or_else(|| by_page.get(&page))
     }
 
     fn serial_of_page(&self, page: usize) -> String {
@@ -2019,11 +3361,8 @@ impl Opened {
             .flat_map(|b| &b.questions)
             .filter(|q| q.status == ResponseStatus::Auto)
             .count();
-        let auto_share = if questions == 0 {
-            0.0
-        } else {
-            auto as f64 / questions as f64
-        };
+        // nothing read (every page refused): no share, never 0 % or 100 %
+        let auto_share = (questions > 0).then(|| auto as f64 / questions as f64);
         let pps = if t.page_stage_ms > 0.0 {
             t.pages as f64 / (t.page_stage_ms / 1e3)
         } else {
@@ -2109,10 +3448,21 @@ impl Opened {
         let thumbnails = pages
             .into_iter()
             .take(THUMBS)
-            .map(|p| b::Thumbnail {
-                serial: self.serial_of_page(p),
-                state: self.thumb_state(p, &by_page, &by_booklet),
-                image: self.thumbnail(p),
+            .map(|p| {
+                let state = self.thumb_state(p, &by_page, &by_booklet);
+                // the item whose code the tile shows (a refused page has no item of its own)
+                let item = match &state {
+                    b::ThumbState::Review { .. } => self
+                        .worst_of(p, &by_page, &by_booklet)
+                        .map(|(_, _, id)| *id),
+                    _ => None,
+                };
+                b::Thumbnail {
+                    serial: self.serial_of_page(p),
+                    state,
+                    image: self.thumbnail(p),
+                    item,
+                }
             })
             .collect();
         let warn = |n: u32| {
@@ -2213,11 +3563,7 @@ impl Opened {
             .filter(|p| alignment_refusal(p).is_some())
             .count() as u32;
         let handled = [
-            (
-                "Key sheets, not students (§10.1)",
-                key_sheets,
-                b::Tone::Neutral,
-            ),
+            ("Key sheets, not students", key_sheets, b::Tone::Neutral),
             (
                 "Not read: alignment unverified (REG-003)",
                 unaligned,
@@ -2254,9 +3600,11 @@ impl Opened {
             floor_pages_per_sec: 40.0,
             max_pages_per_sec: 120.0_f64.max(pps * 1.2),
             auto_accepted: auto_share,
-            abstention_rate: 1.0 - auto_share,
-            first_result: Duration::from_secs_f64(t.first_result_ms.max(0.0) / 1e3),
-            remaining: Duration::ZERO,
+            abstention_rate: auto_share.map(|a| 1.0 - a),
+            first_result: (t.first_result_ms > 0.0)
+                .then(|| Duration::from_secs_f64(t.first_result_ms / 1e3)),
+            remaining: Some(Duration::ZERO),
+            stage: String::new(),
             in_flight: 0,
             queued: 0,
             stages: vec![
@@ -2504,7 +3852,7 @@ impl Opened {
                     let inf = it.booklet.and_then(|bk| s.booklets[bk].inference.as_ref());
                     Some(b::Suggestion {
                         decision,
-                        source: b::SuggestionSource::Rule("form inference (§10.3)".into()),
+                        source: b::SuggestionSource::Rule("form inference".into()),
                         fill: 0.0,
                         margin: inf.map_or(0.0, |i| i.margin_milli as f32 / 1000.0),
                     })
@@ -2634,6 +3982,9 @@ impl Opened {
             page: v.page,
             dpi: v.dpi,
             crop: crop(&v.crop),
+            // an item without a crop (an exam-level notice, an unreadable page) gets the core's
+            // 1 × 1 placeholder: no scan to show
+            has_scan: v.crop.width > 1 && v.crop.height > 1,
             original: None,
             bubbles,
             threshold: v.threshold,
@@ -2848,7 +4199,7 @@ impl Opened {
                 sem: sem_pct,
             },
             scale_label: format!(
-                "Saudi grade scale (omr-scoring) · pass mark {} %",
+                "Saudi grade scale · pass mark {} %",
                 trim(pass_mark(&v.grades))
             ),
             grades: v
@@ -2875,13 +4226,14 @@ impl Opened {
             blackboard_blocked: if s.key.as_ref().is_none_or(|k| k.inferred) {
                 Some(
                     "The key is inferred from the sheets: grades are pushed only with a supplied \
-                     key. Replace it (omr key replace) first"
+                     key. Replace the key in Setup (Replace key…) first"
                         .into(),
                 )
             } else if def.roster.is_none() {
                 Some(
-                    "No roster: results without a roster are never pushed (§16.1). Grade with \
-                     --roster"
+                    "No roster: results without a roster are never pushed. Add the roster in \
+                     Setup (Add roster…): every student is matched again, your decisions carry \
+                     over"
                         .into(),
                 )
             } else if self.p.scoring.as_ref().is_none_or(|sc| sc.run.is_err()) {
@@ -2908,8 +4260,9 @@ impl Opened {
     }
 
     fn make_outcomes(&self, exam: &ExamId) -> Option<b::Outcomes> {
+        // computed once, for the shell's rows and omr-app's screen view alike
         let o = self.p.outcomes()?;
-        let v = self.p.outcomes_vm()?;
+        let v = ExamProject::outcomes_view(&o);
         let def = &self.p.session.definition;
         let setup = def.outcomes.as_ref()?;
         let clo_def = |code: &str| setup.clos.iter().find(|c| c.code == code);
@@ -3007,12 +4360,7 @@ impl Opened {
 /// Split on either separator and joined with the platform's, so Windows paths keep their tail.
 fn short_path(p: &Path) -> String {
     let sep = std::path::MAIN_SEPARATOR;
-    let mut text = p.display().to_string();
-    if let Some(home) = std::env::home_dir()
-        && let Ok(rest) = p.strip_prefix(&home)
-    {
-        text = format!("~{sep}{}", rest.display());
-    }
+    let text = crate::bind::home_path(p);
     if text.chars().count() <= 48 {
         return text;
     }
@@ -3096,6 +4444,7 @@ fn summary_of(v: &vm::ExamSummary, snapshot_utc: &str) -> b::ExamSummary {
         sheets_expected: v.sheets_expected,
         open_exceptions: counts(v.open_exceptions),
         key_status: v.key_status.clone(),
+        key_ok: v.key_in_force,
         mapped_items: v.mapped_items,
         // omr-app has no approval step: every mapping of the definition is in force
         mapping_approval: false,
@@ -3139,6 +4488,8 @@ fn job_summary(j: &Job, d: &ExamDefinition) -> b::ExamSummary {
             omr_app::KeySource::Inferred => "Key · INFERRED (after grading)".into(),
             omr_app::KeySource::Provided { .. } => "Key v1 · draft".into(),
         },
+        // nothing is in force before the run publishes the key
+        key_ok: false,
         mapped_items: d.outcomes.as_ref().map_or(0, |o| {
             o.mapping
                 .iter()
@@ -3196,6 +4547,8 @@ fn job_batch(j: &Job, opened: Option<&Opened>) -> b::BatchProgress {
                     (Some(o), Some(p)) => o.thumbnail(p),
                     _ => None,
                 },
+                // a running batch has no items yet: the tile opens its code's queue
+                item: None,
             }
         })
         .collect();
@@ -3204,14 +4557,18 @@ fn job_batch(j: &Job, opened: Option<&Opened>) -> b::BatchProgress {
     let failed = matches!(j.outcome, Some(Err(_)));
     let n = match j.kind {
         JobKind::Grade { .. } => 1,
-        JobKind::Append { batch, .. } => batch,
+        JobKind::Append { batch, .. } | JobKind::Roster { batch, .. } => batch,
     };
     b::BatchProgress {
         exam: j.exam.clone(),
         batch_label: match (&j.outcome, &j.kind) {
             (None, JobKind::Append { .. }) => format!("Batch {n} of {n} · adding scans"),
+            (None, JobKind::Roster { .. }) => {
+                format!("Batch {n} of {n} · matching students to the roster")
+            }
             (None, _) => format!("Batch {n} of {n}"),
             (Some(Ok(_)), _) => format!("Batch {n} of {n} · complete"),
+            (Some(Err(_)), _) if j.cancelled => format!("Batch {n} of {n} · cancelled"),
             (Some(Err(_)), _) => format!("Batch {n} of {n} · failed"),
         },
         source: v.source.clone(),
@@ -3226,6 +4583,7 @@ fn job_batch(j: &Job, opened: Option<&Opened>) -> b::BatchProgress {
         abstention_rate: v.abstention_rate,
         first_result: v.first_result,
         remaining: v.remaining,
+        stage: v.stage.clone(),
         in_flight: if failed { 0 } else { v.in_flight },
         queued: if failed { 0 } else { v.queued },
         stages: v
@@ -3328,6 +4686,7 @@ fn app_message(e: &AppError) -> String {
         | AppError::NotFound(m)
         | AppError::Internal(m) => m.clone(),
         AppError::Io(e) => e.to_string(),
+        AppError::Cancelled => e.to_string(),
     }
 }
 
@@ -4146,7 +5505,8 @@ impl Backend for AppBackend {
         b::Dashboard {
             user: b::UserInfo {
                 name: self.operator.trim_start_matches("principal:").to_string(),
-                role: "Operator".into(),
+                // the core has no roles: none is shown rather than one made up
+                role: String::new(),
                 initials,
             },
             term,
@@ -4163,10 +5523,10 @@ impl Backend for AppBackend {
             workspace: self
                 .workspace
                 .as_ref()
-                .map_or_else(|| "no workspace".to_string(), |w| short_path(w)),
-            data_note: "Scans, names and student numbers are read from the exam folders of this \
-                        workspace and stay on this computer (PDPL); every review action is an \
-                        audited event in the exam's project store."
+                .map_or_else(|| "no exams folder".to_string(), |w| short_path(w)),
+            data_note: "Scans, names and student numbers are read from the exams in this folder \
+                        and stay on this computer (PDPL); every review action is recorded as an \
+                        audited event in the exam's folder."
                 .into(),
         }
     }
@@ -4236,47 +5596,17 @@ impl Backend for AppBackend {
     }
 
     fn batch_progress(&self, exam: &ExamId) -> Option<b::BatchProgress> {
-        if let Some(j) = self.job.as_ref().filter(|j| &j.exam == exam) {
-            let opened = self.opened.borrow();
-            return Some(match (opened.get(exam), &j.outcome) {
-                // finished and open: the whole batch from the session (codes, reconciliation,
-                // timings), after the run's own activity lines (a refused added batch leaves
-                // the exam as it was, with the reason on top)
-                (Some(o), Some(_)) => {
-                    let mut b = o.batch(exam);
-                    let mut activity = j.activity.clone();
-                    activity.append(&mut b.activity);
-                    b.activity = activity;
-                    b
-                }
-                (o, _) => job_batch(j, o),
-            });
-        }
-        self.with(exam, |o| o.batch(exam))
+        let batch = self.batch_view(exam);
+        // the thumbnails it lacks are decoded off this thread
+        self.decode_thumbs();
+        batch
     }
 
     fn review_queue(&self, exam: &ExamId, lane: b::Lane) -> b::ReviewQueue {
         // an exam without a queue says why (never "no open items" while it is being graded)
-        let unavailable = || {
-            if self
-                .job
-                .as_ref()
-                .is_some_and(|j| &j.exam == exam && j.running())
-            {
-                Some(
-                    "The exam is being graded: its review queue appears when the Scan screen \
-                     says the batch is complete"
-                        .to_string(),
-                )
-            } else if let Some(why) = self.failed.borrow().get(exam) {
-                Some(why.clone())
-            } else {
-                Some("No graded project is open for this exam".to_string())
-            }
-        };
         self.with(exam, |o| o.queue(lane))
             .unwrap_or_else(|| b::ReviewQueue {
-                unavailable: unavailable(),
+                unavailable: Some(self.closed_reason(exam)),
                 lane,
                 lanes: b::Lane::ALL
                     .iter()
@@ -4472,8 +5802,163 @@ impl Backend for AppBackend {
         self.start_append(exam, inputs)
     }
 
+    fn workspace_dir(&self) -> Option<PathBuf> {
+        self.workspace.clone()
+    }
+
+    fn can_open_workspace(&self) -> bool {
+        true
+    }
+
+    fn open_workspace(&mut self, dir: &Path) -> Result<String, BackendError> {
+        // a folder holding one graded exam opens that exam among its neighbours
+        if dir.extension().is_some_and(|e| e == "omrproj") || dir.join("project.omrproj").is_dir() {
+            return self.open_exam_folder(dir).map(|(_, what)| what);
+        }
+        self.open_folder(dir)
+    }
+
+    fn open_exam_folder(&mut self, dir: &Path) -> Result<(ExamId, String), BackendError> {
+        let package = project_dir(dir);
+        let package = std::path::absolute(&package)
+            .map_err(|e| BackendError::Invalid(format!("{}: {e}", dir.display())))?;
+        if !package.join("project.omr").exists() {
+            return Err(BackendError::Invalid(format!(
+                "{}: no graded exam here; choose the folder of a graded exam, or the folder that \
+                 holds your exam folders",
+                dir.display()
+            )));
+        }
+        let p = ExamProject::open_read_only(&package).map_err(|e| {
+            BackendError::Invalid(format!("{} cannot be opened: {e}", dir.display()))
+        })?;
+        let Some(workspace) = package.parent().and_then(Path::parent) else {
+            return Err(BackendError::Invalid(format!(
+                "{}: the exam folder has no folder above it to open",
+                dir.display()
+            )));
+        };
+        let opened = self.open_folder(workspace)?;
+        let exam = match self.entries.iter().find(|e| e.dir == package) {
+            Some(e) => e.id.clone(),
+            // deeper than the folder listing reaches
+            None => self.add_entry(package.clone(), p.summary_vm(), Some(&p)),
+        };
+        self.default = Some(exam.clone());
+        let title = self
+            .entries
+            .iter()
+            .find(|e| e.id == exam)
+            .map(|e| format!("{} {}", e.summary.course_code, e.summary.assessment))
+            .unwrap_or_default();
+        Ok((exam, format!("{opened}; {} is selected", title.trim())))
+    }
+
+    fn refresh_workspace(&mut self) -> Result<String, BackendError> {
+        self.reread_folder()
+    }
+
+    fn exam_folder(&self, exam: &ExamId) -> Option<PathBuf> {
+        let e = self.entries.iter().find(|e| &e.id == exam)?;
+        e.dir.parent().map(Path::to_path_buf)
+    }
+
+    fn exports_state(&self, exam: &ExamId) -> b::ExportsState {
+        let Some(dir) = self.exam_folder(exam) else {
+            return b::ExportsState::None;
+        };
+        use omr_app::export::ExportsState as S;
+        self.with(exam, |o| match omr_app::export::exports_state(&o.p, &dir) {
+            S::None => b::ExportsState::None,
+            S::Current => b::ExportsState::Current,
+            S::Older => b::ExportsState::Older,
+        })
+        .unwrap_or_default()
+    }
+
+    fn close_all(&mut self) -> Vec<String> {
+        let opened = std::mem::take(&mut *self.opened.borrow_mut());
+        self.failed.borrow_mut().clear();
+        opened
+            .into_iter()
+            .filter_map(|(id, o)| o.p.close().err().map(|e| format!("{id}: {e}")))
+            .collect()
+    }
+
+    fn set_operator(&mut self, name: &str) -> Result<String, BackendError> {
+        let op = omr_app::app::operator_principal(name).map_err(|e| match e {
+            AppError::Input(m) => BackendError::Invalid(format!("Your name: {m}")),
+            e => app_err(e),
+        })?;
+        for o in self.opened.borrow_mut().values_mut() {
+            o.p.set_actor(&op, "Instructor");
+        }
+        let shown = op.trim_start_matches("principal:").to_string();
+        self.operator = op;
+        Ok(format!(
+            "Your name in the audit trail is {shown}: every decision, key change and release from \
+             now on records it; earlier events keep their name"
+        ))
+    }
+
     fn can_create_exam(&self) -> bool {
-        self.workspace.is_some() && self.spawn.is_some() && !self.grading_in_progress()
+        self.workspace.is_some()
+    }
+
+    fn create_exam_blocker(&self) -> Option<String> {
+        if self.workspace.is_none() {
+            return Some("No exams folder is open: open one with Open folder…".into());
+        }
+        if let Some(j) = self.job.as_ref().filter(|j| j.running()) {
+            return Some(format!(
+                "{} is being graded: Grade exam is available when it finishes",
+                self.job_name(j)
+            ));
+        }
+        if self.spawn.is_none() {
+            return Some("This window cannot grade in the background".into());
+        }
+        None
+    }
+
+    fn propose_new_exam(&mut self, form: &b::NewExam) -> b::NewExamCard {
+        self.take_form(form);
+        self.propose_card();
+        self.card_view()
+    }
+
+    fn new_exam_card(&self) -> b::NewExamCard {
+        self.card_view()
+    }
+
+    fn choose_on_card(&mut self, ask: usize, choice: usize) -> Result<b::CardAction, BackendError> {
+        self.choose(ask, choice)
+    }
+
+    fn stop_survey(&mut self) -> Result<String, BackendError> {
+        let s = self
+            .card
+            .survey
+            .as_mut()
+            .filter(|s| s.outcome.is_none())
+            .ok_or_else(|| BackendError::Invalid("The scans are not being checked".into()))?;
+        s.cancel.cancel();
+        s.outcome = Some(Err(STOPPED.into()));
+        Ok("Stopped checking the scans: check them again to grade them".into())
+    }
+
+    fn reset_new_exam(&mut self) {
+        self.card.stop();
+        self.card = NewCard::default();
+        self.last_answers.clear();
+    }
+
+    fn restore_graded_card(&mut self) {
+        self.card.stop();
+        self.card = NewCard {
+            answers: self.last_answers.clone(),
+            ..NewCard::default()
+        };
     }
 
     fn create_exam(&mut self, form: &b::NewExam) -> Result<(ExamId, String), BackendError> {
@@ -4505,6 +5990,17 @@ impl Backend for AppBackend {
 
     fn key_sheets(&self, exam: &ExamId) -> Option<b::KeySheetSummary> {
         self.with(exam, Opened::key_summary).flatten()
+    }
+
+    fn remedy(&self, code: &str) -> Option<String> {
+        omr_app::review::remedy(code).map(str::to_string)
+    }
+
+    fn closed(&self, exam: &ExamId) -> Option<String> {
+        match self.with(exam, |_| ()) {
+            Some(()) => None,
+            None => Some(self.closed_reason(exam)),
+        }
     }
 
     fn hold(&self, exam: &ExamId) -> Option<String> {
@@ -4715,6 +6211,7 @@ impl Backend for AppBackend {
                 snapshot_utc: None,
                 operator: operator.clone(),
                 max_pages: None,
+                cancel: Default::default(),
             };
             o.p.add_key_sheets(&paths, &opts, &|_| {})
                 .map_err(app_err)?;
@@ -4890,10 +6387,9 @@ impl Backend for AppBackend {
         exam: &ExamId,
         request: &b::RemarkRequest,
     ) -> Result<b::ParallelRunView, BackendError> {
-        if self.busy(exam) {
+        if let Some(what) = self.busy_text(exam) {
             return Err(BackendError::Denied(format!(
-                "Scans are being added to {exam}: compare when the Scan screen says the batch is \
-                 complete"
+                "{what}: compare when the Scan screen says it is complete"
             )));
         }
         let r = self.with(exam, |o| {
@@ -4903,10 +6399,11 @@ impl Backend for AppBackend {
         let Some(r) = r else {
             return Err(match self.failed.borrow().get(exam) {
                 Some(why) => BackendError::Denied(why.clone()),
-                None => BackendError::NotFound(format!(
-                    "Exam {exam} is not open yet: wait for grading to finish, or open its folder \
-                     with --project"
-                )),
+                None => BackendError::NotFound(
+                    "This exam is not open yet: wait for grading to finish, then open it from \
+                     the Exams screen"
+                        .into(),
+                ),
             });
         };
         if let Some(o) = self.opened.borrow_mut().get_mut(exam) {
@@ -5053,13 +6550,103 @@ impl Backend for AppBackend {
         })
     }
 
+    fn set_auto_export(&mut self, on: bool) {
+        self.auto_export = on;
+    }
+
+    fn take_completed(&mut self) -> Option<b::JobDone> {
+        self.completed.take()
+    }
+
+    fn running(&self) -> Option<String> {
+        let j = self.job.as_ref().filter(|j| j.running())?;
+        let name = self.job_name(j);
+        Some(match j.kind {
+            JobKind::Grade { .. } => format!("{name} is being graded"),
+            JobKind::Append { .. } => format!("Scans are being added to {name}"),
+            JobKind::Roster { .. } => format!("The roster of {name} is being matched"),
+        })
+    }
+
+    fn saving(&self) -> bool {
+        self.job
+            .as_ref()
+            .is_some_and(|j| j.running() && j.cancel.is_committed())
+    }
+
+    fn can_cancel(&self, exam: &ExamId) -> bool {
+        self.job.as_ref().is_some_and(|j| {
+            j.running()
+                && &j.exam == exam
+                && matches!(j.kind, JobKind::Grade { .. })
+                && !j.cancel.is_cancelled()
+                && !j.cancel.is_committed()
+        })
+    }
+
+    fn cancel_job(&mut self) -> Result<String, BackendError> {
+        let Some(j) = self.job.as_ref().filter(|j| j.running()) else {
+            return Err(BackendError::Invalid("Nothing is being graded".into()));
+        };
+        let name = self.job_name(j);
+        let j = self.job.as_mut().expect("checked above");
+        if !j.cancel.cancel() {
+            // past its last check: the run is being saved whole, and that is said as it is
+            return Err(BackendError::Denied(match j.kind {
+                JobKind::Grade { .. } => format!(
+                    "Too late to cancel: the pages are read and {name} is being saved, so it is \
+                     kept; once it opens, change what needs changing in Setup"
+                ),
+                JobKind::Append { .. } => format!(
+                    "Too late to cancel: the pages are read and the scans are being saved into \
+                     {name}"
+                ),
+                JobKind::Roster { .. } => format!(
+                    "Too late to cancel: the booklets are matched and the roster of {name} is \
+                     being saved"
+                ),
+            }));
+        }
+        let now = snapshot_label(&omr_app::pipeline::now_utc());
+        j.activity.insert(
+            0,
+            format!("{now} · cancelling: stops after the pages being read"),
+        );
+        Ok(match j.kind {
+            JobKind::Grade { .. } => {
+                "Cancelling: grading stops after the pages being read, and nothing is saved"
+            }
+            _ => "Cancelling: the run stops after the pages being read; the exam stays as it was",
+        }
+        .into())
+    }
+
+    fn can_set_roster(&self, exam: &ExamId) -> bool {
+        self.spawn.is_some()
+            && !self.job.as_ref().is_some_and(Job::running)
+            && self.with(exam, |o| o.read_only.is_none()).unwrap_or(false)
+    }
+
+    fn set_roster(&mut self, exam: &ExamId, path: &Path) -> Result<String, BackendError> {
+        self.start_roster(exam, path)
+    }
+
     fn pump(&mut self) -> bool {
         let analysed = self.drain_stability(false);
-        self.drain_job() || analysed
+        let thumbs = self.drain_thumbs(false);
+        let surveyed = self.drain_survey(false);
+        let graded = self.drain_job();
+        if graded && !self.grading_in_progress() {
+            // the card's folder and the exams folder's last term may have changed
+            self.propose_card();
+        }
+        graded || analysed || thumbs || surveyed
     }
 
     fn settle(&mut self) -> bool {
-        self.drain_stability(true)
+        let analysed = self.drain_stability(true);
+        let surveyed = self.drain_survey(true);
+        self.drain_thumbs(true) || analysed || surveyed
     }
 
     fn take_reloaded(&mut self) -> Vec<ExamId> {
@@ -5071,6 +6658,100 @@ impl Backend for AppBackend {
 mod tests {
     use super::*;
     use omr_app::exam::TemplateChoice;
+
+    #[test]
+    fn a_roster_run_says_a_decision_it_disagrees_with_is_kept() {
+        let r = omr_app::append::RosterReport {
+            students: 8,
+            matched: 7,
+            not_on_roster: 1,
+            absent: 1,
+            carried_over: 0,
+            conflicts: 1,
+            warnings: Vec::new(),
+        };
+        let text = roster_summary(&r);
+        assert_eq!(
+            text,
+            "8 students on the roster · 7 booklets matched · 1 not on the roster · 1 absent · \
+             1 decision of yours disagrees with this run: kept, and listed for review (SYS-032)"
+        );
+        let r = omr_app::append::RosterReport {
+            carried_over: 3,
+            conflicts: 2,
+            ..r
+        };
+        let text = roster_summary(&r);
+        assert!(
+            text.ends_with(
+                "3 decisions kept · 2 decisions of yours disagree with this run: kept, and \
+                 listed for review (SYS-032)"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("reread"), "{text}");
+    }
+
+    #[test]
+    fn a_run_saved_but_not_closed_cleanly_says_its_change_stands() {
+        let mut app = AppBackend::empty("principal:test", None);
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let mut job = Job::new(
+            ExamId("x".into()),
+            JobKind::Roster {
+                project: PathBuf::from("exam/project.omrproj"),
+                batch: 2,
+            },
+            rx,
+            Cancel::default(),
+        );
+        let e = AppError::Io(std::io::Error::other("No space left on device"));
+        let why = unclosed("The roster was added and saved", REOPEN, &e);
+        job.outcome = Some(Err(why.clone()));
+        job.saved = true;
+        app.job = Some(job);
+        let done = app.job_done(false).expect("a notice");
+        assert_eq!(
+            done.title,
+            "Roster added to Another exam, but the exam was not closed cleanly"
+        );
+        assert_eq!(done.text, why);
+        assert!(
+            why.starts_with(
+                "No space left on device. The roster was added and saved, but the exam could \
+                 not be closed cleanly"
+            ),
+            "{why}"
+        );
+        assert!(!why.contains("no roster was added") && !why.contains("i/o:"));
+        assert_eq!(done.tone, b::Tone::Warning);
+        // not saved: the roster was not added
+        app.job.as_mut().unwrap().saved = false;
+        let done = app.job_done(false).expect("a notice");
+        assert_eq!(done.title, "The roster of Another exam was not added");
+        assert_eq!(done.tone, b::Tone::Error);
+    }
+
+    #[test]
+    fn the_thumbnail_cache_keeps_the_ones_shown_last() {
+        // The cache was never trimmed: every page of every exam shown stayed in memory.
+        let key = |i: usize| (PathBuf::from("exam"), format!("p{i:04}"));
+        let mut t = Thumbs::default();
+        for i in 0..THUMB_CACHE {
+            t.put(key(i), None);
+        }
+        // page 0 is shown again: the oldest is now page 1
+        assert_eq!(t.get(&key(0)), Some(None));
+        t.put(key(THUMB_CACHE), None);
+        assert_eq!(t.done.len(), THUMB_CACHE);
+        assert!(t.get(&key(0)).is_some());
+        assert!(t.get(&key(1)).is_none(), "the one shown longest ago goes");
+        for i in 0..THUMB_CACHE {
+            t.put(key(1000 + i), None);
+        }
+        assert_eq!(t.done.len(), THUMB_CACHE);
+        assert!(t.get(&key(0)).is_none());
+    }
 
     #[test]
     fn long_paths_keep_their_last_folders_on_every_os() {

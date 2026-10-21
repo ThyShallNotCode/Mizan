@@ -12,47 +12,17 @@ mod support;
 use omr_app::ExamProject;
 use omr_app::model::ResponseStatus;
 use omr_model::Response;
-use shell_slint::app_backend::{AppBackend, GradeRequest, JobEvent, Spawn, run_grading};
+use shell_slint::app_backend::{AppBackend, GradeRequest, JobEvent, run_grading};
 use shell_slint::backend::{Backend, Decision, ExamId, ItemId, Lane, ReviewAction, ReviewKind};
-use shell_slint::bind::Shell;
-use shell_slint::ui::{App, AppWindow, ExamsVM, Page, ResultsVM, ReviewVM, ScanVM, SetupVM, Theme};
+use shell_slint::ui::{
+    App, AppWindow, ExamsVM, OutcomesVM, Page, RemarkVM, ResultsVM, ReviewVM, ScanVM, SetupVM,
+};
 use slint::{ComponentHandle, Model};
-use std::cell::RefCell;
 use std::path::Path;
-use std::rc::Rc;
 use std::time::{Duration, Instant};
-use support::a11::{key, one, selected_queue_row, tab, with_prefix};
+use support::a11::{all_texts, by_label, click, key, one, selected_queue_row, tab, with_prefix};
+use support::harness::{Harness, grade, harness, harness_for, held_spawner, run_held, settle_card};
 use support::synthetic_exam::{self as synth, MIDTERM};
-
-struct Harness {
-    ui: AppWindow,
-    app: Rc<RefCell<AppBackend>>,
-    shell: Rc<Shell>,
-    exam: ExamId,
-}
-
-fn harness(app: AppBackend) -> Harness {
-    let exam = app.default_exam().expect("an exam");
-    harness_for(app, exam)
-}
-
-/// A harness for any workspace, even one without an exam (`exam` is then a name that matches
-/// none).
-fn harness_for(app: AppBackend, exam: ExamId) -> Harness {
-    i_slint_backend_testing::init_no_event_loop();
-    let ui = AppWindow::new().expect("window");
-    ui.global::<Theme>().set_reduce_motion(true);
-    let app = Rc::new(RefCell::new(app));
-    let dynamic: Rc<RefCell<dyn Backend>> = app.clone();
-    let shell = Shell::bind(&ui, dynamic);
-    ui.show().expect("show");
-    Harness {
-        ui,
-        app,
-        shell,
-        exam,
-    }
-}
 
 impl Harness {
     fn open_items(&self) -> u32 {
@@ -489,6 +459,17 @@ fn req_a11_real_backend_review_flow_rescores_results() {
     one(ui, "Release").invoke_accessible_default_action();
     let msg = ui.global::<App>().get_message().to_string();
     assert!(msg.contains("Results released"), "{msg}");
+    // the drawer of a released exam: no second person signs a later change here (the
+    // two-person rule is off); release again after one. The key in force is a check.
+    h.shell.refresh_all();
+    let drawer = ui.global::<ExamsVM>().get_drawer();
+    assert_eq!(drawer.callout_title, "Released");
+    assert!(
+        !drawer.callout_text.contains("four-eyes") && drawer.callout_text.contains("release again"),
+        "{}",
+        drawer.callout_text
+    );
+    assert!(drawer.key_ok, "{}", drawer.key_status);
     assert!(built.exam_dir.join("blackboard_grade_center.csv").exists());
     // exports from Results: the Blackboard grade-center upload into an existing column,
     // then every export; only usernames and scores leave, never names
@@ -521,53 +502,6 @@ fn req_a11_real_backend_review_flow_rescores_results() {
         msg.contains("tp154.xlsx") && msg.contains("Blackboard"),
         "{msg}"
     );
-}
-
-/// A spawner that holds the work until the test runs it, so the state while the project is
-/// handed over can be checked first (the test plays the binary's part, R4).
-type Held = Rc<RefCell<Vec<Box<dyn FnOnce() + Send>>>>;
-
-fn held_spawner() -> (Spawn, Held) {
-    let held: Held = Rc::default();
-    let h = held.clone();
-    (
-        Box::new(move |work| {
-            h.borrow_mut().push(work);
-            Ok(())
-        }),
-        held,
-    )
-}
-
-/// Runs the held work on a thread and pumps the shell until the backend is idle again.
-fn run_held(h: &Harness, held: &Held) {
-    let work = held.borrow_mut().pop().expect("work was started");
-    let worker = std::thread::spawn(work);
-    let t0 = Instant::now();
-    while h.app.borrow().grading_in_progress() {
-        assert!(
-            t0.elapsed() < Duration::from_secs(300),
-            "the batch never finished"
-        );
-        h.shell.pump();
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    worker.join().expect("worker");
-    h.shell.pump();
-}
-
-fn grade(def: &omr_app::ExamDefinition, scans: &Path, project: &Path) {
-    let opts = omr_app::GradeOptions {
-        threads: 2,
-        project_dir: Some(project.to_path_buf()),
-        snapshot_utc: Some(synth::SNAPSHOT.into()),
-        operator: "principal:a11".into(),
-        max_pages: None,
-    };
-    ExamProject::grade(def, &[scans.to_path_buf()], &opts, &|_| {})
-        .expect("grading")
-        .close()
-        .expect("close");
 }
 
 fn jpeg(img: &image::GrayImage, path: &Path) {
@@ -652,13 +586,14 @@ fn req_a11_real_backend_adds_scans_from_the_scan_screen() {
         h.app.borrow().dashboard().exams[0].status,
         shell_slint::backend::ExamStatus::Scanning
     );
-    // the review screen says why its queue is empty (never "no open items")
+    // the review screen says why its queue is empty (never "no open items"), and the item
+    // open before the batch is gone: nothing of the closed exam is offered for a decision
     h.shell.navigate(Page::Review);
-    assert!(
-        ui.global::<ReviewVM>()
-            .get_empty_text()
-            .contains("being graded")
-    );
+    let rv = ui.global::<ReviewVM>();
+    assert!(rv.get_empty_text().contains("being graded"));
+    assert!(!rv.get_has_item(), "{}", rv.get_caption());
+    assert!(with_prefix(ui, "Accept").is_empty());
+    assert!(shown(ui, "Nothing to review"));
     tab(ui, "Scan").invoke_accessible_default_action();
     run_held(&h, &held);
 
@@ -808,6 +743,249 @@ fn req_a11_real_backend_empty_workspace_never_panics() {
     assert!(!h.ui.global::<ScanVM>().get_available());
     assert!(!h.ui.global::<ResultsVM>().get_available());
     assert!(h.shell.current_item().is_none());
+}
+
+/// What only the demo shows (its exams' courses, its user, engine and workspace) and what the
+/// screens showed before a binding filled them: never on screen in a real session.
+fn demo_strings() -> Vec<String> {
+    let d = shell_slint::demo::DemoBackend::new().dashboard();
+    let mut v = vec![d.user.name, d.user.role, d.engine, d.workspace];
+    for e in d.exams {
+        v.extend([e.course_code, e.course_title, e.course_title_ar, e.batch_id]);
+    }
+    // its own values only, not a "—" it shows for a value it lacks
+    v.retain(|s| s.chars().filter(|c| c.is_alphanumeric()).count() >= 3);
+    v.extend(
+        [
+            "CS 211 Data Structures",
+            "Midterm 1",
+            "1448 H, 1st term",
+            "Fall 2026",
+            "Floor 40",
+            "Project saved",
+            "§",
+            "WCAG",
+        ]
+        .map(String::from),
+    );
+    v
+}
+
+/// Fails, naming the screen and the text, when anything on screen shows one of `banned`, or a
+/// "Saved" that no save made.
+fn assert_none_shown(ui: &AppWindow, banned: &[String], screen: &str) {
+    for t in all_texts(ui) {
+        assert_ne!(t, "Saved", "{screen}: a \"Saved\" pill");
+        if let Some(b) = banned.iter().find(|b| t.contains(b.as_str())) {
+            panic!("{screen} shows {b:?} in {t:?}");
+        }
+    }
+}
+
+/// True when some text on screen contains `part`.
+fn shown(ui: &AppWindow, part: &str) -> bool {
+    all_texts(ui).iter().any(|t| t.contains(part))
+}
+
+/// G-2: a real session with no exam (an empty exams folder) shows nothing of the demo and no
+/// placeholder: no course in the breadcrumbs, no capture-agent buttons, no "Saved", no step
+/// done. The exams table says the folder is empty and leads to New exam and the Remark import;
+/// every screen of one exam says none is open and leads back to Exams.
+#[test]
+fn req_a11_real_backend_empty_workspace_shows_no_demo_data() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (spawn, _held) = held_spawner();
+    let mut app = AppBackend::workspace(dir.path(), "principal:a11");
+    app.set_spawner(spawn);
+    let h = harness_for(app, ExamId("none".into()));
+    let ui = &h.ui;
+    let demo = demo_strings();
+    for p in PAGES {
+        h.shell.navigate(p);
+        let screen = format!("{p:?} with no exam");
+        assert_none_shown(ui, &demo, &screen);
+        let a = ui.global::<App>();
+        assert!(!a.get_has_exam(), "{screen}");
+        assert_eq!(a.get_course(), "", "{screen}");
+        assert_eq!(a.get_assessment(), "", "{screen}");
+        if !matches!(p, Page::Exams | Page::Settings) {
+            one(ui, "No exam open");
+            one(ui, "Go to Exams");
+        }
+    }
+
+    // Exams: an empty folder, and what to do about it
+    h.shell.navigate(Page::Exams);
+    one(ui, "No exams in this folder yet");
+    assert!(
+        by_label(ui, "Operator").is_empty(),
+        "no role is made up for the user"
+    );
+    click(ui, &one(ui, "New exam…"));
+    let ex = ui.global::<ExamsVM>();
+    assert!(ex.get_new_open(), "New exam… opens the form");
+    assert!(
+        by_label(ui, "No exams in this folder yet").is_empty(),
+        "the form covers the empty state (its buttons are never shown twice)"
+    );
+    click(ui, &one(ui, "Cancel"));
+    assert!(!ex.get_new_open());
+    click(ui, &one(ui, "Import from Remark export…"));
+    assert!(
+        ex.get_new_open(),
+        "the Remark import opens on the New-exam form"
+    );
+    assert!(ui.global::<RemarkVM>().get_new_panel());
+    one(ui, "Remark workbooks");
+    ex.set_new_open(false);
+
+    // Setup: no step is done or wanting, no key tag, no key buttons; Go to Exams goes there
+    h.shell.navigate(Page::Setup);
+    for (i, step) in [
+        "Template",
+        "Forms and key",
+        "CLO mapping",
+        "Roster",
+        "Policies",
+    ]
+    .iter()
+    .enumerate()
+    {
+        one(ui, &format!("{} {step}, to do", i + 1));
+    }
+    assert!(!shown(ui, "Key v"), "no key tag");
+    assert!(by_label(ui, "Replace key…").is_empty());
+    assert!(!ui.global::<SetupVM>().get_has_roster());
+    click(ui, &one(ui, "Go to Exams"));
+    assert_eq!(ui.global::<App>().get_page(), Page::Exams);
+
+    // Scan: no capture agent to pause or stop, nothing to add scans to, no review to open
+    h.shell.navigate(Page::Scan);
+    for control in ["Pause", "Resume", "Stop", "Add scans…", "Open review"] {
+        assert!(
+            with_prefix(ui, control).is_empty(),
+            "Scan with no exam offers {control:?}"
+        );
+    }
+    assert!(!shown(ui, "workers"), "no engine line without a batch");
+
+    // Review: no lanes, progress, undo or help for a code that is not there
+    h.shell.navigate(Page::Review);
+    assert!(by_label(ui, "Review progress").is_empty());
+    assert!(by_label(ui, "Undo last decision (Ctrl+Z)").is_empty());
+    assert!(with_prefix(ui, "Help for").is_empty());
+    assert!(!shown(ui, "audit head"));
+    assert!(!shown(ui, "Two-person rule"));
+}
+
+/// G-2: nothing of one exam stays on screen when another, or none, is shown: a graded exam's
+/// course, key tag, release block and review crop are gone once the shell shows no exam, and
+/// once it shows an exam that is being graded (whose screens say so). A fresh exam, graded from
+/// the New-exam form, shows its own data and nothing of the demo.
+#[test]
+fn req_a11_real_backend_never_shows_a_previous_exam_or_the_demo() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let spec = synth::Spec {
+        sheets: 6,
+        ..synth::BARE
+    };
+    let scans = synth::write_scans(&spec, &dir.path().join("scans"));
+    let ws = dir.path().join("exams");
+    let mut def = synth::definition(&spec);
+    def.term = "Spring 2027".into();
+    grade(&def, &scans, &ws.join("bare-quiz/project.omrproj"));
+    let (spawn, held) = held_spawner();
+    let mut app = AppBackend::workspace(&ws, "principal:a11");
+    app.set_spawner(spawn);
+    let h = harness(app);
+    let ui = &h.ui;
+    let demo = demo_strings();
+
+    // the graded exam on every screen: what of it would be stale elsewhere
+    for p in PAGES {
+        h.shell.navigate(p);
+        assert_none_shown(ui, &demo, &format!("{p:?} of a graded exam"));
+    }
+    h.shell.navigate(Page::Review);
+    let caption = ui.global::<ReviewVM>().get_caption().to_string();
+    assert!(caption.contains("booklet"), "{caption}");
+    let key_status = ui.global::<SetupVM>().get_key_status().to_string();
+    assert!(!key_status.is_empty());
+    h.shell.navigate(Page::Results);
+    let rs = ui.global::<ResultsVM>();
+    assert!(rs.get_release_blocked(), "an inferred key blocks release");
+    let reason = rs.get_release_reason().to_string();
+    let mut stale = vec![
+        spec.course_code.to_string(),
+        spec.course_title.to_string(),
+        caption,
+        key_status,
+        reason,
+    ];
+    stale.extend(demo.iter().cloned());
+
+    // the exam is gone (its folder removed, say): no screen keeps any of it
+    h.shell.select_exam(&ExamId("gone".into()));
+    for p in PAGES {
+        h.shell.navigate(p);
+        let screen = format!("{p:?} after the exam is gone");
+        assert_eq!(ui.global::<App>().get_course(), "", "{screen}");
+        assert!(!ui.global::<App>().get_has_exam(), "{screen}");
+        if p != Page::Exams {
+            assert_none_shown(ui, &stale, &screen);
+        }
+    }
+    assert!(!ui.global::<SetupVM>().get_has_roster());
+    assert_eq!(ui.global::<SetupVM>().get_key_status(), "");
+    assert!(!ui.global::<ResultsVM>().get_release_blocked());
+    assert!(!ui.global::<ReviewVM>().get_has_item());
+
+    // a new exam from the New-exam card, held while it is graded
+    h.shell.navigate(Page::Exams);
+    click(ui, &one(ui, "New exam"));
+    one(ui, "Scan files or folders").set_accessible_value(scans.to_str().unwrap());
+    one(ui, "Exam title").set_accessible_value("Quiz 9");
+    one(ui, "Course code").set_accessible_value("MATH 299");
+    one(ui, "Number of questions").set_accessible_value("30");
+    settle_card(&h, &held);
+    click(ui, &one(ui, PROVISIONAL));
+    click(ui, &one(ui, "Grade exam"));
+    assert!(h.app.borrow().grading_in_progress());
+    for p in PAGES {
+        h.shell.navigate(p);
+        let screen = format!("{p:?} of an exam being graded");
+        assert!(ui.global::<App>().get_has_exam(), "{screen}");
+        assert!(
+            ui.global::<App>().get_course().contains("MATH 299"),
+            "{screen}"
+        );
+        if p != Page::Exams {
+            assert_none_shown(ui, &stale, &screen);
+        }
+    }
+    // the screens with nothing yet say why
+    h.shell.navigate(Page::Setup);
+    assert!(shown(ui, "being graded"), "Setup says why it is empty");
+    h.shell.navigate(Page::Results);
+    assert!(shown(ui, "being graded"), "Results says why it is empty");
+    h.shell.navigate(Page::Outcomes);
+    assert!(shown(ui, "being graded"), "Outcomes says why it is empty");
+    assert!(!ui.global::<OutcomesVM>().get_empty_to_setup());
+    h.shell.navigate(Page::Review);
+    one(ui, "No review queue");
+    one(ui, "Nothing to review");
+    assert!(shown(ui, "being graded"), "the review canvas says why");
+
+    // graded: its own data, nothing of the demo; no CLOs, and Outcomes says where to load them
+    run_held(&h, &held);
+    for p in PAGES {
+        h.shell.navigate(p);
+        assert_none_shown(ui, &demo, &format!("{p:?} of the fresh exam"));
+    }
+    h.shell.navigate(Page::Outcomes);
+    one(ui, "No CLOs for this exam");
+    click(ui, &one(ui, "Load a CLO file in Setup"));
+    assert_eq!(ui.global::<App>().get_page(), Page::Setup);
 }
 
 /// Every screen and the keyboard on a project that breaks naive code: no roster, no CLOs, an
@@ -1003,11 +1181,14 @@ fn req_a11_real_backend_grades_live_through_pump() {
             snapshot_utc: Some(synth::SNAPSHOT.into()),
             operator: "principal:a11".into(),
             max_pages: None,
+            cancel: Default::default(),
         },
+        export_to: None,
     };
+    let cancel = req.options.cancel.clone();
     // the test plays the binary's part: it owns the worker thread
     let worker = std::thread::spawn(move || run_grading(req, tx));
-    let h = harness(AppBackend::grading(&def, rx, None, "principal:a11"));
+    let h = harness(AppBackend::grading(&def, rx, cancel, None, "principal:a11"));
     let ui = &h.ui;
     h.shell.navigate(Page::Scan);
     assert!(
@@ -1109,9 +1290,13 @@ fn req_a11_real_backend_replaces_the_key_from_setup_and_names_a_tampered_project
     assert!(!e.contains("Close the other program"), "{e}");
 }
 
-/// CR-04: a new exam from the dashboard of a workspace ("New exam", the scans, the question
-/// count; no key file, so the key is inferred): a bad entry is refused with what to type, the
-/// run is graded in the background into a new folder of the workspace, and the exam opens.
+/// The card's answer to "no answer key" that grades without one.
+const PROVISIONAL: &str = "Grade with a provisional key (cannot be released)";
+
+/// CR-04: a new exam from the dashboard of a workspace ("New exam", the scans; no key file,
+/// so the key is inferred, as the instructor chose on the card): a bad entry is a question on
+/// its field with what to type, the run is graded in the background into a new folder of the
+/// workspace, and the exam opens.
 #[test]
 fn req_a11_real_backend_creates_an_exam_from_the_new_exam_form() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -1133,25 +1318,40 @@ fn req_a11_real_backend_creates_an_exam_from_the_new_exam_form() {
     one(ui, "Scan files or folders").set_accessible_value(scans.to_str().unwrap());
     one(ui, "Exam title").set_accessible_value(spec.title);
     one(ui, "Course code").set_accessible_value(spec.course_code);
-    // a question count that is not a number, then a key file that does not exist: refused
+    // a question count that is not a number, then a key file that does not exist: questions on
+    // their fields, and Grade exam waits with the reason
+    let ex = ui.global::<ExamsVM>();
     one(ui, "Number of questions").set_accessible_value("thirty");
-    one(ui, "Grade exam").invoke_accessible_default_action();
-    let msg = ui.global::<App>().get_message().to_string();
+    settle_card(&h, &held);
+    let field = one(ui, "Number of questions");
+    let why = field
+        .accessible_description()
+        .unwrap_or_default()
+        .to_string();
+    assert!(why.contains("not a question count"), "{why}");
     assert!(
-        msg.contains("Questions") && msg.contains("e.g. 30"),
-        "{msg}"
+        ex.get_new_block()
+            .starts_with("2 questions to answer first"),
+        "{}",
+        ex.get_new_block()
     );
+    one(ui, "Grade exam").invoke_accessible_default_action();
+    assert!(!h.app.borrow().grading_in_progress());
     one(ui, "Number of questions").set_accessible_value("30");
     one(ui, "Answer key file").set_accessible_value("/no/such/key.csv");
+    settle_card(&h, &held);
+    assert_eq!(ex.get_h_questions().error, "");
+    let why = ex.get_h_key().error.to_string();
+    assert!(why.contains("check the path"), "{why}");
     one(ui, "Grade exam").invoke_accessible_default_action();
-    let msg = ui.global::<App>().get_message().to_string();
-    assert!(msg.contains("check the path"), "{msg}");
     assert!(
-        held.borrow().is_empty(),
-        "nothing started for a refused form"
+        !h.app.borrow().grading_in_progress(),
+        "nothing graded while a question is open"
     );
-    // no key file: the key is inferred, and the message says so
+    // no key file: the card asks, and the key is inferred only as chosen
     one(ui, "Answer key file").set_accessible_value("");
+    settle_card(&h, &held);
+    click(ui, &one(ui, PROVISIONAL));
     one(ui, "Grade exam").invoke_accessible_default_action();
     let msg = ui.global::<App>().get_message().to_string();
     assert!(
@@ -1160,8 +1360,26 @@ fn req_a11_real_backend_creates_an_exam_from_the_new_exam_form() {
     );
     assert!(!ui.global::<ExamsVM>().get_new_open(), "the form closes");
     assert_eq!(ui.global::<App>().get_page(), Page::Scan);
-    assert!(!h.app.borrow().can_create_exam(), "one run at a time");
+    assert!(
+        h.app.borrow().create_exam_blocker().is_some(),
+        "one run at a time"
+    );
+    // before the first page is read nothing is invented: no share, time or estimate, and the
+    // run is not "complete"
+    let sc = ui.global::<ScanVM>();
+    assert!(sc.get_running());
+    let tiles = [
+        sc.get_auto_value(),
+        sc.get_first_value(),
+        sc.get_remaining_value(),
+    ];
+    assert_eq!(tiles.map(|t| t.to_string()), ["–", "–", "–"]);
+    assert_eq!(sc.get_auto_caption(), "questions · AR –");
+    assert_eq!(sc.get_remaining_caption(), "reading inputs");
     run_held(&h, &held);
+    // the status line no longer says the run is grading
+    let msg = ui.global::<App>().get_message().to_string();
+    assert!(!msg.starts_with("Grading "), "{msg}");
     assert_eq!(h.app.borrow().grading_error(), None);
     let project = ws.join("cs-213-quiz-1/project.omrproj");
     assert!(
@@ -1178,7 +1396,15 @@ fn req_a11_real_backend_creates_an_exam_from_the_new_exam_form() {
         "{}",
         results.key_label
     );
-    assert!(h.app.borrow().can_create_exam(), "the next exam can start");
+    assert_eq!(
+        h.app.borrow().create_exam_blocker(),
+        None,
+        "the next exam can start"
+    );
+    // an inferred key is no key in force: the drawer's key row is a warning, not a check
+    h.shell.refresh_all();
+    let drawer = ui.global::<ExamsVM>().get_drawer();
+    assert!(!drawer.key_ok, "{}", drawer.key_status);
 }
 
 /// C7: the New exam form's *Key sheets* field. The instructor's key sheets named there are read
@@ -1207,13 +1433,16 @@ fn req_a11_real_backend_new_exam_reads_the_named_key_sheets() {
     one(ui, "Exam title").set_accessible_value(spec.title);
     one(ui, "Course code").set_accessible_value(spec.course_code);
     one(ui, "Number of questions").set_accessible_value("30");
-    one(ui, "Form letters").set_accessible_value("A, B");
+    one(ui, "Versions").set_accessible_value("A, B");
     let both = format!(
         "{};{}",
         keys[0].to_str().unwrap(),
         keys[1].to_str().unwrap()
     );
     one(ui, "Key sheets").set_accessible_value(&both);
+    // the key sheets give the key: no question about it
+    settle_card(&h, &held);
+    assert_eq!(ui.global::<ExamsVM>().get_new_block(), "");
     one(ui, "Grade exam").invoke_accessible_default_action();
     let msg = ui.global::<App>().get_message().to_string();
     assert!(
@@ -1329,6 +1558,21 @@ fn req_a11_real_backend_confirms_the_key_from_key_sheets() {
     );
     one(ui, "Confirm the key in Setup").invoke_accessible_default_action();
     assert_eq!(ui.global::<App>().get_page(), Page::Setup);
+    // the exams drawer says the same: the key waits (the hold is no ERROR exception that a
+    // review decision lifts), the key row is no check, and its action leads to Setup
+    click(ui, &tab(ui, "Exams"));
+    let drawer = ui.global::<ExamsVM>().get_drawer();
+    assert_eq!(drawer.callout_title, "Key waits for confirmation");
+    assert!(
+        drawer.callout_text.contains("confirm it in Setup")
+            && !drawer.callout_text.contains("ERROR exception"),
+        "{}",
+        drawer.callout_text
+    );
+    assert!(!drawer.key_ok, "{}", drawer.key_status);
+    click(ui, &one(ui, "Confirm the key in Setup"));
+    assert_eq!(ui.global::<App>().get_page(), Page::Setup);
+    assert!(ui.global::<SetupVM>().get_ks_open());
 
     // Scan: the two key sheets are listed as key sheets, never as students
     h.shell.navigate(Page::Scan);
@@ -1353,7 +1597,7 @@ fn req_a11_real_backend_confirms_the_key_from_key_sheets() {
         .map(|kv| (kv.label.to_string(), kv.value.to_string()))
         .collect();
     assert!(
-        recon.contains(&("Key sheets, not students (§10.1)".into(), "2".into())),
+        recon.contains(&("Key sheets, not students".into(), "2".into())),
         "{recon:?}"
     );
     assert!(
@@ -1686,4 +1930,288 @@ fn req_a11_real_backend_reads_a_key_from_answer_sheets_in_setup() {
             );
         }
     }
+}
+
+/// The Scan screen's tile images that are page thumbnails (wider than the 1 × 1 placeholder).
+fn shown_thumbnails(ui: &AppWindow) -> usize {
+    let images = ui.global::<ScanVM>().get_thumb_images();
+    images.iter().filter(|i| i.size().width > 1).count()
+}
+
+#[test]
+fn req_a11_real_scan_thumbnails_are_decoded_off_the_ui_thread() {
+    // The first look at Scan decoded every page thumbnail on the UI thread (about 850 ms on a
+    // 60-sheet exam), and so did the end of a grading run with Scan on show. With the binary's
+    // spawner a worker decodes them: the screen shows at once with placeholders, and the
+    // thumbnails arrive through the pump.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let spec = synth::Spec {
+        sheets: 6,
+        folder: "thumbs",
+        ..MIDTERM
+    };
+    let built = synth::build(&spec, dir.path());
+    let (spawn, held) = held_spawner();
+    let mut app = AppBackend::project(&built.project, "principal:a11").expect("open");
+    app.set_spawner(spawn);
+    let h = harness(app);
+    let ui = &h.ui;
+    tab(ui, "Scan").invoke_accessible_default_action();
+    let tiles = ui.global::<ScanVM>().get_thumbs().row_count();
+    assert_eq!(tiles, 6);
+    assert_eq!(
+        shown_thumbnails(ui),
+        0,
+        "placeholders while the worker decodes"
+    );
+    assert_eq!(held.borrow().len(), 1, "one decode job for the screen");
+    // shown again before the worker is done: nothing is asked twice
+    h.shell.navigate(Page::Scan);
+    assert_eq!(held.borrow().len(), 1);
+    assert!(!h.shell.pump(), "nothing has arrived");
+    // the worker runs on its own thread; the pump fills the tiles in
+    let work = held.borrow_mut().pop().expect("the decode job");
+    std::thread::spawn(work).join().expect("worker");
+    assert!(h.shell.pump());
+    assert_eq!(shown_thumbnails(ui), tiles);
+    // the thumbnails the worker made are those of the pages, as the UI thread made them
+    let batch = h.app.borrow().batch_progress(&h.exam).expect("batch");
+    let pages: Vec<Vec<u8>> = h
+        .app
+        .borrow()
+        .with_project(&h.exam, |p| {
+            (0..p.session.pages.len())
+                .map(|i| {
+                    let img = p.page_image(i).expect("page image");
+                    omr_app::crops::thumbnail(&img, 120).rgba.to_vec()
+                })
+                .collect()
+        })
+        .expect("project");
+    for t in &batch.thumbnails {
+        let rgba = &t.image.as_ref().expect("a thumbnail").rgba;
+        assert!(pages.iter().any(|p| p[..] == rgba[..]), "{}", t.serial);
+    }
+    // cached: shown again, nothing more to decode
+    h.shell.navigate(Page::Scan);
+    assert!(held.borrow().is_empty());
+    assert_eq!(shown_thumbnails(ui), tiles);
+}
+
+/// Fails, naming the screen and the text, when the screen, the status line or the code help
+/// shows one of `words`.
+fn assert_never_shown(ui: &AppWindow, words: &[&str], screen: &str) {
+    let mut texts = all_texts(ui);
+    texts.push(ui.global::<App>().get_message().to_string());
+    texts.push(ui.global::<ReviewVM>().get_help_text().to_string());
+    for t in texts {
+        if let Some(w) = words.iter().find(|w| t.contains(*w)) {
+            panic!("{screen} shows {w:?} in {t:?}");
+        }
+    }
+}
+
+/// A real session's exam graded without a key (the key is inferred), opened in a tall window.
+fn inferred_key_exam(dir: &Path) -> Harness {
+    let built = synth::build(&synth::BARE, dir);
+    let h = harness(AppBackend::project(&built.project, "principal:a11").expect("open"));
+    h.ui.window()
+        .set_size(slint::LogicalSize::new(1600.0, 1100.0));
+    h
+}
+
+/// G-2: a real session shows no control that only answers "not built yet" or names a command
+/// line, on any screen or chord: the What-if, Queue filter and Rescan pull list are the demo's;
+/// the Exams search filters the table; a sheet read automatically says there is nothing to
+/// review.
+#[test]
+fn req_a11_real_backend_shows_no_control_that_is_not_built() {
+    const STUB: [&str; 5] = [
+        "not built yet",
+        "not in the desktop shell",
+        "hat-if",
+        "`omr",
+        "omr-desktop --",
+    ];
+    let dir = tempfile::tempdir().expect("temp dir");
+    let h = inferred_key_exam(dir.path());
+    let ui = &h.ui;
+    for p in PAGES {
+        h.shell.navigate(p);
+        assert_never_shown(ui, &STUB, &format!("{p:?}"));
+        for c in ["Filter the queue", "Rescan pull list", "What-if preview"] {
+            assert!(by_label(ui, c).is_empty(), "{p:?} offers {c}");
+        }
+        // every screen chord, on every screen
+        for c in ["k", "n", "r", "p", " "] {
+            support::a11::chord(ui, slint::platform::Key::Control, c);
+            assert_never_shown(ui, &STUB, &format!("{p:?} after Ctrl+{c:?}"));
+            h.shell.navigate(p);
+        }
+    }
+    // the search on Exams filters the table
+    h.shell.navigate(Page::Exams);
+    let ex = ui.global::<ExamsVM>();
+    one(ui, "Search exams and courses").set_accessible_value("zzz");
+    support::a11::chord(ui, slint::platform::Key::Control, "k");
+    key(ui, "\n");
+    assert_eq!(ex.get_rows().row_count(), 0);
+    assert!(shown(ui, "No exams match"));
+    one(ui, "Search exams and courses").set_accessible_value("cs213");
+    key(ui, "\n");
+    assert_eq!(ex.get_rows().row_count(), 1);
+    assert_never_shown(ui, &STUB, "Exams searched");
+    // a sheet read automatically: nothing to review, said so
+    h.shell.navigate(Page::Scan);
+    let auto = with_prefix(ui, "Sheet ")
+        .into_iter()
+        .find(|(l, _)| l.ends_with("auto-accepted"))
+        .expect("an auto-accepted sheet");
+    click(ui, &auto.1);
+    let msg = ui.global::<App>().get_message().to_string();
+    assert!(msg.contains("nothing to review"), "{msg}");
+    assert_never_shown(ui, &STUB, "Scan after a sheet");
+    // Roster search: with an exam only, and a number on an item that is no identity item says
+    // what a number decides
+    h.shell.navigate(Page::Review);
+    let search = by_label(ui, "Roster search")
+        .into_iter()
+        .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::TextInput))
+        .expect("the roster search field");
+    search.set_accessible_value("2021001234");
+    click(ui, &search);
+    key(ui, "\n");
+    let msg = ui.global::<App>().get_message().to_string();
+    assert!(msg.contains("decides an identity item"), "{msg}");
+}
+
+/// The code help (F1) of every item of a real session says what to do in this window, never
+/// "see Appendix A of the specification"; the inferred key's SCO-003 says Replace key…. Its
+/// notice has no scan: no paper, view chips or rescan action.
+#[test]
+fn req_a11_real_backend_code_help_and_notices_without_a_scan() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let h = inferred_key_exam(dir.path());
+    let ui = &h.ui;
+    h.shell.navigate(Page::Review);
+    let mut seen_sco003 = false;
+    for lane in Lane::ALL {
+        h.shell.set_lane(lane);
+        let q = h.app.borrow().review_queue(&h.exam, lane);
+        for id in q.groups.iter().flat_map(|g| &g.items).map(|i| i.id) {
+            h.shell.select_item(Some(id));
+            assert_never_shown(
+                ui,
+                &["Appendix", "specification"],
+                &format!("Review item {id}"),
+            );
+            if h.item(id).code != "SCO-003" {
+                continue;
+            }
+            seen_sco003 = true;
+            support::a11::special(ui, slint::platform::Key::F1);
+            let rv = ui.global::<ReviewVM>();
+            assert!(rv.get_help_open());
+            assert!(
+                rv.get_help_text().contains("Replace key"),
+                "{}",
+                rv.get_help_text()
+            );
+            assert!(with_prefix(ui, "Scan crop").is_empty());
+            for chrome in [
+                "Add to rescan list",
+                "Zoom ",
+                "Registered, F2",
+                "Original, F2",
+            ] {
+                assert!(with_prefix(ui, chrome).is_empty(), "{chrome}");
+            }
+            support::a11::special(ui, slint::platform::Key::F1);
+        }
+    }
+    assert!(seen_sco003, "the inferred key's notice is queued");
+}
+
+/// The texts of a real session name no crate, CLI flag, backticked identifier or engine
+/// method: Results speaks of Setup's Replace key…, the Setup template card of its options in
+/// words.
+#[test]
+fn req_a11_real_backend_texts_name_no_command_or_identifier() {
+    const NAMES: [&str; 6] = [
+        "`",
+        "--",
+        "omr-scoring",
+        "erase_only",
+        "fiducials",
+        "DIGITS",
+    ];
+    let dir = tempfile::tempdir().expect("temp dir");
+    let h = inferred_key_exam(dir.path());
+    let ui = &h.ui;
+    for p in [Page::Setup, Page::Scan, Page::Results] {
+        h.shell.navigate(p);
+        assert_never_shown(ui, &NAMES, &format!("{p:?}"));
+    }
+    let rs = ui.global::<ResultsVM>();
+    assert!(
+        rs.get_blackboard_note().contains("Replace key"),
+        "{}",
+        rs.get_blackboard_note()
+    );
+}
+
+/// A click on a Scan tile opens the item of that sheet, not the first item of its code in the
+/// queue (another student's, opened under the clicked sheet's name).
+#[test]
+fn req_a11_real_backend_a_tile_opens_its_own_sheet() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let spec = synth::Spec {
+        sheets: 24,
+        folder: "tiles",
+        ..MIDTERM
+    };
+    let built = synth::build(&spec, dir.path());
+    let h = harness(AppBackend::project(&built.project, "principal:a11").expect("open"));
+    let ui = &h.ui;
+    ui.window()
+        .set_size(slint::LogicalSize::new(1600.0, 1100.0));
+    tab(ui, "Scan").invoke_accessible_default_action();
+    // every tile with a code whose sheet is not the first of that code in the queue
+    let tiles: Vec<(String, String, String)> = ui
+        .global::<ScanVM>()
+        .get_thumbs()
+        .iter()
+        .filter(|t| t.state == 1)
+        .map(|t| {
+            (
+                t.label.to_string(),
+                t.serial.to_string(),
+                t.code.to_string(),
+            )
+        })
+        .collect();
+    assert!(tiles.len() >= 3, "{tiles:?}");
+    let mut other_sheet = 0;
+    for (label, serial, code) in tiles {
+        let first = Lane::ALL.iter().find_map(|&l| {
+            let q = h.app.borrow().review_queue(&h.exam, l);
+            q.groups
+                .iter()
+                .find(|g| g.code == code)
+                .and_then(|g| g.items.first())
+                .map(|i| i.id)
+        });
+        let first_serial = first.map(|id| h.item(id).serial).unwrap_or_default();
+        if first_serial != serial {
+            other_sheet += 1;
+        }
+        h.shell.navigate(Page::Scan);
+        click(ui, &one(ui, &label));
+        assert_eq!(ui.global::<App>().get_page(), Page::Review, "{label}");
+        let id = h.shell.current_item().expect("an item");
+        let it = h.item(id);
+        assert_eq!(it.serial, serial, "{label} opened booklet {}", it.serial);
+        assert_eq!(it.code, code, "{label}");
+    }
+    assert!(other_sheet > 0, "a sheet that is not the first of its code");
 }

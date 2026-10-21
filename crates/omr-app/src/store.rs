@@ -51,6 +51,30 @@ pub struct StoreWriter {
     recog_run: String,
     identity_run: String,
     parent_run: Option<String>,
+    /// The roster snapshot in force (SHA-384): the one the latest identity run used.
+    roster_snapshot: Option<String>,
+    /// A roster given after grading, recorded with the next identity run (its store stage).
+    staged_roster: Option<RosterSnapshotIn>,
+}
+
+/// The roster snapshot of `def`'s roster (§9.2), `parent` the one it replaces.
+fn roster_snapshot_in(def: &ExamDefinition, parent: Option<String>) -> Option<RosterSnapshotIn> {
+    def.roster.as_ref().map(|rows| RosterSnapshotIn {
+        parent,
+        source: "import".into(),
+        fetched_at: crate::pipeline::now_utc(),
+        id_scheme_version: format!("{:?}", def.id_scheme),
+        rows: rows
+            .iter()
+            .map(|r| RosterRowIn {
+                student_id: r.id.clone(),
+                section: r.section.clone(),
+                sis_status: "enrolled".into(),
+                fields: json!({"name": r.name, "name_ar": r.name_ar}),
+                attributes: BTreeMap::new(),
+            })
+            .collect(),
+    })
 }
 
 impl std::fmt::Debug for StoreWriter {
@@ -228,6 +252,8 @@ impl StoreWriter {
             recog_run: RECOG_RUN.into(),
             identity_run: IDENTITY_RUN.into(),
             parent_run: None,
+            roster_snapshot: None,
+            staged_roster: None,
         }
     }
 
@@ -266,6 +292,19 @@ impl StoreWriter {
         if let Some(r) = last("IdentityRunStarted") {
             w.identity_run = r;
         }
+        // The roster in force: the one the latest identity run used; a package whose identity
+        // runs do not name it (graded before they did) has at most its setup's roster.
+        w.roster_snapshot = events
+            .iter()
+            .rev()
+            .find(|e| e.event_type == "IdentityRunStarted")
+            .and_then(|e| e.payload["roster_snapshot"].as_str().map(str::to_string))
+            .or_else(|| {
+                events
+                    .iter()
+                    .find(|e| e.event_type == "RosterSnapshotImported")
+                    .map(|e| e.entity_id.clone())
+            });
         Ok(w)
     }
 
@@ -324,6 +363,12 @@ impl StoreWriter {
         self.project.paths().cache.clone()
     }
 
+    /// The object store's folder, to read originals from another thread
+    /// ([`ObjectStore::read_verified`](omr_store::objects::ObjectStore::read_verified)).
+    pub fn objects(&self) -> omr_store::objects::ObjectStore {
+        self.project.objects().clone()
+    }
+
     /// Reads an original by its BLAKE3 address (verified).
     pub fn read_object(&self, blake3: &str, sha384: &str) -> Result<Vec<u8>, AppError> {
         self.project
@@ -350,22 +395,7 @@ impl StoreWriter {
     ) -> Result<(), AppError> {
         let me = self.actor.clone();
         let exam = self.exam;
-        let roster = def.roster.as_ref().map(|rows| RosterSnapshotIn {
-            parent: None,
-            source: "import".into(),
-            fetched_at: crate::pipeline::now_utc(),
-            id_scheme_version: format!("{:?}", def.id_scheme),
-            rows: rows
-                .iter()
-                .map(|r| RosterRowIn {
-                    student_id: r.id.clone(),
-                    section: r.section.clone(),
-                    sis_status: "enrolled".into(),
-                    fields: json!({"name": r.name, "name_ar": r.name_ar}),
-                    attributes: BTreeMap::new(),
-                })
-                .collect(),
-        });
+        let roster = roster_snapshot_in(def, None);
         // The exam definition is persisted with the template revision, without the roster
         // (its own snapshot) and without the page-code secret (§6.4, §19.3).
         let mut public_def = def.clone();
@@ -381,7 +411,11 @@ impl StoreWriter {
             "roster_rows": def.roster.as_ref().map(Vec::len),
             "manifest": manifest,
         });
-        self.project
+        // The exam row keeps the identity mode the exam was created with: a roster given after
+        // grading is recorded by `RosterReplaced` and the identity runs that name its snapshot
+        // (the roster in force), and nothing decides from the row.
+        self.roster_snapshot = self
+            .project
             .decision(|tx| {
                 tx.create_exam(
                     &ExamRecord {
@@ -415,9 +449,10 @@ impl StoreWriter {
                     &template_body,
                     &me,
                 )?;
-                if let Some(r) = &roster {
-                    tx.put_roster_snapshot(r, &me)?;
-                }
+                let roster = match &roster {
+                    Some(r) => Some(tx.put_roster_snapshot(r, &me)?),
+                    None => None,
+                };
                 tx.pin(
                     PinnedKind::GradeScale,
                     &omr_scoring::GradeScale::saudi(),
@@ -440,9 +475,23 @@ impl StoreWriter {
                     },
                     &me,
                 )?;
-                Ok(())
+                Ok(roster)
             })
-            .map_err(store_err)
+            .map_err(store_err)?;
+        Ok(())
+    }
+
+    /// A roster given after grading ([`crate::ExamProject::set_roster`]): its snapshot (the
+    /// roster in force its parent) is recorded by the next run's store stage, in one decision
+    /// with the identity run that uses it, with `RosterReplaced`. A run that stops before its
+    /// store stage records nothing; [`Self::unstage_roster`] drops it.
+    pub fn stage_roster(&mut self, def: &ExamDefinition) {
+        self.staged_roster = roster_snapshot_in(def, self.roster_snapshot.clone());
+    }
+
+    /// Drops a roster staged by [`Self::stage_roster`] (the run that was to record it failed).
+    pub fn unstage_roster(&mut self) {
+        self.staged_roster = None;
     }
 
     /// Stages every original (stage → fsync → link) in parallel; returns BLAKE3 addresses.
@@ -469,7 +518,9 @@ impl StoreWriter {
     }
 
     /// Page rows for every page (bulk lane, ≤ 50 pages per transaction); duplicates and
-    /// unreadable files become CAP-011 / CAP-001 exceptions.
+    /// unreadable files become CAP-011 / CAP-001 exceptions. A page whose row the store holds
+    /// already keeps it, also one spooled by an append that failed or was cancelled after its
+    /// spool: page IDs derive from the content, so adding the same file again adds no row.
     pub fn spool_pages(
         &mut self,
         pages: &[(String, usize, u32, Option<usize>)],
@@ -479,9 +530,21 @@ impl StoreWriter {
         let staged = self.staged.clone();
         let engine = Actor::engine("ingest");
         let batch = self.batch_id.clone();
-        // Pages already spooled by an earlier batch keep their rows.
-        let pages: Vec<&(String, usize, u32, Option<usize>)> =
-            pages.iter().filter(|p| !known.contains(&p.0)).collect();
+        // Pages already spooled keep their rows: an earlier batch's (`known`), and those of a
+        // run that stopped after its spool (they keep that run's batch).
+        let mut spooled = std::collections::BTreeSet::new();
+        for s in staged.iter().flatten() {
+            spooled.extend(
+                self.project
+                    .reader()
+                    .pages_for_object(&s.blake3)
+                    .map_err(store_err)?,
+            );
+        }
+        let pages: Vec<&(String, usize, u32, Option<usize>)> = pages
+            .iter()
+            .filter(|p| !known.contains(&p.0) && !spooled.contains(&p.0))
+            .collect();
         // Objects first.
         self.project
             .bulk(|tx| {
@@ -758,12 +821,36 @@ impl StoreWriter {
         let mut raised: BTreeMap<(usize, String), Vec<i64>> = BTreeMap::new();
         let mut missing: BTreeMap<(usize, usize), Vec<i64>> = BTreeMap::new();
         let mut exam_rows: BTreeMap<(String, Option<String>), Vec<i64>> = BTreeMap::new();
-        self.project
+        // The identity run names the roster it used: a roster given after grading is recorded
+        // here, in the same decision (`RosterReplaced` holds counts and hashes, no student).
+        let staged_roster = self.staged_roster.take();
+        let in_force = self.roster_snapshot.clone();
+        self.roster_snapshot = self
+            .project
             .decision(|tx| {
+                let roster = match &staged_roster {
+                    Some(r) => {
+                        let sha = tx.put_roster_snapshot(r, &me)?;
+                        tx.append_event(&NewEvent::new(
+                            "RosterReplaced",
+                            "exam",
+                            &exam.to_string(),
+                            me.clone(),
+                            json!({
+                                "rows": r.rows.len(),
+                                "sha384": sha,
+                                "previous": r.parent,
+                                "identity_mode": "roster",
+                            }),
+                        ))?;
+                        Some(sha)
+                    }
+                    None => in_force,
+                };
                 tx.create_identity_run(&IdentityRunRecord {
                     run_id: identity_run.clone(),
                     exam_id: exam,
-                    roster_snapshot: None,
+                    roster_snapshot: roster.clone(),
                     models: json!({"grid": "omr-identity"}),
                     thresholds: json!({}),
                 })?;
@@ -812,7 +899,7 @@ impl StoreWriter {
                     tx.put_score_run(&exam, run, &me)?;
                 }
                 tx.close_batch(&batch_id, &me)?;
-                Ok(())
+                Ok(roster)
             })
             .map_err(store_err)?;
         // Key sheets (§10.1) keep their reading in the run too (the confirmed key names their

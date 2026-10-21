@@ -5,7 +5,7 @@
 
 use crate::AppError;
 use crate::app::ExamProject;
-use crate::model::{PageStatus, ResponseStatus};
+use crate::model::{FormSource, PageStatus, ResponseStatus};
 use crate::review::Lane;
 use omr_model::{Response, Severity};
 use omr_report::{
@@ -191,6 +191,55 @@ pub fn review_json(p: &ExamProject) -> Value {
         "resolved": resolved,
         "history": s.review.history,
     })
+}
+
+/// Whether the exports in a folder show the exam as it stands ([`exports_state`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportsState {
+    /// The folder holds no exports of the exam.
+    None,
+    /// They show the exam as it stands.
+    Current,
+    /// They were written before a later change (a decision, the key, the roster): writing the
+    /// exports again updates them.
+    Older,
+}
+
+/// Whether the exports written into `dir` show the exam as it stands: the booklets file they
+/// hold (every answer, its status, every score, grade and student) is compared with the one
+/// they would hold now, so exports the command line wrote count too. Nothing is analysed: it
+/// is cheap enough to ask after every change.
+pub fn exports_state(p: &ExamProject, dir: &Path) -> ExportsState {
+    let Ok((name, now)) = booklets_file(p) else {
+        return ExportsState::Older;
+    };
+    match std::fs::read(dir.join(&name)) {
+        Ok(written) if written == now => ExportsState::Current,
+        Ok(_) => ExportsState::Older,
+        // exports of the other key (an inferred one, or the real one since) are older
+        Err(_) => {
+            let other = if name.contains("-INFERRED") {
+                "booklets.json"
+            } else {
+                "booklets-INFERRED.json"
+            };
+            if dir.join(other).exists() {
+                ExportsState::Older
+            } else {
+                ExportsState::None
+            }
+        }
+    }
+}
+
+/// The booklets file as the exports write it: its name and bytes.
+fn booklets_file(p: &ExamProject) -> Result<(String, Vec<u8>), AppError> {
+    let inferred = p.session.key.as_ref().is_some_and(|k| k.inferred);
+    let sfx = if inferred { "-INFERRED" } else { "" };
+    let mut bk = booklets_json(p);
+    bk["banner"] = json!(inferred.then_some(INFERRED_BANNER));
+    let bytes = serde_json::to_vec_pretty(&bk).map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok((format!("booklets{sfx}.json"), bytes))
 }
 
 /// Per-booklet responses, forms, identity and scores.
@@ -664,6 +713,18 @@ pub fn mask_json(v: &mut Value) {
     }
 }
 
+/// An export file that could not be written, named, with the usual cause and what to do (still
+/// an I/O error, exit code 8): on Windows a file open in Excel is locked against writing.
+fn unwritten(name: &str, e: std::io::Error) -> AppError {
+    AppError::Io(std::io::Error::new(
+        e.kind(),
+        format!(
+            "{name} could not be written ({e}); if it is open in another program, such as \
+             Excel, close it"
+        ),
+    ))
+}
+
 /// Writes every export into `dir`.
 pub fn write_all(p: &ExamProject, dir: &Path) -> Result<ExportSummary, AppError> {
     crate::keys::export_dir(dir)?;
@@ -696,6 +757,21 @@ pub fn write_all(p: &ExamProject, dir: &Path) -> Result<ExportSummary, AppError>
             &students(p),
         )
         .map_err(rep)?;
+        // A sheet scored under the key every version shares declares no version: its form
+        // cell is empty ("version not declared"), never the first version's letter.
+        let shared: std::collections::BTreeSet<u32> = s
+            .booklets
+            .iter()
+            .filter(|b| b.form_source == FormSource::Shared)
+            .map(|b| b.serial)
+            .collect();
+        for r in table
+            .rows
+            .iter_mut()
+            .filter(|r| shared.contains(&r.booklet))
+        {
+            r.form.clear();
+        }
         // Roster students who handed in no sheet: status `absent` (not 0, §10.5), no booklet,
         // no score; never in the Blackboard upload.
         for r in p.absent_students() {
@@ -870,9 +946,7 @@ pub fn write_all(p: &ExamProject, dir: &Path) -> Result<ExportSummary, AppError>
     let mut rq = review_json(p);
     rq["banner"] = json!(inferred.then_some(INFERRED_BANNER));
     files.push((format!("review_queue{sfx}.json"), js(rq)?));
-    let mut bk = booklets_json(p);
-    bk["banner"] = json!(inferred.then_some(INFERRED_BANNER));
-    files.push((format!("booklets{sfx}.json"), js(bk)?));
+    files.push(booklets_file(p)?);
     match blackboard_csv(p, None)? {
         Some(bb) => files.push((BLACKBOARD_FILE.into(), bb)),
         // No upload now (not released, or a later change superseded the release): an upload
@@ -883,12 +957,15 @@ pub fn write_all(p: &ExamProject, dir: &Path) -> Result<ExportSummary, AppError>
     sm["banner"] = json!(inferred.then_some(INFERRED_BANNER));
     files.push((format!("summary{sfx}.json"), js(sm)?));
     let mut manifest = ExportManifest::new(&m, "grades", true);
+    let write = |name: &str, bytes: &[u8]| {
+        crate::keys::write_private(&dir.join(name), bytes).map_err(|e| unwritten(name, e))
+    };
     for (name, bytes) in &files {
-        crate::keys::write_private(&dir.join(name), bytes)?;
+        write(name, bytes)?;
         manifest.add(name, bytes);
     }
     let mbytes = manifest.to_canonical_json();
-    crate::keys::write_private(&dir.join("manifest.json"), &signed_manifest(p, &mbytes)?)?;
+    write("manifest.json", &signed_manifest(p, &mbytes)?)?;
     let mut names: Vec<String> = files.into_iter().map(|(n, _)| n).collect();
     names.push("manifest.json".into());
     Ok(ExportSummary {

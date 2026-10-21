@@ -10,12 +10,18 @@
 //!             [--out DIR] …                  grades in the background, live on the Scan screen
 //! any of these + --screenshot <dir> [--theme light|dark] [--size WxH] [--shots a,b]
 //!             [--remark <graded.xlsx… | folder>] [--remark-setup <…>]   the Remark screens
+//!             [--new-exam <scans folder>]    the New-exam card made from an exam's files
 //! ```
 //!
 //! The generated UI code lives in the library (`shell_slint::ui`, the audited R6 exception);
 //! this binary has no generated code, so it forbids unsafe code outright. File reads of the
-//! definition inputs and the grading worker thread live here (rule R4: binaries may).
+//! definition inputs, the grading worker thread and everything the window asks of the operating
+//! system (native file dialogs, the file manager, the preferences file) live here (rule R4:
+//! binaries may); the library only describes them (`shell_slint::host`).
 #![forbid(unsafe_code)]
+// Windows release builds are GUI programs: no console window opens behind the app. Messages a
+// user must see also go to a small window (`tell`); debug builds keep the console.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 use omr_app::GradeOptions;
 use omr_app::define;
@@ -24,17 +30,19 @@ use shell_slint::app_backend::{AppBackend, GradeRequest, JobEvent, Spawn, run_gr
 use shell_slint::backend::Backend;
 use shell_slint::bind::Shell;
 use shell_slint::demo::DemoBackend;
+use shell_slint::host::{Host, Pick, PickKind, PickRequest, Prefs};
 use shell_slint::screenshot;
 use shell_slint::ui::{AppWindow, Page, Theme};
 use slint::ComponentHandle;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{ExitCode, Stdio};
 use std::rc::Rc;
 
 const USAGE: &str = "usage: omr-desktop [--demo | --project <dir> | --workspace <dir> | --grade <scans…> GRADE]
                    [--operator <name>] [--theme light|dark]
-                   [--screenshot <dir> [--size WxH] [--shots name,name] [--remark <xlsx…>]]
+                   [--screenshot <dir> [--size WxH] [--shots name,name] [--remark <xlsx…>]
+                    [--new-exam <scans folder>]]
   (no source)          the workspace used last time, else ~/OMR Exams (created, private)
   --demo               invented demo data, with a banner (nothing is read or written; the
                        default of --screenshot)
@@ -46,13 +54,17 @@ const USAGE: &str = "usage: omr-desktop [--demo | --project <dir> | --workspace 
          [--title T] [--course C] [--term T] [--cancel-mode erase_only|cross_cancels|fill_cancels_check]
          [--multi-review never|always|high_stakes] [--high-stakes] [--id-scheme iau|pnu|ksu|digits:N]
          [--out DIR] (default: a new folder named after the course and title) [--threads N]
-  --operator <name>    reviewer recorded in the audit events (default: $USER)
+  --operator <name>    reviewer recorded in the audit events (default: the name saved in
+                       Settings, else $USER)
   --screenshot <dir>   render every screen headlessly (software renderer, 1440x900) to PNGs
   --size <WxH>         screenshot window size, e.g. 1280x800 (the smallest supported)
   --shots <names>      only these screens, e.g. review,results
   --remark <xlsx…>     Remark's graded workbooks (files or a folder) for the Remark screens:
                        exams-remark, setup-remark, results-remark (real exams only)
   --remark-setup <xlsx…>  other workbooks for setup-remark (the first exam they apply to)
+  --new-exam <scans>   the scans folder of an exam to grade, with key.csv, roster.csv and
+                       clo.csv beside it, for the New-exam card: exams-new-ask,
+                       exams-new-ready (real exams only; --id-scheme is typed on the ready card)
   --theme <t>          light or dark (screenshots: both when omitted)";
 
 #[derive(Default)]
@@ -99,6 +111,11 @@ struct Args {
     remark: Vec<PathBuf>,
     /// `--remark-setup`: the workbooks for Setup's import shot (the first exam they apply to).
     remark_setup: Vec<PathBuf>,
+    /// `--new-exam`: the scans folder of an exam to grade (its files beside it), for the
+    /// New-exam card's screenshots.
+    new_exam: Option<PathBuf>,
+    /// `--id-scheme` with `--new-exam`: typed on the ready card.
+    card_id_scheme: String,
     /// `--workspace` given together with `--grade`: list it beside the new exam.
     workspace: Option<PathBuf>,
 }
@@ -120,6 +137,8 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Args, String> {
         shots: None,
         remark: Vec::new(),
         remark_setup: Vec::new(),
+        new_exam: None,
+        card_id_scheme: String::new(),
         workspace: None,
     };
     let mut g = Grade::default();
@@ -232,6 +251,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Args, String> {
                     ));
                 }
             }
+            "--new-exam" => out.new_exam = Some(value("--new-exam")?.into()),
             "-h" | "--help" => return Err(String::new()),
             other => return Err(format!("unknown argument {other:?}")),
         }
@@ -240,6 +260,9 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Args, String> {
         return Err(
             "give one of --demo, --project or --grade (--workspace may join --grade)".into(),
         );
+    }
+    if out.new_exam.is_some() && !grading {
+        out.card_id_scheme = g.id_scheme.clone().unwrap_or_default();
     }
     if grading {
         out.source = Source::Grade(Box::new(g));
@@ -299,18 +322,33 @@ fn out_dir(g: &Grade, d: &ExamDefinition, workspace: Option<&Path>) -> Result<Pa
     Ok(define::new_exam_dir(&base, d))
 }
 
-fn operator(a: &Args) -> String {
-    let name = a
-        .operator
-        .clone()
-        .or_else(|| std::env::var("USER").ok())
-        .filter(|n| !n.trim().is_empty())
-        .unwrap_or_else(|| "operator".into());
-    if name.starts_with("principal:") {
-        name
-    } else {
-        format!("principal:{name}")
+/// The principal recorded in the audit trail: `--operator`, else the name saved in Settings,
+/// else the system's user name (`USER`; Windows sets `USERNAME`), else "operator". The core
+/// validates each (`omr_app::app::operator_principal`): a bad `--operator` is refused, a saved
+/// or system name that is no valid name is passed over.
+fn operator_principal(
+    flag: Option<&str>,
+    saved: Option<&str>,
+    user: Option<String>,
+    username: Option<String>,
+) -> Result<String, String> {
+    if let Some(f) = flag {
+        return omr_app::app::operator_principal(f).map_err(|e| format!("--operator: {e}"));
     }
+    Ok([saved.map(str::to_string), user, username]
+        .into_iter()
+        .flatten()
+        .find_map(|n| omr_app::app::operator_principal(&n).ok())
+        .unwrap_or_else(|| "principal:operator".to_string()))
+}
+
+fn operator(a: &Args, prefs: &Prefs) -> Result<String, String> {
+    operator_principal(
+        a.operator.as_deref(),
+        prefs.operator.as_deref(),
+        std::env::var("USER").ok(),
+        std::env::var("USERNAME").ok(),
+    )
 }
 
 enum Built {
@@ -343,34 +381,44 @@ fn app(mut backend: AppBackend) -> Built {
     Built::App(Rc::new(RefCell::new(backend)))
 }
 
-/// The desktop's own settings file (the last workspace), in the private data folder.
+/// The desktop's own preferences file (the last workspace, the folders the file dialogs opened
+/// last, …), in the private data folder.
 fn settings_file() -> Option<PathBuf> {
     omr_app::keys::key_dir().map(|d| d.join("desktop.json"))
 }
 
-/// The workspace opened last time, if it still exists.
-fn last_workspace() -> Option<PathBuf> {
-    let v: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(settings_file()?).ok()?).ok()?;
-    Some(PathBuf::from(v["workspace"].as_str()?)).filter(|w| w.is_dir())
+/// The preferences saved last time; the defaults when there are none or they are unreadable.
+fn load_prefs() -> Prefs {
+    settings_file()
+        .and_then(|f| std::fs::read(f).ok())
+        .map(|b| Prefs::from_json(&b))
+        .unwrap_or_default()
 }
 
-/// Remembers `w` as the workspace to open next time (best effort).
-fn remember_workspace(w: &Path) {
-    let (Some(f), Ok(abs)) = (settings_file(), std::path::absolute(w)) else {
+/// Saves the preferences, readable by the user only (best effort).
+fn save_prefs(p: &Prefs) {
+    let Some(f) = settings_file() else {
         return;
     };
     if let Some(d) = f.parent() {
         let _ = omr_app::keys::create_private_dir(d);
     }
-    let body = serde_json::json!({ "workspace": abs.to_string_lossy() });
-    let _ = omr_app::keys::write_private(&f, body.to_string().as_bytes());
+    let _ = omr_app::keys::write_private(&f, &p.to_json());
 }
 
-/// The workspace of a launch without a source: the last one, else `~/OMR Exams` (created
-/// private to the user: it will hold Restricted data).
-fn default_workspace() -> Result<PathBuf, String> {
-    if let Some(w) = last_workspace() {
+/// Remembers `w` as the workspace to open next time (best effort).
+fn remember_workspace(prefs: &mut Prefs, w: &Path) {
+    let Ok(abs) = std::path::absolute(w) else {
+        return;
+    };
+    prefs.remember_workspace(abs);
+    save_prefs(prefs);
+}
+
+/// The workspace of a launch without a source: the last one if it still exists, else
+/// `~/OMR Exams` (created private to the user: it will hold Restricted data).
+fn default_workspace(prefs: &Prefs) -> Result<PathBuf, String> {
+    if let Some(w) = prefs.workspace.clone().filter(|w| w.is_dir()) {
         return Ok(w);
     }
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
@@ -386,8 +434,8 @@ fn default_workspace() -> Result<PathBuf, String> {
     Ok(w)
 }
 
-fn backend(a: &Args) -> Result<(Built, bool), String> {
-    let op = operator(a);
+fn backend(a: &Args, prefs: &mut Prefs) -> Result<(Built, bool), String> {
+    let op = operator(a, prefs)?;
     Ok(match &a.source {
         Source::Demo => (
             Built::Demo(Rc::new(RefCell::new(DemoBackend::new()))),
@@ -399,13 +447,13 @@ fn backend(a: &Args) -> Result<(Built, bool), String> {
                 .parent()
                 .and_then(Path::parent)
             {
-                remember_workspace(w);
+                remember_workspace(prefs, w);
             }
             (app(b), false)
         }
         Source::Default => {
-            let w = default_workspace()?;
-            remember_workspace(&w);
+            let w = default_workspace(prefs)?;
+            remember_workspace(prefs, &w);
             (app(AppBackend::workspace(&w, &op)), false)
         }
         Source::Workspace(w) => {
@@ -415,7 +463,7 @@ fn backend(a: &Args) -> Result<(Built, bool), String> {
                     w.display()
                 ));
             }
-            remember_workspace(w);
+            remember_workspace(prefs, w);
             (app(AppBackend::workspace(w, &op)), false)
         }
         Source::Grade(g) => {
@@ -423,6 +471,7 @@ fn backend(a: &Args) -> Result<(Built, bool), String> {
             let out = out_dir(g, &def, a.workspace.as_deref())?;
             std::fs::create_dir_all(&out)
                 .map_err(|e| format!("{}: {e}; give a writable --out folder", out.display()))?;
+            let cancel = omr_app::Cancel::default();
             let req = GradeRequest {
                 definition: def.clone(),
                 inputs: g.inputs.clone(),
@@ -433,7 +482,10 @@ fn backend(a: &Args) -> Result<(Built, bool), String> {
                     snapshot_utc: None,
                     operator: op.clone(),
                     max_pages: None,
+                    cancel: cancel.clone(),
                 },
+                // as `omr grade --out` writes them, unless Settings switched them off
+                export_to: prefs.auto_export.then(|| out.clone()),
             };
             let (tx, rx) = std::sync::mpsc::channel::<JobEvent>();
             std::thread::Builder::new()
@@ -441,46 +493,84 @@ fn backend(a: &Args) -> Result<(Built, bool), String> {
                 .spawn(move || run_grading(req, tx))
                 .map_err(|e| format!("cannot start the grading worker: {e}"))?;
             (
-                app(AppBackend::grading(&def, rx, a.workspace.as_deref(), &op)),
+                app(AppBackend::grading(
+                    &def,
+                    rx,
+                    cancel,
+                    a.workspace.as_deref(),
+                    &op,
+                )),
                 true,
             )
         }
     })
 }
 
+/// Prints `text` to stderr and, in a Windows release build (no console), also shows it in a
+/// window, so a user who started Mizan from the Start menu or Explorer sees why it stopped.
+/// When no window of the app can open (often the very reason it stopped), the system's own
+/// message box shows it.
+fn tell(heading: &str, text: &str) {
+    eprintln!("{text}");
+    if cfg!(all(windows, not(debug_assertions))) {
+        let Ok(w) = shell_slint::ui::ErrorWindow::new() else {
+            rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Error)
+                .set_title(heading)
+                .set_description(text)
+                .set_buttons(rfd::MessageButtons::Ok)
+                .show();
+            return;
+        };
+        w.set_heading(heading.into());
+        w.set_message(text.into());
+        let weak = w.as_weak();
+        w.on_close(move || {
+            if let Some(w) = weak.upgrade() {
+                let _ = w.hide();
+            }
+        });
+        let _ = w.run();
+    }
+}
+
 fn main() -> ExitCode {
     let args = match parse(std::env::args().skip(1)) {
         Ok(a) => a,
+        Err(e) if e.is_empty() => {
+            tell("Mizan", USAGE);
+            return ExitCode::SUCCESS;
+        }
         Err(e) => {
-            if !e.is_empty() {
-                eprintln!("omr-desktop: {e}");
-            }
-            eprintln!("{USAGE}");
-            return if e.is_empty() {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(2)
-            };
+            tell(
+                "Mizan cannot start",
+                &format!("omr-desktop: {e}\n\n{USAGE}"),
+            );
+            return ExitCode::from(2);
         }
     };
-    let (built, live) = match backend(&args) {
+    let mut prefs = load_prefs();
+    let (built, live) = match backend(&args, &mut prefs) {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("omr-desktop: {e}");
+            tell("Mizan cannot start", &format!("omr-desktop: {e}"));
             return ExitCode::FAILURE;
         }
     };
     if let Some(dir) = &args.screenshot {
         return screenshots(&args, dir, &built);
     }
-    match run_windowed(args.theme.unwrap_or(false), built.dynamic(), live) {
+    match run_windowed(args.theme, built.dynamic(), live, prefs) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             // R10: the windowing system is missing (no display, no X11 or Wayland session)
-            eprintln!(
-                "omr-desktop: cannot open a window ({e}). Run omr-desktop from a desktop \
-                 session (Windows, macOS, or Linux with X11 or Wayland); on a server, render the \
-                 screens to PNG files with --screenshot DIR, or use the `omr` command line"
+            tell(
+                "Mizan cannot start",
+                &format!(
+                    "omr-desktop: cannot open a window ({e}). Run omr-desktop from a desktop \
+                     session (Windows, macOS, or Linux with X11 or Wayland); on a server, render \
+                     the screens to PNG files with --screenshot DIR, or use the `omr` command line"
+                ),
             );
             ExitCode::FAILURE
         }
@@ -510,11 +600,34 @@ fn screenshots(args: &Args, dir: &Path, built: &Built) -> ExitCode {
             if !args.remark.is_empty() {
                 shots.extend(screenshot::remark_shots());
             }
+            if args.new_exam.is_some() {
+                shots.extend(screenshot::card_shots());
+            }
+            // the run that ended says so
+            if matches!(args.source, Source::Grade(_)) {
+                shots.push(screenshot::notice_shot());
+            }
             shots
         }
     };
-    let remark = match (workbooks(&args.remark), workbooks(&args.remark_setup)) {
-        (Ok(workbooks), Ok(setup)) => screenshot::RemarkFiles { workbooks, setup },
+    let card = match args
+        .new_exam
+        .as_deref()
+        .map(|d| card_files(d, &args.card_id_scheme))
+        .transpose()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("omr-desktop: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let files = match (workbooks(&args.remark), workbooks(&args.remark_setup)) {
+        (Ok(workbooks), Ok(setup)) => screenshot::ShotFiles {
+            workbooks,
+            setup,
+            card,
+        },
         (Err(e), _) | (_, Err(e)) => {
             eprintln!("omr-desktop: {e}");
             return ExitCode::FAILURE;
@@ -527,7 +640,7 @@ fn screenshots(args: &Args, dir: &Path, built: &Built) -> ExitCode {
         built.dynamic(),
         &shots,
         args.shots.as_deref(),
-        &remark,
+        &files,
     ) {
         Ok(paths) => {
             for p in paths {
@@ -572,17 +685,183 @@ fn workbooks(given: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     Ok(out)
 }
 
+/// The files of `--new-exam <scans folder>`: the folder, and `key.csv`, `roster.csv` and
+/// `clo.csv` beside it; `id_scheme` is typed on the ready card.
+fn card_files(scans: &Path, id_scheme: &str) -> Result<screenshot::CardFiles, String> {
+    let beside = scans.parent().unwrap_or(Path::new("."));
+    let files = screenshot::CardFiles {
+        scans: vec![scans.to_path_buf()],
+        key: beside.join("key.csv"),
+        roster: beside.join("roster.csv"),
+        clo: beside.join("clo.csv"),
+        id_scheme: id_scheme.to_string(),
+    };
+    for f in [scans, &files.key, &files.roster, &files.clo] {
+        if !f.exists() {
+            return Err(format!(
+                "{}: not found; --new-exam takes a folder of scans with key.csv, roster.csv \
+                 and clo.csv beside it",
+                f.display()
+            ));
+        }
+    }
+    Ok(files)
+}
+
+/// Opens a native file dialog, parented to the main window, and answers on the UI thread when
+/// it closes. The dialog runs on a thread of its own (on Windows and through the desktop
+/// portal), so the window keeps painting meanwhile.
+fn picker(ui: &AppWindow) -> Pick {
+    let weak = ui.as_weak();
+    Rc::new(move |req: PickRequest, done| {
+        let kind = req.kind;
+        let mut d = rfd::AsyncFileDialog::new().set_title(req.title.as_str());
+        if let Some(start) = req.start.as_deref().filter(|s| s.is_dir()) {
+            d = d.set_directory(start);
+        }
+        for (name, extensions) in &req.filters {
+            d = d.add_filter(name.as_str(), extensions);
+        }
+        if let Some(ui) = weak.upgrade() {
+            d = d.set_parent(&ui.window().window_handle());
+        }
+        let dialog = async move {
+            let picked = match kind {
+                PickKind::File => d.pick_file().await.map(|f| vec![f]),
+                PickKind::Files => d.pick_files().await,
+                PickKind::Folder => d.pick_folder().await.map(|f| vec![f]),
+            };
+            done(picked.map(|v| v.into_iter().map(|f| f.path().to_path_buf()).collect()));
+        };
+        // without an event loop there is no dialog: the answer is dropped unanswered, which the
+        // shell takes as nothing picked
+        let _ = slint::spawn_local(dialog);
+    })
+}
+
+/// Shows `dir`, an existing folder, in the system's file manager. Never a file: the file
+/// manager would open it, or run it.
+fn reveal(dir: &Path) -> Result<(), String> {
+    if !dir.is_dir() {
+        return Err(format!("{}: no such folder", dir.display()));
+    }
+    let dir = std::path::absolute(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let program = if cfg!(windows) {
+        // by its full path, never looked up on PATH (its exit code is 1 even when it worked)
+        let root = std::env::var_os("SystemRoot")
+            .filter(|r| !r.is_empty())
+            .ok_or("cannot find Windows Explorer (SystemRoot is not set)")?;
+        PathBuf::from(root).join("explorer.exe")
+    } else if cfg!(target_os = "macos") {
+        PathBuf::from("open")
+    } else {
+        PathBuf::from("xdg-open")
+    };
+    let mut child = std::process::Command::new(program)
+        .arg(&dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("cannot open the file manager ({e})"))?;
+    // waited for on a thread of its own, so no finished process is left behind
+    std::thread::Builder::new()
+        .name("omr-reveal".into())
+        .spawn(move || {
+            let _ = child.wait();
+        })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// What the window may ask of the operating system: file dialogs, the file manager, and saving
+/// the preferences.
+fn host(ui: &AppWindow, prefs: Prefs) -> Host {
+    Host {
+        pick: Some(picker(ui)),
+        reveal: Some(Rc::new(reveal)),
+        save_prefs: Some(Rc::new(save_prefs)),
+        prefs,
+    }
+}
+
+/// How long the closed window waits for a background run that is still going to end.
+const WIND_DOWN: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Runs the window until it is closed; then a run still going is ended (cancelled, or saved
+/// whole) and every exam open is saved and closed (each writes its signed checkpoint). `theme` is `--theme` (dark when true), which wins over the theme
+/// saved in Settings.
 fn run_windowed(
-    dark: bool,
+    theme: Option<bool>,
     backend: Rc<RefCell<dyn Backend>>,
     live: bool,
+    prefs: Prefs,
 ) -> Result<(), slint::PlatformError> {
     let ui = AppWindow::new()?;
-    ui.global::<Theme>().set_dark(dark);
-    let shell = Shell::bind(&ui, backend);
+    // the Wayland app id and X11 class, matched by packaging/linux/mizan.desktop (its icon)
+    let _ = slint::set_xdg_app_id("mizan");
+    let shell = Shell::bind(&ui, backend.clone());
+    // the saved preferences apply first (the theme among them), the flags after
+    shell.set_host(host(&ui, prefs));
+    if let Some(dark) = theme {
+        ui.global::<Theme>().set_dark(dark);
+    }
     if live {
         shell.navigate(Page::Scan);
     }
     shell.start_live_updates();
-    ui.run()
+    let ran = ui.run();
+    // the window waits for a run to stop before it closes; should the event loop end anyway
+    // (the system logs out), the run still ends here, cancelled or saved whole
+    if !shell_slint::backend::wind_down(&backend, WIND_DOWN) {
+        eprintln!("omr-desktop: a background run did not stop in time");
+    }
+    for e in backend.borrow_mut().close_all() {
+        eprintln!("omr-desktop: not saved and closed properly: {e}");
+    }
+    ran
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operator_precedence() {
+        let name = |flag: Option<&str>,
+                    saved: Option<&str>,
+                    user: Option<&str>,
+                    username: Option<&str>| {
+            operator_principal(flag, saved, user.map(Into::into), username.map(Into::into))
+        };
+        let all = (
+            Some("Flag Name"),
+            Some("Saved Name"),
+            Some("user"),
+            Some("username"),
+        );
+        assert_eq!(
+            name(all.0, all.1, all.2, all.3).unwrap(),
+            "principal:Flag Name"
+        );
+        assert_eq!(
+            name(Some("principal:a11-instructor"), None, None, None).unwrap(),
+            "principal:a11-instructor",
+            "a principal is taken as its name"
+        );
+        assert_eq!(
+            name(None, all.1, all.2, all.3).unwrap(),
+            "principal:Saved Name"
+        );
+        assert_eq!(name(None, None, all.2, all.3).unwrap(), "principal:user");
+        assert_eq!(name(None, None, None, all.3).unwrap(), "principal:username");
+        assert_eq!(name(None, None, None, None).unwrap(), "principal:operator");
+        // a saved or system name that is no valid name is passed over; a bad flag is refused
+        assert_eq!(
+            name(None, Some("bad: name"), Some(""), all.3).unwrap(),
+            "principal:username"
+        );
+        let e = name(Some("a:b"), all.1, all.2, all.3).unwrap_err();
+        assert!(e.starts_with("--operator: ") && e.contains("colon"), "{e}");
+    }
 }

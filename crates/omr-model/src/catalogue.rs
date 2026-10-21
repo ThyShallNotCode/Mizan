@@ -371,7 +371,7 @@ pub const CATALOGUE: &[ExceptionDef] = &[
     ExceptionDef {
         code: "SCO-005",
         title: "Form not identified by code, or near-chance under every key",
-        severities: &[Severity::Error],
+        severities: &[Severity::Error, Severity::Info],
         scopes: &[Scope::Booklet],
         owner: "§10.3",
     },

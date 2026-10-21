@@ -71,6 +71,9 @@ pub struct ExamSummary {
     pub open_exceptions: SeverityCounts,
     /// e.g. "Key v1 · INFERRED".
     pub key_status: String,
+    /// A key is in force: supplied or confirmed, neither inferred nor waiting for its
+    /// confirmation.
+    pub key_in_force: bool,
     /// Items with an approved CLO mapping.
     pub mapped_items: u32,
     /// Items.
@@ -202,14 +205,17 @@ pub struct BatchProgress {
     pub floor_pages_per_sec: f64,
     /// Gauge maximum.
     pub max_pages_per_sec: f64,
-    /// Share of questions auto-accepted.
-    pub auto_accepted: f64,
-    /// Abstention rate.
-    pub abstention_rate: f64,
-    /// Time to the first result.
-    pub first_result: Duration,
-    /// Remaining (estimate).
-    pub remaining: Duration,
+    /// Share of questions auto-accepted; `None` while no question has been read (never an
+    /// invented 100 %).
+    pub auto_accepted: Option<f64>,
+    /// Abstention rate; `None` while no question has been read.
+    pub abstention_rate: Option<f64>,
+    /// Time to the first result; `None` until the first page is read.
+    pub first_result: Option<Duration>,
+    /// Remaining (estimate); `None` while no page rate is known.
+    pub remaining: Option<Duration>,
+    /// What the run does now ("reading inputs", "page stage", "identity", "finished").
+    pub stage: String,
     /// In flight.
     pub in_flight: u32,
     /// Queued.
@@ -302,11 +308,7 @@ impl ProgressTracker {
             .map(|((c, s), n)| (c.clone(), *s, *n))
             .collect();
         exceptions.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(a.0.cmp(&b.0)));
-        let ar = if self.questions == 0 {
-            0.0
-        } else {
-            1.0 - self.auto as f64 / self.questions as f64
-        };
+        let ar = (self.questions > 0).then(|| 1.0 - self.auto as f64 / self.questions as f64);
         BatchProgress {
             batch_label: "Batch 1 of 1".into(),
             source: "file import".into(),
@@ -316,13 +318,15 @@ impl ProgressTracker {
             pages_per_sec: pps,
             floor_pages_per_sec: 40.0,
             max_pages_per_sec: 120.0,
-            auto_accepted: 1.0 - ar,
+            auto_accepted: ar.map(|ar| 1.0 - ar),
             abstention_rate: ar,
-            first_result: Duration::from_secs_f64(self.first_ms.unwrap_or(0.0) / 1e3),
-            remaining: if pps > 0.0 {
-                Duration::from_secs_f64(f64::from(left) / pps)
+            first_result: self.first_ms.map(|ms| Duration::from_secs_f64(ms / 1e3)),
+            remaining: (pps > 0.0).then(|| Duration::from_secs_f64(f64::from(left) / pps)),
+            // before Started the run reads and stores its inputs
+            stage: if self.stage.is_empty() {
+                "reading inputs".into()
             } else {
-                Duration::ZERO
+                self.stage.clone()
             },
             in_flight: left.min(self.workers),
             queued: left.saturating_sub(self.workers),
@@ -736,6 +740,7 @@ impl ExamProject {
                 .map_or(s.booklets.len() as u32, |r| r.len() as u32),
             open_exceptions: oc,
             key_status: key_label(self),
+            key_in_force: s.key.as_ref().is_some_and(|k| !k.inferred) && !s.key_unconfirmed(),
             mapped_items: def.outcomes.as_ref().map_or(0, |o| {
                 let mut q: Vec<u16> = o.mapping.iter().map(|m| m.question).collect();
                 q.sort_unstable();
@@ -1311,7 +1316,7 @@ impl ExamProject {
         readiness.push((
             !s.flags.computing() && miskeys == 0,
             if s.flags.computing() {
-                "Mis-key check (§12.2 flag stability): computing…".into()
+                "Mis-key check: computing…".into()
             } else {
                 format!("{miskeys} probable mis-keys (SCO-001) to decide")
             },
@@ -1365,7 +1370,12 @@ impl ExamProject {
 
     /// Outcomes screen.
     pub fn outcomes_vm(&self) -> Option<Outcomes> {
-        let o = self.outcomes()?;
+        Some(Self::outcomes_view(&self.outcomes()?))
+    }
+
+    /// The Outcomes screen of a computed outcome report ([`Self::outcomes`]): for a shell that
+    /// shows the report as well, which then computes it once (the costly part).
+    pub fn outcomes_view(o: &crate::outcomes::OutcomeReport) -> Outcomes {
         let clos = o
             .result
             .clos
@@ -1402,14 +1412,14 @@ impl ExamProject {
                     })
                 })
                 .collect();
-        Some(Outcomes {
+        Outcomes {
             method: o.policy.class_method.name().into(),
             tau: f(&o.policy.tau),
             target: f(&o.policy.target),
             clos,
             tp154_b1,
             classification: "Restricted · مقيد".into(),
-        })
+        }
     }
 
     /// One booklet's responses as text (CLI and tests).

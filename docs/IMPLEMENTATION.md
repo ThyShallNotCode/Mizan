@@ -75,10 +75,10 @@ expectation tied to the real exams out of the repository.
 - Image ingest (JPEG/PNG/TIFF) and PDF image-XObject extraction (§7.3).
 - The recognition pipeline (§8.2–§8.8), classical cascade (see the deferred list for the CNN).
 - Bubbled-ID identity with roster reconciliation (§9.2, §9.5–§9.6, Saudi rules).
-- Scoring (§10.1–§10.6), with key sources: a key file, an inferred key (never releasable) and
-  teacher-filled key sheets (§10.1: read by the same recognizer, named with `--key-sheet` or
-  found in the stack by their marker student number, held until the instructor confirms the
-  rendered key summary).
+- Scoring (§10.1–§10.6), with key sources: a key file, an inferred key (not releasable until the
+  real key replaces it) and teacher-filled key sheets (§10.1: read by the same recognizer, named
+  with `--key-sheet` or found in the stack by their marker student number, held until the
+  instructor confirms the rendered key summary).
 - CLO engine (§11.1–§11.4, §11.7 tables).
 - CTT item analysis (§12.1–§12.2) with flag stability (§12.2–§12.3: bootstrap shares and
   percentile CIs of r_ir below N = 1,000, Fisher-z above); a probable mis-key at normal
@@ -96,8 +96,41 @@ expectation tied to the real exams out of the repository.
   its head-to-head figures stay inside the university). Remark's binary formats are never read.
 - CSV/XLSX/HTML exports (§16.3, §17), listed in a manifest signed with the device key; the release step (§13.4: `ResultsReleased`, superseded by any later change) gates the Blackboard grade-center upload.
 - The end-to-end pipeline in `omr-app` with rayon parallelism.
+- The New-exam proposal (G-3): a survey of the scans before the exam is defined (one
+  recognition pass in memory under a definition that reads every printed row, version and key
+  sheet; counts only, no student number; `omr_app::survey`) and a proposal of every value of
+  the definition from the evidence, each with its source, that asks when the evidence
+  disagrees and gives `define` inputs only when nothing is left to ask (`omr_app::propose`,
+  `omr survey`). Its thresholds are untuned (one `Thresholds` struct).
 - The `omr` CLI.
-- The Slint desktop shell (§5.2): an exams folder by default (demo data only with `--demo`, marked on every screen), a New-exam form that grades a folder of scans, setup with key replacement, live import and added batches, the review queue, results with release and exports, and outcomes.
+- The Slint desktop shell (§5.2): an exams folder by default (demo data only with `--demo`, marked on every screen), a New-exam card that checks the scans, proposes every value with its source, asks when the evidence disagrees and grades exactly what it shows, setup with key replacement, live import and added batches, the review queue, results with release and exports, and outcomes.
+  - File dialogs on every path field (Browse…, and Folder… for scans): native dialogs from the
+    binary through `rfd` 0.17.2 (MIT; with `pollster` 0.4, Apache-2.0/MIT; no GTK: the XDG
+    desktop portal over D-Bus on Linux, zenity as its fallback), parented to the window. The
+    library only describes each dialog (`shell_slint::host`); picked paths are used exactly
+    while the field shows them, so a `;` in a file name stays intact. The preferences file
+    (`desktop.json`, schema version 1) also keeps the folder each kind of dialog opened last.
+  - Exams folders: another folder (or one exam's folder) opened from the Exams screen or
+    Settings, the folder read again (F5), the exams open saved and closed on a switch and when
+    the window closes, an exam's folder and its exports shown in the file manager (Explorer,
+    `xdg-open`, `open`). Settings keeps the operator's name (validated in `omr-app`, recorded
+    from then on), the theme and the review settings for the next start.
+  - After a run (G-3 D6–D8): grading, an added batch and a roster given in Setup (step 4,
+    `ExamProject::set_roster` on a worker, the file read and checked first) write the exports
+    on their worker as `omr grade` does (Settings: *Write exports after grading*, on by
+    default; a key read from key sheets holds them until it is confirmed), and a notice on
+    every screen says how the run ended with its next steps (review, results, the exports
+    folder, confirming or replacing the key, the card again), in room every screen gives up
+    for it; once a decision or a key change follows, the notice and Results' Export… say the
+    exports are older (`omr_app::export::exports_state` compares what they hold with what they
+    would hold now). A new exam's grading is
+    cancelled from the Scan screen after a confirmation (`omr_app::Cancel`: nothing is
+    saved, no folder is left); closing the window while a run is in progress asks first, and
+    a cancelled run is waited for before the window closes.
+  - Driven as a user drives it, with real pointer clicks and typed keys through a fake host
+    (`crates/shell-slint/tests/req_gui_workflow.rs`), on synthetic exams; the screenshots of
+    the workflow (the New-exam card with a question and ready, the completion notice, an empty
+    exams folder, Settings) are in `docs/design/screens/real/`.
 
 **Deferred, with the spec section that owns each:**
 - The CNN/conformal stage of the cascade (§8.7 steps 3–6); the MVP uses calibrated classical features plus hysteresis.
@@ -105,13 +138,11 @@ expectation tied to the real exams out of the repository.
 - Typst rendering (§6.2): the MVP renders through SVG behind the same API.
 - TWAIN/eSCL capture agents (§7.1) and hot-folder watching; the MVP imports files and folders (`omr grade`, `omr add`, the desktop's New exam and Add scans).
 - SVG and PNG sheet output (§6.2); `omr sheet render` writes PDF.
-- Packaging, installers and the macOS build (§24). The desktop app has run headless (testing backend and software-rendered screenshots), never in a real window.
+- Packaging, installers and the macOS build (§24). The desktop app has run headless (testing backend and software-rendered screenshots), never in a real window: its native file dialogs (the Windows dialog, the XDG desktop portal, zenity), the file manager it opens and the startup message box have never been shown either (the tests drive a fake host). Built so far: the app icon and version resource in both Windows executables (`omr-winres`, no resource compiler), a GUI-subsystem release build of `omr-desktop.exe` that shows startup errors in a window instead of a console (the system's message box when no window of the app can open), the operator name from `USERNAME` on Windows, and a Linux desktop entry with its icon in the release archive.
 - The Windows platform layer. Windows is built and tested in CI on Windows Server 2025 (MSVC), but these are deferred:
   - the §14.2 Windows signals (`GetDriveTypeW`, the file-system type, Cloud Files sync roots, which include OneDrive Known Folder Move);
   - owner-only ACLs (§19.3);
   - keys protected with DPAPI in the local, not roaming, profile (§19.2);
-  - the audit principal from `USERNAME`;
-  - a GUI-subsystem desktop app with a native error dialog;
   - cross-OS decision identity through a pure-Rust `libm` (§9.4);
   - path identity by canonical path (the exam registry compares `std::path::absolute` forms, so another case or an 8.3 short name of the same folder counts as another project).
 - The C runtime: the executables link it statically (`.cargo/config.toml`, `+crt-static`) instead of the app-local MSVC runtime of §24.1 and §22.6 row 15; the MSI work (§24.1) settles which one ships.
@@ -138,6 +169,69 @@ expectation tied to the real exams out of the repository.
   every answer on a photographed **student** sheet goes to review (MRK-001
   `uncalibrated_capture`), and key-sheet photos are confirmed by the instructor as every key
   sheet is.
+- Parts of the version and key backstops (§10.3; built: undeclared versions held, identical
+  versions scored under the shared key, key answers beyond the count named, own sheets' cancel
+  mode from the spec, labelled keys never copied, group confirmation only by 10 nats):
+  - students' rows beyond the question count (G-3 design, G4): the recognizer decides only
+    the exam's rows of a student's sheet, so answers past a count typed too low are not seen
+    there (key files and key sheets name theirs; the New-exam survey covers the desktop);
+  - SCO-005 `near_chance` stays a score-run notice, not a review item (an owner decision, G6);
+  - a batch MRK-018 for confident marks below the last question on many sheets (Fable E5);
+  - reusing the survey's page measurements for the grade (each pass reads the pages);
+  - `omr grade` keeps its defaults (`--cancel-mode erase_only`, versions A,B without a key
+    file that names them) and does not take them from the proposal (`omr survey` prints them):
+    the desktop takes an own sheet's cancel mode from its spec;
+  - the desktop's New-exam card (G-3 D5) takes the sheet and the student-number scheme as
+    typed text (checked by the proposal), not from lists (the cancel mode is the sheet's;
+    second review is chosen from its three choices); a survey it
+    stops or replaces runs to its next stage before it ends; `omr-desktop --grade` defines the
+    exam from its flags, as `omr grade` does, without the card;
+  - the setup's provenance (each value with its source, `ExamDefinition::provenance`) is
+    recorded only for exams defined from a proposal; the survey's own counts are not stored;
+  - `omr grade --key` and `omr key replace` read headerless key rows that start with a letter
+    by the question count (a row as long as the count holds answers alone, else its first
+    cell is its version); the New-exam proposal asks when the count allows both readings and
+    gives the definition the one it shows (`Inputs::key_rows_labelled`);
+  - the proposal's note on sheets without a version follows the key file's shape: a key with
+    a column per version (or a Remark import) whose keys happen to be equal still notes a
+    version review, although grading scores those sheets under the shared key;
+  - a stack whose only key is a key sheet with a blank version bubble, on a one-version exam:
+    the proposal asks for a key sheet of the version the students bubble (rule 5), although
+    grading reads the blank key sheet as that version's;
+  - the IAU student-ID scheme accepts intake years up to 2030 only (§9.2).
+- Parts of the file dialogs (G-3 D2): drag-and-drop of files onto the window (it needs an
+  unstable Slint feature and works on X11 and Windows only); a Folder… button for Remark's
+  workbooks (the import reads named files only: the dialog picks several).
+- Parts of the end of a run (G-3 D6): Export… and Release… in Results still write on the UI
+  thread (a worker needs the project closed and reopened, as an added batch does: a run kind
+  of their own); *Edit and grade again* refills the card without a Remark import (it is read
+  again).
+- Parts of the exams folder (G-3 D3, D9): a menu of the recent folders (the preferences keep
+  the last five); Explorer selecting the results file (`explorer /select`); opening a large
+  folder reads every exam on the UI thread, twice (the listing and the dashboard row), not on
+  a worker with a progress line; the operator's role in the audit trail stays "Instructor".
+- Parts of cancelling a run (G-3 D7; built in `omr-app`: `Cancel` stops a new exam's grading
+  or a survey before anything is stored):
+  - a cancelled run keeps nothing and cannot be resumed (§22.4 keeps the completed pages and
+    the job resumable): the operator grades the scans again;
+  - cancelling an appended batch (or a roster given after grading): its store opens the run
+    (a new scan batch, the new originals and their page rows spooled) before the pages are
+    read, so a cancel there ends as a failed append does: the exam's results stay as they were,
+    that batch stays open in the log and the spooled originals and page rows stay; adding the
+    same files again adds each page once (it keeps the stopped batch's ID), never refuses it;
+  - `omr` sets no cancel on Ctrl+C: its exit code 130 is reserved for `AppError::Cancelled`,
+    which only a caller holding the token raises (the desktop's *Cancel grading*);
+  - the desktop's Scan screen cancels a new exam's grading only; an added batch or a roster
+    run is cancelled only by closing the window while it runs (it ends as described above).
+- Parts of a roster after grading (G-3 D8; built in `omr-app`: `ExamProject::set_roster`
+  identifies a graded exam again against a roster given later, or a replacing one):
+  - the exam row's `identity_mode` stays the mode the exam was created with (`candidate_number`
+    for an exam graded without a roster): the roster given later is recorded by
+    `RosterReplaced` and by the identity runs that name its snapshot (the roster in force), and
+    the row is not projected from them (nothing decides from it);
+  - its run opens a scan batch with no scans, as an appended batch does, for the runs it
+    names; a roster cannot be removed from an exam;
+  - `omr roster set --project DIR roster.csv` (CLI parity) is not built.
 
 ## 3. Crates and ownership
 

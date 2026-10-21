@@ -105,10 +105,16 @@ fn c5_key_files_in_every_common_layout_read_the_same_key() {
     )
     .unwrap();
     assert_eq!(p.unwrap(), vec!["2", "0.5", "1"]);
-    let k = keys(b"B\nc\n\n D\n", &["A"], 3);
+    // An empty line between answers is a question without an entry (an empty cell).
+    let k = keys(b"B\nc\n\n D\n", &["A"], 4);
     assert_eq!(
         entries(&k, 0),
-        vec![Options(vec![1]), Options(vec![2]), Options(vec![3])]
+        vec![
+            Options(vec![1]),
+            Options(vec![2]),
+            Missing,
+            Options(vec![3])
+        ]
     );
     // A question left out is missing (SCO-003 when scored), never a guess.
     let k = keys(b"question,A\n1,B\n3,C\n", &["A"], 3);
@@ -160,6 +166,207 @@ fn c5_malformed_key_files_fail_with_the_line_and_what_to_change() {
         e.to_string().contains("question 1") && e.to_string().contains("* to void"),
         "{e}"
     );
+}
+
+#[test]
+fn a_key_labelled_with_one_version_is_never_copied_to_another() {
+    let two = forms(&["A", "B"]);
+    // A key that names no version is every version's (identical versions).
+    for (what, bytes) in [
+        ("question,key header", &b"question,key\n1,B\n2,C\n"[..]),
+        ("answer header", b"Q,Answer\n1,B\n2,C\n"),
+        ("headerless rows", b"1,B\n2,C\n"),
+        ("single column", b"B\nC\n"),
+        ("a * row", b"form,Q1,Q2\n*,B,C\n"),
+    ] {
+        let k = keys(bytes, &["A", "B"], 2);
+        assert_eq!(answers(&k), vec![vec!["B", "C"]; 2], "{what}");
+    }
+    // A key for version C only, on an exam declaring A and B: refused, never copied to them.
+    let c_only = b"question,C\n1,B\n2,C\n";
+    let m = err(read_key_file(c_only, &two, 2, 5));
+    assert!(
+        m.contains("key for version C only") && m.contains("declares versions A, B"),
+        "{m}"
+    );
+    // ... and the one version's key on an exam declaring that version.
+    assert_eq!(answers(&keys(c_only, &["C"], 2)), vec![vec!["B", "C"]]);
+    // Versions A–D on an exam declaring A and B: refused naming C and D, never dropped.
+    let abcd = b"question,A,B,C,D\n1,A,B,C,D\n2,B,C,D,E\n";
+    let m = err(read_key_file(abcd, &two, 2, 5));
+    assert!(
+        m.contains("version C, version D") && m.contains("does not declare"),
+        "{m}"
+    );
+    let m = err(read_key_file(
+        b"version,Q1,Q2\nA,A,B\nB,B,C\nC,C,D\n",
+        &two,
+        2,
+        5,
+    ));
+    assert!(
+        m.contains("version C") && m.contains("does not declare"),
+        "{m}"
+    );
+    // A key file whose undeclared versions hold no answer (a template's spare columns) reads
+    // as the declared versions' key; declaring every version reads them all.
+    let spare = b"question,A,B,C,D\n1,A,B,,\n2,B,C,,\n";
+    assert_eq!(
+        answers(&keys(spare, &["A", "B"], 2)),
+        vec![vec!["A", "B"], vec!["B", "C"]]
+    );
+    assert_eq!(keys(abcd, &["A", "B", "C", "D"], 2).len(), 4);
+}
+
+/// A one-column key saved by a spreadsheet with an empty cell (an empty line): that question has
+/// no entry, and every later answer stays on its own question.
+#[test]
+fn an_empty_cell_of_a_one_column_key_is_a_gap_never_skipped() {
+    let a = forms(&["A"]);
+    for (what, bytes) in [
+        ("CRLF", &b"B\r\nC\r\n\r\nA\r\nD\r\nE\r\n"[..]),
+        ("LF", b"B\nC\n\nA\nD\nE\n"),
+        ("a line of spaces", b"B\nC\n \nA\nD\nE\n"),
+        ("a quoted empty cell", b"B\nC\n\"\"\nA\nD\nE\n"),
+    ] {
+        let k = exam::read_key_file_full(bytes, &a, 5, 5).unwrap();
+        assert_eq!(answers(&k.forms)[0], vec!["B", "C", "", "A", "D"], "{what}");
+        assert_eq!(k.ignored_questions, vec![6], "{what}");
+        let k = exam::read_key_file_full(bytes, &a, 6, 5).unwrap();
+        assert_eq!(
+            answers(&k.forms)[0],
+            vec!["B", "C", "", "A", "D", "E"],
+            "{what}"
+        );
+        assert!(k.ignored_questions.is_empty(), "{what}");
+        let s = exam::key_file_shape(bytes, 100, 5).unwrap();
+        assert_eq!(s.versions, exam::KeyVersions::Shared, "{what}");
+        assert_eq!((s.questions, s.listed), (6, 6), "{what}");
+        assert_eq!(s.gaps, vec![(String::new(), 3)], "{what}");
+    }
+    // Empty lines before the first answer and after the last are no questions.
+    let lead = b"\r\n\r\nB\r\nC\r\n\r\n\r\n";
+    let k = exam::read_key_file_full(lead, &a, 3, 5).unwrap();
+    assert_eq!(answers(&k.forms)[0], vec!["B", "C", ""]);
+    let s = exam::key_file_shape(lead, 100, 5).unwrap();
+    assert_eq!((s.questions, s.listed, s.gaps.len()), (2, 2, 0));
+    // An entry after an empty line is refused naming its own line.
+    for bytes in [&b"B\nC\n\nF\n"[..], b"B\r\nC\r\n\r\nF\r\n"] {
+        let m = err(exam::read_key_file_full(bytes, &a, 4, 5));
+        assert!(m.contains("line 4") && m.contains("question 4"), "{m}");
+        let m = err(exam::key_file_shape(bytes, 100, 5));
+        assert!(m.contains("line 4") && m.contains("question 4"), "{m}");
+    }
+}
+
+#[test]
+fn key_rows_beyond_the_question_count_are_named_in_every_layout() {
+    let two = forms(&["A", "B"]);
+    // Questions 1–5 with answers; the exam uses 3. Question 6 has no answer, question 7 only
+    // points: neither is named.
+    let long = b"question,A,B,points\n1,A,B,1\n2,B,C,1\n3,C,D,1\n4,D,E,1\n5,,A,1\n6,,,1\n7,,,2\n";
+    let k = exam::read_key_file_full(long, &two, 3, 5).unwrap();
+    assert_eq!(k.ignored_questions, vec![4, 5], "long");
+    assert_eq!(answers(&k.forms)[0], vec!["A", "B", "C"]);
+    // One row per version, with and without a header.
+    let wide = b"version,Q1,Q2,Q3,Q4,Q5,Q6\nA,A,B,C,D,,\nB,B,C,D,*,E,\n";
+    let k = exam::read_key_file_full(wide, &two, 3, 5).unwrap();
+    assert_eq!(k.ignored_questions, vec![4, 5], "wide");
+    let k = exam::read_key_file_full(b"C,A,B,D,E\nD,B,C,E,A\n", &two, 3, 5).unwrap();
+    assert_eq!(k.ignored_questions, vec![4, 5], "wide, no header");
+    assert_eq!(answers(&k.forms)[1], vec!["D", "B", "C"]);
+    // A single column of answers, and headerless rows.
+    let k = exam::read_key_file_full(b"A\nB\nC\nD\n-\nE\n", &forms(&["A"]), 3, 5).unwrap();
+    assert_eq!(
+        k.ignored_questions,
+        vec![4, 6],
+        "single column ('-' is no entry)"
+    );
+    let k = exam::read_key_file_full(b"1,A\n2,B\n3,C\n10,D\n", &two, 3, 5).unwrap();
+    assert_eq!(k.ignored_questions, vec![10], "headerless rows");
+    // Nothing beyond: nothing named, no warning.
+    let k = exam::read_key_file_full(long, &two, 7, 5).unwrap();
+    assert!(k.ignored_questions.is_empty());
+    assert_eq!(k.ignored_warning(7), None);
+    // The new-exam definition names them in a warning, with the count that grades them.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("key.csv");
+    std::fs::write(&path, long).unwrap();
+    let mut i =
+        omr_app::define::Inputs::new(omr_app::define::Sheet::Template("iau-ccsit-v1".into()), 3);
+    i.key = Some(path);
+    let (d, warnings) = omr_app::define::define(&i).unwrap();
+    assert_eq!(d.questions, 3);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].contains("questions 4–5 have an answer")
+            && warnings[0].contains("3 questions")
+            && warnings[0].contains("question count to 5"),
+        "{}",
+        warnings[0]
+    );
+}
+
+#[test]
+fn an_own_sheets_cancel_mode_comes_from_its_spec_and_the_key_sheet_rule_from_the_inputs() {
+    use omr_app::define::{Inputs, Sheet, define};
+    let dir = tempfile::tempdir().unwrap();
+    let spec_file = |name: &str, cancel: Option<CancelMode>| {
+        let mut s = omr_forms::TemplateSpec::standard(
+            omr_model::ExamId(uuid::Uuid::from_u128(
+                0x0190_aaaa_bbbb_7ccc_8ddd_0000_0000_0099,
+            )),
+            20,
+            4,
+            CancelMode::CrossCancels,
+        );
+        s.cancel_mode = cancel;
+        let p = dir.path().join(name);
+        let json = serde_json::json!({"template": s, "exam_key_hex": "6b".repeat(32)});
+        std::fs::write(&p, serde_json::to_vec(&json).unwrap()).unwrap();
+        p
+    };
+    // The sheets print cross_cancels: the exam marks with it, with nothing typed.
+    let cross = Inputs::new(
+        Sheet::Spec(spec_file("cross.json", Some(CancelMode::CrossCancels))),
+        20,
+    );
+    let (d, _) = define(&cross).unwrap();
+    assert_eq!(d.cancel_mode, CancelMode::CrossCancels);
+    // A typed mode must agree with the printed one.
+    let mut typed = cross.clone();
+    typed.cancel_mode = Some("cross_cancels".into());
+    assert_eq!(
+        define(&typed).unwrap().0.cancel_mode,
+        CancelMode::CrossCancels
+    );
+    typed.cancel_mode = Some("erase_only".into());
+    let e = define(&typed).unwrap_err().to_string();
+    assert!(e.contains("cancel mode"), "{e}");
+    // A spec without one could not have printed sheets: refused, naming the file and field.
+    let none = Inputs::new(Sheet::Spec(spec_file("unset.json", None)), 20);
+    let e = define(&none).unwrap_err().to_string();
+    assert!(e.contains("unset.json") && e.contains("cancel_mode"), "{e}");
+    // The IAU sheet marks with erase_only.
+    let iau = Inputs::new(Sheet::Template("iau-ccsit-v1".into()), 20);
+    let (d, _) = define(&iau).unwrap();
+    assert_eq!(d.cancel_mode, CancelMode::EraseOnly);
+    assert_eq!(d.key_sheets, omr_app::KeySheetRule::default());
+    // The key-sheet rule the CLI's --key-sheet-marker sets reaches the definition.
+    let mut ruled = iau.clone();
+    let rule = omr_app::KeySheetRule {
+        detect_in_stack: false,
+        markers: vec![9],
+        declared: Vec::new(),
+    };
+    ruled.key_sheets = Some(rule.clone());
+    assert_eq!(define(&ruled).unwrap().0.key_sheets, rule);
+    ruled.key_sheets = Some(omr_app::KeySheetRule {
+        markers: vec![9, 9],
+        ..omr_app::KeySheetRule::default()
+    });
+    let e = define(&ruled).unwrap_err().to_string();
+    assert!(e.contains("markers repeat"), "{e}");
 }
 
 fn roster_def() -> ExamDefinition {

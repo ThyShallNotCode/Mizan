@@ -177,6 +177,9 @@ pub struct ExamSummary {
     pub open_exceptions: SeverityCounts,
     /// e.g. "Key v2 · published".
     pub key_status: String,
+    /// True when a key is in force: supplied (or confirmed from key sheets), neither inferred
+    /// from the students' answers nor waiting for its confirmation.
+    pub key_ok: bool,
     /// Items with at least one approved CLO mapping, of `total_items` (every mapped item when
     /// `mapping_approval` is false).
     pub mapped_items: u32,
@@ -259,9 +262,9 @@ pub enum CancelMode {
 impl CancelMode {
     pub fn label(self) -> &'static str {
         match self {
-            Self::EraseOnly => "erase_only",
-            Self::CrossCancels => "cross_cancels",
-            Self::FillCancelsCheck => "fill_cancels_check",
+            Self::EraseOnly => "Erasures cancel",
+            Self::CrossCancels => "Crosses cancel",
+            Self::FillCancelsCheck => "Fill cancels a check",
         }
     }
 }
@@ -439,6 +442,10 @@ pub struct Thumbnail {
     /// The page as scanned, scaled down; `None` while the page is not available (the shell
     /// shows a blank sheet, never an invented one).
     pub image: Option<CropImage>,
+    /// The open item behind `state`'s code, opened by a click on the tile: this sheet's, never
+    /// the first item of the code in the queue (another student's). `None`: the shell opens
+    /// the code's queue.
+    pub item: Option<ItemId>,
 }
 
 /// Pipeline stage counter.
@@ -502,12 +509,18 @@ pub struct BatchProgress {
     pub floor_pages_per_sec: f64,
     /// Gauge maximum (stretch target × 1.2).
     pub max_pages_per_sec: f64,
-    /// Share of questions auto-accepted, 0..1.
-    pub auto_accepted: f64,
-    /// Abstention rate AR, 0..1.
-    pub abstention_rate: f64,
-    pub first_result: Duration,
-    pub remaining: Duration,
+    /// Share of questions auto-accepted, 0..1; `None` while no question has been read (the
+    /// screen shows "–", never an invented 100 %).
+    pub auto_accepted: Option<f64>,
+    /// Abstention rate AR, 0..1; `None` while no question has been read.
+    pub abstention_rate: Option<f64>,
+    /// `None` until the first page is read.
+    pub first_result: Option<Duration>,
+    /// `None` while no page rate is known.
+    pub remaining: Option<Duration>,
+    /// What a running batch does now ("reading inputs", "identity", "scoring"), for the
+    /// remaining-time caption once no page waits; empty when nothing is said.
+    pub stage: String,
     /// Pipeline: pages done, in flight and queued (sum = `pages_total`).
     pub in_flight: u32,
     pub queued: u32,
@@ -789,6 +802,10 @@ pub struct ReviewItem {
     /// Registered crop: the answer row (mark items), the ID grid (identity items) or the page
     /// (notice items).
     pub crop: CropImage,
+    /// False for an item with no scan behind it (an exam-level notice such as an inferred key,
+    /// a page that could not be read): `crop` is then a blank placeholder, and the frame shows
+    /// no scan, view chips or rescan action.
+    pub has_scan: bool,
     /// The same region in the original (unregistered) scan, for `F2`.
     pub original: Option<CropImage>,
     pub bubbles: Vec<BubbleView>,
@@ -1294,9 +1311,10 @@ pub struct KeyRowDecision {
     pub answer: String,
 }
 
-/// A new exam as typed in the New-exam form (plain text; the backend validates it with the
-/// same rules as `omr grade`). Blank optional fields take the sheet's defaults; a blank key
-/// file means the key is inferred (provisional, never releasable, replaceable from Setup).
+/// A new exam as given on the New-exam card (plain text): the files, and the values typed over
+/// the proposed ones. A blank value takes the value the card proposes from the evidence (the
+/// key file, the key sheets, the scans, the sheet); the backend checks every value with the
+/// rules of `omr grade`, and no key is ever inferred unless the instructor chose it on the card.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NewExam {
     pub title: String,
@@ -1306,10 +1324,23 @@ pub struct NewExam {
     /// A template ID (`iau-ccsit-v1`) or the spec file of an own sheet.
     pub sheet: String,
     pub questions: String,
-    /// Options per question (blank: the sheet's).
+    /// Options per question (blank: proposed).
     pub options: String,
-    /// Form letters, e.g. `A,B` (blank: the key file's, else the sheet's).
+    /// Version letters, e.g. `A,B` (blank: proposed).
     pub forms: String,
+    /// The term (blank: proposed).
+    pub term: String,
+    /// `iau`, `pnu`, `ksu` or `digits:N` (blank: proposed).
+    pub id_scheme: String,
+    /// `erase_only`, `cross_cancels` or `fill_cancels_check` (blank: the sheet's).
+    pub cancel_mode: String,
+    /// Second review of confident double marks: `never`, `always` or `high_stakes` (blank:
+    /// proposed).
+    pub multi_review: String,
+    /// High-stakes mode switched on.
+    pub high_stakes: bool,
+    /// The exam's new folder (blank: proposed below the exams folder).
+    pub out: String,
     pub key: String,
     pub roster: String,
     pub clo: String,
@@ -1321,6 +1352,169 @@ pub struct NewExam {
     /// points per version and the learning objectives come from that import, held by the
     /// backend since it was read ([`Backend::read_remark_import`] with no exam).
     pub remark: String,
+    /// The files a file dialog picked, by field (`scans`, `sheet`, `key`, `key_sheets`,
+    /// `roster`, `clo`, `out`), for the fields that still show them: used exactly in place of
+    /// that field's text, which shows them joined by `; ` (a `;` in a file name stays intact).
+    pub picked: std::collections::BTreeMap<String, Vec<std::path::PathBuf>>,
+}
+
+/// A field of the New-exam card (the core's names: `scans`, `key`, `versions`, `questions` …).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CardField {
+    Scans,
+    Sheet,
+    Key,
+    KeySheets,
+    Remark,
+    Versions,
+    Questions,
+    Options,
+    CancelMode,
+    IdScheme,
+    Roster,
+    Clo,
+    Title,
+    Course,
+    Term,
+    MultiReview,
+    HighStakes,
+    Folder,
+}
+
+impl CardField {
+    /// Its name (`key-sheets`), as the window names the field.
+    pub fn name(self) -> &'static str {
+        match self {
+            CardField::Scans => "scans",
+            CardField::Sheet => "sheet",
+            CardField::Key => "key",
+            CardField::KeySheets => "key-sheets",
+            CardField::Remark => "remark",
+            CardField::Versions => "versions",
+            CardField::Questions => "questions",
+            CardField::Options => "options",
+            CardField::CancelMode => "cancel-mode",
+            CardField::IdScheme => "id-scheme",
+            CardField::Roster => "roster",
+            CardField::Clo => "clo",
+            CardField::Title => "title",
+            CardField::Course => "course",
+            CardField::Term => "term",
+            CardField::MultiReview => "multi-review",
+            CardField::HighStakes => "high-stakes",
+            CardField::Folder => "folder",
+        }
+    }
+
+    /// True for the fields under *Advanced options* on the card.
+    pub fn advanced(self) -> bool {
+        matches!(
+            self,
+            CardField::Sheet
+                | CardField::Term
+                | CardField::IdScheme
+                | CardField::CancelMode
+                | CardField::MultiReview
+                | CardField::HighStakes
+                | CardField::Folder
+        )
+    }
+}
+
+/// How a field of the card stands.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CardState {
+    #[default]
+    Ok,
+    /// A note on it.
+    Note,
+    /// A question on it is open: nothing is graded until it is answered.
+    Ask,
+}
+
+/// One value of the New-exam card: value — source (evidence), as the core proposed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CardValue {
+    pub field: CardField,
+    /// The field's label (`Versions`).
+    pub label: String,
+    /// The value graded, as typed (`A, B`, `erase_only`; empty: none yet).
+    pub value: String,
+    /// The value in plain words, as the card writes it (`Erase to change`); the value itself
+    /// where it is plain already.
+    pub plain: String,
+    /// Where it came from (`key file`, `the sheets`, `typed`, `default`).
+    pub source: String,
+    /// The evidence (`key.csv names A, B · sheets A 8 · B 8`).
+    pub detail: String,
+    pub state: CardState,
+}
+
+/// A question of the card (with one-click answers) or a note.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CardIssue {
+    pub field: CardField,
+    /// The field's label.
+    pub label: String,
+    pub text: String,
+    /// The answers' button texts (questions only), in order.
+    pub choices: Vec<String>,
+}
+
+/// The survey of the scans the card is made from: the scans are read once, counts only, before
+/// anything is graded.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum SurveyState {
+    /// No scans given yet.
+    #[default]
+    None,
+    /// Running: pages read of the pages found (0 of 0 while the files are listed).
+    Running { done: usize, total: usize },
+    /// Done for the scans given.
+    Done { pages: usize, took: Duration },
+    /// Not done: stopped by the instructor, or the scans could not be read (why).
+    Failed(String),
+}
+
+/// The New-exam card: every value of the new exam as the core proposes it from the evidence,
+/// each with its source; the questions that stop grading until they are answered, and notes.
+/// What it shows is what is graded.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NewExamCard {
+    /// Every value, in the card's order.
+    pub values: Vec<CardValue>,
+    /// Open questions, each with its answers.
+    pub asks: Vec<CardIssue>,
+    pub notes: Vec<CardIssue>,
+    pub survey: SurveyState,
+    /// Why *Grade exam* cannot start (another exam being graded, the scans being read, a
+    /// question open), `None` when it can.
+    pub blocker: Option<String>,
+    /// The printed sheet fixes the cancel mode: the field shows it and takes nothing typed.
+    pub cancel_locked: bool,
+    /// Second review's choices, each its value and its plain words (`never`, `No second
+    /// review`): offered to choose from, never typed.
+    pub review_choices: Vec<(String, String)>,
+}
+
+impl NewExamCard {
+    /// The value of `field`.
+    pub fn value(&self, field: CardField) -> Option<&CardValue> {
+        self.values.iter().find(|v| v.field == field)
+    }
+}
+
+/// What an answer chosen on the card leaves the window to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardAction {
+    /// Nothing: the answer is recorded and the card proposed again.
+    Done,
+    /// Choose a file or folder for the field (its file dialog, or the Remark import).
+    Pick(CardField),
+    /// Empty the field (e.g. the key file when the Remark import gives the key).
+    Clear(CardField),
+    /// Type a value in the field.
+    Type(CardField),
 }
 
 // ------------------------------------------------------------------ Remark migration (§3.5)
@@ -1609,6 +1803,71 @@ pub struct ParallelRunView {
     pub key_differences: Vec<String>,
 }
 
+// ---------------------------------------------------------------------------- background runs
+
+/// How a background run ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobOutcome {
+    /// A new exam graded.
+    Graded,
+    /// A later batch of scans added to a graded exam.
+    Added,
+    /// A roster given to a graded exam.
+    Roster,
+    Failed,
+    /// Cancelled by the operator: a new exam stored nothing.
+    Cancelled,
+}
+
+/// Whether the exports in an exam's folder show the exam as it stands
+/// ([`Backend::exports_state`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExportsState {
+    /// None written (or nothing to say).
+    #[default]
+    None,
+    /// They show the exam as it stands.
+    Current,
+    /// Written before a later change (a decision, the key, the roster): Write all exports
+    /// updates them.
+    Older,
+}
+
+/// A next step the completion notice offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NextStep {
+    /// The exam's review queue (it has open items).
+    Review,
+    Results,
+    /// The exam's folder, where the run wrote its exports.
+    ExportsFolder,
+    /// Setup, on the key read from the key sheets: it waits for the confirmation.
+    ConfirmKey,
+    /// Setup's Replace key… (the key was inferred: the results are provisional).
+    ReplaceKey,
+    /// The New-exam card again, filled as it was when it was graded.
+    GradeAgain,
+    /// The Scan screen, whose activity log says what the run did.
+    ScanLog,
+}
+
+/// The end of a background run, for the completion notice ([`Backend::take_completed`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct JobDone {
+    /// The exam it ran on (no longer listed when a new exam was cancelled).
+    pub exam: ExamId,
+    pub outcome: JobOutcome,
+    /// "CS 213 Quiz 1 is graded".
+    pub title: String,
+    /// What the run did and what waits: "60 booklets · 12 items to review · exports in …".
+    pub text: String,
+    pub tone: Tone,
+    /// Open review items (the Review step's count).
+    pub review_open: u32,
+    /// The next steps, the primary first.
+    pub steps: Vec<NextStep>,
+}
+
 /// What the shell needs from the application core. Queries are cheap snapshots; commands
 /// validate, record an audited event and return the new state the shell should show.
 ///
@@ -1722,15 +1981,145 @@ pub trait Backend {
         false
     }
 
-    /// True when a new exam can be graded from the New-exam form (a workspace to grade into,
-    /// and no other run in progress).
+    /// The exams folder (a file dialog with no folder of its own opens there); `None` without
+    /// one.
+    fn workspace_dir(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+
+    /// True when this backend opens exams folders ([`Backend::open_workspace`]): the Exams
+    /// screen offers to open another folder and to read the folder again. The default opens
+    /// none.
+    fn can_open_workspace(&self) -> bool {
+        false
+    }
+
+    /// Opens another exams folder: the exams open now are saved and closed
+    /// ([`Backend::close_all`]) and the exams below `dir` are listed instead. A folder that
+    /// holds one graded exam opens that exam among its neighbours
+    /// ([`Backend::open_exam_folder`]). Refused while an exam is being graded. Returns what was
+    /// opened. The default refuses.
+    fn open_workspace(&mut self, dir: &std::path::Path) -> Result<String, BackendError> {
+        let _ = dir;
+        Err(BackendError::Denied(
+            "The demo shows invented exams: start omr-desktop without --demo to open your exams \
+             folder"
+                .into(),
+        ))
+    }
+
+    /// Opens the folder of one graded exam (or its `project.omrproj`): the exams folder it sits
+    /// in is opened ([`Backend::open_workspace`]) with that exam selected. Returns the exam and
+    /// what was opened. The default refuses.
+    fn open_exam_folder(
+        &mut self,
+        dir: &std::path::Path,
+    ) -> Result<(ExamId, String), BackendError> {
+        let _ = dir;
+        Err(BackendError::Denied(
+            "The demo shows invented exams: start omr-desktop without --demo to open an exam"
+                .into(),
+        ))
+    }
+
+    /// Reads the exams folder again: exams graded meanwhile (in another window, or on the
+    /// command line) are listed and exams whose folder is gone are dropped (an exam open here
+    /// stays). Returns what changed. The default has no folder to read.
+    fn refresh_workspace(&mut self) -> Result<String, BackendError> {
+        Err(BackendError::Denied(
+            "The demo shows invented exams: there is no exams folder to read again".into(),
+        ))
+    }
+
+    /// The folder of `exam`: it holds the exam's `project.omrproj` and the exports written
+    /// beside it. `None` while the exam has no folder (it is being graded) or is unknown.
+    fn exam_folder(&self, exam: &ExamId) -> Option<std::path::PathBuf> {
+        let _ = exam;
+        None
+    }
+
+    /// Whether the exports in `exam`'s folder show it as it stands, or were written before a
+    /// later change (the core compares what they hold with what they would hold now). The
+    /// default has nothing to say.
+    fn exports_state(&self, exam: &ExamId) -> ExportsState {
+        let _ = exam;
+        ExportsState::None
+    }
+
+    /// Saves and closes every exam open (each writes its signed checkpoint), as the window
+    /// closes or another folder opens; returns what could not be closed. The default has none
+    /// open.
+    fn close_all(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Sets the name recorded on every decision, key change and release from now on, in the
+    /// exams open now and those opened later (earlier events keep theirs). The core validates
+    /// it: returns what happened, or why the name was refused. The default refuses.
+    fn set_operator(&mut self, name: &str) -> Result<String, BackendError> {
+        let _ = name;
+        Err(BackendError::Denied(
+            "The demo records nothing: start omr-desktop without --demo to record your name".into(),
+        ))
+    }
+
+    /// True when the New-exam card can be opened (an exams folder to grade into). It opens
+    /// while another exam is being graded too: [`Backend::create_exam_blocker`] then says why
+    /// *Grade exam* waits.
     fn can_create_exam(&self) -> bool {
         false
     }
 
-    /// Validates `form` and starts grading it in the background into a new folder of the
-    /// workspace; progress arrives through [`Backend::pump`] as for an added batch. Returns
-    /// the new exam and what was started. The default refuses.
+    /// Why a new exam cannot be graded now (another exam is being graded, no exams folder),
+    /// with what to do; `None` when it can. The default grades nothing.
+    fn create_exam_blocker(&self) -> Option<String> {
+        Some("Grading a new exam needs an exams folder: open one with Open folder…".into())
+    }
+
+    /// The New-exam card for `form`: every value proposed from the evidence with its source,
+    /// the questions and notes (see [`NewExamCard`]). Cheap: the scans are not read here. When
+    /// the scans (or the sheet, key sheets or roster) differ from those last surveyed, a new
+    /// survey starts in the background and the one running is stopped; its result arrives
+    /// through [`Backend::pump`] and [`Backend::new_exam_card`]. The default has no card.
+    fn propose_new_exam(&mut self, form: &NewExam) -> NewExamCard {
+        let _ = form;
+        self.new_exam_card()
+    }
+
+    /// The card last proposed, with the survey as it stands now.
+    fn new_exam_card(&self) -> NewExamCard {
+        NewExamCard::default()
+    }
+
+    /// The instructor's answer `choice` to question `ask` of the card last shown: an answer is
+    /// recorded and the card proposed again ([`CardAction::Done`]); choosing a file, emptying
+    /// a field or typing a value is left to the window. The default has no card.
+    fn choose_on_card(&mut self, ask: usize, choice: usize) -> Result<CardAction, BackendError> {
+        let _ = (ask, choice);
+        Err(BackendError::NotFound(
+            "That question is no longer on the card".into(),
+        ))
+    }
+
+    /// Stops the survey running for the card (nothing is kept); returns what happened.
+    fn stop_survey(&mut self) -> Result<String, BackendError> {
+        Err(BackendError::Invalid("The scans are not being read".into()))
+    }
+
+    /// Starts afresh: the card's answers and survey are dropped (a survey running is
+    /// stopped). The default has none.
+    fn reset_new_exam(&mut self) {}
+
+    /// *Edit and grade again*: the card's answers are given again as they were when it was last
+    /// graded (the fields are the window's to fill); the scans are checked again. The default
+    /// has none.
+    fn restore_graded_card(&mut self) {}
+
+    /// Grades the new exam exactly as the card last shown for `form` proposes it, in the
+    /// background, into the card's folder; progress arrives through [`Backend::pump`] as for an
+    /// added batch. Refused while a question is open, the scans are being read, or the form
+    /// changed since the card was shown (the card is then proposed again). Returns the new exam
+    /// and what was started. The default refuses.
     fn create_exam(&mut self, form: &NewExam) -> Result<(ExamId, String), BackendError> {
         let _ = form;
         Err(BackendError::Denied(
@@ -1797,6 +2186,22 @@ pub trait Backend {
     /// Why the exam is held before anything is scored (e.g. a key from key sheets that waits
     /// for the confirmation), with what to do; `None` when nothing holds it.
     fn hold(&self, exam: &ExamId) -> Option<String> {
+        let _ = exam;
+        None
+    }
+
+    /// What to do about an exception code, in the reviewer's words (the core's remedy), for
+    /// the code help of a code the shell has no help of its own for; `None` when the core has
+    /// none.
+    fn remedy(&self, code: &str) -> Option<String> {
+        let _ = code;
+        None
+    }
+
+    /// Why the exam has no project open to show (it is being graded, its grading failed, its
+    /// folder cannot be opened), with what to do; `None` when it is open. The screens of an
+    /// exam say this instead of showing nothing. The default: every exam is open.
+    fn closed(&self, exam: &ExamId) -> Option<String> {
         let _ = exam;
         None
     }
@@ -1969,6 +2374,69 @@ pub trait Backend {
         ))
     }
 
+    /// Writes the exports when a grading run, an added batch or a roster ends, as `omr grade`
+    /// does (Settings; on unless switched off). The default writes none.
+    fn set_auto_export(&mut self, on: bool) {
+        let _ = on;
+    }
+
+    /// How the last background run ended (graded, scans added, roster given, failed or
+    /// cancelled), once: the completion notice. `None` while it runs, after it was handed
+    /// over, and for a backend without background runs.
+    fn take_completed(&mut self) -> Option<JobDone> {
+        None
+    }
+
+    /// What runs in the background ("CS 213 Quiz 1 is being graded"); `None` when nothing
+    /// does. Closing the window asks first while something runs.
+    fn running(&self) -> Option<String> {
+        None
+    }
+
+    /// True once the run in progress has read its pages and is being saved: a cancel comes too
+    /// late, and what it read is kept. The default runs nothing.
+    fn saving(&self) -> bool {
+        false
+    }
+
+    /// True while `exam` is being graded as a new exam: the Scan screen offers Cancel
+    /// grading. The default runs nothing.
+    fn can_cancel(&self, exam: &ExamId) -> bool {
+        let _ = exam;
+        false
+    }
+
+    /// Cancels the run in progress: it stops after the pages being read, before anything is
+    /// stored (a new exam leaves no folder; a graded exam keeps its results). How it ended
+    /// arrives through [`Backend::pump`] and [`Backend::take_completed`]. Returns what
+    /// happened; refused once the run is being saved ([`Backend::saving`]: too late, it is
+    /// kept). The default has nothing to cancel.
+    fn cancel_job(&mut self) -> Result<String, BackendError> {
+        Err(BackendError::Invalid("Nothing is being graded".into()))
+    }
+
+    /// True when a roster can be given to `exam` now ([`Backend::set_roster`]).
+    fn can_set_roster(&self, exam: &ExamId) -> bool {
+        let _ = exam;
+        false
+    }
+
+    /// Gives `exam` the roster in the file `path` (or replaces its roster): the file is read
+    /// and checked first (a refused roster changes nothing), then every booklet is identified
+    /// again in the background, review decisions carried over; progress and the end arrive
+    /// through [`Backend::pump`] as for an added batch. Returns what was started. The default
+    /// refuses.
+    fn set_roster(
+        &mut self,
+        exam: &ExamId,
+        path: &std::path::Path,
+    ) -> Result<String, BackendError> {
+        let _ = (exam, path);
+        Err(BackendError::Denied(
+            "The demo records nothing: start omr-desktop without --demo to add a roster".into(),
+        ))
+    }
+
     // ---- live updates
     /// Folds finished background work into the view-models. Returns true when anything the
     /// shell shows may have changed. The default does nothing.
@@ -1976,9 +2444,10 @@ pub trait Backend {
         false
     }
 
-    /// Blocks until background analyses that are running (flag stability) have reported and
-    /// folds them, as [`Backend::pump`] does: for headless screenshots, which must not catch
-    /// "computing…". Returns true when anything changed. The default has nothing to wait for.
+    /// Blocks until the background work that is running (flag stability, page thumbnails, the
+    /// New-exam card's check of the scans) has reported and folds it, as [`Backend::pump`] does:
+    /// for headless screenshots, which must not catch "computing…" or a placeholder. Returns
+    /// true when anything changed. The default has nothing to wait for.
     fn settle(&mut self) -> bool {
         false
     }
@@ -1989,4 +2458,25 @@ pub trait Backend {
     fn take_reloaded(&mut self) -> Vec<ExamId> {
         Vec::new()
     }
+}
+
+/// Lets a background run that is still going end before the process exits, so its worker is
+/// never killed half-way (a new exam would leave a half-made package behind): the run is
+/// cancelled where it still can be (a cancelled new exam removes what it made), or else saved
+/// whole, and folded in. Waits at most `limit`; true when nothing runs any more.
+pub fn wind_down(backend: &std::cell::RefCell<dyn Backend>, limit: Duration) -> bool {
+    if backend.borrow().running().is_none() {
+        return true;
+    }
+    // refused once it is being saved: it is then waited for
+    let _ = backend.borrow_mut().cancel_job();
+    let t0 = std::time::Instant::now();
+    while backend.borrow().running().is_some() {
+        if t0.elapsed() >= limit {
+            return false;
+        }
+        backend.borrow_mut().pump();
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    true
 }

@@ -439,6 +439,39 @@ pub struct ExamDefinition {
     /// it out and the project keeps it in its private `secrets/` file (read back on open).
     #[serde(default, skip_serializing)]
     pub page_code_key_hex: Option<String>,
+    /// The version backstops of §10.3 (G-3), set on every definition built by
+    /// [`crate::define::define`] and `omr grade`:
+    /// - a sheet that confidently bubbles a version letter the exam does not declare is held
+    ///   (SCO-005 `undeclared_version`, ERROR), never scored under another version's key; on a
+    ///   one-version exam too, where only a blank, unclear or the declared letter takes the
+    ///   one version;
+    /// - when every version shares the key, points and mapping, a sheet that declares no
+    ///   version is scored under the shared key (SCO-005 `identical_forms`, INFO).
+    ///
+    /// Off (the default) in definitions saved before the backstops existed: adding a batch or
+    /// regrading such an exam keeps its earlier decisions byte for byte. Never serialised when
+    /// off, so those definitions also keep their bytes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hold_undeclared_versions: bool,
+    /// Where each value of the setup came from, as the New-exam proposal showed it (counts and
+    /// file names only, never a student's data): recorded with the exam's setup. Empty for an
+    /// exam defined otherwise, and then never serialised, so earlier definitions keep their
+    /// bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance: Vec<SetupField>,
+}
+
+/// One value of an exam's setup and where it came from ([`ExamDefinition::provenance`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupField {
+    /// The field (`questions`, `versions`, …).
+    pub field: String,
+    /// Its value as shown.
+    pub value: String,
+    /// Where it came from (`typed`, `key file`, `sheets`, …).
+    pub source: String,
+    /// The evidence, e.g. `key.csv answers 1–40 · rows 1–40 answered on 97 % of the sheets`.
+    pub detail: String,
 }
 
 impl ExamDefinition {
@@ -482,6 +515,8 @@ impl ExamDefinition {
             outcomes: None,
             key_sheets: KeySheetRule::default(),
             page_code_key_hex: None,
+            hold_undeclared_versions: false,
+            provenance: Vec::new(),
         };
         d.exam_id = d.derived_exam_id();
         d
@@ -788,7 +823,7 @@ impl ExamDefinition {
         Ok(notes)
     }
 
-    /// True when the key is inferred from the sheets (never releasable).
+    /// True when the key is inferred from the sheets (not releasable until replaced).
     pub fn key_inferred(&self) -> bool {
         matches!(self.key, KeySource::Inferred)
     }
@@ -1078,6 +1113,42 @@ fn delimited_rows(bytes: &[u8], what: &str) -> Result<Vec<(u64, Vec<String>)>, A
     Ok(out)
 }
 
+/// The cells of a file of one column, one per line with its 1-based line number, read from the
+/// lines themselves: an empty line between the first and the last entry is an empty cell (a
+/// spreadsheet saves a one-column sheet's empty cell as an empty line, which a CSV reader
+/// skips, so every answer after it would move up a question). Empty lines before the first
+/// entry and after the last are not cells. A line is read as the CSV reader reads it (quotes
+/// removed, then [`clean_cell`]); only its first cell is kept (the others are empty when the
+/// caller checked the file has one column).
+fn single_column(bytes: &[u8]) -> Vec<(u64, String)> {
+    let text = decode_text(bytes).replace("\r\n", "\n").replace('\r', "\n");
+    let delimiter = sniff_delimiter(&text);
+    let cells: Vec<(u64, String)> = text
+        .split('\n')
+        .enumerate()
+        .map(|(i, line)| {
+            let cell = csv::ReaderBuilder::new()
+                .has_headers(false)
+                .flexible(true)
+                .delimiter(delimiter)
+                .from_reader(line.as_bytes())
+                .records()
+                .next()
+                .and_then(Result::ok)
+                .and_then(|r| r.get(0).map(clean_cell))
+                .unwrap_or_default();
+            (i as u64 + 1, cell)
+        })
+        .collect();
+    match (
+        cells.iter().position(|(_, c)| !c.is_empty()),
+        cells.iter().rposition(|(_, c)| !c.is_empty()),
+    ) {
+        (Some(a), Some(b)) => cells[a..=b].to_vec(),
+        _ => Vec::new(),
+    }
+}
+
 fn norm_header(h: &str) -> String {
     clean_cell(h)
         .to_lowercase()
@@ -1203,10 +1274,12 @@ pub const KEY_LAYOUTS: &str = "accepted layouts: one row per question (`question
 ///   exam's form order);
 /// - **one row per version**: `form,Q1,Q2,…` / `version,1,2,…`, or headerless `A,B,C,D,…`
 ///   (the first cell names the form) or unlabeled rows of answers in the exam's form order;
-/// - **a single column** of answers, one per question.
+/// - **a single column** of answers, one per line and question (an empty line between answers,
+///   a spreadsheet's empty cell, is a question without an entry).
 ///
 /// Question numbers may be written `7`, `Q7`, `7.` or in Arabic-Indic digits; questions
-/// beyond the exam's count are ignored (the sheet may print more). Entries follow
+/// beyond the exam's count are not part of the key (the sheet may print more): the ones with
+/// an entry are named in [`KeyFile::ignored_questions`]. Entries follow
 /// [`parse_key_entry`]. Returns the per-form keys (in `forms` order) and the points column if
 /// present. Every malformed line fails with its line number and what to change (R10).
 pub fn read_key_csv(
@@ -1234,6 +1307,48 @@ pub struct KeyFile {
     pub forms: Vec<FormKey>,
     /// Its points columns.
     pub points: KeyFilePoints,
+    /// Questions beyond the exam's count (1-based, ascending) that have an entry in some
+    /// version, in any layout (rows, columns or a single column): read, never part of the key,
+    /// and named to the instructor ([`Self::ignored_warning`]) since a count typed too low
+    /// silently drops them otherwise.
+    pub ignored_questions: Vec<u32>,
+}
+
+impl KeyFile {
+    /// The warning naming [`Self::ignored_questions`], if any, for an exam of `questions`.
+    pub fn ignored_warning(&self, questions: u16) -> Option<String> {
+        let last = *self.ignored_questions.last()?;
+        let one = self.ignored_questions.len() == 1;
+        let (noun, verb, they, them) = if one {
+            ("question", "has", "it is", "it")
+        } else {
+            ("questions", "have", "they are", "them")
+        };
+        Some(format!(
+            "key file: {noun} {} {verb} an answer but the exam has {questions} questions, so \
+             {they} not graded; set the question count to {last} to grade {them}",
+            question_ranges(&self.ignored_questions),
+        ))
+    }
+}
+
+/// Question numbers as ranges: `31–35, 40`.
+pub fn question_ranges(qs: &[u32]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < qs.len() {
+        let mut j = i;
+        while j + 1 < qs.len() && qs[j + 1] == qs[j] + 1 {
+            j += 1;
+        }
+        out.push(if j > i {
+            format!("{}–{}", qs[i], qs[j])
+        } else {
+            qs[i].to_string()
+        });
+        i = j + 1;
+    }
+    out.join(", ")
 }
 
 /// The version a per-version points header names (`points_A`, `points A`, `pts B`,
@@ -1305,6 +1420,22 @@ pub fn read_key_file_full(
     questions: u16,
     options: u8,
 ) -> Result<KeyFile, AppError> {
+    read_key_file_rows(bytes, forms, questions, options, None)
+}
+
+/// [`read_key_file_full`] with the reading of headerless rows of one version each given:
+/// `Some(true)`, a row's first cell is its version (`C,B,A,…`); `Some(false)`, every cell is an
+/// answer (rows of answers alone, in `forms` order); `None`, decided as `omr grade` decides it,
+/// from the question count (a row as long as the count holds answers alone). The New-exam
+/// proposal gives the reading it showed ([`KeyShape::first_cell_labels`]), so the definition
+/// never reads the file another way. Other layouts ignore it.
+pub fn read_key_file_rows(
+    bytes: &[u8],
+    forms: &[String],
+    questions: u16,
+    options: u8,
+    labelled_rows: Option<bool>,
+) -> Result<KeyFile, AppError> {
     let rows = delimited_rows(bytes, "key file")?;
     let Some((_, first)) = rows.first() else {
         return Err(AppError::Input(format!("key file: no rows; {KEY_LAYOUTS}")));
@@ -1315,6 +1446,10 @@ pub fn read_key_file_full(
         parse_key_entry(v, options).map_err(|m| key_error(line, format!("{col}: {m}")))?;
         Ok(v.to_string())
     };
+    // A cell beyond the exam's questions that holds an entry (an answer, a void, or text that
+    // is no entry at all): never part of the key, but named.
+    let has_entry = |v: &str| !matches!(parse_key_entry(v, options), Ok(ParsedKey::Missing));
+    let sorted = |v: BTreeSet<u32>| v.into_iter().collect::<Vec<u32>>();
     let points_cell = |line: u64, q: usize, what: &str, v: &str| -> Result<String, AppError> {
         let v = v.replace(',', ".");
         omr_scoring::parse_points(&v).map_err(|e| {
@@ -1342,6 +1477,7 @@ pub fn read_key_file_full(
             .map(|(f, _)| (f.clone(), vec!["1".to_string(); n]))
             .collect();
         let mut seen: BTreeMap<usize, (u64, Vec<String>)> = BTreeMap::new();
+        let mut ignored = BTreeSet::new();
         for (line, row) in body {
             let q = parse_question_number(&row[0]).ok_or_else(|| {
                 key_error(
@@ -1366,7 +1502,14 @@ pub fn read_key_file_full(
                 ));
             }
             if q > n {
-                continue; // the sheet may print more questions than the exam uses
+                // The sheet may print more questions than the exam uses.
+                if cols
+                    .iter()
+                    .any(|(_, i)| row.get(*i).is_some_and(|v| has_entry(v)))
+                {
+                    ignored.insert(q as u32);
+                }
+                continue;
             }
             let cells: Vec<String> = cols
                 .iter()
@@ -1385,7 +1528,7 @@ pub fn read_key_file_full(
                 continue;
             }
             for ((f, _), v) in cols.iter().zip(&cells) {
-                let col = if f == "*" {
+                let col = if f == SHARED_KEY {
                     format!("question {q}")
                 } else {
                     format!("question {q} form {f}")
@@ -1426,6 +1569,7 @@ pub fn read_key_file_full(
                 all: points,
                 per_form,
             },
+            ignored_questions: sorted(ignored),
         })
     };
     // One row per version: `labelled` rows start with the form letter.
@@ -1451,6 +1595,7 @@ pub fn read_key_file_full(
                 .collect(),
         };
         let mut out = Vec::new();
+        let mut ignored = BTreeSet::new();
         for (k, (line, row)) in body.iter().enumerate() {
             let form = if labelled {
                 form_label(&row[0])
@@ -1475,10 +1620,14 @@ pub fn read_key_file_full(
             }
             let mut answers = vec![String::new(); n];
             for (j, v) in row[skip..].iter().enumerate() {
-                if let Some(Some(q)) = qcols.get(j)
-                    && *q <= n
-                {
-                    answers[q - 1] = entry(*line, &format!("form {form} question {q}"), v)?;
+                match qcols.get(j) {
+                    Some(Some(q)) if *q <= n => {
+                        answers[q - 1] = entry(*line, &format!("form {form} question {q}"), v)?;
+                    }
+                    Some(Some(q)) if has_entry(v) => {
+                        ignored.insert(*q as u32);
+                    }
+                    _ => {}
                 }
             }
             out.push(FormKey { form, answers });
@@ -1486,6 +1635,7 @@ pub fn read_key_file_full(
         Ok(KeyFile {
             forms: order_keys(out, forms)?,
             points: KeyFilePoints::default(),
+            ignored_questions: sorted(ignored),
         })
     };
     if QUESTION_HEADERS.contains(&h0.as_str()) {
@@ -1499,7 +1649,7 @@ pub fn read_key_file_full(
             } else if let Some(f) = points_form(&hn) {
                 form_points.push((f, i));
             } else if SHARED_KEY_HEADERS.contains(&hn.as_str()) {
-                cols.push(("*".into(), i)); // one key for every form
+                cols.push((SHARED_KEY.into(), i)); // one key for every form
             } else if !hn.is_empty() {
                 cols.push((form_label(h), i));
             }
@@ -1519,7 +1669,7 @@ pub fn read_key_file_full(
     if parse_question_number(&first[0]).is_some() && first.len() >= 2 {
         let k = rows.iter().map(|(_, r)| r.len()).max().unwrap_or(2) - 1;
         let cols: Vec<(String, usize)> = if k == 1 {
-            vec![("*".into(), 1)]
+            vec![(SHARED_KEY.into(), 1)]
         } else if k == forms.len() {
             forms.iter().cloned().zip(1..).collect()
         } else {
@@ -1535,29 +1685,41 @@ pub fn read_key_file_full(
         return long(&rows, &cols, None, &[], k + 1);
     }
     if rows.iter().all(|(_, r)| r.len() == 1) {
-        // A single column: one answer per question, in order.
-        let answers = rows
+        // A single column: one answer per line, in order; an empty line between answers is a
+        // question without an entry.
+        let cells = single_column(bytes);
+        let answers = cells
             .iter()
             .enumerate()
             .take(n)
-            .map(|(q, (line, r))| entry(*line, &format!("question {}", q + 1), &r[0]))
+            .map(|(q, (line, v))| entry(*line, &format!("question {}", q + 1), v))
             .collect::<Result<Vec<_>, _>>()?;
         let mut answers = answers;
         answers.resize(n, String::new());
+        let ignored = cells
+            .iter()
+            .enumerate()
+            .skip(n)
+            .filter(|(_, (_, v))| has_entry(v))
+            .map(|(q, _)| q as u32 + 1)
+            .collect();
         return Ok(KeyFile {
             forms: order_keys(
                 vec![FormKey {
-                    form: "*".into(),
+                    form: SHARED_KEY.into(),
                     answers,
                 }],
                 forms,
             )?,
             points: KeyFilePoints::default(),
+            ignored_questions: sorted(ignored),
         });
     }
-    let labelled = rows.iter().all(|(_, r)| {
-        let f = form_label(&r[0]);
-        r.len() != n && forms.contains(&f)
+    let labelled = labelled_rows.unwrap_or_else(|| {
+        rows.iter().all(|(_, r)| {
+            let f = form_label(&r[0]);
+            r.len() != n && forms.contains(&f)
+        })
     });
     wide(&rows, None, labelled)
 }
@@ -1655,9 +1817,380 @@ pub fn key_file_forms(bytes: &[u8]) -> Option<Vec<String>> {
     (!out.is_empty()).then_some(out)
 }
 
+/// The versions a key file names ([`key_file_shape`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyVersions {
+    /// Keys labelled with these versions, in file order, as written: letters (`A`, `C`), or
+    /// numbers (`1`, `2`) when the file numbers its versions, which no sheet can bubble.
+    Named(Vec<String>),
+    /// One key for every version: a `key`/`answer` column, a single column of answers,
+    /// headerless `1,B` rows or a `*` row.
+    Shared,
+    /// This many keys without a label (headerless `1,B,C` rows, or rows of answers alone):
+    /// the reader gives them the exam's versions in order.
+    Unlabeled(usize),
+}
+
+/// What a key file holds, read whole before the exam's question count is known (the New-exam
+/// proposal takes the count, the versions and the gaps from it). Built on its own reading of
+/// the rows, never on [`read_key_file_full`], which drops what lies beyond the count.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyShape {
+    /// The versions it names.
+    pub versions: KeyVersions,
+    /// Headerless rows that start with a bare letter (`A,B,D,…`): read as labelled rows,
+    /// though the letter may be each row's answer to question 1 (then every row holds one
+    /// more question); the New-exam proposal asks when the exam has more questions than the
+    /// labelled rows answer, and gives the definition the reading it shows.
+    pub first_cell_labels: bool,
+    /// The highest question with an entry (an answer or a void) in any version; trailing empty
+    /// rows of a template do not count. 0 when the file has no entry.
+    pub questions: u32,
+    /// The highest question the file lists at all, empty entries included.
+    pub listed: u32,
+    /// Questions up to [`Self::questions`] without an entry, per key: its label (`""` for a
+    /// shared key, `#2` for the second unlabelled key) and the question, ascending.
+    pub gaps: Vec<(String, u32)>,
+    /// Questions with an entry beyond the sheet's printed count.
+    pub beyond_sheet: Vec<u32>,
+    /// The highest option an entry accepts (1-based: 5 is E), if any.
+    pub highest_option: Option<u8>,
+    /// A `points` column (every version).
+    pub points: bool,
+    /// Versions with a points column of their own (`points_A`).
+    pub points_per_version: Vec<String>,
+}
+
+impl KeyShape {
+    /// The version labels that are not letters a sheet prints (`1`, `2`): numbered versions,
+    /// which the instructor maps to the bubbled letters.
+    pub fn numbered_versions(&self) -> Vec<String> {
+        match &self.versions {
+            KeyVersions::Named(v) => v
+                .iter()
+                .filter(|l| !(l.len() == 1 && l.as_bytes()[0].is_ascii_uppercase()))
+                .cloned()
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// Words that name a version in a row's first cell (`Form A`, `Version 1`, `نموذج أ`).
+const VERSION_WORDS: &[&str] = &[
+    "VERSION",
+    "FORM",
+    "MODEL",
+    "VARIANT",
+    "KEY",
+    "BOOKLET",
+    "النموذج",
+    "نموذج",
+];
+
+/// The version label of a headerless row's first cell: a letter or a number after a version
+/// word, or a bare Latin letter; with whether a word named it.
+fn row_label(cell: &str) -> Option<(String, bool)> {
+    let raw = clean_cell(cell).to_uppercase();
+    let worded = VERSION_WORDS.iter().any(|w| raw.starts_with(w));
+    let l = form_label(cell);
+    let letter = l.len() == 1 && l.as_bytes()[0].is_ascii_uppercase();
+    let number = !l.is_empty() && l.len() <= 2 && l.bytes().all(|b| b.is_ascii_digit());
+    ((letter && (worded || raw.len() == 1)) || (number && worded)).then_some((l, worded))
+}
+
+/// Reads what a key file holds ([`KeyShape`]) in every layout [`read_key_file_full`] accepts,
+/// before the question count is known: the versions it names, its extent, its gaps and what
+/// lies beyond the sheet's `printed_questions`. Entries are checked against
+/// `printed_options`. Headerless rows that start with a version (`C,B,A,…`) are labelled rows
+/// here, whatever count the exam has. A malformed line fails with its line number and what to
+/// change (R10).
+pub fn key_file_shape(
+    bytes: &[u8],
+    printed_questions: u16,
+    printed_options: u8,
+) -> Result<KeyShape, AppError> {
+    key_file_shape_rows(bytes, printed_questions, printed_options, None)
+}
+
+/// [`key_file_shape`] with the reading of headerless rows that start with a bare letter given
+/// (`Some(false)`: the letter is the row's answer to question 1, the rows are unlabelled keys;
+/// `Some(true)` or `None`: it is the row's version). Rows labelled by a word (`Form A`) are
+/// labelled whatever it says.
+pub fn key_file_shape_rows(
+    bytes: &[u8],
+    printed_questions: u16,
+    printed_options: u8,
+    labelled_rows: Option<bool>,
+) -> Result<KeyShape, AppError> {
+    let rows = delimited_rows(bytes, "key file")?;
+    let Some((_, first)) = rows.first() else {
+        return Err(AppError::Input(format!("key file: no rows; {KEY_LAYOUTS}")));
+    };
+    let options = printed_options.clamp(1, MAX_OPTIONS);
+    let h0 = norm_header(&first[0]);
+    // Per key: its label and question → entry.
+    let mut keys: Vec<(String, BTreeMap<u32, ParsedKey>)> = Vec::new();
+    let mut listed = 0u32;
+    let mut points = false;
+    let mut points_per_version = Vec::new();
+    let mut first_cell_labels = false;
+    let entry = |line: u64, what: &str, v: &str| {
+        parse_key_entry(v, options).map_err(|m| key_error(line, format!("{what}: {m}")))
+    };
+    let versions = if QUESTION_HEADERS.contains(&h0.as_str())
+        || (parse_question_number(&first[0]).is_some() && first.len() >= 2)
+    {
+        // One row per question, with a header naming the columns or without one.
+        let header = QUESTION_HEADERS.contains(&h0.as_str());
+        let mut cols: Vec<(String, usize)> = Vec::new();
+        let width;
+        let body = if header {
+            for (i, h) in first.iter().enumerate().skip(1) {
+                let hn = norm_header(h);
+                if POINTS_HEADERS.contains(&hn.as_str()) {
+                    points = true;
+                } else if let Some(f) = points_form(&hn) {
+                    points_per_version.push(f);
+                } else if SHARED_KEY_HEADERS.contains(&hn.as_str()) {
+                    cols.push((String::new(), i));
+                } else if !hn.is_empty() {
+                    cols.push((form_label(h), i));
+                }
+            }
+            if cols.is_empty() {
+                return Err(AppError::Input(format!(
+                    "key file header: no answer column after `{}`; {KEY_LAYOUTS}",
+                    first[0]
+                )));
+            }
+            width = first.len();
+            &rows[1..]
+        } else {
+            let k = rows.iter().map(|(_, r)| r.len()).max().unwrap_or(2) - 1;
+            cols = (1..=k)
+                .map(|i| {
+                    (
+                        if k == 1 {
+                            String::new()
+                        } else {
+                            format!("#{i}")
+                        },
+                        i,
+                    )
+                })
+                .collect();
+            width = k + 1;
+            &rows[..]
+        };
+        if cols.len() > 1 && cols.iter().any(|(l, _)| l.is_empty()) {
+            return Err(AppError::Input(format!(
+                "key file header: an answer column for every version (`key`) beside columns \
+                 per version; keep one of them; {KEY_LAYOUTS}"
+            )));
+        }
+        keys = cols
+            .iter()
+            .map(|(l, _)| (l.clone(), BTreeMap::new()))
+            .collect();
+        let mut seen: BTreeMap<u32, (u64, Vec<String>)> = BTreeMap::new();
+        for (line, row) in body {
+            let q = match parse_question_number(&row[0]) {
+                Some(q) if q >= 1 => q,
+                Some(_) => return Err(key_error(*line, "questions are numbered from 1")),
+                None => {
+                    return Err(key_error(
+                        *line,
+                        format!("`{}` is not a question number; {KEY_LAYOUTS}", row[0]),
+                    ));
+                }
+            };
+            if row.len() > width {
+                return Err(key_error(
+                    *line,
+                    format!(
+                        "question {q} has {} cells, the header names {width} columns; remove \
+                         the extra cells or name their columns",
+                        row.len()
+                    ),
+                ));
+            }
+            let cells: Vec<String> = cols
+                .iter()
+                .map(|(_, i)| row.get(*i).cloned().unwrap_or_default())
+                .collect();
+            if let Some((l0, prev)) = seen.get(&q) {
+                if *prev != cells {
+                    return Err(key_error(
+                        *line,
+                        format!(
+                            "question {q} is listed again (first on line {l0}) with other \
+                             answers; keep one row per question"
+                        ),
+                    ));
+                }
+                continue;
+            }
+            listed = listed.max(q);
+            for ((label, map), v) in keys.iter_mut().zip(&cells) {
+                let what = if label.is_empty() || label.starts_with('#') {
+                    format!("question {q}")
+                } else {
+                    format!("question {q} form {label}")
+                };
+                map.insert(q, entry(*line, &what, v)?);
+            }
+            seen.insert(q, (*line, cells));
+        }
+        if !header && cols.len() > 1 {
+            KeyVersions::Unlabeled(cols.len())
+        } else if cols.len() == 1 && cols[0].0.is_empty() {
+            KeyVersions::Shared
+        } else {
+            KeyVersions::Named(cols.into_iter().map(|(l, _)| l).collect())
+        }
+    } else if rows.iter().all(|(_, r)| r.len() == 1) {
+        // A single column: one answer per line, in order (an empty line between answers is a
+        // gap, never skipped).
+        let mut map = BTreeMap::new();
+        for (k, (line, v)) in single_column(bytes).iter().enumerate() {
+            let q = k as u32 + 1;
+            map.insert(q, entry(*line, &format!("question {q}"), v)?);
+            listed = q;
+        }
+        keys.push((String::new(), map));
+        KeyVersions::Shared
+    } else {
+        // One row per version: `form,Q1,Q2,…` with a header, or headerless rows that start
+        // with their version (`Form A,…`, `C,…`) or hold answers alone.
+        let header = FORM_HEADERS.contains(&h0.as_str());
+        let body = if header { &rows[1..] } else { &rows[..] };
+        let labels: Option<Vec<(String, bool)>> = if header {
+            Some(
+                body.iter()
+                    .map(|(_, r)| (form_label(&r[0]), true))
+                    .collect(),
+            )
+        } else {
+            // Bare letters label the rows only when there are several and they differ (one
+            // row, or rows starting alike, are answers to question 1), unless the caller says
+            // they are answers.
+            body.iter()
+                .map(|(_, r)| row_label(&r[0]))
+                .collect::<Option<Vec<_>>>()
+                .filter(|l| {
+                    l.iter().all(|x| x.1)
+                        || (labelled_rows != Some(false)
+                            && l.len() >= 2
+                            && l.iter().map(|x| &x.0).collect::<BTreeSet<_>>().len() == l.len())
+                })
+        };
+        let skip = usize::from(labels.is_some());
+        let qcols: Vec<Option<u32>> = if header {
+            first[1..]
+                .iter()
+                .map(|c| match parse_question_number(c) {
+                    Some(q) if q >= 1 => Ok(Some(q)),
+                    _ if c.is_empty() => Ok(None),
+                    _ => Err(AppError::Input(format!(
+                        "key file header: column `{c}` is not a question number (Q1, Q2, …); \
+                         {KEY_LAYOUTS}"
+                    ))),
+                })
+                .collect::<Result<_, _>>()?
+        } else {
+            (1..=body.iter().map(|(_, r)| r.len() - skip).max().unwrap_or(0))
+                .map(|q| Some(q as u32))
+                .collect()
+        };
+        first_cell_labels = !header && labels.as_ref().is_some_and(|l| l.iter().any(|x| !x.1));
+        for (k, (line, row)) in body.iter().enumerate() {
+            let label = match &labels {
+                Some(l) => l[k].0.clone(),
+                None => format!("#{}", k + 1),
+            };
+            if keys.iter().any(|(l, _)| *l == label) {
+                return Err(key_error(
+                    *line,
+                    format!("form {label} has a second key row; keep one row per form"),
+                ));
+            }
+            let mut map = BTreeMap::new();
+            for (j, v) in row[skip..].iter().enumerate() {
+                if let Some(Some(q)) = qcols.get(j) {
+                    map.insert(*q, entry(*line, &format!("form {label} question {q}"), v)?);
+                    listed = listed.max(*q);
+                }
+            }
+            keys.push((label, map));
+        }
+        match labels {
+            Some(l) if l.len() == 1 && l[0].0 == SHARED_KEY => {
+                keys[0].0 = String::new();
+                KeyVersions::Shared
+            }
+            Some(l) => KeyVersions::Named(l.into_iter().map(|(x, _)| x).collect()),
+            None => KeyVersions::Unlabeled(keys.len()),
+        }
+    };
+    let has = |e: &ParsedKey| !matches!(e, ParsedKey::Missing);
+    let answered = |m: &BTreeMap<u32, ParsedKey>| {
+        m.iter()
+            .filter(|(_, e)| has(e))
+            .map(|(q, _)| *q)
+            .collect::<Vec<u32>>()
+    };
+    let questions = keys
+        .iter()
+        .flat_map(|(_, m)| answered(m))
+        .max()
+        .unwrap_or(0);
+    let mut gaps = Vec::new();
+    for (label, m) in &keys {
+        for q in 1..=questions {
+            if !m.get(&q).is_some_and(has) {
+                gaps.push((label.clone(), q));
+            }
+        }
+    }
+    let beyond_sheet: BTreeSet<u32> = keys
+        .iter()
+        .flat_map(|(_, m)| answered(m))
+        .filter(|q| *q > u32::from(printed_questions))
+        .collect();
+    let highest_option = keys
+        .iter()
+        .flat_map(|(_, m)| m.values())
+        .filter_map(|e| match e {
+            ParsedKey::Options(v) => v.iter().max().map(|o| o + 1),
+            _ => None,
+        })
+        .max();
+    Ok(KeyShape {
+        versions,
+        first_cell_labels,
+        questions,
+        listed,
+        gaps,
+        beyond_sheet: beyond_sheet.into_iter().collect(),
+        highest_option,
+        points,
+        points_per_version,
+    })
+}
+
+/// The label of a key that names no version (a `key`/`answer` column, a single column of
+/// answers, headerless `1,B` rows or a `*` row): one key for every version.
+const SHARED_KEY: &str = "*";
+
+/// The keys read from a file in the exam's form order. Only a key that names no version is
+/// copied to every version (identical versions); a key labelled with a version is that
+/// version's key alone, so a key for a version the exam does not declare is refused, never
+/// copied to another version or dropped while it holds answers (an empty column of an
+/// undeclared version, as a template's spare `C,D` columns, is left out).
 fn order_keys(keys: Vec<FormKey>, forms: &[String]) -> Result<Vec<FormKey>, AppError> {
-    // A single unlabeled key applies to every form (identical forms).
-    if keys.len() == 1 && !forms.contains(&keys[0].form) {
+    if keys.len() == 1 && keys[0].form == SHARED_KEY {
         return Ok(forms
             .iter()
             .map(|f| FormKey {
@@ -1665,6 +2198,33 @@ fn order_keys(keys: Vec<FormKey>, forms: &[String]) -> Result<Vec<FormKey>, AppE
                 answers: keys[0].answers.clone(),
             })
             .collect());
+    }
+    let label = |f: &str| {
+        if f == SHARED_KEY {
+            "every version (a key or answer column)".to_string()
+        } else {
+            format!("version {f}")
+        }
+    };
+    let extra: Vec<&FormKey> = keys
+        .iter()
+        .filter(|k| !forms.contains(&k.form) && k.answers.iter().any(|a| !a.trim().is_empty()))
+        .collect();
+    if let [only] = keys.as_slice()
+        && !extra.is_empty()
+    {
+        return Err(AppError::Input(format!(
+            "the key file has a key for {} only; this exam declares {} {}: declare the \
+             version the key is for (--forms {}), or give a key for every declared version",
+            label(&only.form),
+            if forms.len() == 1 {
+                "version"
+            } else {
+                "versions"
+            },
+            forms.join(", "),
+            only.form
+        )));
     }
     let mut out = Vec::new();
     for f in forms {
@@ -1681,6 +2241,19 @@ fn order_keys(keys: Vec<FormKey>, forms: &[String]) -> Result<Vec<FormKey>, AppE
                 )));
             }
         }
+    }
+    if !extra.is_empty() {
+        return Err(AppError::Input(format!(
+            "the key file also has a key for {}, which this exam does not declare (versions \
+             {}); declare every version the file has (--forms), or remove the other columns or \
+             rows",
+            extra
+                .iter()
+                .map(|k| label(&k.form))
+                .collect::<Vec<_>>()
+                .join(", "),
+            forms.join(", ")
+        )));
     }
     Ok(out)
 }
@@ -1969,7 +2542,7 @@ pub fn check_roster(
     match RosterSnapshot::build(records, &s, &omr_identity::ImportOptions::default()) {
         Ok((_, report)) => Ok(report.issues.iter().map(text).collect()),
         Err(RosterError::Blocked(report)) => Err(AppError::Input(format!(
-            "roster refused (§9.2): {}",
+            "roster refused: {}",
             report
                 .issues
                 .iter()
@@ -2206,5 +2779,57 @@ mod tests {
         v.as_object_mut().unwrap().remove("cancel_mode");
         assert!(serde_json::from_value::<ExamDefinition>(v).is_err());
         assert_eq!(d.exam_id, d.derived_exam_id());
+    }
+
+    #[test]
+    fn a_key_files_shape_is_read_whole_in_every_layout() {
+        let shape = |s: &str| key_file_shape(s.as_bytes(), 100, 5).unwrap();
+        // Per question with a header: versions, extent, gaps, trailing template rows ignored.
+        let k = shape("question,A,B,points\n1,B,C,1\n2,,D,1\n3,A,*,2\n4,,,\n5,,,\n");
+        assert_eq!(k.versions, KeyVersions::Named(vec!["A".into(), "B".into()]));
+        assert_eq!((k.questions, k.listed), (3, 5));
+        assert_eq!(k.gaps, vec![("A".to_string(), 2)]);
+        assert_eq!(k.highest_option, Some(4));
+        assert!(k.points && !k.first_cell_labels);
+        // Rows beyond any count are read, never dropped; beyond the sheet they are named.
+        let k = shape("q,key\n1,A\n40,B\n120,C\n");
+        assert_eq!(k.versions, KeyVersions::Shared);
+        assert_eq!(k.questions, 120);
+        assert_eq!(k.beyond_sheet, vec![120]);
+        assert_eq!(k.gaps.len(), 117);
+        // Headerless `1,B` is one shared key; `1,B,C` two unlabelled keys.
+        assert_eq!(shape("1,B\n2,C\n").versions, KeyVersions::Shared);
+        assert_eq!(shape("1,B,C\n2,C,D\n").versions, KeyVersions::Unlabeled(2));
+        // A single column, and a `*` version row: one key for every version.
+        let k = shape("B\nC\n-\nA\n");
+        assert_eq!((k.versions.clone(), k.questions), (KeyVersions::Shared, 4));
+        assert_eq!(k.gaps, vec![(String::new(), 3)]);
+        assert_eq!(shape("form,1,2\n*,A,B\n").versions, KeyVersions::Shared);
+        // One row per version with a header, numbered versions reported.
+        let k = shape("version,Q1,Q2,Q3\nVersion 1,A,B,C\nVersion 2,B,C,D\n");
+        assert_eq!(k.versions, KeyVersions::Named(vec!["1".into(), "2".into()]));
+        assert_eq!(k.numbered_versions(), vec!["1".to_string(), "2".into()]);
+        assert_eq!(shape("question,1,2\n1,A,B\n").numbered_versions().len(), 2);
+        // Headerless rows that start with their version, worded or a bare letter.
+        let k = shape("Form A,B,C,D\nForm C,C,D,A\n");
+        assert_eq!(k.versions, KeyVersions::Named(vec!["A".into(), "C".into()]));
+        assert_eq!((k.questions, k.first_cell_labels), (3, false));
+        let k = shape("A,B,C,D,E\nC,C,D,A,B\n");
+        assert_eq!(k.versions, KeyVersions::Named(vec!["A".into(), "C".into()]));
+        assert_eq!((k.questions, k.first_cell_labels), (4, true));
+        // Rows of answers alone: a cell that is no version label, one row, or rows starting
+        // with the same letter.
+        let k = shape("A|B,C,D\nB,C,*\n");
+        assert_eq!(
+            (k.versions.clone(), k.questions),
+            (KeyVersions::Unlabeled(2), 3)
+        );
+        assert_eq!(shape("B,C,A\n").versions, KeyVersions::Unlabeled(1));
+        assert_eq!(shape("B,C,A\nB,D,E\n").versions, KeyVersions::Unlabeled(2));
+        // Malformed entries fail with their line; options beyond the sheet's too.
+        let e = key_file_shape(b"question,A\n1,B\n2,F\n", 100, 5).unwrap_err();
+        assert!(e.to_string().contains("line 3"), "{e}");
+        assert!(key_file_shape(b"question,A\n1,B\n1,C\n", 100, 5).is_err());
+        assert!(key_file_shape(b"question,key,A\n1,B,C\n", 100, 5).is_err());
     }
 }

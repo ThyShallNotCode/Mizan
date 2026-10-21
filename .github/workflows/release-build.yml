@@ -126,6 +126,23 @@ jobs:
             if ($deps -match "(?i)vcruntime|msvcp") { throw "$exe needs the Visual C++ runtime" }
           }
 
+      # omr-winres embeds the app icon and version resource (no resource compiler): Explorer, the
+      # taskbar and Task Manager show them.
+      - name: The executables carry the Mizan icon and version information
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Add-Type -Namespace Win32 -Name Shell -MemberDefinition '[DllImport("shell32.dll", CharSet = CharSet.Unicode)] public static extern uint ExtractIconEx(string file, int index, System.IntPtr[] large, System.IntPtr[] small, uint n);'
+          foreach ($pair in @(@("target\release\omr.exe", "Mizan command line"), @("target\release\omr-desktop.exe", "Mizan"))) {
+            $exe = (Resolve-Path $pair[0]).Path
+            $icons = [Win32.Shell]::ExtractIconEx($exe, -1, $null, $null, 0)
+            $info = (Get-Item $exe).VersionInfo
+            Write-Output "$exe : $icons icon(s), '$($info.FileDescription)' $($info.ProductName) $($info.FileVersion)"
+            if ($icons -lt 1) { throw "$exe has no icon" }
+            if ($info.FileDescription -ne $pair[1]) { throw "$exe FileDescription is '$($info.FileDescription)', expected '$($pair[1])'" }
+            if ($info.ProductName -ne "Mizan") { throw "$exe ProductName is '$($info.ProductName)'" }
+          }
+
       - name: Package
         shell: bash
         run: |
@@ -134,7 +151,13 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then ext=".exe"; fi
           mkdir -p "dist/$name"
           cp "target/release/omr$ext" "target/release/omr-desktop$ext" "dist/$name/"
-          if [ "$RUNNER_OS" = Linux ]; then strip --strip-debug "dist/$name/omr" "dist/$name/omr-desktop"; fi
+          if [ "$RUNNER_OS" = Linux ]; then
+            strip --strip-debug "dist/$name/omr" "dist/$name/omr-desktop"
+            # the applications-menu entry and its icon (install-desktop-entry.sh adds both)
+            cp packaging/linux/mizan.desktop packaging/linux/install-desktop-entry.sh \
+              crates/shell-slint/ui/assets/brand/mizan-256.png crates/shell-slint/ui/assets/brand/mizan-512.png \
+              "dist/$name/"
+          fi
           # The embedded IBM Plex fonts are under the SIL Open Font License, which travels with them.
           cp crates/shell-slint/ui/assets/fonts/OFL.txt "dist/$name/OFL.txt"
           cat > "dist/$name/BUILD.txt" <<EOF
@@ -199,7 +222,7 @@ jobs:
           mv "artifacts/omr-x86_64-unknown-linux-gnu/omr-${GITHUB_SHA::7}-x86_64-unknown-linux-gnu" "staging/$linux"
           mv "artifacts/omr-x86_64-pc-windows-msvc/omr-${GITHUB_SHA::7}-x86_64-pc-windows-msvc" "staging/$windows"
           # Artifacts do not keep file modes, so the Linux programs get their execute bit back.
-          chmod 755 "staging/$linux/omr" "staging/$linux/omr-desktop"
+          chmod 755 "staging/$linux/omr" "staging/$linux/omr-desktop" "staging/$linux/install-desktop-entry.sh"
           (cd "staging/$linux" && sha256sum -c SHA256SUMS)
           (cd "staging/$windows" && sha256sum -c SHA256SUMS)
           tar -C staging --owner=0 --group=0 --numeric-owner -czf "release/$linux.tar.gz" "$linux"
@@ -218,7 +241,7 @@ jobs:
           | \`$windows.zip\` | x86-64 Windows 10 or 11 (CI runs on Windows Server 2025 only) |
           | \`$linux.tar.gz\` | x86-64 Linux with glibc ${glibc#GLIBC_} or newer (built on Ubuntu 24.04) |
 
-          Each archive holds \`omr\` (the command line) and \`omr-desktop\` (the desktop app), with \`BUILD.txt\`, the font licence \`OFL.txt\` and a \`SHA256SUMS\` of the two programs. The \`SHA256SUMS\` attached here covers the two archives.
+          Each archive holds \`omr\` (the command line) and \`omr-desktop\` (the desktop app), with \`BUILD.txt\`, the font licence \`OFL.txt\` and a \`SHA256SUMS\` of the two programs; the Linux one also holds \`install-desktop-entry.sh\`, which adds Mizan with its icon to your applications menu. The \`SHA256SUMS\` attached here covers the two archives.
 
           ## Before you use it
 

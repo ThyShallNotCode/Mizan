@@ -10,11 +10,13 @@ import {
 import { App, ReviewVM, Candidate, ContactTile } from "../state.slint";
 import {
     Icons, ThemeToggle, Centered, SectionLabel, StatusText, QueueRow, ScanPaper, FillBar,
-    ShortcutRow, AgreeGlyph, EmptyState, MessageText, KVLine, TextField,
+    ShortcutRow, AgreeGlyph, EmptyState, NoExamState, MessageText, KVLine, TextField,
 } from "../widgets.slint";
 import { ListView } from "std-widgets.slint";
 
 component QueuePane inherits Rectangle {
+    // hands the keys back to the review canvas after a click on a row or a group header
+    callback refocus();
     background: Theme.surface;
     property <length> sel-y: ReviewVM.selected-y;
     // keep the current item in view (rows are 62 px, headers 32 px), also when the screen is
@@ -50,12 +52,14 @@ component QueuePane inherits Rectangle {
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
-            Centered {
+            // the demo only: in a real session the lane chips filter the queue
+            if App.demo: Centered {
                 IconButton {
                     icon: Icons.filter;
                     label: "Filter the queue";
                     clicked => {
                         App.request("Queue filter");
+                        root.refocus();
                     }
                 }
             }
@@ -64,10 +68,11 @@ component QueuePane inherits Rectangle {
             height: 1px;
             background: Theme.border;
         }
+        // the canvas says why (ReviewVM.empty-text): the lane is done, or the exam is being
+        // graded
         if ReviewVM.queue.length == 0: EmptyState {
             vertical-stretch: 1;
-            title: "Lane clear";
-            text: "No open items in this lane.";
+            title: ReviewVM.empty-title;
         }
         lv := ListView {
             vertical-stretch: ReviewVM.queue.length == 0 ? 0 : 1;
@@ -81,6 +86,7 @@ component QueuePane inherits Rectangle {
                     expanded: e.expanded;
                     toggled => {
                         ReviewVM.toggle-group(e.code);
+                        root.refocus();
                     }
                 }
                 if !e.header: QueueRow {
@@ -95,6 +101,7 @@ component QueuePane inherits Rectangle {
                     a11y: e.a11y;
                     clicked => {
                         ReviewVM.select-item(e.id);
+                        root.refocus();
                     }
                 }
             }
@@ -208,6 +215,8 @@ component ContactThumb inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {
                 root.clicked();
@@ -242,8 +251,11 @@ component ContactThumb inherits Rectangle {
     }
 }
 
-component CanvasPane inherits Rectangle {
-    // hands the keys back to the review canvas (after a typed student number)
+// The item on show: its scan crop with the view chips, and what the item kind adds (fill chart,
+// contact sheet, identity channels, notice).
+component ItemCanvas inherits Rectangle {
+    // hands the keys back to the review canvas (after a typed student number, or a click on a
+    // view chip or a contact tile: Enter then commits the decision, never the control)
     callback refocus();
     // 1280 px windows: the fill chart card shrinks to its five bars
     in property <bool> narrow;
@@ -259,7 +271,7 @@ component CanvasPane inherits Rectangle {
         padding: Theme.space-xl;
         padding-top: Theme.space-lg;
         spacing: Theme.space-lg;
-        HorizontalLayout {
+        if ReviewVM.has-scan: HorizontalLayout {
             spacing: Theme.space-sm;
             Rectangle {
                 horizontal-stretch: 1;
@@ -270,6 +282,7 @@ component CanvasPane inherits Rectangle {
                 selected: true;
                 clicked => {
                     ReviewVM.toggle-registered();
+                    root.refocus();
                 }
             }
             if ReviewVM.kind != 3: Chip {
@@ -278,6 +291,7 @@ component CanvasPane inherits Rectangle {
                 selected: ReviewVM.overlay && ReviewVM.kind != 1;
                 clicked => {
                     ReviewVM.toggle-overlay();
+                    root.refocus();
                 }
             }
             if ReviewVM.kind == 0: Chip {
@@ -285,6 +299,7 @@ component CanvasPane inherits Rectangle {
                 selected: ReviewVM.show-all;
                 clicked => {
                     ReviewVM.toggle-show-all();
+                    root.refocus();
                 }
             }
             Chip {
@@ -293,6 +308,7 @@ component CanvasPane inherits Rectangle {
                 // a click cycles 2× → 3× → 4× → 2× (the keys step either way)
                 clicked => {
                     ReviewVM.zoom-by(ReviewVM.zoom >= 4 ? -2 : 1);
+                    root.refocus();
                 }
             }
             Rectangle {
@@ -325,7 +341,9 @@ component CanvasPane inherits Rectangle {
         paper-box := Rectangle {
             min-width: 0px;
             preferred-width: 0px;
-            height: paper.height;
+            // an item with no scan (an exam-level notice) shows no blank paper
+            visible: ReviewVM.has-scan;
+            height: ReviewVM.has-scan ? paper.height : 0px;
             paper := ScanPaper {
                 x: (parent.width - self.width) / 2;
                 y: 0;
@@ -337,7 +355,7 @@ component CanvasPane inherits Rectangle {
                 // blind items show no overlays (§13.4); overlays follow the registered geometry
                 show-overlays: ReviewVM.overlay && ReviewVM.registered && ReviewVM.kind != 1;
                 caption: ReviewVM.caption;
-                image-label: "Scan crop: " + ReviewVM.caption;
+                image-label: ReviewVM.has-scan ? "Scan crop: " + ReviewVM.caption : "";
             }
         }
         if ReviewVM.kind == 0: HorizontalLayout {
@@ -372,6 +390,7 @@ component CanvasPane inherits Rectangle {
                     t: t;
                     clicked => {
                         ReviewVM.select-contact(t.id);
+                        root.refocus();
                     }
                 }
             }
@@ -379,7 +398,7 @@ component CanvasPane inherits Rectangle {
         if ReviewVM.kind == 1: Card {
             vertical-stretch: 0;
             title: "Blind verify";
-            subtitle: "The engine's reading is withheld (§13.4): no suggestion, fill bars, threshold or overlays.";
+            subtitle: "The engine's reading is withheld: no suggestion, fill bars, threshold or overlays.";
             Text {
                 text: "Enter what is marked: an option key (A–E, 1–5, or the Arabic letter), Backspace for blank, Ctrl+M for multiple marks, Ctrl+U for unreadable. Then press Enter.";
                 font-size: Theme.text-sm;
@@ -547,6 +566,8 @@ component CandidateRow inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
                 root.clicked();
@@ -665,6 +686,24 @@ component CandidateRow inherits Rectangle {
     }
 }
 
+// The canvas column: the item on show, or why there is none (a scan crop, chips and charts with
+// nothing behind them are never drawn).
+component CanvasPane inherits Rectangle {
+    callback refocus();
+    in property <bool> narrow;
+    background: Theme.scan-backdrop;
+    if ReviewVM.has-item: ItemCanvas {
+        narrow: root.narrow;
+        refocus => {
+            root.refocus();
+        }
+    }
+    if !ReviewVM.has-item: EmptyState {
+        title: ReviewVM.queue.length > 0 ? "No item open" : "Nothing to review";
+        text: ReviewVM.queue.length > 0 ? "Pick an item from the queue." : ReviewVM.empty-text;
+    }
+}
+
 component DecisionPane inherits Rectangle {
     // below 880 px the keyboard legend gives way (the keys stay on every control; Settings
     // lists the whole map) so the pane fits 800 px windows
@@ -678,7 +717,6 @@ component DecisionPane inherits Rectangle {
     }
     if !ReviewVM.has-item: EmptyState {
         title: "Nothing to decide";
-        text: "Pick an item from the queue.";
     }
     if ReviewVM.has-item: VerticalLayout {
         padding: Theme.space-lg + Theme.space-xs;
@@ -921,7 +959,8 @@ component DecisionPane inherits Rectangle {
                     root.refocus();
                 }
             }
-            GhostButton {
+            // a sheet can be rescanned; an exam-level notice has none
+            if ReviewVM.has-scan: GhostButton {
                 text: "Add to rescan list";
                 key-hint: "Ctrl+R";
                 icon: Icons.rescan;
@@ -998,17 +1037,18 @@ export component ReviewScreen inherits VerticalLayout {
     in property <length> win-h: 900px;
     property <bool> narrow: root.win-w < 1400px;
     property <bool> short: root.win-h < 880px;
-    property <int> search-request: ReviewVM.search-request;
-    changed search-request => {
-        search.focus();
-    }
     init => {
+        keys.focus();
+    }
+    // the window gives the keyboard back (a control that had it went away): the canvas takes it
+    property <int> keys-back: App.keys-back;
+    changed keys-back => {
         keys.focus();
     }
     TopBar {
         // narrow windows drop the trailing "Review" (the active nav tab names the page)
         Breadcrumb {
-            parts: root.narrow ? [App.course, App.assessment] : [App.course, App.assessment, "Review"];
+            parts: root.narrow && App.has-exam ? [App.course, App.assessment] : [App.course, App.assessment, "Review"];
         }
         HorizontalLayout {
             spacing: Theme.space-sm;
@@ -1024,7 +1064,7 @@ export component ReviewScreen inherits VerticalLayout {
                 }
             }
         }
-        VerticalLayout {
+        if App.has-exam: VerticalLayout {
             alignment: center;
             spacing: Theme.space-xs;
             width: root.narrow ? 150px : 200px;
@@ -1054,9 +1094,14 @@ export component ReviewScreen inherits VerticalLayout {
         }
         HorizontalLayout {
             spacing: Theme.space-sm;
-            Centered {
-                // a number typed here decides the identity item on screen; the canvas then
-                // takes the keys again, so Enter accepts it
+            // a number typed here decides the identity item on screen; the canvas then takes
+            // the keys again, so Enter accepts it (no exam: no roster to search)
+            if App.has-exam: Centered {
+                // "/" or Ctrl+F (ReviewVM.search-request) puts the keyboard in the field
+                property <int> search-request: ReviewVM.search-request;
+                changed search-request => {
+                    search.focus();
+                }
                 search := SearchField {
                     placeholder: "Roster search";
                     width: 200px;
@@ -1067,9 +1112,13 @@ export component ReviewScreen inherits VerticalLayout {
                 }
             }
             Centered {
-                ThemeToggle { }
+                ThemeToggle {
+                    toggled => {
+                        keys.focus();
+                    }
+                }
             }
-            Centered {
+            if App.has-exam: Centered {
                 IconButton {
                     icon: Icons.undo;
                     label: "Undo last decision (Ctrl+Z)";
@@ -1082,10 +1131,11 @@ export component ReviewScreen inherits VerticalLayout {
             Centered {
                 IconButton {
                     icon: Icons.help;
-                    label: "Help for " + ReviewVM.code + " (F1)";
+                    label: ReviewVM.code != "" ? "Help for " + ReviewVM.code + " (F1)" : "Help (F1)";
                     active: ReviewVM.help-open;
                     clicked => {
                         ReviewVM.toggle-help();
+                        keys.focus();
                     }
                 }
             }
@@ -1100,9 +1150,12 @@ export component ReviewScreen inherits VerticalLayout {
             }
             return reject;
         }
-        HorizontalLayout {
+        if App.has-exam: HorizontalLayout {
             QueuePane {
                 width: Theme.list-pane-width;
+                refocus => {
+                    keys.focus();
+                }
             }
             CanvasPane {
                 horizontal-stretch: 1;
@@ -1119,16 +1172,15 @@ export component ReviewScreen inherits VerticalLayout {
                 }
             }
         }
+        if !App.has-exam: NoExamState { }
+    }
+    // the run's notice sits here, above the status bar: nothing of the screen lies under it
+    if App.notice-room > 0: Rectangle {
+        height: App.notice-room;
     }
     StatusBar {
-        Centered {
-            StatusPill {
-                text: "Saved";
-                tone: Tone.success;
-            }
-        }
         StatusText {
-            text: "audit head " + ReviewVM.audit-head;
+            text: ReviewVM.audit-head != "" ? "audit head " + ReviewVM.audit-head : "";
             mono: true;
         }
         MessageText {
@@ -1137,7 +1189,7 @@ export component ReviewScreen inherits VerticalLayout {
             horizontal-stretch: 1;
         }
         StatusText {
-            text: ReviewVM.two-person ? "Two-person rule: on" : "Two-person rule: off";
+            text: !App.has-exam ? "" : ReviewVM.two-person ? "Two-person rule: on" : "Two-person rule: off";
         }
         StatusText {
             text: App.engine;

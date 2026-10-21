@@ -23,7 +23,7 @@ This is the visual and interaction system for the Mizan desktop app (Rust + Slin
 | Exams dashboard | AIDesigner `generate_design` (classic, desktop) | `concepts/exams-dashboard.{html,png}` |
 | Results and outcomes | Hand-authored after the AIDesigner credits ran out, already on the final tokens | `concepts/results-outcomes.{html,png}`, `results-outcomes-dark.png` |
 | Scan and recognise (live batch) | Hand-authored, same reason | `concepts/scan-live.{html,png}` |
-| App icon | Hand-drawn SVG (no image credits left), rendered with Chromium | `assets/icon.svg`, `assets/icon.png` (512 px) |
+| App icon | Four concepts generated with Figma AI (gpt-image), then the chosen direction hand-built as vectors; `examples/brand_icons.rs` renders it with resvg | `assets/icon.svg` (48 px and up), `assets/brand/icon-<n>.svg` (16–40 px), `assets/brand/glyph.svg` (rail logo), `omr-winres/assets/mizan.ico` |
 
 The account had 5 AIDesigner credits. They went as follows:
 - one credit was lost to a client-side 60 s timeout before an editor session existed, so its result could not be retrieved;
@@ -276,11 +276,19 @@ The weights are `weight-regular` 400, `weight-medium` 500 and `weight-semibold` 
 
 ## 7. Iconography
 
-- **App mark** (`assets/icon.svg`, `icon.png` 512 px).
-  - A 3×3 bubble-sheet dot grid on a deep-teal rounded square.
-  - The check mark is drawn *through* three grid bubbles, the "marked answers", in gold `#E2BD6E`.
-  - A faint 8-point girih star sits behind the grid at 7 % and disappears at small sizes.
-  - Verified legible at 16, 32 and 64 px on light and dark.
+- **App mark** (`assets/icon.svg`): *mizan* is a balance.
+  - A level balance in gold on a deep-teal rounded square; its two pans are filled answer bubbles,
+    so it reads as grading rather than law.
+  - The pivot is a solid 8-point girih star. It has no central circle: an 8-point star with one is
+    the Rub el Hizb sign that marks Quran sections.
+  - A faint girih star sits behind the balance and disappears below 64 px.
+  - A lighter rim keeps the plate's edge visible on the dark Windows taskbar.
+  - 16–40 px use separately drawn, pixel-fitted versions (`assets/brand/icon-<n>.svg`: no lattice,
+    hangers only from 24 px); the rail logo is the balance without its plate (`brand/glyph.svg`).
+  - The Windows `.ico` holds 16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 80, 96, 128 and 256 px
+    (the sizes Windows asks for at 100–200 % scaling), embedded in both executables by `omr-winres`;
+    Linux gets 256 and 512 px PNGs and a desktop entry (`packaging/linux`).
+  - Checked at every size on light (`#F3F3F3`) and dark (`#202020`) taskbars and on `nav-bg`.
 - **UI icons** (`assets/icons/*.svg`, 25 icons).
   - Drawn for this product on a 24 px grid: 1.75 px stroke, round caps and joins, single colour.
   - Applied with `colorize` in Slint.
@@ -354,11 +362,15 @@ All screens are 1440×900 nominal and work down to 1280×800. The frame is:
 
 Nav order: **Exams, Setup, Scan, Review, Results, Outcomes, Export**, then Settings at the bottom. `Ctrl+1`…`Ctrl+7` jump between them; these chords do not collide with review keys (§13.3).
 
+The built shell has no Export screen: exports are written when a run ends and from Results' **Export…** bar, so `Ctrl+1`…`Ctrl+6` reach Exams to Outcomes. Screenshots of every built screen, rendered headless from synthetic data, are in `screens/` (demo data) and `screens/real/` (synthetic exams graded through the core), light, dark and 1280×800.
+
+**Completion notice** (on every screen; `screens/real/scan-notice-light.png`). When a background run ends (a new exam graded, scans added, a roster given), a `surface-raised` card with `shadow-2` and `radius-lg` sits 12 px above the `StatusBar`, across the content column (24 px in from each side), in room every screen gives up for it while it shows (`App.notice-room`), so it never lies over a control, the New-exam card's Grade exam included. A 4 px bar at its start carries the tone (success; warning when a key is inferred or waits for confirmation; info when cancelled), and the words say it too. It shows the title (text-sm/600, "CS 213 Quiz 1 is graded"), one line of what happened and what waits (text-xs, `ink-2`: booklets, items to review, where the exports are, and, once a decision or key change follows, that those exports are older than the exam), the next steps as buttons (the first primary: **Review N items**, **Open results**, **Open exports folder**, **Confirm the key in Setup**, **Replace the key in Setup**, **Edit and grade again**, **Show the Scan log**) and a close `IconButton` "Dismiss the notice" (Escape too; the keyboard goes back to the window). A step that leads to another screen dismisses it, and so do New exam and grading another exam; *Open exports folder* leaves it on show. It is a live region, polite (assertive when the run failed), since it never takes the keyboard.
+
 ### 9.1 Exams dashboard (concept: `exams-dashboard.png`)
 
 - **Top bar.**
   - Left: wordmark "Mizan" and the term selector ("Term 1448-1 (Fall 2026)").
-  - Right: global search (`Ctrl+K`), primary **New exam**, theme toggle and user (name · role).
+  - Right: global search (`Ctrl+K`), **Open folder…** (`Ctrl+O`, another exams folder), a refresh `IconButton` (`F5`, reads the folder again), primary **New exam**, theme toggle and user (name · role).
 - **Page header.** "Exams" (20/600), with a `GirihDivider` under it and filter `Chip`s with counts: All, Setup, Scanning, In review, Ready to release, Released. A view toggle (table / cards) sits on the right.
 - **Stat row.** Four `StatTile`s:
   - Sheets scanned this week;
@@ -385,7 +397,22 @@ Nav order: **Exams, Setup, Scan, Review, Results, Outcomes, Export**, then Setti
   - logistics: roster count, sections, last scan, batch ID;
   - **Open results**.
 - **Keyboard.** `↑`/`↓` move rows, `Enter` opens the drawer, `Esc` closes it, `Ctrl+N` starts a new exam. Single-character keys are reserved for the review canvas (§10, 2.1.4).
-- **Empty state.** The girih line art, "No exams this term", and **New exam** / **Import from Remark**.
+- **Empty state** (`screens/real/exams-empty-light.png`). The girih line art, "No exams in this folder yet", one sentence on what goes here, and **New exam…** (primary), **Open another folder…** and **Import from Remark export…**. A filter or search that hides every exam says so instead ("No exams with this status") with **Show all exams**.
+
+### 9.1.1 New exam card (`screens/real/exams-new-ask-light.png`, `exams-new-ready-light.png`)
+
+**New exam** opens a card over the dashboard (`surface-raised`, `shadow-2`; the top bar stays above it) with a one-line explanation: every value is proposed from the scans and the files given, with where it came from, and what the card shows is what is graded.
+- **Left column: what the instructor gives.**
+  - Path fields, each with **Browse…** beside it (and **Folder…** for the scans) when the window has file dialogs: Scan files or folders, Answer key file, Key sheets, Roster file, CLO mapping file.
+  - Values typed over the proposal: Exam title, Course code, Number of questions, Versions, Options per question. An empty field shows, as its placeholder, the value it will grade and its source ("30 · key file").
+  - **Advanced options ▸**: the sheet, output folder, term, student-ID scheme, cancel mode (locked when the sheet prints it, as the IAU sheet and most spec files do), second review (chosen from its three choices, never typed) and high stakes. Codes are written in plain words ("Erase to change", "IAU student number"). Folded, these fields do not exist.
+  - Under the scans field, the check of the scans: "Checking the scans: 6 of 12 pages read" with a `ProgressBar` and **Stop checking**, then "Checked 12 pages in 0.5 s: the card is made from them".
+  - A question about a typed value is also said under its field (its accessible description).
+- **Right column: What is graded.**
+  - The questions first, each in a `warning-soft` box: its text and one-click answers as secondary buttons (an answer is recorded; a file to choose opens its dialog; a field to type in takes the focus).
+  - **Show notes (n)**, folded.
+  - One row per value: the label (`ink-2`), the value and its source ("A, B — the sheets"; a missing value in `error`), the evidence under it (text-xs, `ink-3`), and "question" (`error`) or "note" (`ink-3`) at the row's end.
+- **Footer.** **Import from Remark export…** at the start; at the end why grading waits (text-xs), **Cancel** and primary **Grade exam**, disabled with that reason while anything blocks it (another exam being graded, the scans being checked, a question).
 
 ### 9.2 Exam setup: template, key and CLO mapping (no concept; spec §6, §10.3, §11.2)
 
@@ -410,13 +437,16 @@ Nav order: **Exams, Setup, Scan, Review, Results, Outcomes, Export**, then Setti
 
   Rows sit in a sticky header grid with the CLO titles truncated and the full text in a tooltip. Below it, a **coverage strip** shows one `MeterBar` per CLO for Σ e<sub>i,c</sub> share and lint chips (unmapped items, thin evidence SCO-014, Bloom gap SCO-015). Keyboard: arrows move cells; digits type the weight; `Delete` clears; `Ctrl+Enter` approves the selected rows (role-gated).
 - **Roster.** An import drop zone and a table with masked national IDs (`••••••3456`, mono).
+  - Built so far: **Add roster…** in the top bar (while the exam has no roster) and step **4 Roster** open a bar under the top bar with the roster file (**Browse…**) and **Add roster and match students**, for an exam graded without one or to replace it. The file is checked first; the students are then matched again in the background, followed on the Scan screen and closed by the completion notice. There is no drop zone or roster table yet.
 
 ### 9.3 Scan and recognise, live batch (concept: `scan-live.png`)
 
 - **Top bar.**
   - Breadcrumb "CHEM 101 / Midterm 1 / Batch 3 of 5" and source `Tag` (hot folder or file import);
   - device pill (model · dpi · mode);
-  - **Pause** (`Ctrl+Space`) and ghost **Stop**;
+  - **Pause** (`Ctrl+Space`) and ghost **Stop**, for a capture agent's batch only (not built: a file import runs to its end);
+  - **Cancel grading…** while a new exam is being graded: a bar under the top bar asks "Cancel grading? Nothing is saved; your scan files are unchanged." with **Keep grading** and **Cancel grading**;
+  - **Add scans…** (a floating bar with the scan files or folder, **Browse…**, **Folder…** and **Add and regrade**);
   - primary **Open review · N** (`Ctrl+4`).
 - **Body.** A grid of a flexible left column plus a 360 px right column.
 - **Left column, row 1.** A `Gauge` card (pages/s, floor tick at the 40 pages/s spec floor, max = stretch target ×1.2) and four `StatTile`s:
@@ -502,6 +532,20 @@ Codes whose Appendix A severity varies by instance (e.g. MRK-003 INFO/ERROR, REG
 - **Centre:** a live preview of the selected table, rendered with data-table rules, plus a classification banner: "Restricted" (`warning-soft`, lock glyph).
 - **Right, 340 px:** options (language Arabic/English, digits `latn`/`arab`, Hijri dates on/off, include provisional), destination path (mono), and primary **Export** (`Ctrl+E` in this view). Below that, an "Export history" list with hashes (mono) and the SUPERSEDED watermark state.
 - An export that would carry identities before release shows a blocking `error` call-out with the §17.4 reason.
+- Built so far: no Export screen. Results' **Export…** opens a floating bar with **Write all exports**, the Blackboard upload into a new or an existing column (**Write Blackboard CSV**) and **Open exports folder**; the exports are also written when a run ends (Settings, §9.7).
+
+### 9.7 Settings (no concept; `screens/real/settings-light.png`)
+
+Two columns of `Card`s.
+- **Left.**
+  - **Appearance**: Theme (segments Light · Dark, also the top bars' toggle) and Reduce motion.
+  - **Review**: "Your name in the audit trail" (a text field with **Save**; Enter saves too; the status bar says why a name is refused), recorded on every decision from then on; while the field differs from the name recorded, the line under it says it is not saved yet, and Settings shown again shows the name recorded; Single-key shortcuts; Show blank-bubble overlays.
+  - **About**: Engine (mono), Exams folder, **Change…** (the folder dialog) and **Show folder** (*Show in Explorer* on Windows), and the data note.
+- **Right.**
+  - **Grading**: Write exports after grading (on by default).
+  - **Review keymap**: every key with its keycaps and what it does.
+
+Every setting is kept for the next start.
 
 ---
 
@@ -555,7 +599,7 @@ Codes whose Appendix A severity varies by instance (e.g. MRK-003 INFO/ERROR, REG
 
 ## 12. Deviations and deferrals
 
-- **Only two of four concepts come from AIDesigner.** The account had 5 credits. One was lost to a client timeout before an editor session existed, and the generation for the third screen was refused once the balance hit zero. Results/outcomes and scan-live were hand-authored on the final tokens. The app icon was drawn by hand rather than with `generate_image`.
+- **Only two of four concepts come from AIDesigner.** The account had 5 credits. One was lost to a client timeout before an editor session existed, and the generation for the third screen was refused once the balance hit zero. Results/outcomes and scan-live were hand-authored on the final tokens. The app icon's concepts came from Figma AI; the final mark was built by hand as vectors, since traced AI output is neither geometric nor fit to small sizes.
 - **Exam setup and export have layout specs only** (§9.2, §9.6), no concept renders.
 - **Overlay colours don't follow the concepts.** They were re-derived from `#B26B00` and the concept crimson to pass the CVD all-pairs gate on scan grey.
 - **Not built in `theme.slint`:** dropdown, tooltip, dialog, toast and virtualised table components. The shell builds them from these tokens.

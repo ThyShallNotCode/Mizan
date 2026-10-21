@@ -95,7 +95,7 @@ pub fn stack_markers(def: &ExamDefinition, digits: usize) -> (Vec<u8>, Vec<Strin
         .stack_markers(digits, &def.id_scheme.scheme(), def.roster.as_deref())
 }
 
-fn page_label(sources: &[SourceInfo], p: &PageState) -> String {
+pub(crate) fn page_label(sources: &[SourceInfo], p: &PageState) -> String {
     let name = sources
         .get(p.source)
         .map(|s| {
@@ -113,11 +113,13 @@ fn page_label(sources: &[SourceInfo], p: &PageState) -> String {
 /// A sheet of several pages (own forms) is grouped by its verified serial, else by consecutive
 /// pages of one file. Each row is routed by `omr-scoring` ([`SheetCell::route`]): only one
 /// confidently read option gives a key entry, everything else waits for the instructor.
+/// `beyond[i]`: the questions past the exam's count that page `i` marks (1-based).
 pub fn collect(
     def: &ExamDefinition,
     pages: &[PageState],
     sources: &[SourceInfo],
     declared: &[bool],
+    beyond: &[Vec<u16>],
 ) -> Vec<KeySheet> {
     let n = usize::from(def.questions);
     let mut groups: Vec<Vec<usize>> = Vec::new();
@@ -157,7 +159,7 @@ pub fn collect(
         .into_iter()
         .map(|mut g| {
             g.sort_by_key(|&i| pages[i].read.as_ref().map_or(0, |r| r.page_no));
-            sheet_of(def, pages, sources, declared, g, n)
+            sheet_of(def, pages, sources, declared, beyond, g, n)
         })
         .collect()
 }
@@ -167,6 +169,7 @@ fn sheet_of(
     pages: &[PageState],
     sources: &[SourceInfo],
     declared: &[bool],
+    beyond: &[Vec<u16>],
     g: Vec<usize>,
     n: usize,
 ) -> KeySheet {
@@ -292,6 +295,12 @@ fn sheet_of(
             })
             .collect()
     };
+    let beyond: std::collections::BTreeSet<u16> = g
+        .iter()
+        .filter_map(|&i| beyond.get(i))
+        .flatten()
+        .copied()
+        .collect();
     KeySheet {
         pages: g,
         declared: is_declared,
@@ -302,7 +311,35 @@ fn sheet_of(
         refusal,
         questions,
         label,
+        beyond: beyond.into_iter().collect(),
     }
+}
+
+/// Key sheets that mark questions beyond the exam's count (§10.1): one note per sheet naming
+/// them, for the key summary. Those rows are never part of the key.
+pub fn beyond_notes(def: &ExamDefinition, ks: &KeySheets) -> Vec<String> {
+    ks.sheets
+        .iter()
+        .filter(|k| !k.beyond.is_empty())
+        .map(|k| {
+            let qs: Vec<u32> = k.beyond.iter().map(|&q| u32::from(q)).collect();
+            format!(
+                "{}: the key sheet marks {} {} but the exam has {} questions, so {} not part \
+                 of the key; set the question count to {} to grade {}",
+                k.label,
+                if qs.len() == 1 {
+                    "question"
+                } else {
+                    "questions"
+                },
+                crate::exam::question_ranges(&qs),
+                def.questions,
+                if qs.len() == 1 { "it is" } else { "they are" },
+                qs[qs.len() - 1],
+                if qs.len() == 1 { "it" } else { "them" },
+            )
+        })
+        .collect()
 }
 
 /// The rows of version `form`: the cells of its usable key sheets combined (rows on which two
@@ -1029,7 +1066,9 @@ impl ExamProject {
             .map(|(_, v)| {
                 let from = match &def.key {
                     KeySource::Provided { .. } => "the key file",
-                    KeySource::Inferred => "INFERRED from the sheets (never releasable)",
+                    KeySource::Inferred => {
+                        "INFERRED from the sheets (not releasable until replaced)"
+                    }
                     KeySource::None => "no key yet (omr key set / omr key replace)",
                 };
                 (v.clone(), from.to_string())
@@ -1056,6 +1095,7 @@ impl ExamProject {
                 .iter()
                 .cloned()
                 .chain(stack_warnings(def, ks))
+                .chain(beyond_notes(def, ks))
                 .collect(),
             key_checks: self
                 .scoring
@@ -1353,6 +1393,7 @@ pub fn read_key_sheets(
         snapshot_utc: Some(crate::pipeline::now_utc()),
         operator: "principal:operator".into(),
         max_pages: None,
+        cancel: Default::default(),
     };
     let g = crate::pipeline::grade_sources(
         &d,

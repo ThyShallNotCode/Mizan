@@ -3,12 +3,14 @@
 // preview with Arabic and English headers (§11.7).
 
 import {
-    Theme, Tone, Severity, Card, TopBar, StatusBar, SecondaryButton, StatusPill, Tag, MeterBar,
-    Breadcrumb, TableRow,
+    Theme, Tone, Severity, Card, TopBar, StatusBar, PrimaryButton, SecondaryButton, StatusPill, Tag,
+    MeterBar, Breadcrumb, TableRow,
 } from "../theme.slint";
-import { App, OutcomesVM, CloRow, B1Row } from "../state.slint";
+import { App, OutcomesVM, CloRow, B1Row, Page } from "../state.slint";
 import { ListView } from "std-widgets.slint";
-import { Icons, ThemeToggle, Centered, StatusText, EmptyState, MessageText } from "../widgets.slint";
+import {
+    Icons, ThemeToggle, Centered, StatusText, EmptyState, NoExamState, MessageText,
+} from "../widgets.slint";
 
 component Legend inherits HorizontalLayout {
     spacing: Theme.space-lg;
@@ -457,10 +459,20 @@ export component OutcomesScreen inherits VerticalLayout {
             }
         }
     }
-    if !OutcomesVM.available: EmptyState {
+    if !App.has-exam: NoExamState {
         vertical-stretch: 1;
-        title: "No outcome results yet";
-        text: "CLO attainment appears once scores exist and the exam's items are mapped to CLOs (a CLO file, --clo clo.csv).";
+    }
+    // why there is no attainment (being graded, not scored yet, no CLOs), and where to go
+    if App.has-exam && !OutcomesVM.available: EmptyState {
+        vertical-stretch: 1;
+        title: OutcomesVM.empty-title;
+        text: OutcomesVM.empty-text;
+        if OutcomesVM.empty-to-setup: PrimaryButton {
+            text: "Load a CLO file in Setup";
+            clicked => {
+                App.navigate(Page.setup);
+            }
+        }
     }
     if OutcomesVM.available: VerticalLayout {
         vertical-stretch: 1;
@@ -556,20 +568,18 @@ export component OutcomesScreen inherits VerticalLayout {
             }
         }
     }
+    // the run's notice sits here, above the status bar: nothing of the screen lies under it
+    if App.notice-room > 0: Rectangle {
+        height: App.notice-room;
+    }
     StatusBar {
-        Centered {
-            StatusPill {
-                text: "Saved";
-                tone: Tone.success;
-            }
-        }
         MessageText {
             text: App.message;
             tone: App.message-tone;
             horizontal-stretch: 1;
         }
         StatusText {
-            text: "Actual level prints μ and π; the policy decides (§11.4)";
+            text: OutcomesVM.available ? "Actual level prints μ and π; the policy decides" : "";
         }
         StatusText {
             text: App.engine;

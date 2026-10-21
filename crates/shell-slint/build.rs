@@ -5,4 +5,9 @@ fn main() {
         .with_style("fluent".into())
         .with_debug_info(true);
     slint_build::compile_with_config("ui/app.slint", config).expect("compile ui/app.slint");
+    // Windows: the app icon and version resource in omr-desktop.exe.
+    omr_winres::embed(&omr_winres::Info {
+        file_description: "Mizan",
+        original_filename: "omr-desktop.exe",
+    });
 }

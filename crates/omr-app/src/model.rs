@@ -88,6 +88,11 @@ pub enum FormSource {
     Reviewed,
     /// Unknown.
     Unknown,
+    /// The sheet declares no version (blank or unclear bubble) and the exam grades every
+    /// sheet with one key: a one-version exam, or versions whose keys, points and mapping are
+    /// identical (SCO-005 `identical_forms`, INFO). Scored under that key; per-version
+    /// breakdowns count it as "version not declared", never as the first version.
+    Shared,
 }
 
 /// Form inference evidence (§10.3).
@@ -193,6 +198,24 @@ impl Booklet {
     pub fn label(&self) -> String {
         format!("Booklet {:04}", self.serial)
     }
+
+    /// True when the sheet bubbles a version the exam does not declare (SCO-005
+    /// `undeclared_version`): held, never scored, until a reviewer chooses its version.
+    pub fn undeclared_version(&self) -> bool {
+        self.exceptions.iter().any(|e| {
+            e.code == "SCO-005" && e.sub_reason.as_deref() == Some(crate::infer::UNDECLARED_VERSION)
+        })
+    }
+
+    /// The version the booklet counts under in per-version breakdowns: its form's letter,
+    /// `None` without a form or when the form only stands for the shared key
+    /// ([`FormSource::Shared`]: the version is not declared).
+    pub fn version<'a>(&self, forms: &'a [String]) -> Option<&'a str> {
+        if self.form_source == FormSource::Shared {
+            return None;
+        }
+        self.form.and_then(|f| forms.get(f)).map(String::as_str)
+    }
 }
 
 /// The key in force: per form, per question.
@@ -200,7 +223,7 @@ impl Booklet {
 pub struct EffectiveKey {
     /// Key version number (1 = first).
     pub version: u32,
-    /// True when inferred from the sheets (never releasable).
+    /// True when inferred from the sheets (not releasable until the real key replaces it).
     pub inferred: bool,
     /// Entries per form, per question.
     pub forms: Vec<Vec<KeyCell>>,
@@ -312,6 +335,10 @@ pub struct KeySheet {
     /// Where the sheet is: its first page's file and page number (e.g. `scans.pdf page 31`).
     #[serde(default)]
     pub label: String,
+    /// Questions beyond the exam's count (1-based, ascending) the sheet marks: never part of
+    /// the key, named in the key summary (a count typed too low drops them otherwise).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub beyond: Vec<u16>,
 }
 
 impl KeySheet {
@@ -552,7 +579,11 @@ impl Session {
             );
         }
         if self.key.as_ref().is_some_and(|k| k.inferred) {
-            why.push("key INFERRED from the sheets (SCO-003): never releasable".to_string());
+            why.push(
+                "key INFERRED from the sheets (SCO-003): not releasable until the real key \
+                 replaces it (Setup › Replace key…, or omr key replace)"
+                    .to_string(),
+            );
         }
         let open = self.open_blocking();
         if open > 0 {
@@ -575,8 +606,7 @@ impl Session {
         if self.flags.computing() && !self.key_unconfirmed() {
             why.push(
                 "the item analysis of the current results has not checked for a probable \
-                 mis-key yet (§12.2 flag stability: computing…); it runs with the next export \
-                 (omr export) or release"
+                 mis-key yet (it is computing…); it runs with the next export or release"
                     .to_string(),
             );
         }

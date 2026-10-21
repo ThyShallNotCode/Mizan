@@ -5,9 +5,12 @@
 // as a binding: `win-w: root.width` would close a loop (the window's layout constraints depend on
 // the screens, whose layout depends on the width), which Slint 1.18 deprecates and may panic on.
 
-import { Theme, Tone, NavRail, NavItem } from "theme.slint";
+import {
+    Theme, Tone, NavRail, NavItem, PrimaryButton, SecondaryButton, Button, ButtonKind,
+    IconButton,
+} from "theme.slint";
 import { App, ExamsVM, SetupVM, ScanVM, ReviewVM, ResultsVM, OutcomesVM, RemarkVM, Page } from "state.slint";
-import { Icons } from "widgets.slint";
+import { Icons, Centered } from "widgets.slint";
 import { ExamsScreen } from "screens/exams.slint";
 import { SetupScreen } from "screens/setup.slint";
 import { ScanScreen } from "screens/scan.slint";
@@ -19,9 +22,190 @@ import { Palette } from "std-widgets.slint";
 
 export { Theme, App, ExamsVM, SetupVM, ScanVM, ReviewVM, ResultsVM, OutcomesVM, RemarkVM, Page }
 
+// The end of a background run (a new exam graded, scans added, a roster), on every screen: what
+// happened, what waits, and the next steps, the primary first. Dismissed with × or Escape, or by
+// a step that leads to another screen. It sits above the status bar, in room every screen gives
+// up for it (App.notice-room), so it never lies over a control.
+component Notice inherits Rectangle {
+    // a button of it is pressed: the keyboard goes back to the window before the notice (and the
+    // button) may go away
+    callback stepping();
+    background: Theme.surface-raised;
+    border-radius: Theme.radius-lg;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    drop-shadow-blur: Theme.shadow-2-blur;
+    drop-shadow-offset-y: Theme.shadow-2-offset;
+    drop-shadow-color: Theme.shadow-2-color;
+    accessible-role: AccessibleRole.groupbox;
+    accessible-label: App.notice-title;
+    accessible-description: App.notice-text;
+    // it appears without taking the keyboard: screen readers announce it as it appears, at once
+    // when the run failed (VoiceOver reads the value)
+    accessible-live-region: App.notice-tone == Tone.error ? AccessibleLiveness.assertive : AccessibleLiveness.polite;
+    accessible-value: App.notice-title;
+    // a press on its background never reaches the screen underneath
+    TouchArea { }
+    HorizontalLayout {
+        padding-left: Theme.space-lg;
+        padding-right: Theme.space-md;
+        padding-top: Theme.space-md;
+        padding-bottom: Theme.space-md;
+        spacing: Theme.space-md;
+        // the tone (success, warning, error) is also said in words: colour is never the only cue
+        Rectangle {
+            width: 4px;
+            border-radius: 2px;
+            background: Theme.tone-fg(App.notice-tone);
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            min-width: 240px;
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: App.notice-title;
+                font-size: Theme.text-sm;
+                font-weight: Theme.weight-semibold;
+                color: Theme.ink;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+            Text {
+                text: App.notice-text;
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+        }
+        for step[i] in App.notice-steps: Centered {
+            Button {
+                kind: i == 0 ? ButtonKind.primary : ButtonKind.secondary;
+                text: step;
+                clicked => {
+                    root.stepping();
+                    App.notice-action(i);
+                }
+            }
+        }
+        Centered {
+            IconButton {
+                icon: Icons.close;
+                label: "Dismiss the notice";
+                accessible-description: "Or press Escape";
+                clicked => {
+                    root.stepping();
+                    App.notice-action(-1);
+                }
+            }
+        }
+    }
+}
+
+// Closing the window while a run is in progress asks first: keep it running, or cancel it and
+// close once it has stopped (nothing half-saved is left behind); a run that has read its pages
+// is being saved and kept, and the window offers to close once it is saved. Modal for the
+// keyboard too: Escape keeps the run going, Tab and Shift+Tab stay on its two buttons, and no
+// key reaches the screen underneath.
+component CloseConfirm inherits Rectangle {
+    // the dialog is answered: the keyboard goes back to the window as it closes
+    callback answered();
+    background: Theme.scrim;
+    // modal: nothing underneath takes a press or a wheel turn
+    TouchArea {
+        scroll-event(event) => {
+            return accept;
+        }
+    }
+    card := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 3;
+        width: 520px;
+        height: self.preferred-height;
+        background: Theme.surface-raised;
+        border-radius: Theme.radius-lg;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+        drop-shadow-blur: Theme.shadow-2-blur;
+        drop-shadow-offset-y: Theme.shadow-2-offset;
+        drop-shadow-color: Theme.shadow-2-color;
+        accessible-role: AccessibleRole.groupbox;
+        accessible-label: "Close Mizan?";
+        accessible-description: App.close-text;
+        keys := FocusScope {
+            key-pressed(event) => {
+                if (event.text == Key.Escape && !App.closing) {
+                    root.answered();
+                    App.close-action(0);
+                }
+                // nothing reaches the screen underneath, its shortcuts included
+                return accept;
+            }
+            VerticalLayout {
+                padding: Theme.space-lg;
+                spacing: Theme.space-md;
+                Text {
+                    text: !App.closing ? "Close Mizan?" : App.close-saving ? "Saving…" : "Cancelling…";
+                    font-size: Theme.text-md;
+                    font-weight: Theme.weight-semibold;
+                    color: Theme.ink;
+                    accessible-role: none;
+                }
+                Text {
+                    text: App.close-text;
+                    font-size: Theme.text-sm;
+                    color: Theme.ink-2;
+                    wrap: word-wrap;
+                    accessible-role: none;
+                }
+                if !App.closing: FocusScope {
+                    // Tab and Shift+Tab go between the two buttons, never out of the dialog
+                    key-pressed(event) => {
+                        if (event.text == Key.Tab || event.text == Key.Backtab) {
+                            if (keep.has-focus) {
+                                stop.focus();
+                            } else {
+                                keep.focus();
+                            }
+                            return accept;
+                        }
+                        return reject;
+                    }
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: Theme.space-sm;
+                        keep := SecondaryButton {
+                            text: "Keep it running";
+                            init => {
+                                self.focus();
+                            }
+                            clicked => {
+                                root.answered();
+                                App.close-action(0);
+                            }
+                        }
+                        // too late to cancel (being saved): the run is kept, and the window
+                        // waits for it
+                        stop := Button {
+                            kind: App.close-saving ? ButtonKind.primary : ButtonKind.danger;
+                            text: App.close-saving ? "Close once saved" : "Cancel it and close";
+                            clicked => {
+                                // the buttons go while it waits: the dialog keeps the keyboard
+                                keys.focus();
+                                App.close-action(1);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     title: "Mizan";
-    icon: @image-url("assets/icon.png");
+    icon: @image-url("assets/icon.svg");
     preferred-width: 1440px;
     preferred-height: 900px;
     min-width: 1280px;
@@ -58,6 +242,36 @@ export component AppWindow inherits Window {
     changed page => {
         if (self.page != Page.review) {
             root-keys.focus();
+        }
+    }
+
+    // A control that had the keyboard goes away with what holds it (the notice, the close
+    // dialog): the keyboard goes back to the window, and on Review to its canvas.
+    function keys-back() {
+        root-keys.focus();
+        if (App.page == Page.review) {
+            App.keys-back += 1;
+        }
+    }
+    // the close dialog went without an answer (the run ended meanwhile): it had the keyboard
+    property <bool> close-open: App.close-open;
+    changed close-open => {
+        if (!self.close-open) {
+            root.keys-back();
+        }
+    }
+    // the New-exam card closed (Escape, Cancel) with the control that had the keyboard
+    property <bool> new-open: ExamsVM.new-open;
+    changed new-open => {
+        if (!self.new-open) {
+            root.keys-back();
+        }
+    }
+    // the notice gone, no screen keeps room for it
+    property <bool> notice-open: App.notice-open;
+    changed notice-open => {
+        if (!self.notice-open) {
+            App.notice-room = 0;
         }
     }
 
@@ -194,6 +408,74 @@ export component AppWindow inherits Window {
                 horizontal-stretch: 1;
                 win-w: root.win-w;
                 win-h: root.win-h;
+            }
+        }
+        // inside the window's key scope, so the keys keep working after a click on it
+        if App.notice-open: Notice {
+            x: Theme.nav-rail-width + Theme.space-xl;
+            width: root.win-w - Theme.nav-rail-width - 2 * Theme.space-xl;
+            height: self.preferred-height;
+            y: root.win-h - Theme.status-bar-height - Theme.space-md - self.height;
+            // the screens give up its height and the gaps around it
+            init => {
+                App.notice-room = self.height + 2 * Theme.space-md;
+            }
+            changed height => {
+                App.notice-room = self.height + 2 * Theme.space-md;
+            }
+            stepping => {
+                root.keys-back();
+            }
+        }
+        if App.close-open: CloseConfirm {
+            x: 0;
+            y: 0;
+            width: root.win-w;
+            height: root.win-h;
+            answered => {
+                root.keys-back();
+            }
+        }
+    }
+}
+
+// Shown instead of the main window when Mizan cannot start: the Windows release build has no
+// console window to print the reason to.
+export component ErrorWindow inherits Window {
+    in property <string> heading: "Mizan cannot start";
+    in property <string> message;
+    callback close();
+    title: "Mizan";
+    icon: @image-url("assets/icon.svg");
+    preferred-width: 600px;
+    min-width: 420px;
+    default-font-family: Theme.font-sans;
+    default-font-size: Theme.text-md;
+    background: Theme.surface;
+
+    VerticalLayout {
+        padding: 24px;
+        spacing: 16px;
+        Text {
+            text: root.heading;
+            font-size: Theme.text-lg;
+            font-weight: Theme.weight-semibold;
+            color: Theme.ink;
+            accessible-role: AccessibleRole.text;
+        }
+        Text {
+            text: root.message;
+            wrap: word-wrap;
+            color: Theme.ink-2;
+            accessible-role: AccessibleRole.text;
+        }
+        HorizontalLayout {
+            alignment: end;
+            PrimaryButton {
+                text: "Close";
+                clicked => {
+                    root.close();
+                }
             }
         }
     }

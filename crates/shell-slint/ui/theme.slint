@@ -382,6 +382,8 @@ export component Button inherits Rectangle {
     }
 
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         enabled: root.enabled;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
@@ -476,6 +478,8 @@ export component IconButton inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         enabled: root.enabled;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
@@ -503,6 +507,7 @@ export component Chip inherits Rectangle {
     in property <string> text;
     in property <string> count;
     in property <bool> selected;
+    out property <bool> has-focus: fs.has-focus;
     callback clicked();
     height: 28px;
     width: max(Theme.target-min, chip-layout.preferred-width);
@@ -525,6 +530,8 @@ export component Chip inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
                 root.clicked();
@@ -690,6 +697,8 @@ export component OptionChip inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
                 root.clicked();
@@ -941,6 +950,8 @@ export component NavItem inherits Rectangle {
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
                 root.clicked();
@@ -1042,23 +1053,27 @@ export component StatusBar inherits Rectangle {
     }
 }
 
-// Breadcrumb trail "MATH 101 / Midterm 1 / Term 1448-1"; last part is current. An empty part
-// (an exam without a course code) is left out with its separator.
+// Breadcrumb trail "MATH 101 / Midterm 1 / Term 1448-1"; the last part shown is current. An
+// empty part (an exam without a course code, no exam open) is left out with its separator, so
+// a trail never ends in "/".
 export component Breadcrumb inherits HorizontalLayout {
     in property <[string]> parts;
-    spacing: Theme.space-sm;
+    // the last part shown (a trail has at most four parts; a part past the end reads "")
+    property <int> last: root.parts[3] != "" ? 3 : root.parts[2] != "" ? 2 : root.parts[1] != "" ? 1 : 0;
     for part[i] in root.parts: HorizontalLayout {
         spacing: Theme.space-sm;
+        // the gap to the next part shown (a part left out takes no room at all)
+        padding-right: part != "" && i < root.last ? Theme.space-sm : 0px;
         visible: part != "";
         max-width: part != "" ? 100000px : 0px;
         Text {
             text: part;
             font-size: Theme.text-sm;
-            font-weight: i == root.parts.length - 1 ? Theme.weight-semibold : Theme.weight-regular;
-            color: i == root.parts.length - 1 ? Theme.ink : Theme.ink-2;
+            font-weight: i == root.last ? Theme.weight-semibold : Theme.weight-regular;
+            color: i == root.last ? Theme.ink : Theme.ink-2;
             vertical-alignment: center;
         }
-        if i < root.parts.length - 1: Text {
+        if i < root.last: Text {
             text: "/";
             font-size: Theme.text-sm;
             color: Theme.ink-3;
@@ -1353,6 +1368,8 @@ export component GroupHeader inherits Rectangle {
     }
     // Keyboard operable like every other interactive component (WCAG 2.1.1).
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == " " || event.text == Key.Return) {
                 root.toggled();
@@ -1481,6 +1498,11 @@ export component TableRow inherits Rectangle {
     in property <bool> header;
     in property <length> row-height: Theme.row-height + 8px;
     callback clicked();
+    // The item the row shows (an exam ID), for `picked`: a refresh during a press may fill the
+    // row with another item by the release, and `picked` names the item that was pressed.
+    in property <string> key;
+    callback picked(string);
+    property <string> pressed-key;
     min-height: self.header ? Theme.row-height-compact + 4px : self.row-height;
     background: self.header ? Theme.surface-sunken : self.selected ? Theme.primary-soft : ta.has-hover ? Theme.surface-hover : transparent;
     // Slint requires a constant accessible-role (a `header ? none : list-item` binding fails to
@@ -1493,12 +1515,19 @@ export component TableRow inherits Rectangle {
     accessible-action-default => {
         if (!root.header) {
             root.clicked();
+            root.picked(root.key);
         }
     }
     ta := TouchArea {
         enabled: !root.header;
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                root.pressed-key = root.key;
+            }
+        }
         clicked => {
             root.clicked();
+            root.picked(root.pressed-key);
         }
     }
     HorizontalLayout {

@@ -7,3 +7,4 @@
 # font licences are upstream copies.
 crates/omr-report/tests/golden/*.csv -text
 **/OFL.txt -text
+*.ico binary

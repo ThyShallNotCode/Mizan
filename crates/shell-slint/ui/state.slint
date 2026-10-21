@@ -9,16 +9,19 @@ export enum Page { exams, setup, scan, review, results, outcomes, settings }
 
 export global App {
     in-out property <Page> page: Page.exams;
-    // exam context for breadcrumbs
-    in property <string> course: "CS 211 Data Structures";
-    in property <string> assessment: "Midterm 1";
-    in property <string> term: "1448 H, 1st term";
-    in property <string> term-gregorian: "Fall 2026";
+    // an exam is open (the dashboard lists the current exam): the screens that show one exam
+    // say so, and lead to the Exams screen, when it is false
+    in property <bool> has-exam;
+    // exam context for breadcrumbs ("" with no exam open: nothing here is ever a placeholder)
+    in property <string> course;
+    in property <string> assessment;
+    in property <string> term;
+    in property <string> term-gregorian;
     in property <int> review-open;
     in property <string> user-name;
     in property <string> user-role;
     in property <string> user-initials;
-    in property <string> engine: "omr 0.1.0";
+    in property <string> engine;
     in property <string> workspace;
     // invented demo data (`--demo`): a banner on every screen says so
     in property <bool> demo;
@@ -27,15 +30,69 @@ export global App {
     // last command result, e.g. "Recorded Q17: B" or a validation error
     in property <string> message;
     in property <Tone> message-tone: Tone.neutral;
-    // settings
+    // the window has file dialogs (the desktop app; not headless tests or screenshots): path
+    // fields offer Browse… beside the typed path
+    in property <bool> can-browse;
+    // the window can show a folder in the system's file manager
+    in property <bool> can-reveal;
+    // the file manager's verb on this system ("Show in Explorer" on Windows)
+    in property <string> reveal-label: "Show folder";
+    // an exams folder is open (Settings shows it, with Change… and the file manager)
+    in property <bool> has-workspace;
+    // settings: each applies at once and is saved for the next start
     in-out property <bool> single-key: true;
     in-out property <bool> show-all-default: false;
+    // the name recorded in the audit trail (Settings, the field shows it until saved)
+    in-out property <string> operator-name;
+    // write the exports when a grading run, an added batch or a roster ends (Settings)
+    in-out property <bool> auto-export: true;
+    // the end of a background run (grading, scans added, a roster): what happened and the next
+    // steps, on every screen until it is dismissed or a step leads to another screen
+    in property <bool> notice-open;
+    in property <string> notice-title;
+    in property <string> notice-text;
+    in property <Tone> notice-tone: Tone.neutral;
+    // the steps' labels, the primary first
+    in property <[string]> notice-steps;
+    // the height the notice takes above the status bar (0: none on show): every screen gives it
+    // up, so the notice never lies over a control (set by the window as the notice is laid out)
+    in-out property <length> notice-room;
+    // counted up when the keyboard goes back to the window from a control that went away (the
+    // notice's buttons, the close dialog's): the review canvas takes it on Review
+    in-out property <int> keys-back;
+    // closing the window while a run is in progress asks first: what runs, and whether the
+    // window waits for a cancelled run to stop
+    in property <bool> close-open;
+    in property <string> close-text;
+    in property <bool> closing;
+    // the run has read its pages and is being saved (a cancel is too late): the window offers
+    // to close once it is saved
+    in property <bool> close-saving;
     callback navigate(Page);
     callback set-dark(bool);
     callback set-reduce-motion(bool);
     callback set-single-key(bool);
+    callback set-show-all-default(bool);
+    // validated by the core; recorded on every decision from now on
+    callback set-operator(string);
+    callback set-auto-export(bool);
+    // a step of the notice (its index), or -1: the notice is dismissed
+    callback notice-action(int);
+    // closing while a run is in progress: 0 keep it running (the window stays), 1 cancel it
+    // and close once it has stopped (a run being saved: close once it is saved)
+    callback close-action(int);
+    // shows a folder in the system's file manager: "exam" (the current exam's folder),
+    // "exports" (the same folder, where its exports are written) or "workspace"
+    callback reveal(string);
+    // the folder dialog for another exams folder; what is chosen opens
+    callback open-workspace();
+    // reads the exams folder again (F5)
+    callback refresh();
     // a command the shell forwards but the demo backend does not model (e.g. "New exam")
     callback request(string);
+    // a path field's Browse… or Folder… button: opens the file dialog of that field
+    // ("new-scans", "setup-key", …); what is picked fills the field
+    callback browse(string);
     // global keys (Ctrl+1..6, Ctrl+0/Ctrl+comma, Escape); returns true when handled
     callback key(string, bool, bool, bool) -> bool;
 }
@@ -83,7 +140,11 @@ export struct ExamDrawer {
     callout-tone: Tone,
     review-label: string,
     can-review: bool,
+    // the key read from key sheets waits for its confirmation: the call-out leads to Setup
+    to-setup: bool,
     key-status: string,
+    // a key is in force (supplied or confirmed, not inferred): the key row shows a check
+    key-ok: bool,
     mapped: int,
     mapped-word: string,
     total: int,
@@ -94,6 +155,45 @@ export struct ExamDrawer {
     term: string,
     term-ar: string,
 }
+
+// One value of the New-exam card.
+export struct CardValue {
+    // the field's name (`versions`) and label (`Versions`)
+    field: string,
+    label: string,
+    // the value in plain words ("Erase to change")
+    value: string,
+    source: string,
+    detail: string,
+    // 0 nothing to say, 1 a note, 2 a question open
+    state: int,
+    // the row's accessible text: "Versions: A, B — key file (…), note"
+    a11y: string,
+}
+
+// One value of a field chosen from a closed set: the value forwarded, and its plain words.
+export struct ValueChoice {
+    value: string,
+    label: string,
+}
+
+// A question of the New-exam card (with its answers' button texts) or a note.
+export struct CardIssue {
+    field: string,
+    label: string,
+    text: string,
+    choices: [string],
+}
+
+// What the card says of a field the instructor may type in.
+export struct FieldHint {
+    // the value proposed and its source ("30 · key file"; "" none)
+    proposed: string,
+    // a question open on the field ("" none)
+    error: string,
+}
+
+// ------------------------------------------------------------------------------- setup
 
 export global ExamsVM {
     in property <[ExamRow]> rows;
@@ -109,19 +209,36 @@ export global ExamsVM {
     in property <string> median-review;
     in property <string> median-caption;
     in property <string> throughput;
+    in property <string> throughput-caption;
+    // the captions' tones: neutral when there is nothing to count
+    in property <Tone> sheets-today-tone;
+    in property <Tone> open-errors-tone;
     in property <string> term-label;
     // incremented by Rust on Ctrl+K: the dashboard focuses its search field
     in property <int> search-request;
-    // select row n and open the drawer (click, Enter)
-    callback select(int);
+    // the search field (Enter applies it: the table lists the exams whose course code, title or
+    // assessment contains it), and the search the table applies ("" none)
+    in-out property <string> search-text;
+    in property <string> search-applied;
+    callback search(string);
+    // select the exam with this ID and open the drawer (click, Enter); an ID, not a row: a
+    // refresh during a press may move another exam into the row pressed
+    callback select(string);
     // move the selection by n rows, keeping the drawer as it is (↑ / ↓)
     callback move(int);
     callback set-filter(int);
     // open the selected exam on a page
     callback open(Page);
+    // Setup, on the key summary that confirms a key read from key sheets
+    callback confirm-key();
     callback close-drawer();
-    // the New-exam form (CR-04): what the instructor types; Rust validates and grades it
+    // another exams folder can be opened and the folder read again (not the demo)
+    in property <bool> can-open-workspace;
+    // the New-exam card (G-3): the files the instructor gives and the values typed over the
+    // proposed ones; Rust proposes every value from the evidence, each with its source, and
+    // grades exactly what the card shows
     in-out property <bool> new-open;
+    // the card can open (an exams folder to grade into)
     in property <bool> can-create;
     in property <string> new-note;
     in-out property <string> new-title;
@@ -135,10 +252,61 @@ export global ExamsVM {
     in-out property <string> new-roster;
     in-out property <string> new-clo;
     in-out property <string> new-key-sheets;
+    in-out property <string> new-term;
+    in-out property <string> new-id-scheme;
+    in-out property <string> new-cancel-mode;
+    in-out property <string> new-multi-review;
+    in-out property <bool> new-high-stakes;
+    in-out property <string> new-out;
+    // Advanced options open (their fields exist only then), the notes unfolded
+    in-out property <bool> new-advanced;
+    in-out property <bool> new-notes-open;
+    // every value as graded: value — source (evidence); the questions that stop grading until
+    // answered (each with its one-click answers), and the notes
+    in property <[CardValue]> card-values;
+    in property <[CardIssue]> card-asks;
+    in property <[CardIssue]> card-notes;
+    // the scans being checked: 0 not yet (no scans), 1 checking, 2 checked, 3 not checked
+    in property <int> survey-state;
+    in property <string> survey-text;
+    in property <float> survey-share;
+    // why Grade exam waits ("": it can start)
+    in property <string> new-block;
+    // the printed sheet fixes how marks are cancelled: the field shows it, takes nothing typed
+    in property <bool> cancel-locked;
+    // Second review's choices, and the value the card grades with (a choice's `value`)
+    in property <[ValueChoice]> review-choices;
+    in property <string> review-value;
+    // per field the instructor may type in: the value proposed (its placeholder) and a question
+    // open on it (shown under the field)
+    in property <FieldHint> h-scans;
+    in property <FieldHint> h-key;
+    in property <FieldHint> h-key-sheets;
+    in property <FieldHint> h-roster;
+    in property <FieldHint> h-clo;
+    in property <FieldHint> h-title;
+    in property <FieldHint> h-course;
+    in property <FieldHint> h-questions;
+    in property <FieldHint> h-forms;
+    in property <FieldHint> h-options;
+    in property <FieldHint> h-sheet;
+    in property <FieldHint> h-term;
+    in property <FieldHint> h-id-scheme;
+    in property <FieldHint> h-cancel-mode;
+    in property <FieldHint> h-multi-review;
+    in property <FieldHint> h-high-stakes;
+    in property <FieldHint> h-out;
+    // the field the keyboard goes to (`questions`), as an answer on the card asks; each ask
+    // counts up `new-focus-gen`
+    in-out property <string> new-focus;
+    in property <int> new-focus-gen;
     callback create-exam();
+    // the instructor edited a field (its name): the card is proposed again shortly
+    callback form-changed(string);
+    // answer `choice` (index) to question `ask` (index) of the card
+    callback choose(int, int);
+    callback stop-survey();
 }
-
-// ------------------------------------------------------------------------------- setup
 
 export struct MapCell {
     text: string,
@@ -226,7 +394,9 @@ export struct KsScan {
 
 export global SetupVM {
     in property <bool> available;
-    in property <bool> has-roster: true;
+    // why an open exam has no setup to show (being graded, grading failed)
+    in property <string> empty-text;
+    in property <bool> has-roster;
     in property <[KV]> template;
     in property <string> template-id;
     in property <string> template-kind;
@@ -282,9 +452,18 @@ export global SetupVM {
     callback ks-confirm(bool);
     callback ks-discard();
     callback cycle-key(int, int);
-    callback set-key(int, int, string);
+    // row, version, the typed key (empty clears it); false when the text is no key entry (a
+    // key that types nothing), so the key goes on to the screen
+    callback set-key(int, int, string) -> bool;
     callback set-weight(int, int, string);
     callback set-note(int, int, string);
+    // a roster for the graded exam (step 4 Roster): every booklet is matched again in the
+    // background, review decisions carried over
+    in property <bool> can-set-roster;
+    in property <string> roster-status;
+    in-out property <bool> roster-open;
+    in-out property <string> roster-path;
+    callback set-roster(string);
     // imported item → CLO rows waiting for approval (§11.2), and a CLO file to replace them
     in property <int> mappings-proposed;
     in-out property <string> clo-path;
@@ -436,6 +615,8 @@ export struct Thumb {
     severity: Severity,
     variant: int,
     label: string,
+    // the sheet's own open item (the one whose code the tile shows), -1 none
+    item: int,
 }
 
 export struct CodeBar {
@@ -448,6 +629,8 @@ export struct CodeBar {
 
 export global ScanVM {
     in property <bool> available;
+    // why an open exam has no batch to show (grading failed, the project cannot be opened)
+    in property <string> empty-text;
     in property <string> batch-label;
     in property <string> source;
     in property <string> device;
@@ -462,6 +645,8 @@ export global ScanVM {
     in property <string> auto-caption;
     in property <string> first-value;
     in property <string> first-caption;
+    // success under the 3 s target, a warning over it, neutral before the first result
+    in property <Tone> first-tone;
     in property <string> remaining-value;
     in property <string> remaining-caption;
     in property <float> done-frac;
@@ -484,7 +669,11 @@ export global ScanVM {
     in property <int> workers;
     in property <int> review-open;
     // a capture agent runs the batch (Pause and Stop); file imports cannot be paused
-    in property <bool> pausable: true;
+    in property <bool> pausable;
+    // a new exam being graded can be cancelled (nothing is saved): the bar asks first
+    in property <bool> can-cancel;
+    in-out property <bool> cancel-confirm;
+    callback cancel-job();
     // adding a later batch (another section, another day) to this exam, §8.1
     in property <bool> can-add;
     in property <string> add-note;
@@ -494,8 +683,9 @@ export global ScanVM {
     callback toggle-pause();
     callback open-review();
     callback open-code(string);
-    // a thumbnail: its serial and worst open code ("" when none)
-    callback open-sheet(string, string);
+    // a thumbnail: its serial, worst open code ("" when none) and that code's item of this
+    // sheet (-1 none)
+    callback open-sheet(string, string, int);
 }
 
 // ------------------------------------------------------------------------------- review
@@ -572,6 +762,9 @@ export global ReviewVM {
     in property <[QueueEntry]> queue;
     in property <length> selected-y;
     in property <bool> has-item;
+    // false for an item with no scan behind it (an exam-level notice): no paper, view chips or
+    // rescan action
+    in property <bool> has-scan: true;
     // item: 0 mark, 1 blind verify, 2 identity, 3 notice
     in property <int> kind;
     in property <string> code;
@@ -583,13 +776,13 @@ export global ReviewVM {
     in property <image> crop;
     in property <image> original;
     in property <bool> has-original;
-    in property <float> crop-w: 640;
-    in property <float> crop-h: 168;
+    in property <float> crop-w;
+    in property <float> crop-h;
     in property <[BubbleVM]> bubbles;
     in property <[BubbleVM]> fill-bars;
-    in property <float> threshold: 0.45;
-    in property <float> band-lo: 0.35;
-    in property <float> band-hi: 0.55;
+    in property <float> threshold;
+    in property <float> band-lo;
+    in property <float> band-hi;
     in property <bool> has-suggestion;
     in property <string> suggestion-letter;
     in property <string> suggestion-word;
@@ -626,10 +819,10 @@ export global ReviewVM {
     in property <string> group-label;
     in property <bool> group-enabled;
     in property <string> group-reason;
-    in property <bool> overlay: true;
+    in property <bool> overlay;
     in property <bool> show-all;
-    in property <bool> registered: true;
-    in property <int> zoom: 3;
+    in property <bool> registered;
+    in property <int> zoom;
     in-out property <string> note;
     in property <string> median;
     // "Threshold 0.45 · hysteresis band 0.35–0.55"
@@ -638,6 +831,8 @@ export global ReviewVM {
     in property <bool> two-person;
     in property <string> help-text;
     in property <bool> help-open;
+    // an empty queue: what it means ("Lane clear") and why (the exam is being graded, …)
+    in property <string> empty-title;
     in property <string> empty-text;
     // incremented by Rust on "/" or Ctrl+F: the review screen focuses the roster search
     in property <int> search-request;
@@ -714,8 +909,8 @@ export struct CheckRow {
 export global ResultsVM {
     in property <bool> available;
     // why there are no results yet (e.g. a key from key sheets waits for its confirmation)
-    in property <string> empty-title: "No results yet";
-    in property <string> empty-text: "Results appear once every sheet of the exam is recognised and scored.";
+    in property <string> empty-title;
+    in property <string> empty-text;
     in property <bool> empty-to-setup;
     in property <string> key-label;
     in property <string> students;
@@ -746,6 +941,9 @@ export global ResultsVM {
     in property <string> release-reason;
     // exports (§16.3): every file next to the project, and the Blackboard grade-center upload
     in property <bool> can-export;
+    // the exports in the exam's folder were written before a later change ("": they are
+    // current, or none were written)
+    in property <string> exports-note;
     in property <bool> blackboard-ready;
     in property <string> blackboard-note;
     in-out property <bool> export-open;
@@ -757,8 +955,9 @@ export global ResultsVM {
     callback export-blackboard(string);
     in-out property <bool> show-key;
     in-out property <bool> grade-table;
-    in property <int> selected-item: -1;
-    callback select-item(int);
+    // the item row selected, by its question label ("Q03", "B-Q03"; "" none)
+    in property <string> selected-q;
+    callback select-item(string);
     callback release();
     callback what-if();
     callback check-action(int);
@@ -811,6 +1010,10 @@ export struct B1Row {
 
 export global OutcomesVM {
     in property <bool> available;
+    // why there is no attainment to show, and whether Setup is where to go (a CLO file)
+    in property <string> empty-title;
+    in property <string> empty-text;
+    in property <bool> empty-to-setup;
     in property <string> policy;
     in property <string> policy-version;
     in property <string> method-label;

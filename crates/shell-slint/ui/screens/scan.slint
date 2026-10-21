@@ -2,10 +2,12 @@
 
 import {
     Theme, Tone, Severity, Card, StatTile, TopBar, StatusBar, PrimaryButton, SecondaryButton,
-    GhostButton, StatusPill, Tag, Gauge, SeverityGlyph, Breadcrumb, FocusRing, Keycap,
+    GhostButton, DangerButton, StatusPill, Tag, Gauge, SeverityGlyph, Breadcrumb, FocusRing, Keycap,
 } from "../theme.slint";
 import { App, ScanVM, Thumb } from "../state.slint";
-import { Icons, ThemeToggle, Centered, StatusText, KVLine, EmptyState, MessageText, TextField } from "../widgets.slint";
+import {
+    Icons, ThemeToggle, Centered, StatusText, KVLine, EmptyState, NoExamState, MessageText, PathField,
+} from "../widgets.slint";
 
 // Adding a later batch (another section, another day, §8.1): the scan folders or files, then
 // the exam is graded again with them in the background. Opens with the focus in the field.
@@ -20,8 +22,23 @@ component AddScansBar inherits Rectangle {
     init => {
         field.focus();
     }
+    property <bool> focus-inside: field.has-focus || add.has-focus || cancel.has-focus;
+    // An overlay: a press on its background must not reach the page underneath. A click on it
+    // gives the bar the keyboard back (for Escape) unless a control inside has it.
+    TouchArea {
+        clicked => {
+            if (!root.focus-inside) {
+                field.focus();
+            }
+        }
+        scroll-event(event) => {
+            return accept;
+        }
+    }
     // Escape closes the bar from anywhere inside it
     FocusScope {
+        // the fields inside keep focus when the bar's background is clicked
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Escape) {
                 ScanVM.add-open = false;
@@ -44,12 +61,13 @@ component AddScansBar inherits Rectangle {
                     color: Theme.ink;
                     vertical-alignment: center;
                 }
-                field := TextField {
+                field := PathField {
                     horizontal-stretch: 1;
                     label: "Scan files or folders to add";
                     placeholder: "A folder or files of scans; separate several with ;";
                     text <=> ScanVM.add-path;
-                    mono: true;
+                    target: "add-scans";
+                    folder-target: "add-scan-folder";
                     enabled: ScanVM.can-add;
                     accepted(v) => {
                         if (ScanVM.can-add && v != "") {
@@ -58,7 +76,7 @@ component AddScansBar inherits Rectangle {
                     }
                 }
                 Centered {
-                    PrimaryButton {
+                    add := PrimaryButton {
                         text: "Add and regrade";
                         key-hint: "Enter";
                         enabled: ScanVM.can-add && ScanVM.add-path != "";
@@ -68,7 +86,7 @@ component AddScansBar inherits Rectangle {
                     }
                 }
                 Centered {
-                    GhostButton {
+                    cancel := GhostButton {
                         text: "Cancel";
                         clicked => {
                             ScanVM.add-open = false;
@@ -86,10 +104,87 @@ component AddScansBar inherits Rectangle {
     }
 }
 
+// Cancelling the grading of a new exam asks first: nothing is saved and the scan files are not
+// touched. Opens with the focus on Keep grading (Enter keeps it running).
+component CancelBar inherits Rectangle {
+    background: Theme.surface-raised;
+    border-radius: Theme.radius-lg;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    drop-shadow-blur: Theme.shadow-2-blur;
+    drop-shadow-offset-y: Theme.shadow-2-offset;
+    drop-shadow-color: Theme.shadow-2-color;
+    init => {
+        keep.focus();
+    }
+    // an overlay: a press on its background must not reach the page underneath
+    TouchArea {
+        scroll-event(event) => {
+            return accept;
+        }
+    }
+    FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                ScanVM.cancel-confirm = false;
+                return accept;
+            }
+            return reject;
+        }
+        HorizontalLayout {
+            padding-left: Theme.space-lg;
+            padding-right: Theme.space-lg;
+            padding-top: Theme.space-md;
+            padding-bottom: Theme.space-md;
+            spacing: Theme.space-md;
+            Text {
+                horizontal-stretch: 1;
+                text: "Cancel grading? Nothing is saved; your scan files are unchanged.";
+                font-size: Theme.text-sm;
+                color: Theme.ink;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+            Centered {
+                keep := SecondaryButton {
+                    text: "Keep grading";
+                    clicked => {
+                        ScanVM.cancel-confirm = false;
+                    }
+                }
+            }
+            Centered {
+                DangerButton {
+                    text: "Cancel grading";
+                    clicked => {
+                        ScanVM.cancel-job();
+                    }
+                }
+            }
+        }
+    }
+}
+
 component ThumbTile inherits Rectangle {
     in property <Thumb> t;
     in property <image> img;
-    callback clicked();
+    // the sheet opened: the one the press began on (a refresh twice a second during a run may
+    // show another sheet in this tile by the release)
+    callback clicked(Thumb);
+    property <Thumb> pressed;
+    // The arrow keys (DESIGN §9.3): `step` asks the grid for the tile `d` places on; the grid
+    // names the tile that takes the keyboard (`focus-ix`) and counts the requests
+    // (`focus-gen`), so the same tile can be asked twice.
+    in property <int> index;
+    in property <int> focus-ix: -1;
+    in property <int> focus-gen;
+    callback step(int);
+    changed focus-gen => {
+        if (root.focus-ix == root.index) {
+            fs.focus();
+        }
+    }
     height: self.width * 1.12 + 22px;
     border-radius: Theme.radius-sm;
     background: Theme.surface-raised;
@@ -100,18 +195,42 @@ component ThumbTile inherits Rectangle {
     accessible-role: AccessibleRole.button;
     accessible-label: root.t.label;
     accessible-action-default => {
-        root.clicked();
+        root.clicked(root.t);
     }
     ta := TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                root.pressed = root.t;
+            }
+        }
         clicked => {
             fs.focus();
-            root.clicked();
+            root.clicked(root.pressed);
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Return) {
-                root.clicked();
+                root.clicked(root.t);
+                return accept;
+            }
+            // the grid runs left to right in every language: Left is the tile before
+            if (event.text == Key.LeftArrow) {
+                root.step(-1);
+                return accept;
+            }
+            if (event.text == Key.RightArrow) {
+                root.step(1);
+                return accept;
+            }
+            if (event.text == Key.UpArrow) {
+                root.step(-10);
+                return accept;
+            }
+            if (event.text == Key.DownArrow) {
+                root.step(10);
                 return accept;
             }
             return reject;
@@ -205,7 +324,10 @@ component CodeBarRow inherits Rectangle {
     in property <int> count;
     in property <float> frac;
     in property <bool> compact;
-    callback clicked();
+    // the code opened: the one the press began on (a refresh during the press may show another
+    // code in this row by the release)
+    callback clicked(string);
+    property <string> pressed-code;
     height: root.compact ? 24px : 30px;
     background: ta.has-hover ? Theme.surface-hover : transparent;
     border-radius: Theme.radius-sm;
@@ -213,18 +335,25 @@ component CodeBarRow inherits Rectangle {
     accessible-label: root.code + " " + root.title + ", " + root.count + " open";
     accessible-description: "Open the review queue filtered to this code";
     accessible-action-default => {
-        root.clicked();
+        root.clicked(root.code);
     }
     ta := TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                root.pressed-code = root.code;
+            }
+        }
         clicked => {
             fs.focus();
-            root.clicked();
+            root.clicked(root.pressed-code);
         }
     }
     fs := FocusScope {
+        // Keyboard only: the TouchArea focuses it; focusing on press would swallow the first click.
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {
-                root.clicked();
+                root.clicked(root.code);
                 return accept;
             }
             return reject;
@@ -299,8 +428,9 @@ export component ScanScreen inherits Rectangle {
         TopBar {
             HorizontalLayout {
                 spacing: Theme.space-md;
+                // the batch, else the page's name (a trail never ends in "/")
                 Breadcrumb {
-                    parts: [App.course, App.assessment, ScanVM.batch-label];
+                    parts: [App.course, App.assessment, ScanVM.batch-label != "" ? ScanVM.batch-label : "Scan"];
                 }
                 if ScanVM.available: Centered {
                     Tag {
@@ -338,10 +468,21 @@ export component ScanScreen inherits Rectangle {
                         }
                     }
                 }
-                // a backend that cannot add scans (the demo) leaves the capture agent's room: the
-                // button is folded away (not removed, so the bar can hand focus back to it)
+                // a new exam being graded: cancelled after a confirmation (the bar below)
+                if ScanVM.can-cancel: Centered {
+                    SecondaryButton {
+                        text: "Cancel grading…";
+                        accessible-description: "Stops grading this new exam: nothing is saved and your scan files are unchanged";
+                        clicked => {
+                            ScanVM.cancel-confirm = !ScanVM.cancel-confirm;
+                        }
+                    }
+                }
+                // a backend that cannot add scans (the demo) leaves the capture agent's room, and
+                // with no exam there is nothing to add to: the button is folded away (not
+                // removed, so the bar can hand focus back to it)
                 Centered {
-                    property <bool> shown: !ScanVM.pausable || ScanVM.can-add;
+                    property <bool> shown: App.has-exam && (!ScanVM.pausable || ScanVM.can-add);
                     visible: self.shown;
                     max-width: self.shown ? 400px : 0px;
                     add-button := SecondaryButton {
@@ -354,7 +495,7 @@ export component ScanScreen inherits Rectangle {
                         }
                     }
                 }
-                Centered {
+                if App.has-exam: Centered {
                     PrimaryButton {
                         text: "Open review · " + ScanVM.review-open;
                         key-hint: "Ctrl+4";
@@ -368,10 +509,13 @@ export component ScanScreen inherits Rectangle {
                 }
             }
         }
-        if !ScanVM.available: EmptyState {
+        if !App.has-exam: NoExamState {
             vertical-stretch: 1;
-            title: "No batch for this exam";
-            text: "Start a scan or import files to see the live batch.";
+        }
+        if App.has-exam && !ScanVM.available: EmptyState {
+            vertical-stretch: 1;
+            title: "No batch to show";
+            text: ScanVM.empty-text;
         }
         if ScanVM.available: HorizontalLayout {
             vertical-stretch: 1;
@@ -404,7 +548,8 @@ export component ScanScreen inherits Rectangle {
                                     maximum: ScanVM.pps-max;
                                     floor-mark: ScanVM.pps-floor;
                                     value-text: ScanVM.pps-text;
-                                    unit: "pages / s · floor 40";
+                                    // the floor is the tick on the arc
+                                    unit: "pages a second";
                                     label: "Throughput";
                                 }
                             }
@@ -432,7 +577,7 @@ export component ScanScreen inherits Rectangle {
                         value: ScanVM.first-value;
                         unit: "s";
                         caption: ScanVM.first-caption;
-                        caption-tone: Tone.success;
+                        caption-tone: ScanVM.first-tone;
                     }
                     StatTile {
                         horizontal-stretch: 1;
@@ -444,7 +589,7 @@ export component ScanScreen inherits Rectangle {
                 }
                 Card {
                     title: "Pipeline";
-                    subtitle: "Progress is announced politely, at most every 5 s (WCAG 4.1.3)";
+                    subtitle: "Where the pages are, from file to result";
                     vertical-stretch: 0;
                     VerticalLayout {
                         spacing: Theme.space-md;
@@ -507,7 +652,7 @@ export component ScanScreen inherits Rectangle {
                                     color: Theme.ink;
                                 }
                                 Text {
-                                    text: "Latest 30 · arrows move, Enter opens the sheet";
+                                    text: "Latest 30 · arrows move, Enter opens the sheet's review item";
                                     font-size: Theme.text-xs;
                                     color: Theme.ink-2;
                                 }
@@ -546,6 +691,9 @@ export component ScanScreen inherits Rectangle {
                             property <length> tile-w: (self.width - 2 * Theme.space-lg - 9 * self.gap) / 10;
                             property <length> row-h: self.tile-w * 1.12 + 22px + self.gap;
                             property <int> rows: max(1, floor((self.height - Theme.space-md + self.gap) / self.row-h));
+                            // the tile the arrow keys move the keyboard to, and how often asked
+                            property <int> focus-ix: -1;
+                            property <int> focus-gen;
                             for t[i] in ScanVM.thumbs: ThumbTile {
                                 x: Theme.space-lg + mod(i, 10) * (parent.tile-w + parent.gap);
                                 y: floor(i / 10) * parent.row-h;
@@ -553,9 +701,26 @@ export component ScanScreen inherits Rectangle {
                                 visible: floor(i / 10) < parent.rows;
                                 t: t;
                                 img: ScanVM.thumb-images[t.variant];
-                                clicked => {
-                                    ScanVM.open-sheet(t.serial, t.code);
+                                index: i;
+                                focus-ix: parent.focus-ix;
+                                focus-gen: parent.focus-gen;
+                                clicked(p) => {
+                                    ScanVM.open-sheet(p.serial, p.code, p.item);
                                 }
+                                // never onto a row that is left out (it has no tile on screen)
+                                step(d) => {
+                                    if (i + d >= 0 && i + d < min(ScanVM.thumbs.length, parent.rows * 10)) {
+                                        parent.focus-ix = i + d;
+                                        parent.focus-gen += 1;
+                                    }
+                                }
+                            }
+                            if ScanVM.thumbs.length == 0: Text {
+                                x: Theme.space-lg;
+                                y: 0;
+                                text: "No sheets in this batch yet";
+                                font-size: Theme.text-sm;
+                                color: Theme.ink-2;
                             }
                         }
                     }
@@ -570,6 +735,11 @@ export component ScanScreen inherits Rectangle {
                     vertical-stretch: 0;
                     VerticalLayout {
                         spacing: 2px;
+                        if ScanVM.codes.length == 0: Text {
+                            text: "No exceptions in this batch";
+                            font-size: Theme.text-sm;
+                            color: Theme.ink-2;
+                        }
                         for c in ScanVM.codes: CodeBarRow {
                             compact: root.short;
                             code: c.code;
@@ -577,8 +747,8 @@ export component ScanScreen inherits Rectangle {
                             severity: c.severity;
                             count: c.count;
                             frac: c.frac;
-                            clicked => {
-                                ScanVM.open-code(c.code);
+                            clicked(code) => {
+                                ScanVM.open-code(code);
                             }
                         }
                         if ScanVM.codes-more > 0: HorizontalLayout {
@@ -610,7 +780,8 @@ export component ScanScreen inherits Rectangle {
                             tone: kv.tone;
                             mono: true;
                         }
-                        HorizontalLayout {
+                        // the demo's capture agent only: a real session has no pull list yet
+                        if App.demo: HorizontalLayout {
                             alignment: start;
                             SecondaryButton {
                                 text: "Rescan pull list";
@@ -638,6 +809,11 @@ export component ScanScreen inherits Rectangle {
                             padding: Theme.space-md;
                             spacing: Theme.space-xs;
                             alignment: start;
+                            if ScanVM.activity.length == 0: Text {
+                                text: "No activity yet";
+                                font-size: Theme.text-xs;
+                                color: Theme.ink-2;
+                            }
                             // long lines (a saved path, a refused batch) wrap, never cut
                             for a in ScanVM.activity: Text {
                                 text: a;
@@ -651,6 +827,10 @@ export component ScanScreen inherits Rectangle {
                 }
             }
         }
+        // the run's notice sits here, above the status bar: nothing of the screen lies under it
+        if App.notice-room > 0: Rectangle {
+            height: App.notice-room;
+        }
         StatusBar {
             Centered {
                 StatusPill {
@@ -659,7 +839,7 @@ export component ScanScreen inherits Rectangle {
                 }
             }
             StatusText {
-                text: ScanVM.engine + " · " + ScanVM.workers + " workers";
+                text: ScanVM.engine != "" ? ScanVM.engine + " · " + ScanVM.workers + " workers" : "";
                 mono: true;
             }
             MessageText {
@@ -668,7 +848,7 @@ export component ScanScreen inherits Rectangle {
                 horizontal-stretch: 1;
             }
             StatusText {
-                text: "Deterministic: decisions are identical at any thread count (A5)";
+                text: "The same scans always give the same results";
             }
             StatusText {
                 text: App.engine;
@@ -679,6 +859,12 @@ export component ScanScreen inherits Rectangle {
     // the bar floats over the screen, so opening it never pushes the status bar out of a
     // 1280 × 800 window
     if ScanVM.available && ScanVM.add-open: AddScansBar {
+        x: Theme.space-lg;
+        y: Theme.top-bar-height + Theme.space-sm;
+        width: root.width - 2 * Theme.space-lg;
+        height: self.preferred-height;
+    }
+    if ScanVM.can-cancel && ScanVM.cancel-confirm: CancelBar {
         x: Theme.space-lg;
         y: Theme.top-bar-height + Theme.space-sm;
         width: root.width - 2 * Theme.space-lg;

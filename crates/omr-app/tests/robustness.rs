@@ -125,6 +125,7 @@ fn grade(def: &ExamDefinition, inputs: &[PathBuf], out: &Path) -> ExamProject {
         snapshot_utc: Some("2026-10-17T09:00:00Z".into()),
         operator: "principal:test".into(),
         max_pages: None,
+        cancel: Default::default(),
     };
     let mut p = ExamProject::grade(def, inputs, &opts, &|_| {}).unwrap();
     p.export(out).unwrap();

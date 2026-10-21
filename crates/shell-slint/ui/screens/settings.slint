@@ -1,9 +1,15 @@
-// Settings: theme, motion, the single-key shortcut switch (WCAG 2.1.4) and the review keymap.
+// Settings: the name recorded in the audit trail, theme, motion, the single-key shortcut switch
+// (WCAG 2.1.4), the exports written after grading, the exams folder and the review keymap. Each setting applies at once and is
+// saved for the next start (Rust saves them).
 
-import { Theme, Tone, Card, TopBar, StatusBar, StatusPill, Tag, Keycap, GirihDivider } from "../theme.slint";
-import { App } from "../state.slint";
+import {
+    Theme, Tone, Card, TopBar, StatusBar, StatusPill, Tag, Keycap, GirihDivider, SecondaryButton,
+    GhostButton,
+} from "../theme.slint";
+import { App, ExamsVM } from "../state.slint";
 import {
     ThemeToggle, Centered, StatusText, Switch, Segment, SegmentGroup, SectionLabel, KVLine, MessageText,
+    TextField,
 } from "../widgets.slint";
 
 component KeyLine inherits HorizontalLayout {
@@ -63,11 +69,12 @@ export component SettingsScreen inherits VerticalLayout {
         spacing: Theme.space-lg;
         VerticalLayout {
             width: root.narrow ? 420px : 460px;
-            spacing: Theme.space-lg;
+            // tighter below 880 px so the cards fit an 800 px window
+            spacing: root.win-h < 880px ? Theme.space-md : Theme.space-lg;
             Card {
                 title: "Appearance";
                 vertical-stretch: 0;
-                subtitle: "Overlay colours on the scan never change with the theme (DESIGN §4)";
+                subtitle: "Overlay colours on the scan never change with the theme";
                 HorizontalLayout {
                     spacing: Theme.space-md;
                     Text {
@@ -84,7 +91,7 @@ export component SettingsScreen inherits VerticalLayout {
                             label: "Light theme setting";
                             selected: !Theme.dark;
                             clicked => {
-                                Theme.dark = false;
+                                App.set-dark(false);
                             }
                         }
                         Segment {
@@ -92,7 +99,7 @@ export component SettingsScreen inherits VerticalLayout {
                             label: "Dark theme setting";
                             selected: Theme.dark;
                             clicked => {
-                                Theme.dark = true;
+                                App.set-dark(true);
                             }
                         }
                     }
@@ -102,16 +109,49 @@ export component SettingsScreen inherits VerticalLayout {
                     description: "Every transition runs in 0 ms; also follows the OS preference";
                     checked: Theme.reduce-motion;
                     toggled(v) => {
-                        Theme.reduce-motion = v;
+                        App.set-reduce-motion(v);
                     }
                 }
             }
             Card {
                 title: "Review";
                 vertical-stretch: 0;
+                // the name recorded in the audit trail (saved, and kept for the next start)
+                VerticalLayout {
+                    spacing: Theme.space-xs;
+                    HorizontalLayout {
+                        spacing: Theme.space-sm;
+                        TextField {
+                            horizontal-stretch: 1;
+                            label: "Your name in the audit trail";
+                            placeholder: "Your name in the audit trail";
+                            text <=> App.operator-name;
+                            mono: false;
+                            accepted(v) => {
+                                App.set-operator(v);
+                            }
+                        }
+                        Centered {
+                            SecondaryButton {
+                                text: "Save";
+                                accessible-label: "Save your name";
+                                clicked => {
+                                    App.set-operator(App.operator-name);
+                                }
+                            }
+                        }
+                    }
+                    // typed but not saved yet: decisions are still recorded under the name saved
+                    Text {
+                        text: App.operator-name != App.user-name ? "Not saved yet: press Save or Enter. Until then decisions are recorded as " + App.user-name : "Your name, recorded on every decision from now on";
+                        font-size: Theme.text-xs;
+                        color: App.operator-name != App.user-name ? Theme.warning : Theme.ink-2;
+                        wrap: word-wrap;
+                    }
+                }
                 Switch {
                     label: "Single-key shortcuts";
-                    description: "Option letters, digits, / and +/− act only while the review canvas has focus; turn off to use Ctrl chords and arrows only (WCAG 2.1.4)";
+                    description: "Option letters, digits, / and +/− act only while the review canvas has focus; turn off to use Ctrl chords and arrows only";
                     checked: App.single-key;
                     toggled(v) => {
                         App.set-single-key(v);
@@ -122,9 +162,10 @@ export component SettingsScreen inherits VerticalLayout {
                     description: "By default only filled, ambiguous and unreadable bubbles get overlays";
                     checked: App.show-all-default;
                     toggled(v) => {
-                        App.show-all-default = v;
+                        App.set-show-all-default(v);
                     }
                 }
+
             }
             Card {
                 title: "About";
@@ -135,9 +176,28 @@ export component SettingsScreen inherits VerticalLayout {
                     mono: true;
                 }
                 KVLine {
-                    label: "Workspace";
+                    label: "Exams folder";
                     value: App.workspace;
                     wrap-value: true;
+                }
+                // another folder, or this one in the file manager (the desktop app only)
+                if App.has-workspace && (App.can-browse || App.can-reveal): HorizontalLayout {
+                    spacing: Theme.space-sm;
+                    alignment: end;
+                    if App.can-browse: SecondaryButton {
+                        text: "Change…";
+                        accessible-label: "Change the exams folder…";
+                        clicked => {
+                            App.open-workspace();
+                        }
+                    }
+                    if App.can-reveal: GhostButton {
+                        text: App.reveal-label;
+                        accessible-description: "Shows the exams folder in the file manager";
+                        clicked => {
+                            App.reveal("workspace");
+                        }
+                    }
                 }
                 Text {
                     text: App.data-note;
@@ -150,34 +210,58 @@ export component SettingsScreen inherits VerticalLayout {
                 }
             }
         }
-        Card {
+        VerticalLayout {
             horizontal-stretch: 1;
-            title: "Review keymap";
-            subtitle: "Bound to physical key positions: under the Arabic (101) layout the A key still selects A; typed Arabic option letters in abjad order and Arabic-Indic digits work too (§13.3)";
-            // the map's own rhythm: tighter below 880 px so all rows fit an 800 px window
-            VerticalLayout {
-                spacing: root.win-h < 880px ? 4px : 10px;
-                KeyLine { narrow: root.narrow; action: "Set answer"; keys: "A–E · 1–5"; note: "A=أ or ش · B=ب or لا · C=ج or ؤ · D=د or ي · E=هـ or ث"; }
-                KeyLine { narrow: root.narrow; action: "Accept suggestion / commit"; keys: "Enter"; note: "Commits the chosen value when one is chosen"; }
-                KeyLine { narrow: root.narrow; action: "Apply to group"; keys: "Shift+Enter"; note: "Only when §13.2 batch-confirm conditions hold"; }
-                KeyLine { narrow: root.narrow; action: "Next / previous"; keys: "↓ ↑ · J K"; note: "J and K only when no option uses them"; }
-                KeyLine { narrow: root.narrow; action: "Blank"; keys: "Backspace"; note: ""; }
-                KeyLine { narrow: root.narrow; action: "Multiple marks"; keys: "Ctrl+M"; note: "Invalid response"; }
-                KeyLine { narrow: root.narrow; action: "Unreadable"; keys: "Ctrl+U"; note: "Rescan needed; never EMPTY"; }
-                KeyLine { narrow: root.narrow; action: "Defer · Escalate · Rescan list"; keys: "Ctrl+D · E · R"; note: ""; }
-                KeyLine { narrow: root.narrow; action: "Undo"; keys: "Ctrl+Z"; note: "Compensating event; the log is never rewritten"; }
-                KeyLine { narrow: root.narrow; action: "Overlay · Original"; keys: "Space · F2"; note: ""; }
-                KeyLine { narrow: root.narrow; action: "Roster search · Code help"; keys: "/ · F1"; note: ""; }
-                KeyLine { narrow: root.narrow; action: "Identity: candidate · N · D"; keys: "1–3 · N · D"; note: "Not on roster · duplicate"; }
-                KeyLine { narrow: root.narrow; action: "Screens"; keys: "Ctrl+1 … Ctrl+6"; note: "Exams … Outcomes; Ctrl+comma opens Settings"; }
-                KeyLine { narrow: root.narrow; action: "Exams: search · new exam"; keys: "Ctrl+K · N"; note: "↑ ↓ move table rows, Enter opens the drawer"; }
-                KeyLine { narrow: root.narrow; action: "Scan: pause · rescan list"; keys: "Ctrl+Space · R"; note: ""; }
-                KeyLine { narrow: root.narrow; action: "Results: what-if preview"; keys: "Ctrl+P"; note: ""; }
+            spacing: root.win-h < 880px ? Theme.space-md : Theme.space-lg;
+            Card {
+                title: "Grading";
+                vertical-stretch: 0;
+                Switch {
+                    label: "Write exports after grading";
+                    description: "Results, reports and uploads go into the exam's folder when a run ends";
+                    checked: App.auto-export;
+                    toggled(v) => {
+                        App.set-auto-export(v);
+                    }
+                }
             }
-            Rectangle {
+            Card {
                 vertical-stretch: 1;
+                title: "Review keymap";
+                subtitle: "Bound to physical key positions: under the Arabic (101) layout the A key still selects A; typed Arabic option letters in abjad order and Arabic-Indic digits work too";
+                // the map's own rhythm: tighter below 880 px so all rows fit an 800 px window
+                // beside the Grading card
+                VerticalLayout {
+                    spacing: root.win-h < 880px ? 2px : 10px;
+                    KeyLine { narrow: root.narrow; action: "Set answer"; keys: "A–E · 1–5"; note: "A=أ or ش · B=ب or لا · C=ج or ؤ · D=د or ي · E=هـ or ث"; }
+                    KeyLine { narrow: root.narrow; action: "Accept suggestion / commit"; keys: "Enter"; note: "Commits the chosen value when one is chosen"; }
+                    KeyLine { narrow: root.narrow; action: "Apply to group"; keys: "Shift+Enter"; note: "Only when the group may be confirmed at once"; }
+                    KeyLine { narrow: root.narrow; action: "Next / previous"; keys: "↓ ↑ · J K"; note: "J and K only when no option uses them"; }
+                    KeyLine { narrow: root.narrow; action: "Blank"; keys: "Backspace"; note: ""; }
+                    KeyLine { narrow: root.narrow; action: "Multiple marks"; keys: "Ctrl+M"; note: "Invalid response"; }
+                    KeyLine { narrow: root.narrow; action: "Unreadable"; keys: "Ctrl+U"; note: "Rescan needed; never Blank"; }
+                    KeyLine { narrow: root.narrow; action: "Defer · Escalate · Rescan list"; keys: "Ctrl+D · E · R"; note: ""; }
+                    KeyLine { narrow: root.narrow; action: "Undo"; keys: "Ctrl+Z"; note: "Compensating event; the log is never rewritten"; }
+                    KeyLine { narrow: root.narrow; action: "Overlay · Original"; keys: "Space · F2"; note: ""; }
+                    KeyLine { narrow: root.narrow; action: "Roster search · Code help"; keys: "/ · F1"; note: ""; }
+                    KeyLine { narrow: root.narrow; action: "Identity: candidate · N · D"; keys: "1–3 · N · D"; note: "Not on roster · duplicate"; }
+                    KeyLine { narrow: root.narrow; action: "Screens"; keys: "Ctrl+1 … Ctrl+6"; note: "Exams … Outcomes; Ctrl+comma opens Settings"; }
+                    KeyLine { narrow: root.narrow; action: "Exams: search · new exam"; keys: "Ctrl+K · N"; note: "↑ ↓ move table rows, Enter opens the drawer"; }
+                    // another exams folder and this one read again: not the demo's
+                    if ExamsVM.can-open-workspace: KeyLine { narrow: root.narrow; action: "Exams: open folder · refresh"; keys: "Ctrl+O · F5"; note: "Another exams folder · exams graded meanwhile"; }
+                    // the demo's capture agent and previews only: a real session has neither
+                    if App.demo: KeyLine { narrow: root.narrow; action: "Scan: pause · rescan list"; keys: "Ctrl+Space · R"; note: ""; }
+                    if App.demo: KeyLine { narrow: root.narrow; action: "Results: what-if preview"; keys: "Ctrl+P"; note: ""; }
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                }
             }
         }
+    }
+    // the run's notice sits here, above the status bar: nothing of the screen lies under it
+    if App.notice-room > 0: Rectangle {
+        height: App.notice-room;
     }
     StatusBar {
         MessageText {

@@ -1026,7 +1026,8 @@ pub fn compare_under(
         .copied()
         .filter(|(w, r)| in_scope[*w] && !used_r.contains(&(*w, *r)))
         .collect();
-    let form_of_b = |b: usize| s.booklets[b].form.map(|f| forms[f].clone());
+    // A sheet scored under the shared key declares no version: it pairs with any version.
+    let form_of_b = |b: usize| s.booklets[b].version(&forms).map(str::to_string);
     let mut cand: Vec<(usize, usize, (usize, usize))> = Vec::new();
     for &b in &left_b {
         for &(w, r) in &left_r {
@@ -1237,7 +1238,7 @@ pub fn compare_under(
     let mut students = Vec::new();
     let mut remark_refs = Vec::new();
     for (bi, b) in s.booklets.iter().enumerate() {
-        let form = b.form.map(|f| forms[f].clone()).unwrap_or_default();
+        let form = b.version(&forms).map(str::to_string).unwrap_or_default();
         let pi = pair_of.get(&bi).copied();
         let row = pi.map(|i| row_of(pairs[i].workbook, pairs[i].row));
         let version = if form.is_empty() {

@@ -461,8 +461,8 @@ pub fn read_workbook(name: &str, bytes: &[u8]) -> Result<RemarkWorkbook, AppErro
     }
     if !bytes.starts_with(b"PK") {
         return Err(bad(format!(
-            "not an Excel .xlsx workbook (Remark's binary .rmx and .aky files are never read, \
-             spec §3.5); {REMEDY_EXPORT}"
+            "not an Excel .xlsx workbook (Remark's binary .rmx and .aky files are never read); \
+             {REMEDY_EXPORT}"
         )));
     }
     use calamine::Reader;
@@ -847,8 +847,8 @@ pub fn read_workbook_files(paths: &[PathBuf]) -> Result<Vec<RemarkWorkbook>, App
             .to_ascii_lowercase();
         if matches!(ext.as_str(), "rmx" | "aky" | "rmt" | "xls" | "xlsm") {
             return Err(AppError::Input(format!(
-                "{name}: .{ext} files are not read (Remark's own formats are never opened, spec \
-                 §3.5; .xls and .xlsm workbooks are refused); {REMEDY_EXPORT}"
+                "{name}: .{ext} files are not read (Remark's own formats are never opened; .xls \
+                 and .xlsm workbooks are refused); {REMEDY_EXPORT}"
             )));
         }
         let meta = std::fs::metadata(p).map_err(|e| {

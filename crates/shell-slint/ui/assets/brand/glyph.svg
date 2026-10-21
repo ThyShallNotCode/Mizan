@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="64 100 384 384" width="384" height="384">
+  <title>Mizan</title>
+  <!-- The balance from ../icon.svg without its plate: the navigation-rail logo on nav-bg. -->
+  <defs>
+    <linearGradient id="bgG" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#14735F"/>
+      <stop offset="1" stop-color="#0C463F"/>
+    </linearGradient>
+    <radialGradient id="glowG" cx="0.3" cy="0.12" r="0.75">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="goldG" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#EDC979"/>
+      <stop offset="1" stop-color="#C38F3A"/>
+    </linearGradient>
+    <radialGradient id="panG" cx="0.36" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#F6DA97"/>
+      <stop offset="0.55" stop-color="#EDC979"/>
+      <stop offset="1" stop-color="#C38F3A"/>
+    </radialGradient>
+  </defs>
+
+    <path d="M124 186 L88 262 M124 186 L160 262" fill="none" stroke="url(#goldG)" stroke-width="8" stroke-linecap="round"/>
+    <path d="M388 186 L352 262 M388 186 L424 262" fill="none" stroke="url(#goldG)" stroke-width="8" stroke-linecap="round"/>
+    <rect x="243" y="168" width="26" height="206" rx="13" fill="url(#goldG)"/>
+    <rect x="204" y="360" width="104" height="24" rx="12" fill="url(#goldG)"/>
+    <rect x="166" y="380" width="180" height="30" rx="15" fill="url(#goldG)"/>
+    <rect x="100" y="173" width="312" height="24" rx="12" fill="url(#goldG)"/>
+    <circle cx="124" cy="185" r="15" fill="url(#goldG)"/>
+    <circle cx="388" cy="185" r="15" fill="url(#goldG)"/>
+    <circle cx="124" cy="300" r="52" fill="url(#panG)" stroke="#A9782C" stroke-opacity="0.55" stroke-width="5"/>
+    <circle cx="388" cy="300" r="52" fill="url(#panG)" stroke="#A9782C" stroke-opacity="0.55" stroke-width="5"/>
+    <path d="M256.00,126.00 L268.30,138.30 L285.70,138.30 L285.70,155.70 L298.00,168.00 L285.70,180.30 L285.70,197.70 L268.30,197.70 L256.00,210.00 L243.70,197.70 L226.30,197.70 L226.30,180.30 L214.00,168.00 L226.30,155.70 L226.30,138.30 L243.70,138.30 Z" fill="url(#goldG)" stroke="#A9782C" stroke-opacity="0.45" stroke-width="3" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="20" height="20">
+  <title>Mizan</title>
+  <!-- 20 px: drawn on the pixel grid (no lattice or shadow) for crisp small icons; the 48 px and
+       larger icons render ../icon.svg. -->
+  <defs>
+    <linearGradient id="bgS20" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#14735F"/>
+      <stop offset="1" stop-color="#0C463F"/>
+    </linearGradient>
+    <radialGradient id="glowS20" cx="0.3" cy="0.12" r="0.75">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="goldS20" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#EDC979"/>
+      <stop offset="1" stop-color="#C38F3A"/>
+    </linearGradient>
+    <radialGradient id="panS20" cx="0.36" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#F6DA97"/>
+      <stop offset="0.55" stop-color="#EDC979"/>
+      <stop offset="1" stop-color="#C38F3A"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="20" height="20" rx="4.5" fill="url(#bgS20)"/>
+  <rect x="0" y="0" width="20" height="20" rx="4.5" fill="url(#glowS20)"/>
+  <rect x="0.5" y="0.5" width="19" height="19" rx="4.0" fill="none" stroke="#2A8A7C" stroke-width="1"/>
+  <rect x="3.0" y="6.5" width="14.0" height="1.5" rx="0.75" fill="url(#goldS20)"/>
+  <rect x="9.0" y="6.5" width="2" height="8.5" fill="url(#goldS20)"/>
+  <rect x="6.0" y="15.0" width="8.0" height="2.0" rx="1.0" fill="url(#goldS20)"/>
+  <rect x="5.0" y="6.5" width="1" height="2.5" fill="url(#goldS20)"/>
+  <rect x="14.0" y="6.5" width="1" height="2.5" fill="url(#goldS20)"/>
+  <circle cx="5.5" cy="11.5" r="3.0" fill="url(#panS20)"/>
+  <circle cx="14.5" cy="11.5" r="3.0" fill="url(#panS20)"/>
+  <path d="M10.0 5.25 L12.0 7.25 L10.0 9.25 L8.0 7.25 Z" fill="url(#goldS20)"/>
+</svg>

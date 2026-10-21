@@ -75,10 +75,13 @@ pub enum GlobalKey {
     Settings,
     /// Escape.
     Dismiss,
+    /// F5: read the list shown again (the exams folder).
+    Refresh,
 }
 
-/// A Ctrl chord whose meaning depends on the screen showing (DESIGN §9): Ctrl+N and Ctrl+K on
-/// Exams, Ctrl+Space and Ctrl+R on Scan, Ctrl+P on Results. Letters are physical positions.
+/// A Ctrl chord whose meaning depends on the screen showing (DESIGN §9): Ctrl+N, Ctrl+K and
+/// Ctrl+O on Exams, Ctrl+Space and Ctrl+R on Scan, Ctrl+P on Results. Letters are physical
+/// positions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Chord {
     /// Ctrl + the letter at this physical position (`'a'`…`'z'`).
@@ -135,6 +138,16 @@ pub fn digit(text: &str) -> Option<u32> {
         '\u{06F0}'..='\u{06F9}' => Some(c as u32 - 0x06F0),
         _ => None,
     }
+}
+
+/// Whether a produced text is something typed (a letter, digit or sign), not the text Slint
+/// gives a key that types nothing: a control character (Escape, Backspace, a lone Shift, Caps
+/// Lock or Meta press) or a private-use code (the arrows, Home, the function keys).
+pub fn typed_entry(text: &str) -> bool {
+    !text.is_empty()
+        && text
+            .chars()
+            .all(|c| !c.is_control() && !('\u{F700}'..='\u{F8FF}').contains(&c))
 }
 
 /// Option position selected by a produced text, for an item with `options` options.
@@ -275,6 +288,9 @@ pub fn global_key(text: &str, ctrl: bool, alt: bool) -> Option<GlobalKey> {
     if is_key(text, Key::Escape) {
         return Some(GlobalKey::Dismiss);
     }
+    if is_key(text, Key::F5) && !ctrl {
+        return Some(GlobalKey::Refresh);
+    }
     if !ctrl {
         return None;
     }
@@ -301,6 +317,8 @@ mod tests {
         assert_eq!(page_chord("n", true, false), Some(Chord::Letter('n')));
         // Ctrl+N under the Arabic (101) layout produces ى on the N position
         assert_eq!(page_chord("ى", true, false), Some(Chord::Letter('n')));
+        // Ctrl+O under the Arabic (101) layout produces خ on the O position
+        assert_eq!(page_chord("خ", true, false), Some(Chord::Letter('o')));
         assert_eq!(page_chord(" ", true, false), Some(Chord::Space));
         assert_eq!(page_chord("n", false, false), None);
         assert_eq!(page_chord("n", true, true), None);
@@ -489,6 +507,27 @@ mod tests {
     }
 
     #[test]
+    fn only_typed_characters_are_entries() {
+        for key in [
+            Key::Shift,
+            Key::ShiftR,
+            Key::CapsLock,
+            Key::Meta,
+            Key::Escape,
+            Key::RightArrow,
+            Key::UpArrow,
+            Key::Home,
+            Key::F1,
+        ] {
+            assert!(!typed_entry(&k(key)), "{key:?}");
+        }
+        for text in ["b", "B", "*", "د", "3", "٣", "لا"] {
+            assert!(typed_entry(text), "{text}");
+        }
+        assert!(!typed_entry(""));
+    }
+
+    #[test]
     fn global_navigation() {
         assert_eq!(global_key("1", true, false), Some(GlobalKey::Screen(0)));
         assert_eq!(global_key("٤", true, false), Some(GlobalKey::Screen(3)));
@@ -500,5 +539,10 @@ mod tests {
             global_key(&k(Key::Escape), false, false),
             Some(GlobalKey::Dismiss)
         );
+        assert_eq!(
+            global_key(&k(Key::F5), false, false),
+            Some(GlobalKey::Refresh)
+        );
+        assert_eq!(global_key(&k(Key::F5), true, false), None);
     }
 }

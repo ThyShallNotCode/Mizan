@@ -9,7 +9,7 @@ import { App, ResultsVM, ItemRow, Page, SetupVM, RemarkVM } from "../state.slint
 import { ParallelRunView, CompareBar } from "remark.slint";
 import {
     Icons, ThemeToggle, Centered, SectionLabel, StatusText, Hatch, StepMeter, ShareSpark, EmptyState,
-    MessageText, Segment, SegmentGroup, TextField,
+    NoExamState, MessageText, Segment, SegmentGroup, TextField,
 } from "../widgets.slint";
 import { ListView } from "std-widgets.slint";
 
@@ -27,8 +27,25 @@ component ExportBar inherits Rectangle {
     init => {
         all.focus();
     }
+    property <bool> focus-inside: all.has-focus || column.has-focus || blackboard.has-focus || close.has-focus || root.reveal-focused;
+    // "Open exports folder" (made with App.can-reveal) has the keyboard (reset when made)
+    property <bool> reveal-focused;
+    // An overlay: a press on its background must not reach the page underneath. A click on it
+    // gives the bar the keyboard back (for Escape) unless a control inside has it.
+    TouchArea {
+        clicked => {
+            if (!root.focus-inside) {
+                all.focus();
+            }
+        }
+        scroll-event(event) => {
+            return accept;
+        }
+    }
     // Escape closes the bar from anywhere inside it
     FocusScope {
+        // the fields inside keep focus when the bar's background is clicked
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Escape) {
                 ResultsVM.export-open = false;
@@ -66,7 +83,7 @@ component ExportBar inherits Rectangle {
                     color: Theme.ink;
                     vertical-alignment: center;
                 }
-                TextField {
+                column := TextField {
                     width: 230px;
                     label: "Blackboard column ID (optional)";
                     placeholder: "Column ID, e.g. 835932 (optional)";
@@ -75,7 +92,7 @@ component ExportBar inherits Rectangle {
                     enabled: ResultsVM.blackboard-ready;
                 }
                 Centered {
-                    SecondaryButton {
+                    blackboard := SecondaryButton {
                         text: "Write Blackboard CSV";
                         enabled: ResultsVM.blackboard-ready;
                         accessible-description: ResultsVM.blackboard-note;
@@ -87,14 +104,38 @@ component ExportBar inherits Rectangle {
                 Rectangle {
                     horizontal-stretch: 1;
                 }
+                // the folder the exports are written to, in the file manager
+                if App.can-reveal: Centered {
+                    SecondaryButton {
+                        init => {
+                            root.reveal-focused = false;
+                        }
+                        changed has-focus => {
+                            root.reveal-focused = self.has-focus;
+                        }
+                        text: "Open exports folder";
+                        accessible-description: ResultsVM.exports-note != "" ? ResultsVM.exports-note : "Shows the exam's folder, where its exports are written, in the file manager";
+                        clicked => {
+                            App.reveal("exports");
+                        }
+                    }
+                }
                 Centered {
-                    GhostButton {
+                    close := GhostButton {
                         text: "Close";
                         clicked => {
                             ResultsVM.export-open = false;
                         }
                     }
                 }
+            }
+            // the files in the folder are older than the exam (a decision, the key since)
+            if ResultsVM.exports-note != "": Text {
+                text: ResultsVM.exports-note;
+                font-size: Theme.text-xs;
+                font-weight: Theme.weight-semibold;
+                color: Theme.warning;
+                wrap: word-wrap;
             }
             Text {
                 text: ResultsVM.blackboard-note;
@@ -119,7 +160,22 @@ component ReleaseBar inherits Rectangle {
     init => {
         cancel.focus();
     }
+    property <bool> focus-inside: release.has-focus || cancel.has-focus;
+    // An overlay: a press on its background must not reach the page underneath. A click on it
+    // gives the bar the keyboard back (for Escape) unless a control inside has it.
+    TouchArea {
+        clicked => {
+            if (!root.focus-inside) {
+                cancel.focus();
+            }
+        }
+        scroll-event(event) => {
+            return accept;
+        }
+    }
     FocusScope {
+        // the fields inside keep focus when the bar's background is clicked
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Escape) {
                 ResultsVM.release-open = false;
@@ -146,7 +202,7 @@ component ReleaseBar inherits Rectangle {
                     horizontal-stretch: 1;
                 }
                 Centered {
-                    PrimaryButton {
+                    release := PrimaryButton {
                         text: "Release";
                         icon: Icons.release;
                         accessible-description: "Releases the results and writes the Blackboard upload";
@@ -578,7 +634,7 @@ export component ResultsScreen inherits Rectangle {
                         text: root.narrow ? "Remark…" : "Compare with Remark…";
                         enabled: ResultsVM.available && RemarkVM.can-compare;
                         accessible-label: "Compare with Remark export…";
-                        accessible-description: "The parallel run (§23.7): this exam beside Remark's graded workbooks of the same sheets, every difference with its crop (Restricted)";
+                        accessible-description: "The parallel run: this exam beside Remark's graded workbooks of the same sheets, every difference with its crop (Restricted)";
                         clicked => {
                             ResultsVM.export-open = false;
                             ResultsVM.release-open = false;
@@ -586,7 +642,8 @@ export component ResultsScreen inherits Rectangle {
                         }
                     }
                 }
-                Centered {
+                // the demo only: a real session changes the key in Setup to rescore
+                if App.demo: Centered {
                     SecondaryButton {
                         text: "What-if preview";
                         key-hint: "Ctrl+P";
@@ -609,7 +666,7 @@ export component ResultsScreen inherits Rectangle {
                         }
                     }
                 }
-                if ResultsVM.release-blocked: HorizontalLayout {
+                if ResultsVM.available && ResultsVM.release-blocked: HorizontalLayout {
                     spacing: Theme.space-xs + 2px;
                     Centered {
                         SeverityGlyph {
@@ -634,22 +691,18 @@ export component ResultsScreen inherits Rectangle {
                 }
             }
         }
-        if !ResultsVM.available: VerticalLayout {
+        if !App.has-exam: NoExamState {
             vertical-stretch: 1;
-            alignment: center;
-            spacing: Theme.space-md;
-            EmptyState {
-                title: ResultsVM.empty-title;
-                text: ResultsVM.empty-text;
-            }
-            if ResultsVM.empty-to-setup: HorizontalLayout {
-                alignment: center;
-                PrimaryButton {
-                    text: "Confirm the key in Setup";
-                    clicked => {
-                        SetupVM.ks-open = true;
-                        App.navigate(Page.setup);
-                    }
+        }
+        if App.has-exam && !ResultsVM.available: EmptyState {
+            vertical-stretch: 1;
+            title: ResultsVM.empty-title;
+            text: ResultsVM.empty-text;
+            if ResultsVM.empty-to-setup: PrimaryButton {
+                text: "Confirm the key in Setup";
+                clicked => {
+                    SetupVM.ks-open = true;
+                    App.navigate(Page.setup);
                 }
             }
         }
@@ -849,15 +902,26 @@ export component ResultsScreen inherits Rectangle {
                                     horizontal-stretch: 1;
                                 }
                             }
-                            ListView {
+                            if ResultsVM.items.length == 0: Text {
                                 vertical-stretch: 1;
-                                for it[i] in ResultsVM.items: ItemTableRow {
+                                text: "No item statistics for this exam";
+                                font-size: Theme.text-sm;
+                                color: Theme.ink-2;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            ListView {
+                                vertical-stretch: ResultsVM.items.length == 0 ? 0 : 1;
+                                for it in ResultsVM.items: ItemTableRow {
                                     height: 40px;
                                     narrow: root.narrow;
                                     data: it;
-                                    selected: i == ResultsVM.selected-item;
-                                    clicked => {
-                                        ResultsVM.select-item(i);
+                                    // by question: a refresh during a press (flag stability
+                                    // reorders the rows) selects the row pressed
+                                    key: it.q;
+                                    selected: it.q == ResultsVM.selected-q;
+                                    picked(q) => {
+                                        ResultsVM.select-item(q);
                                     }
                                 }
                             }
@@ -883,9 +947,12 @@ export component ResultsScreen inherits Rectangle {
                                     horizontal-stretch: 1;
                                 }
                                 Centered {
+                                    // a long reason is cut here, never the screen (the
+                                    // Release button's description carries it whole)
                                     StatusPill {
                                         text: ResultsVM.release-blocked ? "Blocked · " + ResultsVM.release-reason : "Ready";
                                         tone: ResultsVM.release-blocked ? Tone.error : Tone.success;
+                                        max-pill-width: root.narrow ? 360px : 480px;
                                     }
                                 }
                             }
@@ -938,20 +1005,18 @@ export component ResultsScreen inherits Rectangle {
                 }
             }
         }
+        // the run's notice sits here, above the status bar: nothing of the screen lies under it
+        if App.notice-room > 0: Rectangle {
+            height: App.notice-room;
+        }
         StatusBar {
-            Centered {
-                StatusPill {
-                    text: "Saved";
-                    tone: Tone.success;
-                }
-            }
             MessageText {
                 text: App.message;
                 tone: App.message-tone;
                 horizontal-stretch: 1;
             }
             StatusText {
-                text: "Release is a deliberate act of the instructor (PDPL IR Art. 11(2)(c))";
+                text: ResultsVM.available ? "Release is a deliberate act of the instructor" : "";
             }
             StatusText {
                 text: App.engine;

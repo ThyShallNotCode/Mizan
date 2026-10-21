@@ -31,12 +31,15 @@ pub mod keys;
 pub mod keysheet;
 pub mod model;
 pub mod outcomes;
+pub mod pages;
 pub mod parallel;
 pub mod pipeline;
+pub mod propose;
 pub mod remark;
 pub mod review;
 pub mod score;
 pub mod store;
+pub mod survey;
 pub mod vm;
 pub mod xlsx;
 
@@ -45,7 +48,7 @@ pub use exam::{
     CloDefinition, CloMapping, DomainLetter, ExamDefinition, FormKey, IdSchemeChoice, KeySheetRule,
     KeySource, MultiReviewPolicy, OutcomeSetup, PolicyChoice, RosterStudent, TemplateChoice,
 };
-pub use pipeline::{GradeOptions, Progress, ProvisionalPage};
+pub use pipeline::{Cancel, GradeOptions, Progress, ProvisionalPage};
 pub use review::{Action, Decision, ItemKind, ItemState, Lane, ReviewItem};
 
 use thiserror::Error;
@@ -77,11 +80,14 @@ pub enum AppError {
     /// Internal error.
     #[error("internal: {0}")]
     Internal(String),
+    /// The operator cancelled the run ([`Cancel`]) before anything was stored.
+    #[error("cancelled by the operator; nothing was saved")]
+    Cancelled,
 }
 
 impl AppError {
     /// Process exit code for the CLI: 2 usage/definition, 3 input, 4 store, 5 scoring,
-    /// 6 review, 7 not found, 8 I/O, 70 internal.
+    /// 6 review, 7 not found, 8 I/O, 70 internal, 130 cancelled (as an interrupted command).
     pub fn exit_code(&self) -> i32 {
         match self {
             AppError::Definition(_) => 2,
@@ -92,6 +98,7 @@ impl AppError {
             AppError::NotFound(_) => 7,
             AppError::Io(_) => 8,
             AppError::Internal(_) => 70,
+            AppError::Cancelled => 130,
         }
     }
 }

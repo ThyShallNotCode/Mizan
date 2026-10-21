@@ -8,7 +8,7 @@ import {
     StatTile, SeverityGlyph, TableRow, TableHeaderCell, Chip,
 } from "../theme.slint";
 import { RemarkVM, RmRow, CmpDiff, CmpLine } from "../state.slint";
-import { Centered, SectionLabel, KVLine, TextField, Segment, SegmentGroup } from "../widgets.slint";
+import { Centered, SectionLabel, KVLine, PathField, Segment, SegmentGroup } from "../widgets.slint";
 import { ListView, ScrollView } from "std-widgets.slint";
 
 // The classification banner of the parallel run (DESIGN §9.6: "Restricted", warning-soft, lock
@@ -63,6 +63,10 @@ export component RemarkRefusal inherits Rectangle {
     in property <bool> exam-points;
     callback use-suggested();
     callback use-exam-points();
+    // one of the buttons has the keyboard (each flag is reset when its button is made)
+    out property <bool> has-focus: (root.suggestion != "" && root.suggested-focused) || (root.exam-points && root.points-focused);
+    property <bool> suggested-focused;
+    property <bool> points-focused;
     background: Theme.error-soft;
     border-radius: Theme.radius-md;
     border-width: 1px;
@@ -115,6 +119,12 @@ export component RemarkRefusal inherits Rectangle {
             spacing: Theme.space-sm;
             alignment: start;
             if root.suggestion != "": SecondaryButton {
+                init => {
+                    root.suggested-focused = false;
+                }
+                changed has-focus => {
+                    root.suggested-focused = self.has-focus;
+                }
                 text: "Use the suggested points";
                 accessible-description: "Gives the suggested points as your decision and reads again; every Remark total is still checked";
                 clicked => {
@@ -122,6 +132,12 @@ export component RemarkRefusal inherits Rectangle {
                 }
             }
             if root.exam-points: SecondaryButton {
+                init => {
+                    root.points-focused = false;
+                }
+                changed has-focus => {
+                    root.points-focused = self.has-focus;
+                }
                 text: "Use this exam's points";
                 accessible-description: "Compares with the points this exam is graded with, checked against every Remark total";
                 clicked => {
@@ -134,31 +150,33 @@ export component RemarkRefusal inherits Rectangle {
 
 // The workbook and points fields of an import (the Setup bar and the New-exam panel).
 export component RemarkFields inherits HorizontalLayout {
+    out property <bool> has-focus: books.has-focus || points.has-focus || read.has-focus;
     spacing: Theme.space-md;
+    forward-focus: books;
     init => {
         books.focus();
     }
-    books := TextField {
+    books := PathField {
         horizontal-stretch: 3;
         label: "Remark workbooks";
         placeholder: "Remark's graded Excel exports (.xlsx), ; between several (its .rmx/.aky files are never opened)";
         text <=> RemarkVM.path;
-        mono: true;
+        target: "remark-books";
         accepted(v) => {
             if (v != "") {
                 RemarkVM.read(RemarkVM.path, RemarkVM.points-path);
             }
         }
     }
-    TextField {
+    points := PathField {
         horizontal-stretch: 1;
         label: "Points file (optional)";
         placeholder: "points.csv (optional)";
         text <=> RemarkVM.points-path;
-        mono: true;
+        target: "remark-points";
     }
     Centered {
-        PrimaryButton {
+        read := PrimaryButton {
             text: "Read export";
             key-hint: "Enter";
             enabled: RemarkVM.path != "";
@@ -243,6 +261,9 @@ component RemarkRowView inherits Rectangle {
 // instructor reveals it), the exact points and the learning objective.
 export component RemarkImportCard inherits Card {
     in property <bool> compact;
+    // a control inside has the keyboard: the key chip, or a version (by index, -1 for none)
+    out property <bool> has-focus: key-chip.has-focus || (RemarkVM.versions.length > 1 && root.focused-version >= 0);
+    property <int> focused-version: -1;
     inset: 0;
     VerticalLayout {
         HorizontalLayout {
@@ -272,6 +293,9 @@ export component RemarkImportCard inherits Card {
             }
             if RemarkVM.versions.length > 1: VerticalLayout {
                 alignment: start;
+                init => {
+                    root.focused-version = -1;
+                }
                 SegmentGroup {
                     for v[i] in RemarkVM.versions: Segment {
                         text: v.label;
@@ -279,6 +303,13 @@ export component RemarkImportCard inherits Card {
                         selected: v.selected;
                         clicked => {
                             RemarkVM.select-version(i);
+                        }
+                        changed has-focus => {
+                            if (self.has-focus) {
+                                root.focused-version = i;
+                            } else if (root.focused-version == i) {
+                                root.focused-version = -1;
+                            }
                         }
                     }
                 }
@@ -318,7 +349,7 @@ export component RemarkImportCard inherits Card {
                 accessible-role: AccessibleRole.text;
             }
             Centered {
-                Chip {
+                key-chip := Chip {
                     text: RemarkVM.show-key ? "Hide key" : "Reveal key";
                     selected: RemarkVM.show-key;
                     clicked => {
@@ -853,12 +884,13 @@ export component ParallelRunView inherits VerticalLayout {
                     }
                     HorizontalLayout {
                         spacing: Theme.space-sm;
-                        TextField {
+                        PathField {
                             horizontal-stretch: 1;
                             label: "Report folder";
                             placeholder: "Folder for the Restricted report";
                             text <=> RemarkVM.save-path;
-                            mono: true;
+                            target: "parallel-dir";
+                            folder: true;
                         }
                         Centered {
                             PrimaryButton {
@@ -889,7 +921,22 @@ export component CompareBar inherits Rectangle {
     init => {
         field.focus();
     }
+    property <bool> focus-inside: field.has-focus || compare.has-focus || cancel.has-focus;
+    // An overlay: a press on its background must not reach the page underneath. A click on it
+    // gives the bar the keyboard back (for Escape) unless a control inside has it.
+    TouchArea {
+        clicked => {
+            if (!root.focus-inside) {
+                field.focus();
+            }
+        }
+        scroll-event(event) => {
+            return accept;
+        }
+    }
     FocusScope {
+        // the fields inside keep focus when the bar's background is clicked
+        focus-on-click: false;
         key-pressed(event) => {
             if (event.text == Key.Escape) {
                 RemarkVM.cmp-bar = false;
@@ -912,12 +959,12 @@ export component CompareBar inherits Rectangle {
                     color: Theme.ink;
                     vertical-alignment: center;
                 }
-                field := TextField {
+                field := PathField {
                     horizontal-stretch: 1;
                     label: "Remark workbooks to compare";
                     placeholder: "Remark's graded Excel exports of these sheets (.xlsx), and optionally a handwritten-ID .csv (file,page,student_id); ; between several";
                     text <=> RemarkVM.cmp-path;
-                    mono: true;
+                    target: "compare-books";
                     accepted(v) => {
                         if (v != "") {
                             RemarkVM.compare(v);
@@ -925,7 +972,7 @@ export component CompareBar inherits Rectangle {
                     }
                 }
                 Centered {
-                    PrimaryButton {
+                    compare := PrimaryButton {
                         text: "Compare";
                         key-hint: "Enter";
                         enabled: RemarkVM.cmp-path != "";
@@ -936,7 +983,7 @@ export component CompareBar inherits Rectangle {
                     }
                 }
                 Centered {
-                    GhostButton {
+                    cancel := GhostButton {
                         text: "Cancel";
                         clicked => {
                             RemarkVM.cmp-bar = false;
@@ -945,7 +992,7 @@ export component CompareBar inherits Rectangle {
                 }
             }
             Text {
-                text: "Restricted: student numbers and answers; head-to-head figures stay inside the university and leave it only after the licence review (spec §3.5, Q-08)";
+                text: "Restricted: student numbers and answers; head-to-head figures stay inside the university and leave it only after the licence review";
                 font-size: Theme.text-xs;
                 color: Theme.warning;
                 wrap: word-wrap;

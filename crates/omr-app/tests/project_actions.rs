@@ -172,7 +172,24 @@ fn c5_the_real_key_replaces_an_inferred_key_and_the_blocker_clears() {
     let input = scans(dir.path());
     let out = dir.path().join("out");
     let mut p = grade(&definition(KeySource::Inferred, true), &[input], &out, 2);
-    assert!(p.session.release_blocked().unwrap().contains("INFERRED"));
+    // the block and the notice name the remedy: an inferred key is replaceable, never final
+    let blocked = p.session.release_blocked().unwrap();
+    assert!(blocked.contains("INFERRED"), "{blocked}");
+    assert!(
+        blocked.contains("Replace key") && !blocked.contains("never"),
+        "{blocked}"
+    );
+    let detail = p
+        .session
+        .exam_exceptions
+        .iter()
+        .find(|e| e.sub_reason.as_deref() == Some("inferred_key"))
+        .map(|e| e.detail.clone())
+        .expect("the inferred-key notice");
+    assert!(
+        detail.contains("Replace key") && !detail.contains("never"),
+        "{detail}"
+    );
     assert!(out.join("results-INFERRED.csv").exists());
     let sco003 = p
         .queue(Some(Lane::Scoring))
@@ -498,4 +515,83 @@ fn c8_blackboard_grade_center_upload_holds_only_what_it_needs() {
         r.export_blackboard(&dir.path().join("x.csv"), None)
             .is_err()
     );
+}
+
+#[test]
+fn an_export_file_that_cannot_be_written_is_named_with_what_to_do() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = scans(dir.path());
+    let out = dir.path().join("out");
+    let mut p = grade(
+        &definition(provided(false), true),
+        std::slice::from_ref(&input),
+        &out,
+        2,
+    );
+    // results.csv held where it cannot be replaced (a folder stands in for a file Excel
+    // keeps open on Windows)
+    std::fs::remove_file(out.join("results.csv")).unwrap();
+    std::fs::create_dir(out.join("results.csv")).unwrap();
+    let e = p.export(&out).unwrap_err();
+    assert_eq!(e.exit_code(), 8, "still a file error");
+    let msg = e.to_string();
+    assert!(
+        msg.contains("results.csv could not be written")
+            && msg.contains("if it is open in another program, such as Excel, close it"),
+        "{msg}"
+    );
+}
+
+/// Exports written before a change are known to be older than the exam: a decision, or a key
+/// entry corrected, after they were written makes them older; writing them again makes them
+/// current. A folder without exports holds none.
+#[test]
+fn exports_written_before_a_change_are_known_to_be_older() {
+    use omr_app::export::{ExportsState, exports_state};
+    let dir = tempfile::tempdir().unwrap();
+    let input = scans(dir.path());
+    let out = dir.path().join("out");
+    let mut p = grade(&definition(provided(true), true), &[input], &out, 2);
+    assert_eq!(exports_state(&p, &out), ExportsState::Current);
+    assert_eq!(
+        exports_state(&p, &dir.path().join("elsewhere")),
+        ExportsState::None
+    );
+    // one review decision
+    let (id, kind, b, q) = p
+        .queue(None)
+        .iter()
+        .find(|i| i.kind == ItemKind::Mark)
+        .map(|i| (i.id, i.kind, i.booklet, i.question))
+        .expect("a mark to review");
+    assert_eq!(kind, ItemKind::Mark);
+    let d = answer(sheet_no(&p, b.unwrap()), q.unwrap()).map_or(Decision::Blank, Decision::Option);
+    let reason = p
+        .overrides_engine(id, &d)
+        .then(|| ReviewReason::code("AMBIGUOUS_MARK"));
+    p.apply_with_reason(
+        id,
+        Action::Resolve {
+            decision: d,
+            accepted_suggestion: false,
+            note: String::new(),
+        },
+        reason,
+    )
+    .unwrap();
+    assert_eq!(exports_state(&p, &out), ExportsState::Older);
+    p.export(&out).unwrap();
+    assert_eq!(exports_state(&p, &out), ExportsState::Current);
+    // a key entry corrected
+    let right = char::from(b'A' + key(0, 2)).to_string();
+    p.set_key_with_reason(
+        0,
+        3,
+        &right,
+        Some(ReviewReason::with_note("KEY_ERROR", "typo")),
+    )
+    .unwrap();
+    assert_eq!(exports_state(&p, &out), ExportsState::Older);
+    p.export(&out).unwrap();
+    assert_eq!(exports_state(&p, &out), ExportsState::Current);
 }
