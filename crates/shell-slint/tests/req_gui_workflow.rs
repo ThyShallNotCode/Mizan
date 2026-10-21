@@ -2656,6 +2656,111 @@ fn setup_roster_step_adds_a_roster_in_the_background() {
     );
 }
 
+/// D8: while a roster is matched, a change elsewhere is refused naming that run as the Scan
+/// screen names it: the exam's name (never its ID), and no scans said to be added.
+#[test]
+fn a_change_during_the_roster_run_names_that_run() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let ws = exams_folder(&dir.path().join("exams"), &[&QUIZ_1]);
+    let roster = dir.path().join("roster.csv");
+    roster_file(&QUIZ_1, &roster, false);
+    let (h, held, _host) = window_on(&ws);
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Setup"));
+    press(ui, "4 Roster, warnings");
+    type_into(ui, "Roster file", roster.to_str().unwrap());
+    press(ui, "Add roster and match students");
+    assert!(h.app.borrow().grading_in_progress());
+    click(ui, &tab_of(ui, "Review"));
+    chord(ui, Key::Control, "z");
+    let msg = message(ui);
+    assert!(
+        msg.starts_with(
+            "The roster of CS 213 Quiz 1 is being matched: nothing can change until the Scan \
+             screen says it is complete"
+        ),
+        "{msg}"
+    );
+    assert!(!msg.contains(&h.exam.0), "{msg}");
+    run_held(&h, &held);
+}
+
+/// D7: scans added from a mistyped folder fail: the notice and the Scan log say what went
+/// wrong and what to do in this window, with no command line, exit code, error kind or
+/// package path.
+#[test]
+fn a_failed_run_says_what_to_do_in_this_window() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let ws = exams_folder(&dir.path().join("exams"), &[&QUIZ_1]);
+    let (h, held, _host) = window_on(&ws);
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Scan"));
+    press(ui, "Add scans…");
+    let typo = dir.path().join("day 2 scnas");
+    type_into(ui, "Scan files or folders to add", typo.to_str().unwrap());
+    press(ui, "Add and regrade");
+    run_held(&h, &held);
+    let (title, text, steps) = notice(ui);
+    assert_eq!(title, "Adding scans to CS 213 Quiz 1 failed");
+    assert!(
+        text.contains("day 2 scnas: no such file or folder")
+            && text.contains("Nothing was added; the exam is as it was")
+            && text.contains("Add scans…"),
+        "{text}"
+    );
+    assert_eq!(steps, ["Show the Scan log"]);
+    let log = ui
+        .global::<ScanVM>()
+        .get_activity()
+        .row_data(0)
+        .expect("the Scan log")
+        .to_string();
+    assert!(log.contains("no such file or folder"), "{log}");
+    for t in [&text, &log] {
+        for bad in ["exit code", "omr ", "--project", ".omrproj", "input:"] {
+            assert!(!t.contains(bad), "{bad:?} in {t}");
+        }
+    }
+}
+
+/// D8: exports a run cannot write (results.csv open in Excel on Windows) are named in the
+/// notice with what to do, in plain words; the roster itself is added.
+#[test]
+fn exports_that_cannot_be_written_are_named_with_what_to_do() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let ws = exams_folder(&dir.path().join("exams"), &[&QUIZ_1]);
+    let roster = dir.path().join("roster.csv");
+    roster_file(&QUIZ_1, &roster, false);
+    // a folder stands in for a results file another program keeps open
+    let exam_dir = ws.join(QUIZ_1.folder);
+    for name in ["results.csv", "results-INFERRED.csv"] {
+        let _ = std::fs::remove_file(exam_dir.join(name));
+        std::fs::create_dir(exam_dir.join(name)).expect("stand-in");
+    }
+    let (h, held, _host) = window_on(&ws);
+    let ui = &h.ui;
+    click(ui, &tab(ui, "Setup"));
+    press(ui, "4 Roster, warnings");
+    type_into(ui, "Roster file", roster.to_str().unwrap());
+    press(ui, "Add roster and match students");
+    run_held(&h, &held);
+    let (title, text, _) = notice(ui);
+    assert_eq!(title, "Roster added to CS 213 Quiz 1");
+    assert!(
+        text.contains("The exports were not written: results")
+            && text.contains(
+                ".csv could not be written (Is a directory (os error 21)); if it is open in \
+                 another program, such as Excel, close it. Write them again with Write all \
+                 exports in Results"
+            ),
+        "{text}"
+    );
+    assert!(
+        !text.contains("i/o:") && !text.contains("writes them"),
+        "{text}"
+    );
+}
+
 /// D8: a roster the core refuses (a student number listed twice) is refused at once, in the
 /// status line, with nothing started and the exam as it was; the bar stays open to fix it.
 #[test]

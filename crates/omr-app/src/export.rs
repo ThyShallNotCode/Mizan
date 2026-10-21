@@ -664,6 +664,18 @@ pub fn mask_json(v: &mut Value) {
     }
 }
 
+/// An export file that could not be written, named, with the usual cause and what to do (still
+/// an I/O error, exit code 8): on Windows a file open in Excel is locked against writing.
+fn unwritten(name: &str, e: std::io::Error) -> AppError {
+    AppError::Io(std::io::Error::new(
+        e.kind(),
+        format!(
+            "{name} could not be written ({e}); if it is open in another program, such as \
+             Excel, close it"
+        ),
+    ))
+}
+
 /// Writes every export into `dir`.
 pub fn write_all(p: &ExamProject, dir: &Path) -> Result<ExportSummary, AppError> {
     crate::keys::export_dir(dir)?;
@@ -898,12 +910,15 @@ pub fn write_all(p: &ExamProject, dir: &Path) -> Result<ExportSummary, AppError>
     sm["banner"] = json!(inferred.then_some(INFERRED_BANNER));
     files.push((format!("summary{sfx}.json"), js(sm)?));
     let mut manifest = ExportManifest::new(&m, "grades", true);
+    let write = |name: &str, bytes: &[u8]| {
+        crate::keys::write_private(&dir.join(name), bytes).map_err(|e| unwritten(name, e))
+    };
     for (name, bytes) in &files {
-        crate::keys::write_private(&dir.join(name), bytes)?;
+        write(name, bytes)?;
         manifest.add(name, bytes);
     }
     let mbytes = manifest.to_canonical_json();
-    crate::keys::write_private(&dir.join("manifest.json"), &signed_manifest(p, &mbytes)?)?;
+    write("manifest.json", &signed_manifest(p, &mbytes)?)?;
     let mut names: Vec<String> = files.into_iter().map(|(n, _)| n).collect();
     names.push("manifest.json".into());
     Ok(ExportSummary {

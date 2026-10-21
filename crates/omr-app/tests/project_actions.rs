@@ -516,3 +516,28 @@ fn c8_blackboard_grade_center_upload_holds_only_what_it_needs() {
             .is_err()
     );
 }
+
+#[test]
+fn an_export_file_that_cannot_be_written_is_named_with_what_to_do() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = scans(dir.path());
+    let out = dir.path().join("out");
+    let mut p = grade(
+        &definition(provided(false), true),
+        std::slice::from_ref(&input),
+        &out,
+        2,
+    );
+    // results.csv held where it cannot be replaced (a folder stands in for a file Excel
+    // keeps open on Windows)
+    std::fs::remove_file(out.join("results.csv")).unwrap();
+    std::fs::create_dir(out.join("results.csv")).unwrap();
+    let e = p.export(&out).unwrap_err();
+    assert_eq!(e.exit_code(), 8, "still a file error");
+    let msg = e.to_string();
+    assert!(
+        msg.contains("results.csv could not be written")
+            && msg.contains("if it is open in another program, such as Excel, close it"),
+        "{msg}"
+    );
+}

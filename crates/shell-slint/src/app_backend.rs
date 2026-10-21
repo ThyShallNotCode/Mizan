@@ -56,6 +56,9 @@ pub enum JobEvent {
     /// What the run changed, in one line (an added batch, a roster): logged, and said again
     /// when the run ends.
     Summary(String),
+    /// What the run did is saved in the exam (graded, scans added, a roster given): it stands
+    /// even if closing the project after it fails.
+    Saved,
     /// What became of the exports the run writes when it ends: written, or why not (the key
     /// read from key sheets waits for its confirmation, or the export failed).
     Exports(Result<Exported, String>),
@@ -100,7 +103,9 @@ fn export_after(p: &mut ExamProject, dir: Option<&Path>, tx: &Sender<JobEvent>) 
                     .any(|f| f == omr_app::export::BLACKBOARD_FILE),
             }),
             Err(e) => Err(format!(
-                "Exports not written: {e}. Write all exports in Results writes them"
+                "The exports were not written: {}. Write them again with Write all exports in \
+                 Results",
+                app_message(&e)
             )),
         }
     };
@@ -137,9 +142,9 @@ pub fn run_grading(req: GradeRequest, tx: Sender<JobEvent>) {
     };
     let fail = |e: AppError| {
         format!(
-            "{e} (exit code {}). Fix the input and start again; `omr grade` prints the same \
-             message",
-            e.exit_code()
+            "{}. Nothing was saved; your scan files are unchanged. Fix what this names, then \
+             Edit and grade again",
+            app_message(&e)
         )
     };
     let outcome = match &req.options.project_dir {
@@ -157,8 +162,15 @@ pub fn run_grading(req: GradeRequest, tx: Sender<JobEvent>) {
             }
             Err(e) => Err(fail(e)),
             Ok(mut p) => {
+                let _ = tx.send(JobEvent::Saved);
                 export_after(&mut p, req.export_to.as_deref(), &tx);
-                p.close().map(|()| dir.clone()).map_err(fail)
+                p.close().map(|()| dir.clone()).map_err(|e| {
+                    unclosed(
+                        "The exam was graded and saved",
+                        "refresh the exams folder (F5) to open it",
+                        &e,
+                    )
+                })
             }
         },
     };
@@ -187,9 +199,9 @@ pub fn run_append(req: AppendRequest, tx: Sender<JobEvent>) {
     };
     let fail = |e: AppError| {
         format!(
-            "{e} (exit code {}). Nothing was added; `omr add --project {}` prints the same message",
-            e.exit_code(),
-            req.project.display()
+            "{}. Nothing was added; the exam is as it was. Check the scans, then choose them \
+             again with Add scans…",
+            app_message(&e)
         )
     };
     let outcome = match ExamProject::open(&req.project, &req.options.operator) {
@@ -197,6 +209,7 @@ pub fn run_append(req: AppendRequest, tx: Sender<JobEvent>) {
         Ok(mut p) => {
             let added = p.add_scans(&req.inputs, &req.options, &progress);
             if let Ok(r) = &added {
+                let _ = tx.send(JobEvent::Saved);
                 let _ = tx.send(JobEvent::Summary(append_summary(r)));
                 export_after(&mut p, req.export_to.as_deref(), &tx);
             }
@@ -207,7 +220,9 @@ pub fn run_append(req: AppendRequest, tx: Sender<JobEvent>) {
                     return;
                 }
                 (Ok(_), Ok(())) => Ok(req.project.clone()),
-                (Err(e), _) | (Ok(_), Err(e)) => Err(fail(e)),
+                (Err(e), _) => Err(fail(e)),
+                // added and saved: only closing the exam after it failed
+                (Ok(_), Err(e)) => Err(unclosed("The scans were added and saved", REOPEN, &e)),
             }
         }
     };
@@ -236,8 +251,8 @@ pub fn run_set_roster(req: RosterRequest, tx: Sender<JobEvent>) {
     };
     let fail = |e: AppError| {
         format!(
-            "{e} (exit code {}). The exam is as it was: no roster was added",
-            e.exit_code()
+            "{}. The exam is as it was: no roster was added",
+            app_message(&e)
         )
     };
     let outcome = match ExamProject::open(&req.project, &req.options.operator) {
@@ -245,6 +260,7 @@ pub fn run_set_roster(req: RosterRequest, tx: Sender<JobEvent>) {
         Ok(mut p) => {
             let set = p.set_roster(req.rows, &req.options, &progress);
             if let Ok(r) = &set {
+                let _ = tx.send(JobEvent::Saved);
                 let _ = tx.send(JobEvent::Summary(roster_summary(r)));
                 for w in &r.warnings {
                     let _ = tx.send(JobEvent::Note(format!("roster: {w}")));
@@ -258,12 +274,28 @@ pub fn run_set_roster(req: RosterRequest, tx: Sender<JobEvent>) {
                     return;
                 }
                 (Ok(_), Ok(())) => Ok(req.project.clone()),
-                (Err(e), _) | (Ok(_), Err(e)) => Err(fail(e)),
+                (Err(e), _) => Err(fail(e)),
+                // given and saved: only closing the exam after it failed
+                (Ok(_), Err(e)) => Err(unclosed("The roster was added and saved", REOPEN, &e)),
             }
         }
     };
     let _ = tx.send(JobEvent::Finished(outcome));
 }
+
+/// Why closing an exam failed after the run saved what it did (`done`: "The scans were added
+/// and saved"), say when the disk filled up as the exports were written: the change stands,
+/// and is said to, with what to do (`then`).
+fn unclosed(done: &str, then: &str, e: &AppError) -> String {
+    format!(
+        "{}. {done}, but the exam could not be closed cleanly: free disk space if the disk is \
+         full, then {then}",
+        app_message(e)
+    )
+}
+
+/// What to do once an exam that was not closed cleanly can be opened again.
+const REOPEN: &str = "open the exam again";
 
 /// What a survey worker reports, tagged with the survey's generation ([`run_survey`]): counts
 /// only (no page's provisional result crosses).
@@ -430,21 +462,33 @@ fn append_summary(r: &omr_app::append::AppendReport) -> String {
 }
 
 /// "142 students on the roster · 138 booklets matched · 4 not on the roster · 6 absent · 3
-/// decisions kept".
+/// decisions kept". A decision the run disagrees with (a student chosen by hand that the roster
+/// now matches otherwise) is kept and listed for review, and said so.
 fn roster_summary(r: &omr_app::append::RosterReport) -> String {
     let mut parts = vec![
         format!("{} on the roster", plural(r.students, "student")),
         format!("{} matched", plural(r.matched, "booklet")),
         format!("{} not on the roster", r.not_on_roster),
         format!("{} absent", r.absent),
-        format!(
+    ];
+    // "0 decisions kept" beside a decision kept for review would contradict it
+    if r.carried_over > 0 || r.conflicts == 0 {
+        parts.push(format!(
             "{} decision{} kept",
             r.carried_over,
             if r.carried_over == 1 { "" } else { "s" }
-        ),
-    ];
+        ));
+    }
     if r.conflicts > 0 {
-        parts.push(format!("{} reread differently (SYS-032)", r.conflicts));
+        parts.push(format!(
+            "{} of yours {} with this run: kept, and listed for review (SYS-032)",
+            plural(r.conflicts, "decision"),
+            if r.conflicts == 1 {
+                "disagrees"
+            } else {
+                "disagree"
+            }
+        ));
     }
     parts.join(" · ")
 }
@@ -480,6 +524,8 @@ struct Job {
     exports: Option<Result<Exported, String>>,
     /// The run's summary line (an added batch, a roster), for the completion notice.
     summary: Option<String>,
+    /// What the run did is saved ([`JobEvent::Saved`]): a failure after it is only the closing.
+    saved: bool,
     /// The run ended cancelled.
     cancelled: bool,
 }
@@ -497,6 +543,7 @@ impl Job {
             cancel,
             exports: None,
             summary: None,
+            saved: false,
             cancelled: false,
         }
     }
@@ -681,7 +728,7 @@ impl Opened {
             None => Ok(()),
             Some(why) => Err(BackendError::Denied(format!(
                 "This exam is open read-only ({why}). Close the other program that has {} open \
-                 (an `omr review` command or another window), then reopen the exam",
+                 (another window, or a command run on it), then reopen the exam",
                 self.dir.display()
             ))),
         }
@@ -724,7 +771,6 @@ struct StabilityJob {
 }
 
 fn app_err(e: AppError) -> BackendError {
-    let code = e.exit_code();
     match e {
         AppError::NotFound(m) => BackendError::NotFound(format!(
             "{m}. The item may have been resolved elsewhere: reopen the exam"
@@ -732,7 +778,7 @@ fn app_err(e: AppError) -> BackendError {
         AppError::Review(m) | AppError::Definition(m) | AppError::Scoring(m) => {
             BackendError::Invalid(m)
         }
-        AppError::Input(m) => BackendError::Invalid(format!("{m} (input error, code {code})")),
+        AppError::Input(m) => BackendError::Invalid(m),
         AppError::Store(m) => BackendError::Denied(format!(
             "The project store refused the change: {m}. Check that the folder is writable and \
              not open elsewhere, then reopen the exam"
@@ -797,9 +843,21 @@ impl AppBackend {
     }
 
     fn busy(&self, exam: &ExamId) -> bool {
-        self.job
+        self.busy_text(exam).is_some()
+    }
+
+    /// What holds `exam` while a run grades it again (scans added, a roster matched), named
+    /// as the rest of the window names it; `None` when nothing does.
+    fn busy_text(&self, exam: &ExamId) -> Option<String> {
+        let j = self
+            .job
             .as_ref()
-            .is_some_and(|j| j.is_append() && j.running() && &j.exam == exam)
+            .filter(|j| j.is_append() && j.running() && &j.exam == exam)?;
+        let name = self.job_name(j);
+        Some(match j.kind {
+            JobKind::Roster { .. } => format!("The roster of {name} is being matched"),
+            _ => format!("Scans are being added to {name}"),
+        })
     }
 
     /// Every graded exam below `workspace` (folders holding `project.omrproj`, via
@@ -1403,10 +1461,9 @@ impl AppBackend {
         exam: &ExamId,
         f: impl FnOnce(&mut Opened) -> Result<R, BackendError>,
     ) -> Result<R, BackendError> {
-        if self.busy(exam) {
+        if let Some(what) = self.busy_text(exam) {
             return Err(BackendError::Denied(format!(
-                "Scans are being added to {exam}: nothing can change until the Scan screen says \
-                 the batch is complete"
+                "{what}: nothing can change until the Scan screen says it is complete"
             )));
         }
         // open it first (a command may be the first touch, e.g. from a test)
@@ -1416,10 +1473,11 @@ impl AppBackend {
         }
         let mut map = self.opened.borrow_mut();
         let o = map.get_mut(exam).ok_or_else(|| {
-            BackendError::NotFound(format!(
-                "Exam {exam} is not open yet: wait for grading to finish, or open its folder \
-                 with --project"
-            ))
+            BackendError::NotFound(
+                "This exam is not open yet: wait for grading to finish, then open it from the \
+                 Exams screen"
+                    .into(),
+            )
         })?;
         o.writable()?;
         let r = f(o);
@@ -1700,6 +1758,7 @@ impl AppBackend {
                     job.activity.insert(0, format!("{now} · {line}"));
                     changed = true;
                 }
+                Ok(JobEvent::Saved) => job.saved = true,
                 Ok(JobEvent::Summary(line)) => {
                     let now = snapshot_label(&omr_app::pipeline::now_utc());
                     job.activity.insert(0, format!("{now} · {line}"));
@@ -1743,9 +1802,9 @@ impl AppBackend {
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     if job.outcome.is_none() {
-                        finished = Some(Err("The grading worker stopped without a result. Run \
-                                             the same `omr grade` (or `omr add`) command to see \
-                                             the error"
+                        finished = Some(Err("The background run stopped without a result. \
+                                             Refresh the exams folder (F5) to see what it \
+                                             saved, then try again"
                             .to_string()));
                     }
                     break;
@@ -1870,24 +1929,32 @@ impl AppBackend {
             ));
         }
         if let Some(e) = error {
-            let title = match j.kind {
-                JobKind::Grade { .. } => format!("Grading {name} failed"),
-                JobKind::Append { .. } => format!("Adding scans to {name} failed"),
-                JobKind::Roster { .. } => format!("The roster of {name} was not added"),
+            let title = match (&j.kind, j.saved) {
+                // what it did is saved: only closing the exam after it failed
+                (JobKind::Grade { .. }, true) => {
+                    format!("{name} is graded, but was not closed cleanly")
+                }
+                (JobKind::Append { .. }, true) => {
+                    format!("Scans added to {name}, but the exam was not closed cleanly")
+                }
+                (JobKind::Roster { .. }, true) => {
+                    format!("Roster added to {name}, but the exam was not closed cleanly")
+                }
+                (JobKind::Grade { .. }, false) => format!("Grading {name} failed"),
+                (JobKind::Append { .. }, false) => format!("Adding scans to {name} failed"),
+                (JobKind::Roster { .. }, false) => format!("The roster of {name} was not added"),
             };
-            let steps = if new_exam {
+            let steps = if new_exam && !j.saved {
                 vec![S::GradeAgain, S::ScanLog]
             } else {
                 vec![S::ScanLog]
             };
-            return Some(done(
-                b::JobOutcome::Failed,
-                title,
-                e,
-                b::Tone::Error,
-                0,
-                steps,
-            ));
+            let tone = if j.saved {
+                b::Tone::Warning
+            } else {
+                b::Tone::Error
+            };
+            return Some(done(b::JobOutcome::Failed, title, e, tone, 0, steps));
         }
         let opened = self.with(&j.exam, |o| {
             let s = &o.p.session;
@@ -1990,15 +2057,13 @@ impl AppBackend {
         }
         if let Some(j) = self.job.as_ref().filter(|j| j.running()) {
             return Err(BackendError::Denied(format!(
-                "{} is still being graded: add the scans when the Scan screen says complete",
-                j.exam
+                "{} is still being graded: add the scans when the Scan screen says it is complete",
+                self.job_name(j)
             )));
         }
         if self.spawn.is_none() {
             return Err(BackendError::Denied(
-                "This window cannot start background work; add the scans with `omr add \
-                 --project <exam folder> <scans…>` and reopen the exam"
-                    .into(),
+                "This window cannot start background work, so scans cannot be added here".into(),
             ));
         }
         let (project, batch, threads) = self.close_for_worker(exam, |_| Ok(()))?;
@@ -2026,7 +2091,7 @@ impl AppBackend {
             self.with(exam, |_| ());
             return Err(BackendError::Denied(format!(
                 "Cannot start the grading worker ({e}); nothing was added. Close other \
-                 programs and try again, or use `omr add`"
+                 programs and try again"
             )));
         }
         let names: Vec<String> = inputs
@@ -2284,8 +2349,8 @@ fn open_project(dir: &Path, operator: &str) -> Result<(ExamProject, Option<Strin
     match ExamProject::open(dir, operator) {
         Ok(p) => Ok((p, None)),
         Err(e @ AppError::NotFound(_)) => Err(format!(
-            "{e}. Point --project at an exam folder that `omr grade --out` or `omr-desktop \
-             --grade` wrote"
+            "{}. Open an exam folder that holds a graded exam",
+            app_message(&e)
         )),
         Err(AppError::Store(m)) if m.contains("locked by another writer") => {
             match ExamProject::open_read_only(dir) {
@@ -6267,10 +6332,9 @@ impl Backend for AppBackend {
         exam: &ExamId,
         request: &b::RemarkRequest,
     ) -> Result<b::ParallelRunView, BackendError> {
-        if self.busy(exam) {
+        if let Some(what) = self.busy_text(exam) {
             return Err(BackendError::Denied(format!(
-                "Scans are being added to {exam}: compare when the Scan screen says the batch is \
-                 complete"
+                "{what}: compare when the Scan screen says it is complete"
             )));
         }
         let r = self.with(exam, |o| {
@@ -6280,10 +6344,11 @@ impl Backend for AppBackend {
         let Some(r) = r else {
             return Err(match self.failed.borrow().get(exam) {
                 Some(why) => BackendError::Denied(why.clone()),
-                None => BackendError::NotFound(format!(
-                    "Exam {exam} is not open yet: wait for grading to finish, or open its folder \
-                     with --project"
-                )),
+                None => BackendError::NotFound(
+                    "This exam is not open yet: wait for grading to finish, then open it from \
+                     the Exams screen"
+                        .into(),
+                ),
             });
         };
         if let Some(o) = self.opened.borrow_mut().get_mut(exam) {
@@ -6538,6 +6603,79 @@ impl Backend for AppBackend {
 mod tests {
     use super::*;
     use omr_app::exam::TemplateChoice;
+
+    #[test]
+    fn a_roster_run_says_a_decision_it_disagrees_with_is_kept() {
+        let r = omr_app::append::RosterReport {
+            students: 8,
+            matched: 7,
+            not_on_roster: 1,
+            absent: 1,
+            carried_over: 0,
+            conflicts: 1,
+            warnings: Vec::new(),
+        };
+        let text = roster_summary(&r);
+        assert_eq!(
+            text,
+            "8 students on the roster · 7 booklets matched · 1 not on the roster · 1 absent · \
+             1 decision of yours disagrees with this run: kept, and listed for review (SYS-032)"
+        );
+        let r = omr_app::append::RosterReport {
+            carried_over: 3,
+            conflicts: 2,
+            ..r
+        };
+        let text = roster_summary(&r);
+        assert!(
+            text.ends_with(
+                "3 decisions kept · 2 decisions of yours disagree with this run: kept, and \
+                 listed for review (SYS-032)"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("reread"), "{text}");
+    }
+
+    #[test]
+    fn a_run_saved_but_not_closed_cleanly_says_its_change_stands() {
+        let mut app = AppBackend::empty("principal:test", None);
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let mut job = Job::new(
+            ExamId("x".into()),
+            JobKind::Roster {
+                project: PathBuf::from("exam/project.omrproj"),
+                batch: 2,
+            },
+            rx,
+            Cancel::default(),
+        );
+        let e = AppError::Io(std::io::Error::other("No space left on device"));
+        let why = unclosed("The roster was added and saved", REOPEN, &e);
+        job.outcome = Some(Err(why.clone()));
+        job.saved = true;
+        app.job = Some(job);
+        let done = app.job_done(false).expect("a notice");
+        assert_eq!(
+            done.title,
+            "Roster added to Another exam, but the exam was not closed cleanly"
+        );
+        assert_eq!(done.text, why);
+        assert!(
+            why.starts_with(
+                "No space left on device. The roster was added and saved, but the exam could \
+                 not be closed cleanly"
+            ),
+            "{why}"
+        );
+        assert!(!why.contains("no roster was added") && !why.contains("i/o:"));
+        assert_eq!(done.tone, b::Tone::Warning);
+        // not saved: the roster was not added
+        app.job.as_mut().unwrap().saved = false;
+        let done = app.job_done(false).expect("a notice");
+        assert_eq!(done.title, "The roster of Another exam was not added");
+        assert_eq!(done.tone, b::Tone::Error);
+    }
 
     #[test]
     fn the_thumbnail_cache_keeps_the_ones_shown_last() {
