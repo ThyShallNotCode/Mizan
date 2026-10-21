@@ -23,7 +23,9 @@ use shell_slint::ui::{
 use slint::platform::Key;
 use slint::{ComponentHandle, Model};
 use std::path::{Path, PathBuf};
-use support::a11::{by_label, chord, click, one, special, tab, type_text, with_prefix};
+use support::a11::{
+    by_label, chord, click, near, one, special, tab, type_text, under, with_prefix,
+};
 use support::harness::{
     FakeHost, Harness, Held, grade, harness, harness_in, held_spawner, run_held, run_survey,
     settle_card,
@@ -2705,18 +2707,23 @@ fn the_notice_lies_over_no_control() {
         apart(&one(ui, "Grade exam"), &over),
         "Grade exam is under the notice"
     );
-    press(ui, "Grade exam");
+    let grade = one(ui, "Grade exam");
+    let (p, s) = (grade.absolute_position(), grade.size());
+    let before = under(ui, p.x + s.width / 2.0, p.y + s.height / 2.0);
+    click(ui, &grade);
     let ex = ui.global::<ExamsVM>();
     assert!(
         message(ui).starts_with("Grading"),
-        "message {:?}; Grade exam waits for {:?}; asks {:?}; grading error {:?}",
+        "message {:?}; Grade exam waits for {:?}; asks {:?}; grading error {:?}; card open {}; \
+         {before}",
         message(ui),
         ex.get_new_block(),
         ex.get_card_asks()
             .iter()
             .map(|a| a.label.to_string())
             .collect::<Vec<_>>(),
-        w.h.app.borrow().grading_error()
+        w.h.app.borrow().grading_error(),
+        ex.get_new_open(),
     );
     assert!(
         !app.get_notice_open(),
@@ -2729,6 +2736,45 @@ fn the_notice_lies_over_no_control() {
     let over = one(ui, &app.get_notice_title());
     for l in ["Scan and recognise", "Open results"] {
         assert!(apart(&one(ui, l), &over), "{l} is under the notice");
+    }
+}
+
+/// D6: in the smallest window the Exams drawer's actions stay clear of a run's notice however
+/// many lines the notice takes (a long title, a long exports folder, larger system fonts): the
+/// drawer's details scroll above them instead of pushing them under the notice.
+#[test]
+fn the_drawers_actions_stay_clear_of_a_tall_notice() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let w = workspace(dir.path());
+    let ui = &w.h.ui;
+    let app = ui.global::<App>();
+    smallest_window(ui);
+    press(ui, "New exam");
+    grade_with_card(
+        &w.h,
+        &w.held,
+        &[
+            ("Scan files or folders", w.scans.to_str().unwrap()),
+            (
+                "Exam title",
+                "Quiz 1 on trees, heaps, hashing, sorting and the graph algorithms of the first \
+                 nine weeks, with the lab questions",
+            ),
+            ("Course code", "CS 213"),
+        ],
+    );
+    run_held(&w.h, &w.held);
+    click(ui, &tab(ui, "Exams"));
+    assert!(ui.global::<ExamsVM>().get_drawer_open());
+    let over = one(ui, &app.get_notice_title());
+    for l in ["Open results", "Exam setup", "Scan and recognise"] {
+        assert!(
+            apart(&one(ui, l), &over),
+            "{l} is under the notice at {:?} {:?}; {}",
+            over.absolute_position(),
+            over.size(),
+            near(ui, "Open results Exam setup Scan and recognise")
+        );
     }
 }
 

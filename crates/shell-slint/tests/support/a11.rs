@@ -8,9 +8,20 @@ use slint::ComponentHandle;
 use slint::platform::{Key, PointerEventButton, WindowEvent};
 use std::collections::BTreeMap;
 
+/// Lets the window settle as Slint does before it draws a frame: the change handlers run and
+/// what they make is made, with no time passing (only a timer already due fires). A user aims
+/// at a drawn, settled frame, so a test finds and measures controls after it too. A pointer
+/// event settles the window before it hits a control: a place read before would be one the
+/// control may just have left, as the New-exam card's buttons move once a run's notice has
+/// taken its room under them. Every query here settles first, so they all read one frame.
+pub fn settle() {
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+}
+
 /// Distinct elements with exactly this accessible label. `find_all` reports an element once per
 /// level of its inheritance chain, so duplicates are folded by geometry.
 pub fn by_label(ui: &AppWindow, label: &str) -> Vec<ElementHandle> {
+    settle();
     let mut seen = BTreeMap::new();
     for e in ElementHandle::find_by_accessible_label(ui, label) {
         let p = e.absolute_position();
@@ -51,6 +62,7 @@ pub fn one(ui: &AppWindow, label: &str) -> ElementHandle {
 /// Where things are, for a failure message: the window's size and every element whose label
 /// shares a word with `label`, with its place.
 pub fn near(ui: &AppWindow, label: &str) -> String {
+    settle();
     let size = ui.window().size();
     let words: Vec<&str> = label.split_whitespace().filter(|w| w.len() > 3).collect();
     let mut found = Vec::new();
@@ -82,6 +94,7 @@ pub fn near(ui: &AppWindow, label: &str) -> String {
 
 /// All distinct elements whose label starts with `prefix`.
 pub fn with_prefix(ui: &AppWindow, prefix: &str) -> Vec<(String, ElementHandle)> {
+    settle();
     let mut out: BTreeMap<String, ElementHandle> = BTreeMap::new();
     for e in ElementQuery::from_root(ui).match_descendants().find_all() {
         if let Some(l) = e.accessible_label()
@@ -94,6 +107,7 @@ pub fn with_prefix(ui: &AppWindow, prefix: &str) -> Vec<(String, ElementHandle)>
 }
 
 pub fn selected_queue_row(ui: &AppWindow) -> String {
+    settle();
     let rows: Vec<String> = ElementQuery::from_root(ui)
         .match_descendants()
         .match_accessible_role(AccessibleRole::ListItem)
@@ -131,6 +145,13 @@ pub fn chord(ui: &AppWindow, modifier: Key, text: &str) {
 /// One left click at the centre of `e`, through the window's pointer events (move, press,
 /// release) as a mouse delivers it, not through the accessibility action.
 pub fn click(ui: &AppWindow, e: &ElementHandle) {
+    settle();
+    // a control the window removed as it settled would be clicked at (0, 0)
+    assert!(
+        e.is_valid() && e.size().width > 0.0 && e.size().height > 0.0,
+        "{:?} went away before it was clicked",
+        e.accessible_label().unwrap_or_default().as_str()
+    );
     let p = e.absolute_position();
     let s = e.size();
     let (x, y) = (p.x + s.width / 2.0, p.y + s.height / 2.0);
@@ -144,6 +165,31 @@ pub fn click(ui: &AppWindow, e: &ElementHandle) {
         size.height
     );
     click_at(ui, x, y);
+}
+
+/// What lies under a window position, topmost last, for a failure message: every element
+/// whose box holds the point, by its accessible label or else its type.
+pub fn under(ui: &AppWindow, x: f32, y: f32) -> String {
+    settle();
+    let mut found = Vec::new();
+    for e in ElementQuery::from_root(ui).match_descendants().find_all() {
+        let (p, sz) = (e.absolute_position(), e.size());
+        if x < p.x || y < p.y || x >= p.x + sz.width || y >= p.y + sz.height {
+            continue;
+        }
+        let name = match e.accessible_label() {
+            Some(l) if !l.is_empty() => format!("{:?}", l.as_str()),
+            _ => e.type_name().unwrap_or_default().to_string(),
+        };
+        let item = format!(
+            "{name} ({:.0}, {:.0}) {:.0}x{:.0}",
+            p.x, p.y, sz.width, sz.height
+        );
+        if !found.contains(&item) {
+            found.push(item);
+        }
+    }
+    format!("under ({x:.0}, {y:.0}): [{}]", found.join("; "))
 }
 
 /// One left click at a window position (for a spot that is no control, such as an overlay's
@@ -183,6 +229,7 @@ pub fn type_text(ui: &AppWindow, text: &str) {
 /// Every text the accessible tree of the visible elements carries (labels, values,
 /// descriptions, placeholders): what a screen reader, or a test, reads off the screen.
 pub fn all_texts(ui: &AppWindow) -> Vec<String> {
+    settle();
     let mut out = Vec::new();
     for e in ElementQuery::from_root(ui).match_descendants().find_all() {
         let texts = [

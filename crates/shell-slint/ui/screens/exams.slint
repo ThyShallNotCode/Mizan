@@ -253,162 +253,174 @@ component Drawer inherits Rectangle {
             height: 1px;
             background: Theme.border;
         }
-        VerticalLayout {
-            padding: Theme.space-xl;
-            padding-top: root.short ? Theme.space-lg : Theme.space-xl;
-            spacing: root.short ? Theme.space-sm + 2px : Theme.space-lg;
-            // status call-out
-            Rectangle {
-                border-radius: Theme.radius-lg;
-                background: Theme.tone-soft(ExamsVM.drawer.callout-tone);
-                border-width: 1px;
-                border-color: Theme.border;
-                VerticalLayout {
-                    padding: Theme.space-lg;
-                    spacing: Theme.space-sm;
-                    HorizontalLayout {
+        // The details scroll when the drawer is shorter than they are (a run's notice takes its
+        // room below the screen); the actions under them stay in view.
+        ScrollView {
+            vertical-stretch: 1;
+            content-width: self.visible-width;
+            VerticalLayout {
+                // at the top, as before the room below them was the scroll area's
+                alignment: start;
+                padding: Theme.space-xl;
+                padding-top: root.short ? Theme.space-lg : Theme.space-xl;
+                padding-bottom: root.short ? Theme.space-sm + 2px : Theme.space-lg;
+                spacing: root.short ? Theme.space-sm + 2px : Theme.space-lg;
+                // status call-out
+                Rectangle {
+                    border-radius: Theme.radius-lg;
+                    background: Theme.tone-soft(ExamsVM.drawer.callout-tone);
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    VerticalLayout {
+                        padding: Theme.space-lg;
                         spacing: Theme.space-sm;
-                        Centered {
-                            StatusPill {
-                                text: ExamsVM.drawer.status;
-                                tone: ExamsVM.drawer.status-tone;
+                        HorizontalLayout {
+                            spacing: Theme.space-sm;
+                            Centered {
+                                StatusPill {
+                                    text: ExamsVM.drawer.status;
+                                    tone: ExamsVM.drawer.status-tone;
+                                }
+                            }
+                            Text {
+                                text: ExamsVM.drawer.callout-title;
+                                font-size: Theme.text-sm;
+                                font-weight: Theme.weight-semibold;
+                                color: Theme.tone-fg(ExamsVM.drawer.callout-tone);
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
                             }
                         }
                         Text {
-                            text: ExamsVM.drawer.callout-title;
+                            text: ExamsVM.drawer.callout-text;
                             font-size: Theme.text-sm;
-                            font-weight: Theme.weight-semibold;
-                            color: Theme.tone-fg(ExamsVM.drawer.callout-tone);
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                            overflow: elide;
+                            color: Theme.ink;
+                            wrap: word-wrap;
+                        }
+                        if ExamsVM.drawer.to-setup: PrimaryButton {
+                            text: "Confirm the key in Setup";
+                            icon: Icons.setup;
+                            clicked => {
+                                ExamsVM.confirm-key();
+                            }
+                        }
+                        // the key comes first while it waits: the review is the second action then
+                        if ExamsVM.drawer.can-review && !ExamsVM.drawer.to-setup: PrimaryButton {
+                            text: ExamsVM.drawer.review-label;
+                            icon: Icons.review;
+                            key-hint: "Ctrl+4";
+                            clicked => {
+                                ExamsVM.open(Page.review);
+                            }
+                        }
+                        if ExamsVM.drawer.can-review && ExamsVM.drawer.to-setup: SecondaryButton {
+                            text: ExamsVM.drawer.review-label;
+                            icon: Icons.review;
+                            key-hint: "Ctrl+4";
+                            clicked => {
+                                ExamsVM.open(Page.review);
+                            }
+                        }
+                    }
+                }
+                SectionLabel {
+                    text: "CONFIGURATION";
+                }
+                // a check only for a key in force; an inferred key, one waiting for its
+                // confirmation or none at all is a warning (shape and colour, WCAG 1.4.1)
+                HorizontalLayout {
+                    spacing: Theme.space-sm;
+                    Centered {
+                        if ExamsVM.drawer.key-ok: Image {
+                            source: Icons.check;
+                            width: 16px;
+                            height: 16px;
+                            colorize: Theme.success;
+                        }
+                        if !ExamsVM.drawer.key-ok: Rectangle {
+                            width: 16px;
+                            height: 16px;
+                            SeverityGlyph {
+                                severity: Severity.warn;
+                                size: 12px;
+                            }
                         }
                     }
                     Text {
-                        text: ExamsVM.drawer.callout-text;
+                        text: "Answer key";
                         font-size: Theme.text-sm;
                         color: Theme.ink;
-                        wrap: word-wrap;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
                     }
-                    if ExamsVM.drawer.to-setup: PrimaryButton {
-                        text: "Confirm the key in Setup";
-                        icon: Icons.setup;
-                        clicked => {
-                            ExamsVM.confirm-key();
-                        }
-                    }
-                    // the key comes first while it waits: the review is the second action then
-                    if ExamsVM.drawer.can-review && !ExamsVM.drawer.to-setup: PrimaryButton {
-                        text: ExamsVM.drawer.review-label;
-                        icon: Icons.review;
-                        key-hint: "Ctrl+4";
-                        clicked => {
-                            ExamsVM.open(Page.review);
-                        }
-                    }
-                    if ExamsVM.drawer.can-review && ExamsVM.drawer.to-setup: SecondaryButton {
-                        text: ExamsVM.drawer.review-label;
-                        icon: Icons.review;
-                        key-hint: "Ctrl+4";
-                        clicked => {
-                            ExamsVM.open(Page.review);
+                    Centered {
+                        Tag {
+                            text: ExamsVM.drawer.key-status;
+                            tone: ExamsVM.drawer.key-ok ? Tone.primary : Tone.warning;
                         }
                     }
                 }
-            }
-            SectionLabel {
-                text: "CONFIGURATION";
-            }
-            // a check only for a key in force; an inferred key, one waiting for its
-            // confirmation or none at all is a warning (shape and colour, WCAG 1.4.1)
-            HorizontalLayout {
-                spacing: Theme.space-sm;
-                Centered {
-                    if ExamsVM.drawer.key-ok: Image {
-                        source: Icons.check;
-                        width: 16px;
-                        height: 16px;
-                        colorize: Theme.success;
-                    }
-                    if !ExamsVM.drawer.key-ok: Rectangle {
-                        width: 16px;
-                        height: 16px;
-                        SeverityGlyph {
-                            severity: Severity.warn;
-                            size: 12px;
+                HorizontalLayout {
+                    spacing: Theme.space-sm;
+                    Centered {
+                        Image {
+                            source: Icons.outcomes;
+                            width: 16px;
+                            height: 16px;
+                            colorize: Theme.ink-2;
                         }
                     }
-                }
-                Text {
-                    text: "Answer key";
-                    font-size: Theme.text-sm;
-                    color: Theme.ink;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                }
-                Centered {
-                    Tag {
-                        text: ExamsVM.drawer.key-status;
-                        tone: ExamsVM.drawer.key-ok ? Tone.primary : Tone.warning;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        Text {
+                            text: "CLO mapping";
+                            font-size: Theme.text-sm;
+                            color: Theme.ink;
+                        }
+                        Text {
+                            text: ExamsVM.drawer.mapped + " of " + ExamsVM.drawer.total + " items " + ExamsVM.drawer.mapped-word;
+                            font-size: Theme.text-xs;
+                            color: Theme.ink-2;
+                        }
+                    }
+                    CoverageRing {
+                        value: ExamsVM.drawer.total > 0 ? ExamsVM.drawer.mapped / ExamsVM.drawer.total : 0;
+                        text: ExamsVM.drawer.total > 0 ? round(100 * ExamsVM.drawer.mapped / ExamsVM.drawer.total) + "%" : "–";
                     }
                 }
-            }
-            HorizontalLayout {
-                spacing: Theme.space-sm;
-                Centered {
-                    Image {
-                        source: Icons.outcomes;
-                        width: 16px;
-                        height: 16px;
-                        colorize: Theme.ink-2;
-                    }
+                Rectangle {
+                    height: 1px;
+                    background: Theme.border;
                 }
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    alignment: center;
-                    Text {
-                        text: "CLO mapping";
-                        font-size: Theme.text-sm;
-                        color: Theme.ink;
-                    }
-                    Text {
-                        text: ExamsVM.drawer.mapped + " of " + ExamsVM.drawer.total + " items " + ExamsVM.drawer.mapped-word;
-                        font-size: Theme.text-xs;
-                        color: Theme.ink-2;
-                    }
+                SectionLabel {
+                    text: "LOGISTICS";
                 }
-                CoverageRing {
-                    value: ExamsVM.drawer.total > 0 ? ExamsVM.drawer.mapped / ExamsVM.drawer.total : 0;
-                    text: ExamsVM.drawer.total > 0 ? round(100 * ExamsVM.drawer.mapped / ExamsVM.drawer.total) + "%" : "–";
+                KVLine {
+                    label: "Roster";
+                    value: ExamsVM.drawer.roster;
+                }
+                KVLine {
+                    label: "Sections";
+                    value: ExamsVM.drawer.sections;
+                }
+                KVLine {
+                    label: "Last scan";
+                    value: ExamsVM.drawer.last-scan;
+                }
+                KVLine {
+                    label: "Batch ID";
+                    value: ExamsVM.drawer.batch-id;
+                    mono: true;
                 }
             }
-            Rectangle {
-                height: 1px;
-                background: Theme.border;
-            }
-            SectionLabel {
-                text: "LOGISTICS";
-            }
-            KVLine {
-                label: "Roster";
-                value: ExamsVM.drawer.roster;
-            }
-            KVLine {
-                label: "Sections";
-                value: ExamsVM.drawer.sections;
-            }
-            KVLine {
-                label: "Last scan";
-                value: ExamsVM.drawer.last-scan;
-            }
-            KVLine {
-                label: "Batch ID";
-                value: ExamsVM.drawer.batch-id;
-                mono: true;
-            }
-            Rectangle {
-                vertical-stretch: 1;
-            }
+        }
+        // the actions
+        VerticalLayout {
+            padding: Theme.space-xl;
+            padding-top: 0;
+            spacing: root.short ? Theme.space-sm + 2px : Theme.space-lg;
             HorizontalLayout {
                 spacing: Theme.space-sm;
                 SecondaryButton {
