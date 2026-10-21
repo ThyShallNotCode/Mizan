@@ -716,11 +716,12 @@ fn join(v: &[String]) -> String {
 }
 
 /// The course code in a folder name (`CS211 Midterm` → `CS 211`): two to five letters, an
-/// optional space or hyphen, three digits.
+/// optional space or hyphen, three digits, standing on their own: neither a letter nor a digit
+/// right before or right after, so a code is never read out of an id such as `…6bd513f…`.
 fn course_in(name: &str) -> Option<(String, std::ops::Range<usize>)> {
     let c: Vec<(usize, char)> = name.char_indices().collect();
     for s in 0..c.len() {
-        if !c[s].1.is_ascii_alphabetic() || (s > 0 && c[s - 1].1.is_ascii_alphabetic()) {
+        if !c[s].1.is_ascii_alphabetic() || (s > 0 && c[s - 1].1.is_alphanumeric()) {
             continue;
         }
         let mut e = s;
@@ -738,7 +739,7 @@ fn course_in(name: &str) -> Option<(String, std::ops::Range<usize>)> {
             d += 1;
         }
         let digits = c[d..].iter().take_while(|x| x.1.is_ascii_digit()).count();
-        if digits == 3 {
+        if digits == 3 && c.get(d + 3).is_none_or(|x| !x.1.is_alphanumeric()) {
             let letters: String = c[s..e].iter().map(|x| x.1.to_ascii_uppercase()).collect();
             let number: String = c[d..d + 3].iter().map(|x| x.1).collect();
             let end = c.get(d + 3).map_or(name.len(), |x| x.0);
@@ -1162,6 +1163,20 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
         Source::Typed,
         scans_detail.join(" · "),
     );
+    if let Some(s) = survey.filter(|s| s.booklets + s.blank_booklets == 0) {
+        let found = match s.key_sheets.len() {
+            0 => String::new(),
+            k => format!(" (only {})", plural(k as u64, "key sheet", "key sheets")),
+        };
+        card.ask(
+            FieldId::Scans,
+            format!(
+                "these files hold no student sheet{found}: choose the students' scans; a key \
+                 sheet goes under Key sheets"
+            ),
+            vec![choice("Choose scans…", ChoiceAction::Pick(FieldId::Scans))],
+        );
+    }
 
     // ---- The sheet.
     let printed = match define::printed(&given.sheet) {
@@ -2999,5 +3014,24 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
         inputs,
         key_sheets: given.key_sheets.clone(),
         folder,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::course_in;
+
+    #[test]
+    fn a_course_code_stands_on_its_own_in_the_folder_name() {
+        let code = |n: &str| course_in(n).map(|(c, _)| c);
+        assert_eq!(code("CS211 Midterm").as_deref(), Some("CS 211"));
+        assert_eq!(code("cs-211_final").as_deref(), Some("CS 211"));
+        assert_eq!(code("ARTI503-Final").as_deref(), Some("ARTI 503"));
+        assert_eq!(code("Midterm MATH 101").as_deref(), Some("MATH 101"));
+        // Inside an id or a longer word it is not a code.
+        assert_eq!(code("105904fa-be5d-5a79-8281-d9d6bd513faf"), None);
+        assert_eq!(code("CS211Midterm"), None);
+        assert_eq!(code("CS2110"), None);
+        assert_eq!(code("Scans 2026"), None);
     }
 }

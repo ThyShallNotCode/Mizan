@@ -325,6 +325,31 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// Scans that hold only key sheets (picked into the scans field by mistake) are not an exam:
+/// the proposal asks for the students' scans instead of grading nothing.
+#[test]
+fn scans_with_no_student_sheet_ask_for_the_students_scans() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sheets = [
+        S::key_sheet("key-a", 0, 30, 0),
+        S::key_sheet("key-b", 1, 30, 9),
+    ];
+    let scans = render(&tmp.path().join("scans"), &sheets);
+    let s = survey_of(std::slice::from_ref(&scans), &[], 2);
+    assert_eq!((s.booklets, s.key_sheets.len()), (0, 2));
+    let p = propose(&given(&[scans]), Some(&s), &ctx(tmp.path()));
+    let ask = ask_on(&p, FieldId::Scans);
+    assert!(
+        ask.text.contains("no student sheet") && ask.text.contains("2 key sheets"),
+        "{}",
+        ask.text
+    );
+    assert!(
+        p.inputs.is_none(),
+        "nothing is graded from key sheets alone"
+    );
+}
+
 /// S1, S5: the survey counts versions, rows, key sheets and student numbers; it writes nothing
 /// and neither it nor the proposal holds a student number.
 #[test]
