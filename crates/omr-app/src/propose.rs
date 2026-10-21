@@ -1163,7 +1163,10 @@ pub fn propose(given: &Given, survey: Option<&Survey>, ctx: &Context) -> Proposa
         Source::Typed,
         scans_detail.join(" · "),
     );
-    if let Some(s) = survey.filter(|s| s.booklets + s.blank_booklets == 0) {
+    // Pages of another sheet are the sheet's question (below), not this one.
+    if let Some(s) =
+        survey.filter(|s| s.booklets + s.blank_booklets == 0 && s.not_this_sheet.is_empty())
+    {
         let found = match s.key_sheets.len() {
             0 => String::new(),
             k => format!(" (only {})", plural(k as u64, "key sheet", "key sheets")),
