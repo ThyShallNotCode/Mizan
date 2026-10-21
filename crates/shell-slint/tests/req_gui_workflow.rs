@@ -3408,12 +3408,14 @@ fn exports_that_cannot_be_written_are_named_with_what_to_do() {
     run_held(&h, &held);
     let (title, text, _) = notice(ui);
     assert_eq!(title, "Roster added to CS 213 Quiz 1");
+    // the system's own reason sits in the brackets ("Is a directory" on Linux, "Access is
+    // denied" on Windows); what to do follows it
     assert!(
         text.contains("The exports were not written: results")
+            && text.contains(".csv could not be written (")
             && text.contains(
-                ".csv could not be written (Is a directory (os error 21)); if it is open in \
-                 another program, such as Excel, close it. Write them again with Write all \
-                 exports in Results"
+                "); if it is open in another program, such as Excel, close it. Write them again \
+                 with Write all exports in Results"
             ),
         "{text}"
     );
