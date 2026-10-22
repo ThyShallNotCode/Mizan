@@ -1,61 +1,145 @@
-# Mizan (ميزان)
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/readme/banner-dark.jpg">
+    <img src="docs/readme/banner-light.jpg" alt="Mizan (ميزان): multiple-choice grading that asks instead of guessing. A brass balance beside a stack of filled answer sheets." width="100%">
+  </picture>
+</p>
 
-Exam correction and outcome evidence. Mizan was called OMR Correction while it was being
-designed; the code keeps that working name in its identifiers (the `omr` command, the `omr-*`
-crates, `.omr`/`.omrproj` projects and the `OMR_*` settings), so existing projects and scripts
-keep working.
+<p align="center">Exam correction and outcome evidence</p>
 
-A native, local-first program that grades multiple-choice answer sheets from scans, built for
-Imam Abdulrahman Bin Faisal University (IAU) and developed by AI agents. It reads the IAU CCSIT
-answer sheet and sheets the university generates itself, matches each sheet to a student,
-scores it, sends every doubtful mark to a person instead of guessing, and writes the results,
-item analysis, NCAAA TP-154 outcome tables and the Blackboard grade-center upload. Every
-decision is kept in a signed, hash-chained audit log in the exam's folder.
+<p align="center">
+  <a href="https://github.com/ThyShallNotCode/Mizan/actions/workflows/ci.yml"><img src="https://github.com/ThyShallNotCode/Mizan/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://github.com/ThyShallNotCode/Mizan/releases"><img src="https://img.shields.io/github/v/release/ThyShallNotCode/Mizan?include_prereleases&amp;label=test%20build" alt="Latest test build"></a>
+</p>
 
-**Status: MVP (October 2026).** Grading, review, release and exports work from the `omr`
-command line and from the desktop app `omr-desktop`, on Linux.
-- What was measured, and how: [`docs/EVIDENCE.md`](docs/EVIDENCE.md). On 143 real IAU sheets
-  the software made no silent error in 4,089 answers it accepted, and sent 7 to review.
-- With the instructors' real keys, every fully scored booklet of the two real exams (137 of
-  143) scored exactly as an independent count of its marks against the key; the other 6 wait
-  only for their 7 questions in review. The keys read from the instructors' own key sheets
-  gave the same results, file for file.
+Mizan grades multiple-choice answer sheets from scans. It is a native, local-first program built
+for Imam Abdulrahman Bin Faisal University (IAU) and developed by AI agents. It reads the IAU
+CCSIT answer sheet and sheets the university generates itself, matches each sheet to a student,
+scores it, and sends every doubtful mark to a person instead of guessing. It writes the results,
+item analysis, NCAAA TP-154 outcome tables and the Blackboard grade-center upload, and keeps every
+decision in a signed, hash-chained audit log in the exam's folder.
+
+## Where it stands
+
+Mizan is an MVP (October 2026). Grading, review, release and exports work from the `omr` command
+line and from the desktop app `omr-desktop`, on Linux.
+
+- On 143 real IAU sheets the software made no silent error in 4,089 answers it accepted, and sent
+  7 to review. What was measured, and how: [`docs/EVIDENCE.md`](docs/EVIDENCE.md).
+- With the instructors' real keys, every fully scored booklet of the two real exams (137 of 143)
+  scored exactly as an independent count of its marks against the key. The other 6 wait only for
+  their 7 questions in review. The keys read from the instructors' own key sheets gave the same
+  results, file for file.
 - A parallel run with Remark Office OMR (spec §23.7) was performed internally on the two real
-  exams with `omr compare remark`, grading them with the points imported from Remark's own
-  graded workbooks. It was a development check by the agents on data the owner supplied: the
-  licence review the spec requires before parallel runs and benchmarking (Q-08, the
-  university's legal affairs, due 2026-12-01) is still open, so its head-to-head figures stay
-  inside the university (spec §3.5).
-- **Windows:** CI runs the same gate (formatting, clippy, every workspace test, the
-  architecture rules) on Windows Server 2025 (MSVC) as on Linux; the Unix file-mode checks are
-  skipped there. Still to build for Windows:
+  exams with `omr compare remark`, grading them with the points imported from Remark's own graded
+  workbooks. It was a development check by the agents on data the owner supplied. The licence
+  review the spec requires before parallel runs and benchmarking (Q-08, the university's legal
+  affairs, due 2026-12-01) is still open, so its head-to-head figures stay inside the university
+  (spec §3.5).
+- On Windows, CI runs the same gate as on Linux (formatting, clippy, every workspace test, the
+  architecture rules) on Windows Server 2025 (MSVC); the Unix file-mode checks are skipped there.
+  Still to build for Windows:
   - refusal of OneDrive and other sync folders;
   - owner-only file permissions;
   - DPAPI-protected keys;
   - an installer.
 
-  The desktop app has not yet run in a real window, nor shown its file dialogs on a real
-  display (see `docs/IMPLEMENTATION.md`).
-- **Not proven yet:** identity against a real roster.
-- What the MVP covers and what it defers: [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md).
-  The full design: [`docs/TECHNICAL_DESIGN.md`](docs/TECHNICAL_DESIGN.md).
+  The desktop app has not yet run in a real window, nor shown its file dialogs on a real display
+  (see [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md)).
+- Identity against a real roster is not proven yet.
+- What the MVP covers and what it defers: [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md). The
+  full design: [`docs/TECHNICAL_DESIGN.md`](docs/TECHNICAL_DESIGN.md).
 
-Scans of real exams are restricted personal data (PDPL). Keep the exam folders on university
-devices, never in a synced cloud folder: the program refuses sync folders such as OneDrive,
-Dropbox, Nextcloud and iCloud, and network shares (SYS-015). On Windows, so far only network
-(UNC) paths and the Dropbox-style marker files are refused (see Status).
+## Screens
 
-## 1. Build
+<table>
+  <tr>
+    <td>
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/design/screens/real/exams-new-ready-dark.png">
+        <img src="docs/design/screens/real/exams-new-ready-light.png" alt="The New exam card: the scans, answer key, roster and CLO files on the left, and on the right every value that will be graded, each with where it came from" width="100%">
+      </picture>
+      <br><sub>New exam: the card shows every value it will grade, each with where it came from.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/design/screens/real/review-dark.png">
+        <img src="docs/design/screens/real/review-light.png" alt="The Review screen: a queue of doubtful marks on the left, the bubble row as scanned in the middle, and the proposed answer with the answer buttons on the right" width="100%">
+      </picture>
+      <br><sub>Review: each doubtful mark is shown as scanned, and Enter accepts the proposal.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/design/screens/real/results-dark.png">
+        <img src="docs/design/screens/real/results-light.png" alt="The Results screen: summary figures, the grade and score distributions, the item analysis and the release checklist" width="100%">
+      </picture>
+      <br><sub>Results: scores, grades and item analysis, and what still blocks release.</sub>
+    </td>
+  </tr>
+</table>
+
+The screenshots show a synthetic exam.
+
+## How it works
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/readme/how-it-works-dark.png">
+    <img src="docs/readme/how-it-works-light.png" alt="How Mizan grades an exam, in five steps: you scan and set up; Mizan reads every mark without the key, scores it and writes the reports; you review the doubtful marks; you release the results; Mizan writes the Blackboard upload. Every decision is recorded." width="100%">
+  </picture>
+</p>
+
+1. You scan the exam into one folder and add the answer key, and the roster and CLO mapping if
+   you have them.
+2. Mizan reads every mark without looking at the key, matches each sheet to a student, scores
+   it and writes the results, the item analysis and, with a CLO mapping, the TP-154 outcome
+   tables into the exam's folder.
+3. Anything it is not sure about waits for a person in Review.
+4. You release the results once nothing blocks them.
+5. Mizan writes the exports again, now with the Blackboard grade-center upload.
+
+Every decision is recorded in the exam's audit log.
+
+## Where exams are kept
+
+> [!IMPORTANT]
+> Scans of real exams are restricted personal data (PDPL). Keep the exam folders on university
+> devices, never in a synced cloud folder. The program refuses sync folders such as OneDrive,
+> Dropbox, Nextcloud and iCloud, and network shares (SYS-015). On Windows, so far only network
+> (UNC) paths and the Dropbox-style marker files are refused (see
+> [Where it stands](#where-it-stands)).
+
+- The exam folder (`--out`, or a folder below your exams folder) holds the exports and
+  `project.omrproj`, the audited store of every page, decision and key version. Back up the whole
+  folder.
+- Your private key folder is `~/.local/share/omr` on Linux (`%APPDATA%\omr` on Windows, or
+  `OMR_KEY_DIR`). It holds this computer's signing key, the checkpoints that detect an older copy
+  of a project put back in place, and the secret keys of the university's own sheets. Back it up
+  separately and keep it private.
+
+## Quick start
+
+Mizan was called OMR Correction while it was being designed. The code keeps that working name in
+its identifiers (the `omr` command, the `omr-*` crates, `.omr`/`.omrproj` projects and the `OMR_*`
+settings), so existing projects and scripts keep working.
+
+### Build
 
 You need:
-- **Rust** 1.92 or newer (tested with 1.97), installed with [rustup](https://rustup.rs).
-- **Linux:** a C compiler, `pkg-config` and the fontconfig headers to build the desktop app,
-  and libxkbcommon-x11 to open its window. On Debian or Ubuntu:
+
+- Rust 1.92 or newer (tested with 1.97), installed with [rustup](https://rustup.rs).
+- On Linux, a C compiler, `pkg-config` and the fontconfig headers to build the desktop app, and
+  libxkbcommon-x11 to open its window. On Debian or Ubuntu:
   `sudo apt install build-essential pkg-config libfontconfig1-dev libxkbcommon-x11-0`.
-- **Windows:** the same `cargo build` works with Visual Studio Build Tools (the "Desktop
-  development with C++" workload, for the MSVC linker and the bundled SQLite). CI builds and
-  tests it on Windows Server 2025. Read §8 before grading real exams on Windows.
-- **macOS:** not built or tested yet.
+- On Windows, the same `cargo build` works with Visual Studio Build Tools (the "Desktop
+  development with C++" workload, for the MSVC linker and the bundled SQLite). CI builds and tests
+  it on Windows Server 2025. Read [Known limits](#known-limits) before grading real exams on
+  Windows.
+- macOS is not built or tested yet.
 
 ```sh
 git clone <this repository> omr-correction
@@ -64,42 +148,36 @@ cargo build --release -p omr-cli -p shell-slint
 ```
 
 This makes two programs: `target/release/omr` (the command line) and
-`target/release/omr-desktop` (the desktop app). Copy them to a folder on your `PATH`, or call
-them by their full path. `omr --help` and `omr <command> --help` list every option.
+`target/release/omr-desktop` (the desktop app). Copy them to a folder on your `PATH`, or call them
+by their full path. `omr --help` and `omr <command> --help` list every option.
 
-**Test builds.** The repository's Releases page has unsigned pre-releases (`v0.1.0-preview.1`
-and later) for x86-64 Windows (a zip) and Linux (a tar.gz), each with both programs. They are
-test builds, not production releases, which will be built and signed in the university's
-release enclave (spec §24.2). Windows SmartScreen warns about unsigned programs; read §8 before
-grading real exams on Windows. To publish the next one, run the *Release builds* workflow on
-main with a new tag; `scripts/release-tag.sh` checks it.
+### Or take a test build
 
-## 2. Grade a folder of scans
+The repository's [Releases](https://github.com/ThyShallNotCode/Mizan/releases) page has unsigned
+pre-releases (`v0.1.0-preview.1` and later) for x86-64 Windows (a zip) and Linux (a tar.gz), each
+with both programs. They are test builds. Production releases will be built and signed in the
+university's release enclave (spec §24.2). Windows SmartScreen warns about unsigned programs; read
+[Known limits](#known-limits) before grading real exams on Windows.
 
-Scan each exam into one folder: PDF or TIFF straight from the scanner (600-dpi black and white,
-or 200–300-dpi gray), or JPEG/PNG files. Blank backs from duplex scanning are dropped, turned
-pages are read upright, and a file added twice is ignored.
-
-### Check the scans first
+### Open the desktop app
 
 ```sh
-omr survey scans/cs211-midterm/ --key key.csv
+omr-desktop                                   # your exams folder: ~/OMR Exams, or the last one
+omr-desktop --workspace "$HOME/OMR Exams"     # every exam below a folder
+omr-desktop --project "$HOME/OMR Exams/cs211-midterm-1"
+omr-desktop --demo                            # invented demo data, marked DEMO on every screen
 ```
 
-`omr survey` reads the scans once, in memory (nothing is written), and proposes the exam's
-definition, each value with where it came from: the versions (from the key file's columns, or
-the version bubbles the students filled), the number of questions (the key's last answered
-question, the key sheets' last marked row, or how far the students answered), the key sheets
-in the stack, the title from the sheets' exam-type bubble and the course from the folder name.
-It keeps counts only, never a student number. When the evidence disagrees (six sheets bubble
-version C but the key has A and B; the key answers questions 1–40 but `--questions 30` was
-given; `--forms A,B` with a key of one answer column; there is no key at all) it asks, prints the answers each question takes
-(`--answer hold:C`, `--answer keep-questions:30`, `--answer provisional-key`, …) and exits 2;
-run it again with your answer. `--json` prints the survey's counts and the proposal for
-scripts. `omr grade` keeps its own defaults (versions A, B unless the key names them; the
-survey proposes, it does not grade): give it the values `omr survey` proposed.
+On Linux the app needs a desktop session (X11 or Wayland). On a server, use the `omr` command
+line, or render the screens to PNG files with `omr-desktop --screenshot DIR`. The full guide
+below walks through [a first exam, step by step](#a-first-exam-step-by-step), under *The desktop
+app*.
 
-### With the answer key
+### Grade a folder from the command line
+
+Scan each exam into one folder: PDF or TIFF straight from the scanner (600 dpi black and white, or
+200 to 300 dpi gray), or JPEG/PNG files. Blank backs from duplex scanning are dropped, turned pages
+are read upright, and a file added twice is ignored.
 
 ```sh
 omr grade scans/cs211-midterm/ --template iau-ccsit-v1 --questions 30 \
@@ -108,29 +186,66 @@ omr grade scans/cs211-midterm/ --template iau-ccsit-v1 --questions 30 \
     --out "$HOME/OMR Exams/cs211-midterm-1"
 ```
 
-- `--template iau-ccsit-v1` is the IAU CCSIT answer sheet; `--questions` is how many of its
-  questions the exam uses. Answers in the key file (or marked on a key sheet) beyond that
-  count are not graded, and a warning (the key summary, for a key sheet) names them with the
-  count that would grade them.
-- `--key` is the answer key, one column per exam version (A, B): see
-  [`docs/examples/key.csv`](docs/examples/key.csv). The versions come from the key file. A
-  single `key` (or `answer`) column, a column of answers alone or `1,B` rows without a header
-  are the key of every version, so a single-version exam needs nothing more: a sheet whose version bubble is blank is graded with that key, without
-  review. A sheet that bubbles a version the exam does not have (C on an A, B exam; B on an
-  exam with `--forms A`) is held for review and never scored until you choose its version.
-  A column named for a version is that version's key only: a key for version C alone, or
-  columns for versions the exam does not declare (`--forms A,B` with an A–D key), are refused
-  unless those columns are empty.
-- `--roster` (CSV or Excel `.xlsx`, [`example`](docs/examples/roster.csv)) and `--clo`
-  ([`example`](docs/examples/clo.csv)) are optional. Without a roster, sheets are identified
-  by the student number bubbled on them; without a CLO file there are no outcome tables.
-- `--out` is a new folder for this exam. It is created readable by you only and holds the
-  exports and the exam's audited project (`project.omrproj`: do not edit or move files inside
-  it; an edited project is refused with SYS-011).
-
 The last lines say what to do next, for example
 `release blocked: 4 ERROR/BLOCKER open; next: omr review list --project …`, or
-`ready to release: omr release --project …`.
+`ready to release: omr release --project …`. *Review* and *Release and upload*, in the full guide
+below, cover those two steps. To check the scans before grading, or to grade without a key, from
+key sheets or from Remark, see [More ways to grade](#check-the-scans-first).
+
+<details>
+<summary><b>What the options mean</b></summary>
+
+- `--template iau-ccsit-v1` is the IAU CCSIT answer sheet; `--questions` is how many of its
+  questions the exam uses. Answers in the key file (or marked on a key sheet) beyond that count
+  are not graded, and a warning (the key summary, for a key sheet) names them with the count that
+  would grade them.
+- `--key` is the answer key, one column per exam version (A, B): see
+  [`docs/examples/key.csv`](docs/examples/key.csv). The versions come from the key file. A single
+  `key` (or `answer`) column, a column of answers alone or `1,B` rows without a header are the key
+  of every version, so a single-version exam needs nothing more: a sheet whose version bubble is
+  blank is graded with that key, without review. A sheet that bubbles a version the exam does not
+  have (C on an A, B exam; B on an exam with `--forms A`) is held for review and never scored
+  until you choose its version. A column named for a version is that version's key only. A key
+  for version C alone, or columns for versions the exam does not declare (`--forms A,B` with an A
+  to D key), are refused unless those columns are empty.
+- `--roster` (CSV or Excel `.xlsx`, [`example`](docs/examples/roster.csv)) and `--clo`
+  ([`example`](docs/examples/clo.csv)) are optional. Without a roster, sheets are identified by
+  the student number bubbled on them; without a CLO file there are no outcome tables.
+- `--out` is a new folder for this exam. It is created readable by you only and holds the exports
+  and the exam's audited project (`project.omrproj`). Do not edit or move files inside it: an
+  edited project is refused with SYS-011.
+
+</details>
+
+## The full guide
+
+<details>
+<summary><b>More ways to grade</b> (check the scans first, no key, key sheets, from Remark, later batches, your own sheets)</summary>
+
+### Check the scans first
+
+```sh
+omr survey scans/cs211-midterm/ --key key.csv
+```
+
+`omr survey` reads the scans once, in memory, and writes nothing. It proposes the exam's
+definition, each value with where it came from:
+
+- the versions (from the key file's columns, or the version bubbles the students filled);
+- the number of questions (the key's last answered question, the key sheets' last marked row, or
+  how far the students answered);
+- the key sheets in the stack;
+- the title, from the sheets' exam-type bubble, and the course, from the folder name.
+
+It keeps counts only, never a student number. When the evidence disagrees, it asks. For example,
+six sheets bubble version C but the key has A and B; the key answers questions 1 to 40 but
+`--questions 30` was given; `--forms A,B` comes with a key of one answer column; or there is no
+key at all. It then prints the answers each question takes (`--answer hold:C`,
+`--answer keep-questions:30`, `--answer provisional-key`, …) and exits 2. Run it again with your
+answer. `--json` prints the survey's counts and the proposal for scripts.
+
+`omr grade` keeps its own defaults (versions A, B unless the key names them). The survey proposes;
+it does not grade. Give `omr grade` the values `omr survey` proposed.
 
 ### Without an answer key
 
@@ -139,9 +254,9 @@ omr grade scans/cs211-midterm/ --template iau-ccsit-v1 --questions 30 --infer-ke
     --out "$HOME/OMR Exams/cs211-midterm-1"
 ```
 
-Each version's key is then inferred from the most common confident answers. Every output is
-marked INFERRED and is not releasable while the key is inferred. When the real key arrives
-(or in the desktop app, Setup › Replace key…):
+Each version's key is then inferred from the most common confident answers. Every output is marked
+INFERRED and is not releasable while the key is inferred. When the real key arrives, replace it
+(in the desktop app, Setup › Replace key…):
 
 ```sh
 omr key replace --project "$HOME/OMR Exams/cs211-midterm-1" --key key.csv
@@ -149,7 +264,7 @@ omr key replace --project "$HOME/OMR Exams/cs211-midterm-1" --key key.csv
 
 ### With a key sheet
 
-Fill one answer sheet per version with the right answers (the key sheet), bubble its student
+Fill one answer sheet per version with the right answers (the key sheet). Bubble its student
 number all 0 (or all 9: numbers no IAU student has) and its version, and scan it with the
 students, anywhere in the stack, or give it on its own:
 
@@ -158,37 +273,42 @@ omr grade scans/cs211-midterm/ --template iau-ccsit-v1 --questions 30 \
     --key-sheet key-A.pdf --key-sheet key-B.pdf --out "$HOME/OMR Exams/cs211-midterm-1"
 ```
 
-A key sheet is never graded as a student, and its answers are never accepted on their own:
-nothing is scored until you open `key_sheet_summary.html` in the exam folder (each question's
-answer as read, beside the scanned bubble row; rows to check are highlighted) and confirm it:
+A key sheet is never graded as a student, and its answers are never accepted on their own. Nothing
+is scored until you open `key_sheet_summary.html` in the exam folder and confirm it. The summary
+shows each question's answer as read, beside the scanned bubble row; rows to check are
+highlighted.
 
 ```sh
 omr key confirm --project "$HOME/OMR Exams/cs211-midterm-1"
 omr key confirm --project … --answer 7=B --answer '12=A|C'   # decide highlighted rows first
 ```
 
-Each row of the summary shows the bubbles as scanned with the question number printed beside
-them: that number must match the question column (if not, the sheet was read a row off: do not
-confirm, rescan it flat). A key sheet that cannot be read reliably (for example a photo
-registered one bubble row off, whose student number then reads 1111111111) is refused and
-named, never used; so is a key sheet whose version is not bubbled, on an exam with several
-versions. If a version is given by more than one sheet found in the stack, the summary and the
-hold name every one of them, even when they agree: a student who bubbled all 0 by mistake and
-answered like the key reads the same as a key sheet. Check each one; if one is a student's,
-grade again naming the real key sheet (`--key-sheet key-A.pdf --key-sheet-marker none`) so
-that the student is graded. A correction made after confirming (`omr key set`) stays your
-decision when the key sheet is scanned again later (shown as "decided by you" in the next
-summary).
+Each row of the summary shows the bubbles as scanned, with the question number printed beside
+them. That number must match the question column. If it does not, the sheet was read a row off:
+do not confirm, rescan it flat.
+
+A key sheet that cannot be read reliably is refused and named, never used. One example is a photo
+registered one bubble row off, whose student number then reads 1111111111. A key sheet whose
+version is not bubbled, on an exam with several versions, is refused the same way.
+
+If more than one sheet found in the stack gives the same version, the summary and the hold name
+every one of them, even when they agree. A student who bubbled all 0 by mistake and answered like
+the key reads the same as a key sheet. Check each one. If one is a student's, grade again naming
+the real key sheet (`--key-sheet key-A.pdf --key-sheet-marker none`) so that the student is
+graded.
+
+A correction made after confirming (`omr key set`) stays your decision when the key sheet is
+scanned again later (shown as "decided by you" in the next summary).
 
 Key sheets you get after grading join the exam the same audited way:
 `omr key replace --project … --from-key-sheets key-A.pdf key-B.pdf`, then `omr key confirm`.
-`omr key read key-A.pdf key-B.pdf --template iau-ccsit-v1 --questions 30 --out key/` only
-previews them: it writes `key/key.csv` and `key/key_summary.html` and records nothing.
+`omr key read key-A.pdf key-B.pdf --template iau-ccsit-v1 --questions 30 --out key/` only previews
+them: it writes `key/key.csv` and `key/key_summary.html` and records nothing.
 
 ### From Remark Office OMR
 
-Programmes that graded with Remark Office OMR bring its graded Excel exports (the Advanced Grade
-reports exported to `.xlsx`; Remark's own `.rmx` and `.aky` files are never read):
+Programmes that graded with Remark Office OMR bring its graded Excel exports: the Advanced Grade
+reports exported to `.xlsx`. Remark's own `.rmx` and `.aky` files are never read.
 
 ```sh
 omr import remark Sec1_A_Graded.xlsx Sec1_B_Graded.xlsx Sec2_A_Graded.xlsx --out remark-import/
@@ -196,22 +316,26 @@ omr grade scans/ --template iau-ccsit-v1 --questions 28 \
     --key remark-import/key.csv --clo remark-import/clo.csv --out "$HOME/OMR Exams/final"
 ```
 
-The import shows a summary first, then writes the key of each version with its exact points
-per question (from Remark's learning objectives, or solved from the students' totals, and
-checked to reproduce every total Remark reported), the learning objectives as CLO mappings
-marked "imported, needs review", a version map and a signed `manifest.json`. When the totals
-cannot tell some points apart (two questions every student answered right, say, or a learning
-objective whose questions the same students got right: its equal split would be a guess) it
-stops, names them and suggests values: give them with `--points points.csv`
-(`question,points` or `question,points_A,points_B`). Rows Remark graded from the instructor's
-key sheet (student number `0000000000`) are reported, never students. An AND key (`A+C`,
-Remark's partial-credit syntax) is refused: it is not scored yet.
+The import shows a summary first, then writes:
 
-The summary gives each learning objective's points and questions per version and warns when
-they differ between the versions (Remark groups printed positions, so one objective may not
-mean the same items in every version); every CLO is written in domain K (the export has no
-domain). Correct `clo.csv`, then, once the exam is graded, approve the imported mapping (the
-TP-154 tables are a draft until then) or replace it, without grading again:
+- the key of each version with its exact points per question (from Remark's learning objectives,
+  or solved from the students' totals, and checked to reproduce every total Remark reported);
+- the learning objectives as CLO mappings marked "imported, needs review";
+- a version map;
+- a signed `manifest.json`.
+
+When the totals cannot tell some points apart, it stops, names them and suggests values. That
+happens with two questions every student answered right, say, or with a learning objective whose
+questions the same students got right, where an equal split would be a guess. Give the points with
+`--points points.csv` (`question,points` or `question,points_A,points_B`). Rows Remark graded from
+the instructor's key sheet (student number `0000000000`) are reported, never taken as students. An
+AND key (`A+C`, Remark's partial-credit syntax) is refused: it is not scored yet.
+
+The summary gives each learning objective's points and questions per version, and warns when they
+differ between the versions. Remark groups printed positions, so one objective may not mean the
+same items in every version. Every CLO is written in domain K, because the export has no domain.
+Correct `clo.csv`. Then, once the exam is graded, approve the imported mapping or replace it,
+without grading again. The TP-154 tables are a draft until you approve it.
 
 ```sh
 omr clo replace --project "$HOME/OMR Exams/final" --clo remark-import/clo.csv
@@ -219,40 +343,52 @@ omr clo approve --project "$HOME/OMR Exams/final" --approver "Dr. A. Coordinator
     --note "objectives checked against the exam paper"
 ```
 
-To check a new exam against Remark before leaving it (spec §23.7), grade the same sheets in
-both and compare:
+To check a new exam against Remark before leaving it (spec §23.7), grade the same sheets in both
+and compare:
 
 ```sh
 omr compare remark --project "$HOME/OMR Exams/final" Sec1_A_Graded.xlsx Sec1_B_Graded.xlsx \
     --out "$HOME/OMR Exams/final/parallel-run"
 ```
 
-`parallel_run.html` lists every answer where the two differ, with the scanned bubble row to
-decide it, this exam's own total per student (its points and voids: what it will release)
-beside Remark's, any question whose points differ from Remark's (a different maximum is
-warned about: no total can agree then), the student numbers that do not match, the learning
-objectives' subtotals, and the key sheets Remark counted as students. The report alone does
-not hold release; add `--queue` to put every settled difference from an answer this exam
-accepted on its own into Review, where each holds release until you decide it (your decisions
-are recorded as field labels). The report is Restricted: its figures stay inside the
-university. It states the licence review (Q-08) as recorded by the administrator in
-`licence_review.json` in the private key folder (`{"q08": "cleared", "by": "…", "date": "…"}`,
-or `"refused"`, which stops every comparison); none recorded means the review is open. Give it
-the workbooks of the sheets you graded (other sections' workbooks are listed and left out);
-workbooks in which no student's answers match a booklet are refused as another test's, and a
+`parallel_run.html` lists:
+
+- every answer where the two differ, with the scanned bubble row to decide it;
+- this exam's own total per student (its points and voids: what it will release) beside Remark's;
+- any question whose points differ from Remark's (a different maximum is warned about, since no
+  total can agree then);
+- the student numbers that do not match;
+- the learning objectives' subtotals;
+- the key sheets Remark counted as students.
+
+The report alone does not hold release. Add `--queue` to put every settled difference from an
+answer this exam accepted on its own into Review, where each holds release until you decide it
+(your decisions are recorded as field labels).
+
+The report is Restricted: its figures stay inside the university. It states the licence review
+(Q-08) as the administrator recorded it in `licence_review.json` in the private key folder
+(`{"q08": "cleared", "by": "…", "date": "…"}`, or `"refused"`, which stops every comparison). If
+none is recorded, the review is open.
+
+Give it the workbooks of the sheets you graded; other sections' workbooks are listed and left out.
+Workbooks in which no student's answers match a booklet are refused as another test's, and a
 student number whose answers are another sheet's is paired last and flagged.
 
 ### Later batches and the university's own sheets
 
-- Another section or another day: `omr add more-scans/ --project <exam folder>` grades the
-  exam again with every scan, keeping your review decisions.
-- Own sheets: `omr templates --example-spec > spec.json`, edit it, then
-  `omr sheet render --spec spec.json --out sheets.pdf --copies 120`. The exam's secret key file
-  is written to your private key folder (§7), not beside the PDF; grade with
-  `--spec <that key file>` instead of `--template`, and with `--cancel-mode` set to the
-  marking convention the spec prints (the desktop's New exam takes it from the spec).
+For another section or another day, `omr add more-scans/ --project <exam folder>` grades the exam
+again with every scan, keeping your review decisions.
 
-## 3. Review
+For the university's own sheets, run `omr templates --example-spec > spec.json`, edit it, then run
+`omr sheet render --spec spec.json --out sheets.pdf --copies 120`. The exam's secret key file is
+written to your private key folder (see [Where exams are kept](#where-exams-are-kept)), not beside
+the PDF. Grade with `--spec <that key file>` instead of `--template`, and with `--cancel-mode` set
+to the marking convention the spec prints (the desktop's New exam takes it from the spec).
+
+</details>
+
+<details>
+<summary><b>Review</b> (doubtful marks, decisions, key fixes, probable mis-keys)</summary>
 
 Anything the program is not sure about waits for a person: faint or double marks, erasures,
 unreadable student numbers, a student not on the roster, two sheets with one number.
@@ -264,206 +400,230 @@ omr review resolve --project … --item 15 --decision C --reason AMBIGUOUS_MARK
 omr review resolve --project … --undo
 ```
 
-- `review list` shows the open items in queue order, with student numbers masked to their
-  last 3 digits (`--reveal` shows them in full, and the reveal is logged). `--crops DIR` saves
-  each item's image as PNG; `--json` is for scripts.
-- Decisions: `ack` accepts the program's proposal (or acknowledges a notice); otherwise a
-  letter (`B`), `blank`, `multi:A+C`, `unreadable`, `student:<number>`, `not-on-roster` or
+- `review list` shows the open items in queue order, with student numbers masked to their last 3
+  digits. `--reveal` shows them in full, and the reveal is logged. `--crops DIR` saves each item's
+  image as PNG; `--json` is for scripts.
+- To decide an item, `ack` accepts the program's proposal (or acknowledges a notice). Otherwise
+  give a letter (`B`), `blank`, `multi:A+C`, `unreadable`, `student:<number>`, `not-on-roster` or
   `form:B`. Choosing something other than the proposal needs a reason (`--reason`, e.g.
   `AMBIGUOUS_MARK`, `ERASURE_RESIDUE`, `ID_CORRECTION`; `OTHER` with `--note`).
-- A wrong key entry: `omr key set --project … --form A --question 7 --answer C`. Every change
-  rescores the exam and is recorded with its reason.
-- A **probable mis-key** (SCO-001, Scoring lane): the item analysis found a question whose key
-  the strongest students contradict, with confidence (its bootstrap stability). It blocks
-  release until you decide it: the letter of the right answer (changes the key), `multi`
-  (accepts the key or the flagged answer), `void`, or `ack --reason ADJUDICATION --note "…"`
-  (keeps the key). A low-confidence flag (one student's choice, for example) is shown as
-  *(proposed)* in the item analysis and never blocks.
-- Phone photos of students' sheets are read, but the phone capture is not calibrated yet:
-  every answer on them waits for your confirmation (MRK-001 `uncalibrated_capture`). Scan
-  students' sheets on a scanner.
-- A key read from key sheets waits for `omr key confirm` (§2): until then `review list` shows
-  the hold first, and nothing is scored or releasable.
+- A wrong key entry is fixed with `omr key set --project … --form A --question 7 --answer C`.
+  Every change rescores the exam and is recorded with its reason.
+- A probable mis-key (SCO-001, Scoring lane) is a question whose key the strongest students
+  contradict, found by the item analysis with confidence (its bootstrap stability). It blocks
+  release until you decide it: the letter of the right answer (changes the key), `multi` (accepts
+  the key or the flagged answer), `void`, or `ack --reason ADJUDICATION --note "…"` (keeps the
+  key). A low-confidence flag (one student's choice, for example) is shown as *(proposed)* in the
+  item analysis and never blocks.
+- Phone photos of students' sheets are read, but the phone capture is not calibrated yet: every
+  answer on them waits for your confirmation (MRK-001 `uncalibrated_capture`). Scan students'
+  sheets on a scanner.
+- A key read from key sheets waits for `omr key confirm` (see
+  [With a key sheet](#with-a-key-sheet), under *More ways to grade*). Until then `review list`
+  shows the hold first, and nothing is scored or releasable.
 
-## 4. Release and upload
+</details>
+
+<details>
+<summary><b>Release and upload</b> (the Blackboard file, what the exam folder holds)</summary>
 
 ```sh
 omr release --project "$HOME/OMR Exams/cs211-midterm-1"
 ```
 
-Release is your deliberate act. It is refused, naming each reason and the next command, while
-anything blocks it (open review items, a probable mis-key not yet decided, an inferred or
-incomplete key). It then writes the exports
-again, now with `blackboard_grade_center.csv` (username and score only) for Blackboard's Grade
-Center upload. A later change (a review decision, a key change, an added batch) supersedes the
-release: the upload file is removed at the next export, until you release again.
+Release is your deliberate act. It is refused while anything blocks it (open review items, a
+probable mis-key not yet decided, an inferred or incomplete key), and the refusal names each reason
+and the next command. Once nothing blocks it, release writes the exports again, now with
+`blackboard_grade_center.csv` (username and score only) for Blackboard's Grade Center upload. A
+later change (a review decision, a key change, an added batch) supersedes the release: the upload
+file is removed at the next export, until you release again.
 
 The exam folder holds `results.xlsx` and `results.csv` (scores, percentages and Saudi letter
 grades), `item_analysis.xlsx`, `tp154.xlsx` (NCAAA course-report tables), `report.html`, and
 `manifest.json`, which lists every file's SHA-384 and is signed with this computer's key.
 `omr export --project …` writes them again.
 
-## 5. The desktop app
+</details>
 
-```sh
-omr-desktop                                   # your exams folder: ~/OMR Exams, or the last one
-omr-desktop --workspace "$HOME/OMR Exams"     # every exam below a folder
-omr-desktop --project "$HOME/OMR Exams/cs211-midterm-1"
-omr-desktop --demo                            # invented demo data, marked DEMO on every screen
-```
+<details>
+<summary><b>The desktop app</b> (a first exam step by step, what each screen does)</summary>
 
 ### A first exam, step by step
 
-1. **Open your exams folder.** `omr-desktop` opens `~/OMR Exams` the first time (it creates
-   it), then the folder you used last. **Open folder…** (Ctrl+O) on the Exams screen opens
-   another one; it lists every exam graded below it.
-2. **New exam** (Ctrl+N). Click **Folder…** beside *Scan files or folders* and choose the
-   folder of scans (or **Browse…** for files). Add the **Answer key file**, the **Roster file**
-   and the **CLO mapping file** the same way when you have them.
-3. **Check the card.** The scans are checked at once (*Checking the scans: 6 of 12 pages
-   read*; **Stop checking** stops it). Then *What is graded* lists every value with where it
-   came from: `30 — key file`, `A, B — the sheets`, `CS 213 — folder name` (a scans folder
-   named like `CS213 Quiz 1` gives the course and the title). Type in a field on the left to
-   change a value. A question (in a highlighted box at the top) stops grading until you answer
-   it with one of its buttons, for example *no answer key*: **Choose a key file…**, **Import
-   from Remark…**, **Key sheets…** or **Grade with a provisional key (cannot be released)**.
-4. **Grade exam.** It is enabled once nothing is left to answer, and grades exactly what the
+1. Open your exams folder. `omr-desktop` opens `~/OMR Exams` the first time (it creates it), then
+   the folder you used last. **Open folder…** (Ctrl+O) on the Exams screen opens another one, and
+   lists every exam graded below it.
+2. Press **New exam** (Ctrl+N). Click **Folder…** beside *Scan files or folders* and choose the
+   folder of scans (or **Browse…** for files). Add the **Answer key file**, the **Roster file** and
+   the **CLO mapping file** the same way when you have them.
+3. Check the card. The scans are checked at once (*Checking the scans: 6 of 12 pages read*;
+   **Stop checking** stops it). *What is graded* then lists every value with where it came from:
+   `30 — key file`, `A, B — the sheets`, `CS 213 — folder name` (a scans folder named like
+   `CS213 Quiz 1` gives the course and the title). Type in a field on the
+   left to change a value. A question, in a highlighted box at the top, stops grading until you
+   answer it with one of its buttons. For example, *no answer key* offers **Choose a key file…**,
+   **Import from Remark…**, **Key sheets…** or **Grade with a provisional key (cannot be
+   released)**.
+4. Press **Grade exam**. It is enabled once nothing is left to answer, and grades exactly what the
    card shows into a new folder of the exams folder (*Folder* on the card). The Scan screen
-   follows the run; **Cancel grading…** stops it, after a confirmation, and saves nothing.
-5. **When it ends** a notice says how it went, for example *CS 213 Quiz 1 is graded*, with
-   **Review N items**, **Open results** and **Open exports folder** (Escape or × dismisses
-   it). Review opens on a lane with items.
-6. **Review.** Each item shows the bubble row as scanned with the reading: Enter accepts the
-   proposal, the letter or number keys choose another answer (with a reason when it overrides
-   the proposal), Ctrl+Z undoes. Results update as you go.
-7. **Results and exports.** The exports (`results.xlsx`, `results.csv`, `item_analysis.xlsx`,
-   `tp154.xlsx`, `report.html`) were written into the exam's folder when grading ended
-   (Settings › **Write exports after grading**, on by default); Results › **Export…** writes
-   them again after your review decisions, or only the Blackboard upload. **Release
-   results…** releases the results once nothing blocks them and writes the Blackboard upload.
+   follows the run. **Cancel grading…** stops it, after a confirmation, and saves nothing.
+5. When it ends, a notice says how it went, for example *CS 213 Quiz 1 is graded*, with
+   **Review N items**, **Open results** and **Open exports folder** (Escape or × dismisses it).
+   Review opens on a lane with items.
+6. In Review, each item shows the bubble row as scanned with the reading. Enter accepts the
+   proposal, the letter or number keys choose another answer (with a reason when it overrides the
+   proposal), and Ctrl+Z undoes. Results update as you go.
+7. The exports (`results.xlsx`, `results.csv`, `item_analysis.xlsx`, `tp154.xlsx`,
+   `report.html`) were written into the exam's folder when grading ended (Settings ›
+   **Write exports after grading**, on by default). Results › **Export…** writes them again after
+   your review decisions, or writes only the Blackboard upload. **Release results…** releases the
+   results once nothing blocks them and writes the Blackboard upload.
 
 ### What each screen does
 
-- **Exams** lists every graded exam. **New exam** (Ctrl+N) opens a card: choose the scans (and,
-  if you have them, the key file or key sheets, the roster and the CLO file). The scans are
-  checked at once in the background (a few seconds for a class; **Stop checking** stops it),
-  and the card then shows every value it will grade, each with where it came from: the
-  versions and the number of questions from the key or the sheets, the options and how marks
-  are cancelled from the sheet, the title and course from the folder name, and so on. Type
-  over any value to change it; **Advanced options** has the sheet, term, student-number
-  scheme, second review, high stakes and the exam's folder. When the evidence disagrees, or no
-  key is given, the card asks, with one-click answers (a key inferred from the answers is used
-  only if you choose it, and cannot be released until the real key replaces it); **Grade exam** waits until nothing is left
-  to answer and grades exactly what the card shows.
-- When grading ends (or added scans, or a roster), the exports are written into the exam's
-  folder as `omr grade` writes them (Settings › **Write exports after grading**; a key read from
-  key sheets holds them until you confirm it), and a notice on every screen says how it went,
-  with the next step: **Review N items**, **Open results**, **Open exports folder**, **Confirm
-  the key in Setup** or **Replace the key in Setup**. Once you decide an item or change the
-  key, the notice and Results › **Export…** say the exports in the folder are older than the
-  exam until **Write all exports** writes them again. **Cancel grading…** on the Scan screen
-  stops a new exam's grading: nothing is saved, and **Edit and grade again** brings the card
-  back as it was. Once the pages are read the exam is being saved, and a cancel is too late
-  (the window says so). Closing the window while something is being graded asks first, and
-  waits for a cancelled run to stop.
+- Exams lists every graded exam. **New exam** (Ctrl+N) opens a card: choose the scans (and, if
+  you have them, the key file or key sheets, the roster and the CLO file). The scans are checked
+  at once in the background (a few seconds for a class; **Stop checking** stops it). The card then
+  shows every value it will grade, each with where it came from: the versions and the number of
+  questions from the key or the sheets, the options and how marks are cancelled from the sheet,
+  the title and course from the folder name, and so on. Type over any value to change it.
+  **Advanced options** has the sheet, term, student-number scheme, second review, high stakes and
+  the exam's folder. When the evidence disagrees, or no key is given, the card asks, with
+  one-click answers. A key inferred from the answers is used only if you choose it, and cannot be
+  released until the real key replaces it. **Grade exam** waits until nothing is left to answer
+  and grades exactly what the card shows.
+- When grading ends (or added scans, or a roster), the exports are written into the exam's folder
+  as `omr grade` writes them (Settings › **Write exports after grading**; a key read from key
+  sheets holds them until you confirm it). A notice on every screen says how it went, with the
+  next step: **Review N items**, **Open results**, **Open exports folder**, **Confirm the key in
+  Setup** or **Replace the key in Setup**. Once you decide an item or change the key, the notice
+  and Results › **Export…** say the exports in the folder are older than the exam, until
+  **Write all exports** writes them again. **Cancel grading…** on the Scan screen stops a new
+  exam's grading: nothing is saved, and **Edit and grade again** brings the card back as it was.
+  Once the pages are read the exam is being saved, and a cancel is too late (the window says so).
+  Closing the window while something is being graded asks first, and waits for a cancelled run to
+  stop.
 - Every file or folder field has **Browse…** beside it (and **Folder…** for scans), which opens
-  your system's file dialog at the folder you picked from last; typing or pasting a path still
+  your system's file dialog at the folder you picked from last. Typing or pasting a path still
   works.
-- **Open folder…** (Ctrl+O) opens another exams folder, or the folder of one exam (selected
-  among the exams beside it); the app opens it again next time. **Refresh** (F5) lists exams
-  graded meanwhile, for example with `omr grade`. **Open exam folder** (in an exam's details)
-  and **Open exports folder** (Results › Export…) show the exam's folder in your file manager.
-- **Setup** shows the key, versions and CLO mapping; **Replace key…** loads the real key from
-  a file and rescores; **Read key from answer sheet…** reads the instructor's key sheets, shows
-  the key summary and, once you confirm, adds them to the exam (stored and audited like key
-  sheets graded with it). New exam also takes key sheets. **Add roster…** (or step **4
-  Roster**, which also replaces one) adds a roster to an exam graded without one: every
-  student is matched again in the background and your review decisions carry over.
-- **Scan** follows grading live; **Add scans…** adds a later batch.
-- **Review** is keyboard-first: the number or letter keys choose an answer, Enter accepts the
-  proposal, Ctrl+Z undoes; F1 lists every key.
-- **Results** shows scores and grades; **Release results…** releases them and writes the
-  Blackboard upload. **Outcomes** shows CLO attainment and the TP-154 tables.
-- **Settings** records your name in the audit trail (on every decision from then on, once you
-  press Save or Enter: until then the field says it is not saved), changes
-  or shows the exams folder, and keeps the theme and the review settings for the next start.
-- **From Remark Office OMR:** **Import from Remark export…** on the New exam card (or in Setup,
-  to replace a graded exam's key) reads Remark's graded `.xlsx` exports and shows the import for
-  review before anything changes; a refusal says what to do and can offer the suggested points.
+- **Open folder…** (Ctrl+O) opens another exams folder, or the folder of one exam (selected among
+  the exams beside it); the app opens it again next time. **Refresh** (F5) lists exams graded
+  meanwhile, for example with `omr grade`. **Open exam folder** (in an exam's details) and
+  **Open exports folder** (Results › Export…) show the exam's folder in your file manager.
+- Setup shows the key, versions and CLO mapping. **Replace key…** loads the real key from a file
+  and rescores. **Read key from answer sheet…** reads the instructor's key sheets, shows the key
+  summary and, once you confirm, adds them to the exam (stored and audited like key sheets graded
+  with it). New exam also takes key sheets. **Add roster…** (or step **4 Roster**, which also
+  replaces one) adds a roster to an exam graded without one: every student is matched again in
+  the background and your review decisions carry over.
+- Scan follows grading live; **Add scans…** adds a later batch.
+- Review is keyboard-first: the number or letter keys choose an answer, Enter accepts the
+  proposal, Ctrl+Z undoes, and F1 lists every key.
+- Results shows scores and grades; **Release results…** releases them and writes the Blackboard
+  upload. Outcomes shows CLO attainment and the TP-154 tables.
+- Settings records your name in the audit trail (on every decision from then on, once you press
+  Save or Enter; until then the field says it is not saved), changes or shows the exams folder,
+  and keeps the theme and the review settings for the next start.
+- For Remark Office OMR, **Import from Remark export…** on the New exam card (or in Setup, to
+  replace a graded exam's key) reads Remark's graded `.xlsx` exports and shows the import for
+  review before anything changes. A refusal says what to do and can offer the suggested points.
   In Setup, **Approve imported mappings** approves the imported CLO rows and **Replace CLOs**
-  loads a corrected CLO file. In Results, **Compare with Remark export…** shows the parallel
-  run under the Restricted banner (a `.csv` among the files is read as handwritten student
-  numbers, `file,page,student_id`); **Queue for review** puts its settled differences into
-  Review, where they hold release; **Save report** writes the Restricted report.
+  loads a corrected CLO file. In Results, **Compare with Remark export…** shows the parallel run
+  under the Restricted banner (a `.csv` among the files is read as handwritten student numbers,
+  `file,page,student_id`). **Queue for review** puts its settled differences into Review, where
+  they hold release, and **Save report** writes the Restricted report.
 
-On Linux the app needs a desktop session (X11 or Wayland). On a server, use the `omr` command
-line, or render the screens to PNG files with `omr-desktop --screenshot DIR`.
+</details>
 
-## 6. File formats
+<details>
+<summary><b>File formats</b> (answer key, roster, CLO mapping, Remark export)</summary>
 
 | File | Layout |
 |---|---|
-| Answer key | CSV `question,A,B` (one column per version, optional `points` column, or `points_A`, `points_B` when the versions carry different points), or `form,Q1,Q2,…`, or one column of answers (an empty line between answers is a question without one). Entries: `B`, `A\|C` (either accepted; also `A or C`, `AC`), `*` (void), empty (missing); an AND key (`A+C`, `A&C`, `A and C`: all answers required, Remark's partial credit) is refused, not scored yet. UTF-8, UTF-16 or Windows-1256; commas, semicolons or tabs, as Excel saves it. Or a key sheet: an answer sheet filled by the instructor, student number all 0 or all 9 and the version bubbled (§2) |
+| Answer key | CSV `question,A,B` (one column per version, optional `points` column, or `points_A`, `points_B` when the versions carry different points), or `form,Q1,Q2,…`, or one column of answers (an empty line between answers is a question without one). Entries: `B`, `A\|C` (either accepted; also `A or C`, `AC`), `*` (void), empty (missing); an AND key (`A+C`, `A&C`, `A and C`: all answers required, Remark's partial credit) is refused, not scored yet. UTF-8, UTF-16 or Windows-1256; commas, semicolons or tabs, as Excel saves it. Or a key sheet: an answer sheet filled by the instructor, student number all 0 or all 9 and the version bubbled (see [With a key sheet](#with-a-key-sheet), under *More ways to grade*) |
 | Roster | CSV or `.xlsx` with a header row: `student_id` (or `ID`, `الرقم الجامعي`), `name`, `name_ar`, `section`. Student numbers that Excel damaged (`2250000001.0`, lost leading zeros) are repaired when nothing was lost; duplicates are refused naming the rows |
 | CLO mapping | CSV `clo,domain,title,plo,questions,weight,note`, with question lists such as `1-8,12`; optional `form` (the row maps one version's questions) and `status`/`source` (`imported, needs review`, `Remark import`) |
 | Remark export | Remark Office OMR's graded workbook (`.xlsx`): Student Response Report with the answer key, Student Statistics Report (learning objectives), Test Statistics Report; `omr import remark`, `omr compare remark` |
 
-Examples: [`docs/examples/`](docs/examples/). More detail: [`crates/omr-cli/README.md`](crates/omr-cli/README.md).
+Examples: [`docs/examples/`](docs/examples/). More detail:
+[`crates/omr-cli/README.md`](crates/omr-cli/README.md).
 
-## 7. Where things are kept
+</details>
 
-- **The exam folder** (`--out`, or a folder below your exams folder): the exports and
-  `project.omrproj`, the audited store of every page, decision and key version. Back up the
-  whole folder.
-- **Your private key folder:** `~/.local/share/omr` on Linux (`%APPDATA%\omr` on Windows, or
-  `OMR_KEY_DIR`). It holds this computer's signing key, the checkpoints that detect an older
-  copy of a project put back in place, and the secret keys of the university's own sheets. Back
-  it up separately and keep it private.
-
-## 8. Known limits
-
-- macOS is not built or tested. Windows is built and tested in CI only, without its platform
-  layer (sync-folder refusal, owner-only permissions, DPAPI keys), and there is no installer yet.
-- The scanner's hot folder is not watched (grade the folder when scanning ends), and
-  `omr sheet render` writes PDF only.
-- Phone photos: key sheets can be photographed (the instructor confirms them), but every answer
-  on a photographed student sheet goes to review until the phone capture is calibrated.
-- The project store is not encrypted at rest; keep exam folders on an encrypted university
-  device.
-- Every input file is read into memory for the run; files over 2 GB are refused.
-- **Migration from Remark** (each with its workaround):
-  - Only the graded Excel (`.xlsx`) Advanced Grade export is read; Remark's CSV and SPSS
-    exports, version-mapping and scaled-score tables, and Remark-compatible exports are not
-    built (spec §3.5, §16.3): export the Excel reports from Remark.
-  - Remark's response data cannot become an assessment without the scans (TP-154 needs the
-    exam graded here): scan the sheets.
-  - AND keys (`A+C`) are refused: write `A|C` (either) or void the question.
-  - A learning objective whose questions the students do not tell apart is refused, not split
-    equally: give its points with `--points` (or *Use the suggested points*).
-  - Imported CLOs land in domain K and their versions' objectives may differ: correct
-    `clo.csv`, then `omr clo replace` and `omr clo approve` (or Setup's buttons).
-  - A graded exam's points cannot be changed (its form map is stored once): create the exam
-    from the import instead (`omr grade`, `omr key replace` and the desktop's *Replace key…*
-    all read the key file's `points_A`/`points_B` columns).
-  - The Setup grid's points column shows version A's points; a cell that stands for one
-    version's rows is labelled "version A only".
-  - Booklets are paired with Remark's rows by student number, then by answers (a heuristic
-    whose every pairing is reported as an identity difference); an ID Excel already rounded
-    (`2.2E+09`) cannot be recovered: export it again from Remark with the ID column as text.
-  - The parallel run holds release only when its differences are queued (`--queue`, *Queue for
-    review*); it is an internal check until the licence review (Q-08) is recorded.
-
-The full list, with the evidence for each row: [`docs/EVIDENCE.md`](docs/EVIDENCE.md) §7.
-
-## 9. For developers
+<details>
+<summary><b>For developers</b> (the checks, the acceptance run, test builds, the design documents)</summary>
 
 ```sh
 scripts/check.sh        # formatting, clippy, every test, architecture rules
 scripts/acceptance.sh   # the MVP acceptance rows A1–A11 in release; writes docs/evidence/acceptance.json
 ```
 
+CI runs the same `scripts/check.sh` gate on Linux and on Windows. Tests that need real exam data
+skip unless their environment variables point at the data. CI never sets them, and the restricted
+data stays on the evaluation machine.
+
+To publish the next test build, run the *Release builds* workflow on main with a new tag;
+`scripts/release-tag.sh` checks it.
+
 The crates and the engineering rules are in [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md)
-§3–§4; each crate has its own README. The technical design
+§3 and §4; each crate has its own README. The technical design
 ([`docs/TECHNICAL_DESIGN.md`](docs/TECHNICAL_DESIGN.md), Draft v0.2) covers the architecture,
 recognition, identity, scoring and outcomes, audit, security and privacy, Saudi regulatory
 obligations, quality assurance and the delivery plan.
+
+</details>
+
+## Known limits
+
+macOS is not built or tested. Windows is built and tested in CI only, without its platform layer
+(sync-folder refusal, owner-only permissions, DPAPI keys), and there is no installer yet.
+
+<details>
+<summary><b>The other limits</b> (hot folder, phone photos, encryption, file size, migration from Remark)</summary>
+
+- The scanner's hot folder is not watched (grade the folder when scanning ends), and
+  `omr sheet render` writes PDF only.
+- Key sheets can be photographed (the instructor confirms them), but every answer on a
+  photographed student sheet goes to review until the phone capture is calibrated.
+- The project store is not encrypted at rest; keep exam folders on an encrypted university device.
+- Every input file is read into memory for the run; files over 2 GB are refused.
+- Migration from Remark has these limits, each with its workaround:
+  - Only the graded Excel (`.xlsx`) Advanced Grade export is read. Remark's CSV and SPSS exports,
+    version-mapping and scaled-score tables, and Remark-compatible exports are not built (spec
+    §3.5, §16.3). Export the Excel reports from Remark.
+  - Remark's response data cannot become an assessment without the scans (TP-154 needs the exam
+    graded here). Scan the sheets.
+  - AND keys (`A+C`) are refused. Write `A|C` (either) or void the question.
+  - A learning objective whose questions the students do not tell apart is refused, not split
+    equally. Give its points with `--points` (or *Use the suggested points*).
+  - Imported CLOs land in domain K and their versions' objectives may differ. Correct `clo.csv`,
+    then run `omr clo replace` and `omr clo approve` (or use Setup's buttons).
+  - A graded exam's points cannot be changed (its form map is stored once). Create the exam from
+    the import instead (`omr grade`, `omr key replace` and the desktop's *Replace key…* all read
+    the key file's `points_A`/`points_B` columns).
+  - The Setup grid's points column shows version A's points; a cell that stands for one version's
+    rows is labelled "version A only".
+  - Booklets are paired with Remark's rows by student number, then by answers (a heuristic whose
+    every pairing is reported as an identity difference). An ID Excel already rounded (`2.2E+09`)
+    cannot be recovered: export it again from Remark with the ID column as text.
+  - The parallel run holds release only when its differences are queued (`--queue`, *Queue for
+    review*). It is an internal check until the licence review (Q-08) is recorded.
+
+</details>
+
+The full list, with the evidence for each row: [`docs/EVIDENCE.md`](docs/EVIDENCE.md) §7.
+
+---
+
+<p align="center">
+  <img src="crates/shell-slint/ui/assets/icon.svg" width="48" alt="Mizan app icon">
+</p>
+
+<p align="center">
+  <sub>
+    Design: <a href="docs/TECHNICAL_DESIGN.md">TECHNICAL_DESIGN.md</a> ·
+    Built and deferred: <a href="docs/IMPLEMENTATION.md">IMPLEMENTATION.md</a> ·
+    Evidence: <a href="docs/EVIDENCE.md">EVIDENCE.md</a> ·
+    <a href="crates/">Crates</a>
+  </sub>
+</p>
