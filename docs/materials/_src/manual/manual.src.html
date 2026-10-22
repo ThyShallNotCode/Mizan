@@ -1,0 +1,1749 @@
+<title>Mizan User Manual</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Arabic:wght@400;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+  :root {
+    --canvas: #F5F0E6;
+    --surface: #FFFDF8;
+    --sunken: #F0EADF;
+    --hairline: #E3DACB;
+    --strong: #8C8270;
+    --ink: #1C2430;
+    --ink-2: #55606E;
+    --teal: #0E5E57;
+    --teal-deep: #0B3B37;
+    --teal-soft: #DCEBE6;
+    --teal-line: #B5D2C9;
+    --gold: #B0832A;
+    --gold-text: #7A5815;
+    --gold-bright: #D9AE55;
+    --success: #2A7148;
+    --warning: #955800;
+    --error: #B3261E;
+    --info: #3D5A80;
+    --info-soft: #E8EDF3;
+    --info-line: #C7D2DF;
+    --warn-soft: #F7ECDB;
+    --warn-line: #E5CDA6;
+    --on-teal: #F5F0E6;
+    --on-teal-2: #C9DCD6;
+    --pin-ring: #FFFDF8;
+    --sans: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+    --arabic: 'IBM Plex Sans Arabic', 'IBM Plex Sans', 'Segoe UI', Tahoma, sans-serif;
+    --mono: 'IBM Plex Mono', Consolas, 'Courier New', monospace;
+    --measure: 40rem;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--surface);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    font-kerning: normal;
+    hyphens: manual;
+  }
+  [lang="ar"] { font-family: var(--arabic); }
+  img { max-width: 100%; height: auto; display: block; }
+  h2, h3, h4 { font-weight: 600; line-height: 1.2; margin: 0; }
+  p { margin: 0 0 0.75em; }
+  a { color: var(--teal); }
+  strong { font-weight: 600; }
+  em { font-style: italic; }
+
+  /* ---------- Inline elements ---------- */
+  .ui {
+    font-weight: 500;
+    background: var(--sunken);
+    border: 1px solid var(--hairline);
+    border-radius: 3px;
+    padding: 0 0.18em;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+    white-space: nowrap;
+  }
+  .ui.wrap { white-space: normal; }
+  td:first-child .ui { white-space: nowrap; }
+  kbd {
+    font-family: var(--mono);
+    font-size: 0.9em;
+    font-weight: 500;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--strong);
+    border-bottom-width: 2px;
+    border-radius: 3px;
+    padding: 0.02em 0.35em;
+    white-space: nowrap;
+  }
+  code.nw { white-space: nowrap; }
+  code {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    color: var(--teal-deep);
+    overflow-wrap: anywhere;
+  }
+  .msg { color: var(--ink-2); font-style: italic; }
+  .path { white-space: nowrap; }
+
+  /* ---------- Cover ---------- */
+  .cover {
+    position: relative;
+    overflow: hidden;
+    background: var(--teal-deep);
+    color: var(--on-teal);
+  }
+  .cover-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    object-fit: cover;
+    object-position: 50% 78%;
+  }
+  .cover-text { position: relative; }
+  .cover-mark { display: flex; align-items: center; gap: 0.9rem; margin-bottom: 2.2rem; }
+  .cover-icon { width: 3.1rem; height: 3.1rem; }
+  .tag {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--gold-bright);
+    border: 1px solid var(--gold-bright);
+    border-radius: 3px;
+    padding: 0.15em 0.6em;
+  }
+  .cover-title {
+    margin: 0;
+    font-weight: 600;
+    font-size: clamp(3rem, 11vw, 5.2rem);
+    line-height: 1;
+    letter-spacing: -0.02em;
+    color: var(--on-teal);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.1em 0.45em;
+  }
+  .cover-title [lang="ar"] { font-size: 0.78em; font-weight: 600; color: var(--gold-bright); letter-spacing: 0; }
+  .cover-sub { margin: 0.9rem 0 0; font-size: clamp(1.25rem, 3.6vw, 1.65rem); font-weight: 500; color: var(--on-teal); }
+  .cover-sub [lang="ar"] { margin-left: 0.6em; color: var(--on-teal-2); font-weight: 400; font-size: 0.85em; }
+  .cover-desc { margin: 1.1rem 0 0; max-width: 27rem; font-size: 1.02rem; line-height: 1.5; color: var(--on-teal-2); }
+  .cover-version {
+    margin: 1.6rem 0 0;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    letter-spacing: 0.06em;
+    color: var(--on-teal-2);
+    border-top: 1px solid rgba(245, 240, 230, 0.28);
+    padding-top: 0.8rem;
+    max-width: 27rem;
+  }
+
+  /* ---------- Contents ---------- */
+  .contents-title { font-size: 2rem; letter-spacing: -0.01em; }
+  .toc { list-style: none; margin: 1.6rem 0 2rem; padding: 0; border-top: 1px solid var(--ink); }
+  .toc li { border-bottom: 1px solid var(--hairline); }
+  .toc a {
+    display: grid;
+    grid-template-columns: 2.4rem 1fr auto auto;
+    align-items: baseline;
+    gap: 0 0.8rem;
+    padding: 0.42rem 0;
+    color: var(--ink);
+    text-decoration: none;
+  }
+  .toc .n { font-family: var(--mono); font-size: 0.82rem; color: var(--gold-text); }
+  .toc .t { font-weight: 500; }
+  .toc .ar { font-family: var(--arabic); font-size: 0.82rem; color: var(--ink-2); text-align: right; }
+  .toc .p { font-family: var(--mono); font-size: 0.85rem; color: var(--teal); min-width: 1.6rem; text-align: right; }
+  .toc .appx { margin-top: 0.6rem; border-top: 1px solid var(--ink); }
+
+  /* ---------- Chapter heads ---------- */
+  .ch-head { margin-bottom: 1.6rem; }
+  .ch-kicker {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    margin-bottom: 1rem;
+  }
+  .ch-kicker .no { color: var(--gold-text); font-weight: 500; font-size: 1.05rem; letter-spacing: 0.04em; }
+  .ch-kicker svg { flex: 1; height: 10px; opacity: 0.55; }
+  .ch-head h2 { font-size: clamp(1.9rem, 5.5vw, 2.5rem); letter-spacing: -0.015em; }
+  .ch-ar {
+    margin: 0.45rem 0 0;
+    font-family: var(--arabic);
+    font-size: 1.12rem;
+    font-weight: 400;
+    color: var(--gold-text);
+    text-align: left;
+  }
+  .lede { margin: 1rem 0 0; font-size: 1.08rem; line-height: 1.55; color: var(--ink-2); max-width: var(--measure); }
+
+  h3 code, h4 code { font-weight: 500; }
+  h3 { font-size: 1.22rem; margin: 2rem 0 0.6rem; break-after: avoid; page-break-after: avoid; }
+  h4 { font-size: 1rem; margin: 1.3rem 0 0.4rem; break-after: avoid; page-break-after: avoid; }
+  h3 + p, h4 + p { margin-top: 0; }
+
+  /* ---------- Lists ---------- */
+  ol.steps { list-style: none; counter-reset: step; padding: 0; margin: 0.6rem 0 1.1rem; }
+  ol.steps > li { counter-increment: step; position: relative; padding-left: 2.2em; margin: 0 0 0.5em; }
+  ol.steps > li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: 0.12em;
+    width: 1.5em;
+    height: 1.5em;
+    border-radius: 50%;
+    background: var(--teal-soft);
+    color: var(--teal);
+    font-family: var(--mono);
+    font-size: 0.88em;
+    font-weight: 500;
+    line-height: 1.5em;
+    text-align: center;
+  }
+  ol.steps ul { margin: 0.3em 0 0.2em; }
+  ul.plain { margin: 0.4rem 0 1rem; padding-left: 1.15em; }
+  ul.plain > li { margin: 0 0 0.35em; padding-left: 0.15em; }
+  ul.plain > li::marker { color: var(--gold); }
+  ol.steps ul > li::marker { color: var(--gold); }
+  ol.safeguards { padding-left: 2.1em; margin: 0.5rem 0 1rem; }
+  ol.safeguards > li { margin: 0 0 0.55em; padding-left: 0.2em; }
+  ol.safeguards > li::marker { font-family: var(--mono); color: var(--gold-text); font-size: 0.9em; }
+
+  /* ---------- Callouts ---------- */
+  .callout {
+    border-radius: 5px;
+    padding: 0.8rem 1rem 0.65rem;
+    margin: 1.1rem 0 1.2rem;
+    border: 1px solid;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .callout > :last-child { margin-bottom: 0.15rem; }
+  .callout .label {
+    display: block;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    margin-bottom: 0.3rem;
+  }
+  .callout ul { margin: 0.2rem 0 0.3rem; padding-left: 1.1em; }
+  .callout li { margin: 0 0 0.25em; }
+  .callout li::marker { color: var(--gold); }
+  .tip { background: var(--teal-soft); border-color: var(--teal-line); }
+  .tip .label { color: var(--teal); }
+  .note { background: var(--info-soft); border-color: var(--info-line); }
+  .note .label { color: var(--info); }
+  .important { background: var(--warn-soft); border-color: var(--warn-line); }
+  .important .label { color: var(--warning); }
+
+  /* ---------- Figures ---------- */
+  figure { margin: 1.3rem 0 1.5rem; break-inside: avoid; page-break-inside: avoid; }
+  .window {
+    position: relative;
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    background: var(--surface);
+  }
+  .window img { border-radius: 7px; width: 100%; }
+  .window > a.zoom { display: block; }
+  /* a crop that continues below: fade its bottom edge */
+  .window.cut img { -webkit-mask-image: linear-gradient(#000 92%, transparent); mask-image: linear-gradient(#000 92%, transparent); }
+  figcaption {
+    margin-top: 0.55rem;
+    font-size: 0.86rem;
+    line-height: 1.45;
+    color: var(--ink-2);
+    max-width: var(--measure);
+  }
+  figcaption .fig { font-family: var(--mono); font-size: 0.96em; color: var(--teal); margin-right: 0.45em; }
+  .diagram .frame { border: 1px solid var(--hairline); border-radius: 8px; overflow: hidden; background: var(--surface); }
+  .diagram svg { display: block; width: 100%; height: auto; }
+  .w-80 .frame, .w-80 .window { width: 80%; }
+  .w-66 .frame { width: 66%; }
+  .w-86 .frame { width: 86%; }
+  .w-80d .frame { width: 80%; }
+  .w-74 .frame { width: 74%; }
+  .w-56 .frame { width: 56%; }
+  .w-92 .frame, .w-92s .window { width: 100%; }
+  .w-measure .window { width: 100%; max-width: var(--measure); }
+  .w-70 .window { width: 70%; }
+  .w-60 .window { width: 60%; }
+
+  /* Annotated screenshot */
+  .pin {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    width: 1.65rem;
+    height: 1.65rem;
+    border-radius: 50%;
+    background: var(--teal);
+    color: var(--on-teal);
+    border: 2px solid var(--pin-ring);
+    font-family: var(--mono);
+    font-weight: 500;
+    font-size: 0.8rem;
+    line-height: calc(1.65rem - 4px);
+    text-align: center;
+  }
+  ol.legend { list-style: none; padding: 0; margin: 1rem 0 1.4rem; counter-reset: pin; columns: 2; column-gap: 2rem; }
+  ol.legend > li {
+    counter-increment: pin;
+    position: relative;
+    padding-left: 2.1rem;
+    margin: 0 0 0.7rem;
+    break-inside: avoid;
+    page-break-inside: avoid;
+    font-size: 0.93rem;
+    line-height: 1.5;
+  }
+  ol.legend > li::before {
+    content: counter(pin);
+    position: absolute;
+    left: 0;
+    top: 0.05rem;
+    width: 1.4rem;
+    height: 1.4rem;
+    border-radius: 50%;
+    background: var(--teal);
+    color: var(--on-teal);
+    font-family: var(--mono);
+    font-size: 0.86rem;
+    font-weight: 500;
+    line-height: 1.4rem;
+    text-align: center;
+  }
+  ol.legend b { font-weight: 600; display: block; }
+
+  /* Text beside a narrow screenshot */
+  .split { display: grid; grid-template-columns: 1fr; gap: 0 1.6rem; align-items: start; break-inside: avoid; page-break-inside: avoid; }
+  .split figure { margin-top: 0.4rem; }
+  .split h3 { margin-top: 0; }
+
+  /* ---------- Tables ---------- */
+  .table-wrap { overflow-x: auto; margin: 0.9rem 0 1.3rem; -webkit-overflow-scrolling: touch; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; line-height: 1.45; }
+  caption { caption-side: top; text-align: left; font-size: 0.86rem; color: var(--ink-2); padding-bottom: 0.4rem; }
+  caption .fig { font-family: var(--mono); color: var(--teal); margin-right: 0.45em; }
+  caption code, figcaption code { font-size: 0.96em; }
+  th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 0.8rem;
+    letter-spacing: 0.02em;
+    color: var(--ink);
+    background: var(--sunken);
+    border-bottom: 1px solid var(--strong);
+    padding: 0.45rem 0.6rem;
+    vertical-align: bottom;
+  }
+  td { border-bottom: 1px solid var(--hairline); padding: 0.45rem 0.6rem; vertical-align: top; }
+  tr { break-inside: avoid; page-break-inside: avoid; }
+  thead { display: table-header-group; }
+  table.keep { break-inside: avoid; page-break-inside: avoid; }
+  td.k, th.k { white-space: nowrap; }
+  table.glossary td { padding-top: 0.32rem; padding-bottom: 0.32rem; }
+  td .sub { display: block; color: var(--ink-2); font-size: 0.92em; }
+  tr.group { break-after: avoid; page-break-after: avoid; }
+  tr.group td {
+    background: var(--surface);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--gold-text);
+    padding-top: 0.9rem;
+    border-bottom: 1px solid var(--ink);
+  }
+  .code { font-family: var(--mono); font-size: 0.86em; white-space: nowrap; color: var(--teal-deep); }
+
+  /* CSV examples as mono grids */
+  .csv-block { margin: 0.6rem 0 1.2rem; break-inside: avoid; page-break-inside: avoid; max-width: 100%; overflow-x: auto; }
+  .csv-name { font-family: var(--mono); font-size: 0.86rem; color: var(--ink-2); margin-bottom: 0.3rem; }
+  table.csv { width: auto; min-width: 50%; font-family: var(--mono); font-size: 0.82rem; border: 1px solid var(--hairline); }
+  table.csv th { font-family: var(--mono); font-weight: 500; font-size: 0.8rem; letter-spacing: 0; color: var(--teal-deep); background: var(--sunken); border-bottom: 1px solid var(--hairline); padding: 0.28rem 0.7rem; }
+  table.csv td { padding: 0.24rem 0.7rem; border-bottom: 1px solid var(--hairline); border-left: 1px solid var(--hairline); white-space: nowrap; }
+  table.csv th + th { border-left: 1px solid var(--hairline); }
+  table.csv td:first-child { border-left: 0; }
+  table.csv td[lang="ar"] { font-family: var(--arabic); font-size: 0.86rem; direction: rtl; text-align: right; }
+  .csv-row { display: flex; flex-wrap: wrap; gap: 0 1.6rem; align-items: flex-start; }
+
+  /* Grade scale */
+  table.grades { table-layout: fixed; text-align: center; min-width: 30rem; }
+  table.grades th { white-space: nowrap; }
+  table.grades th, table.grades td { text-align: center; padding: 0.35rem 0.2rem; }
+  table.grades td.l { font-weight: 600; }
+  table.grades td[lang="ar"] { font-family: var(--arabic); color: var(--ink-2); }
+  table.grades th:first-child, table.grades td:first-child { text-align: left; width: 5.2rem; color: var(--ink-2); font-weight: 400; }
+
+  /* Keys */
+  .keys-grid { display: grid; grid-template-columns: 1fr; gap: 0 1.6rem; align-items: start; }
+  table.keys td:first-child { white-space: nowrap; width: 1%; }
+  table.keys td { padding-top: 0.2rem; padding-bottom: 0.2rem; }
+  table.keys tr.sep td { border-top: 1px solid var(--strong); }
+  table.keys kbd { margin-right: 0.15em; }
+
+  /* Folder tree */
+  pre.tree {
+    font-family: var(--mono);
+    font-size: 0.84rem;
+    line-height: 1.55;
+    background: var(--sunken);
+    border: 1px solid var(--hairline);
+    border-radius: 5px;
+    padding: 0.8rem 1rem;
+    margin: 0.8rem 0 1.2rem;
+    overflow-x: auto;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  pre.tree .c { color: var(--ink-2); }
+  pre.cmd {
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    line-height: 1.55;
+    background: var(--sunken);
+    border: 1px solid var(--hairline);
+    border-radius: 5px;
+    padding: 0.7rem 0.9rem;
+    margin: 0.6rem 0 1.1rem;
+    overflow-x: auto;
+    white-space: pre;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  pre.cmd .c { color: var(--ink-2); }
+
+  .two-col { columns: 1; column-gap: 2rem; }
+  .two-col > * { break-inside: avoid; page-break-inside: avoid; }
+  .limits h4 { margin-top: 0; padding-top: 0.2rem; }
+  .limits section { break-inside: avoid; page-break-inside: avoid; margin-bottom: 1rem; }
+  .limits ul { margin-top: 0.2rem; }
+
+  .small-note { font-size: 0.86rem; color: var(--ink-2); }
+  .end-note { margin-top: 2.5rem; padding-top: 0.8rem; border-top: 1px solid var(--hairline); font-size: 0.86rem; color: var(--ink-2); }
+
+  /* ---------- Screen ---------- */
+  @media screen {
+    body {
+      padding-left: max(16px, env(safe-area-inset-left, 0px));
+      padding-right: max(16px, env(safe-area-inset-right, 0px));
+      padding-block: 0 4rem;
+    }
+    .cover {
+      margin-left: calc(-1 * max(16px, env(safe-area-inset-left, 0px)));
+      margin-right: calc(-1 * max(16px, env(safe-area-inset-right, 0px)));
+      min-height: clamp(420px, 62vw, 600px);
+      display: flex;
+      align-items: flex-start;
+    }
+    .cover-img { object-position: 50% 4%; }
+    .cover-text { text-shadow: 0 1px 2px rgba(11, 59, 55, 0.5); }
+    @media (max-width: 759px) {
+      .cover { flex-direction: column-reverse; min-height: 0; }
+      .cover-img {
+        position: relative;
+        height: 200px;
+        object-position: 50% 66%;
+        -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 45%);
+        mask-image: linear-gradient(to bottom, transparent 0, #000 45%);
+      }
+      .cover-text { padding-bottom: 0.5rem; }
+    }
+    @media (min-width: 760px) {
+      .cover-img {
+        left: auto;
+        width: 46%;
+        object-position: 50% 80%;
+        -webkit-mask-image: linear-gradient(to right, transparent 0, #000 40%);
+        mask-image: linear-gradient(to right, transparent 0, #000 40%);
+      }
+      .cover::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: url("../assets/img/manual-cover.jpg") 50% 4% / cover no-repeat;
+      }
+      .cover-text { max-width: calc(46rem + 32px); }
+      .cover-desc, .cover-version { max-width: 24rem; }
+    }
+    .cover-text {
+      width: 100%;
+      max-width: calc(46rem + 32px);
+      margin: 0 auto;
+      padding: clamp(2rem, 6vw, 4rem) max(16px, env(safe-area-inset-right, 0px)) 2.5rem max(16px, env(safe-area-inset-left, 0px));
+    }
+    .doc { max-width: 46rem; margin: 0 auto; }
+    .contents { padding-top: 3rem; }
+    .toc .p { display: none; }
+    .toc a { grid-template-columns: 2.4rem 1fr auto; }
+    .chapter { margin-top: 4.5rem; padding-top: 2.5rem; border-top: 1px solid var(--hairline); }
+    @media (min-width: 40rem) {
+      .split { grid-template-columns: minmax(0, 1fr) 15rem; }
+      .split.wide-fig { grid-template-columns: minmax(0, 1fr) 16.5rem; }
+      .split.fig-lg { grid-template-columns: minmax(0, 1fr) 24rem; }
+      .keys-grid { grid-template-columns: 1fr 1fr; }
+      .two-col { columns: 2; }
+    }
+    @media (max-width: 34rem) {
+      ol.legend { columns: 1; }
+      .toc .ar { display: none; }
+      .toc a { grid-template-columns: 2rem 1fr auto; }
+      .w-80 .frame, .w-80 .window, .w-70 .window, .w-60 .window, .w-66 .frame, .w-86 .frame, .w-80d .frame, .w-92 .frame, .w-92s .window, .w-74 .frame, .w-56 .frame { width: 100%; }
+      .pin { width: 1.15rem; height: 1.15rem; font-size: 0.6rem; line-height: calc(1.15rem - 4px); border-width: 1.5px; }
+      .ui, td:first-child .ui { white-space: normal; }
+      table.grades { min-width: 0; font-size: 0.8rem; }
+      table.grades th, table.grades td { padding: 0.35rem 0.1rem; }
+      table.grades th:first-child, table.grades td:first-child { width: 3.4rem; }
+    }
+    @media (max-width: 40rem) {
+      .diagram .frame { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      .diagram svg { min-width: 640px; }
+      .diagram.compact svg { min-width: 420px; }
+    }
+    @media (min-width: 1100px) {
+      figure.wide { margin-inline: calc((46rem - min(100vw - 64px, 72rem)) / 2); }
+      figure.wide figcaption { margin-inline: calc((min(100vw - 64px, 72rem) - 46rem) / 2); }
+    }
+  }
+
+  /* ---------- Print ---------- */
+  @page {
+    size: A4;
+    margin: 18mm 16mm 20mm 16mm;
+    @bottom-center {
+      content: counter(page);
+      font: 9pt 'IBM Plex Mono';
+      color: #55606E;
+    }
+  }
+  @page :first { margin: 0; }
+  @page { background: #FFFDF8; }
+
+  @media print {
+    html { font-size: 9.4pt; }
+    body { font-size: 9.4pt; line-height: 1.47; background: var(--surface); }
+    .cover {
+      width: 210mm;
+      height: 297mm;
+      break-after: page;
+      page-break-after: always;
+    }
+    .cover-img { height: 105%; bottom: auto; }
+    .cover-text { position: absolute; top: 20mm; left: 22mm; right: 22mm; }
+    .cover-icon { width: 15mm; height: 15mm; }
+    .cover-mark { margin-bottom: 11mm; }
+    .tag { font-size: 8pt; }
+    .cover-title { font-size: 60pt; }
+    .cover-sub { font-size: 18pt; margin-top: 5mm; }
+    .cover-desc { font-size: 11pt; max-width: 120mm; margin-top: 6mm; }
+    .cover-version { font-size: 9pt; margin-top: 8mm; max-width: 120mm; padding-top: 4mm; }
+
+    .contents { break-after: page; page-break-after: always; }
+    .contents-title { font-size: 24pt; }
+    .toc { margin: 7mm 0 8mm; }
+    .toc a { padding: 1.55mm 0; grid-template-columns: 10mm 1fr auto 12mm; }
+    .toc .t { font-size: 10.5pt; }
+    .toc .n, .toc .p { font-size: 9pt; }
+    .toc .ar { font-size: 9pt; }
+
+    .chapter { break-before: page; page-break-before: always; }
+    .ch-head { margin-bottom: 6mm; }
+    .ch-kicker { font-size: 8pt; margin-bottom: 4mm; }
+    .ch-kicker .no { font-size: 11pt; }
+    .ch-head h2 { font-size: 24pt; }
+    .ch-ar { font-size: 12.5pt; }
+    .lede { font-size: 11pt; max-width: 152mm; }
+    h3 { font-size: 12.5pt; margin: 6mm 0 2mm; }
+    h4 { font-size: 10pt; margin: 4mm 0 1.5mm; }
+    p, ol.steps, ul.plain, ol.safeguards { max-width: 152mm; }
+    td p, .callout p, .split p, .split ol.steps, .split ul.plain { max-width: none; }
+    .callout { padding: 3mm 4mm 2.4mm; margin: 4mm 0; }
+    .callout .label { font-size: 8pt; }
+    figure { margin: 4.5mm 0 5mm; }
+    figcaption { font-size: 8.5pt; max-width: 152mm; }
+    .w-measure .window { width: 152mm; max-width: 100%; }
+    table { font-size: 8.75pt; }
+    td kbd, td code, td .code { font-size: 8.25pt; }
+    ol.legend kbd { font-size: 8.25pt; }
+    th { font-size: 8.25pt; padding: 1.4mm 2mm; }
+    td { padding: 1.4mm 2mm; }
+    caption { font-size: 8.5pt; }
+    tr.group td { font-size: 8pt; padding-top: 3mm; }
+    table.csv { font-size: 8.5pt; }
+    table.csv th { font-size: 8.25pt; padding: 0.8mm 2.4mm; }
+    table.csv td { padding: 0.7mm 2.4mm; }
+    pre.tree, pre.cmd { font-size: 8.25pt; }
+    ol.legend { font-size: 9pt; }
+    ol.legend > li { font-size: 9pt; }
+    .pin { width: 5.6mm; height: 5.6mm; font-size: 8.5pt; line-height: calc(5.6mm - 4px); }
+    .split { grid-template-columns: minmax(0, 1fr) 64mm; gap: 0 7mm; }
+    .split.wide-fig { grid-template-columns: minmax(0, 1fr) 70mm; }
+    .split.fig-lg { grid-template-columns: minmax(0, 1fr) 100mm; }
+    .keys-grid { grid-template-columns: 1fr 1fr; gap: 0 7mm; }
+    .two-col { columns: 2; column-gap: 8mm; }
+    .table-wrap { overflow: visible; }
+    .end-note { font-size: 8.5pt; }
+    a { color: inherit; text-decoration: none; }
+    .avoid { break-inside: avoid; page-break-inside: avoid; }
+    .page-break { break-before: page; page-break-before: always; }
+  }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <pattern id="girih-strip" width="32" height="10" patternUnits="userSpaceOnUse">
+      <g fill="none" style="stroke: var(--gold)" stroke-width="1">
+        <path d="M0 5 H11.5 M20.5 5 H32"/>
+        <rect x="13" y="2" width="6" height="6"/>
+        <rect x="13" y="2" width="6" height="6" transform="rotate(45 16 5)"/>
+      </g>
+    </pattern>
+  </defs>
+</svg>
+
+<!-- ===================================================== COVER -->
+<section class="cover" aria-label="Cover">
+  <img class="cover-img" src="../assets/img/manual-cover.jpg" alt="" width="1344" height="1800">
+  <div class="cover-text">
+    <div class="cover-mark">
+      <img class="cover-icon" src="../assets/brand/icon.svg" alt="" width="512" height="512">
+      <span class="tag">Preview</span>
+    </div>
+    <h1 class="cover-title">Mizan <span lang="ar" dir="rtl">ميزان</span></h1>
+    <p class="cover-sub">User manual <span lang="ar" dir="rtl">دليل المستخدم</span></p>
+    <p class="cover-desc">Grading multiple-choice answer sheets on your own computer, with every doubtful mark decided by a person. For instructors and exam coordinators, with a command-line appendix for IT staff.</p>
+    <p class="cover-version">Preview edition · October 2026 · Mizan 0.1.0</p>
+  </div>
+</section>
+
+<div class="doc">
+
+<!-- ===================================================== CONTENTS -->
+<section class="contents" id="contents">
+  <div class="ch-kicker"><span>Mizan user manual</span></div>
+  <h2 class="contents-title">Contents</h2>
+  <ol class="toc">
+    <li><a href="#ch-01"><span class="n">01</span><span class="t">Welcome</span><span class="ar" lang="ar" dir="rtl">مقدمة</span><span class="p">{{pg:ch-01}}</span></a></li>
+    <li><a href="#ch-02"><span class="n">02</span><span class="t">Install and first launch</span><span class="ar" lang="ar" dir="rtl">التثبيت والتشغيل الأول</span><span class="p">{{pg:ch-02}}</span></a></li>
+    <li><a href="#ch-03"><span class="n">03</span><span class="t">A tour of the window</span><span class="ar" lang="ar" dir="rtl">جولة في النافذة</span><span class="p">{{pg:ch-03}}</span></a></li>
+    <li><a href="#ch-04"><span class="n">04</span><span class="t">Create an exam</span><span class="ar" lang="ar" dir="rtl">إنشاء اختبار</span><span class="p">{{pg:ch-04}}</span></a></li>
+    <li><a href="#ch-05"><span class="n">05</span><span class="t">The answer key</span><span class="ar" lang="ar" dir="rtl">مفتاح الإجابة</span><span class="p">{{pg:ch-05}}</span></a></li>
+    <li><a href="#ch-06"><span class="n">06</span><span class="t">Add scanned sheets</span><span class="ar" lang="ar" dir="rtl">إضافة الأوراق الممسوحة ضوئيًا</span><span class="p">{{pg:ch-06}}</span></a></li>
+    <li><a href="#ch-07"><span class="n">07</span><span class="t">Review</span><span class="ar" lang="ar" dir="rtl">المراجعة</span><span class="p">{{pg:ch-07}}</span></a></li>
+    <li><a href="#ch-08"><span class="n">08</span><span class="t">Results and item analysis</span><span class="ar" lang="ar" dir="rtl">النتائج وتحليل الفقرات</span><span class="p">{{pg:ch-08}}</span></a></li>
+    <li><a href="#ch-09"><span class="n">09</span><span class="t">Release and export</span><span class="ar" lang="ar" dir="rtl">اعتماد النتائج وتصديرها</span><span class="p">{{pg:ch-09}}</span></a></li>
+    <li><a href="#ch-10"><span class="n">10</span><span class="t">Import from Remark and compare</span><span class="ar" lang="ar" dir="rtl">الاستيراد والمقارنة</span><span class="p">{{pg:ch-10}}</span></a></li>
+    <li><a href="#ch-11"><span class="n">11</span><span class="t">Learning outcomes</span><span class="ar" lang="ar" dir="rtl">مخرجات التعلم</span><span class="p">{{pg:ch-11}}</span></a></li>
+    <li><a href="#ch-12"><span class="n">12</span><span class="t">Settings</span><span class="ar" lang="ar" dir="rtl">الإعدادات</span><span class="p">{{pg:ch-12}}</span></a></li>
+    <li><a href="#ch-13"><span class="n">13</span><span class="t">Files and formats</span><span class="ar" lang="ar" dir="rtl">الملفات وصيغها</span><span class="p">{{pg:ch-13}}</span></a></li>
+    <li><a href="#ch-14"><span class="n">14</span><span class="t">Where your data lives and how it is protected</span><span class="ar" lang="ar" dir="rtl">أين تُحفظ بياناتك وكيف تُحمى</span><span class="p">{{pg:ch-14}}</span></a></li>
+    <li><a href="#ch-15"><span class="n">15</span><span class="t">Troubleshooting</span><span class="ar" lang="ar" dir="rtl">حل المشكلات</span><span class="p">{{pg:ch-15}}</span></a></li>
+    <li><a href="#ch-16"><span class="n">16</span><span class="t">Known limits</span><span class="ar" lang="ar" dir="rtl">القيود المعروفة</span><span class="p">{{pg:ch-16}}</span></a></li>
+    <li class="appx"><a href="#app-a"><span class="n">A</span><span class="t">Command line, for IT staff</span><span class="ar" lang="ar" dir="rtl">سطر الأوامر</span><span class="p">{{pg:app-a}}</span></a></li>
+    <li><a href="#app-b"><span class="n">B</span><span class="t">Glossary</span><span class="ar" lang="ar" dir="rtl">مسرد المصطلحات</span><span class="p">{{pg:app-b}}</span></a></li>
+  </ol>
+
+  <aside class="callout note">
+    <span class="label">How to read this manual</span>
+    <p>Words you see on screen look like this: <span class="ui">New exam</span>. Keys look like this: <kbd>Ctrl+N</kbd>. File and folder names look like this: <code class="nw">key.csv</code>. Every course, student, number and name in the examples and pictures is invented; a few details in the pictures are masked.</p>
+  </aside>
+  <p class="end-note">Mizan user manual · Preview edition, October 2026 · for Mizan 0.1.0. This manual is not an official publication of any institution. Blackboard and Remark Office OMR are trademarks of their owners; Mizan is not affiliated with or endorsed by them.</p>
+</section>
+
+<!-- ===================================================== 1 WELCOME -->
+<section class="chapter" id="ch-01">
+  <header class="ch-head">
+    <div class="ch-kicker"><span class="no">01</span><span>Chapter</span><svg aria-hidden="true"><rect width="100%" height="10" fill="url(#girih-strip)"/></svg></div>
+    <h2>Welcome</h2>
+    <p class="ch-ar" lang="ar" dir="rtl">مقدمة</p>
+    <p class="lede">Mizan grades multiple-choice answer sheets from their scans. When it is not sure of something, it stops and asks you.</p>
+  </header>
+
+  <h3>What Mizan does</h3>
+  <ul class="plain">
+    <li><strong>Reads scanned answer sheets</strong>: the legacy answer sheet (up to 100 questions, options A–E), or a form Mizan prints for your exam.</li>
+    <li><strong>Scores them</strong> against your answer key, one per version: from a file, from answer sheets you fill in, or from Remark Office OMR's Excel export.</li>
+    <li><strong>Sends every doubt to you.</strong> Faint or double marks, erasures, unreadable student numbers, a student not on the roster, two sheets with one number: each waits in Review for a person.</li>
+    <li><strong>Shows the results</strong> (scores, letter grades, item analysis, course learning outcomes) and <strong>releases them only when you say so</strong>, with nothing left open.</li>
+    <li><strong>Writes files</strong>: results in Excel and CSV, item analysis, course-report outcome tables, an HTML report and a grade-upload file for Blackboard. Every decision goes into a tamper-evident log in the exam's folder.</li>
+  </ul>
+
+  <figure class="diagram">
+    <div class="frame"><!--SVG:how-it-works--></div>
+    <figcaption><span class="fig">Figure 1.1</span>How an exam moves through Mizan. The reports are first written when grading ends, and again, with the grade-upload file, when you release.</figcaption>
+  </figure>
+
+  <p>Mizan is two programs: <code class="nw">omr-desktop</code>, the desktop app this manual describes, and <code class="nw">omr</code>, the command line (Appendix A). The screens are in English; Arabic names, grade letters and option letters work.</p>
+
+  <aside class="callout important">
+    <span class="label">This is a preview</span>
+    <ul>
+      <li>Mizan 0.1.0 is a first version. Grading, review, release and exports work on Linux.</li>
+      <li>The desktop app has been tested only by automatic tests, never in a real window: its file pickers have not been shown on a real display. If one does not appear, type or paste the path.</li>
+      <li>Windows builds are unsigned test builds, not yet tried on an everyday PC, and some protections are missing (Chapter 14). <strong>Do not grade real exams on Windows with a test build.</strong> There is no Mac version.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- ===================================================== 2 INSTALL -->
+<section class="chapter" id="ch-02">
+  <header class="ch-head">
+    <div class="ch-kicker"><span class="no">02</span><span>Chapter</span><svg aria-hidden="true"><rect width="100%" height="10" fill="url(#girih-strip)"/></svg></div>
+    <h2>Install and first launch</h2>
+    <p class="ch-ar" lang="ar" dir="rtl">التثبيت والتشغيل الأول</p>
+    <p class="lede">There is no installer yet. You unpack one folder and start the desktop app from it. The first start creates your exams folder.</p>
+  </header>
+
+  <h3>What you need</h3>
+  <ul class="plain">
+    <li><strong>Linux</strong> (64-bit, x86) with a desktop session (X11 or Wayland): works. All measurements were made on Linux.</li>
+    <li><strong>Windows 10 or 11</strong> (64-bit, x86): unsigned test builds that build and pass the automatic tests, not yet tried on an everyday PC.</li>
+    <li><strong>macOS</strong>: not available.</li>
+    <li>A screen of at least 1280 × 800 (the window is normally 1440 × 900), and your scans on a local disk of your institution's device.</li>
+  </ul>
+
+  <h3>Get the program (test build)</h3>
+  <div class="table-wrap">
+    <table class="keep">
+      <thead><tr><th style="width:8%"></th><th style="width:46%">Windows</th><th>Linux</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>From the project's Releases page, download <code>mizan-&lt;version&gt;-x86_64-pc-windows-msvc.zip</code>.</td><td>Download <code>mizan-&lt;version&gt;-x86_64-unknown-linux-gnu.tar.gz</code>.</td></tr>
+        <tr><td>2</td><td colspan="2">Check the download against the <code class="nw">SHA256SUMS</code> file published beside it. Your IT team can help.</td></tr>
+        <tr><td>3</td><td>Unzip it. The folder holds <code class="nw">omr-desktop.exe</code> (the desktop app), <code class="nw">omr.exe</code> (the command line), <code class="nw">BUILD.txt</code>, <code class="nw">OFL.txt</code> and <code class="nw">SHA256SUMS</code>.</td><td>If they are missing, install two libraries. On Debian or Ubuntu: <code>sudo apt install libfontconfig1 libxkbcommon-x11-0</code>. Then unpack the archive.</td></tr>
+        <tr><td>4</td><td>Run <code class="nw">omr-desktop.exe</code>.</td><td>Run <code class="nw">./omr-desktop</code> from a desktop session. Optional: <code>./install-desktop-entry.sh</code> adds Mizan to your applications menu (run it again if you move the folder).</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <aside class="callout important">
+    <span class="label">Important</span>
+    <p>Test builds are not signed. Windows SmartScreen warns about them, and devices that enforce App Control or AppLocker may block them. Ask your IT team; do not work around the warning. Production releases will be built and signed separately.</p>
+  </aside>
+
+  <h3>First launch</h3>
+  <ol class="steps">
+    <li>Start Mizan. The first time, it creates and opens the folder <code class="nw">OMR Exams</code> in your home folder (on Windows, your user profile folder); on Linux it is created readable by you only. An empty folder shows <span class="ui">No exams in this folder yet</span>. Later, Mizan opens the folder you used last.</li>
+    <li>To use another folder, go to <span class="ui">Exams</span> and press <span class="ui">Open folder…</span> (<kbd>Ctrl+O</kbd>). Choose the folder that holds your exam folders. If you pick the folder of one exam, Mizan opens the folder above it and selects that exam. You can also use <span class="ui">Settings</span> › <span class="ui">About</span> › <span class="ui">Change…</span>.</li>
+    <li>Go to <span class="ui">Settings</span> › <span class="ui">Review</span>, type your name and press <span class="ui">Save</span> (or <kbd>Enter</kbd>). Every decision from then on is recorded under that name.</li>
+  </ol>
+
+
+</section>
+
+<!-- ===================================================== 3 TOUR -->
+<section class="chapter" id="ch-03">
+  <header class="ch-head">
+    <div class="ch-kicker"><span class="no">03</span><span>Chapter</span><svg aria-hidden="true"><rect width="100%" height="10" fill="url(#girih-strip)"/></svg></div>
+    <h2>A tour of the window</h2>
+    <p class="ch-ar" lang="ar" dir="rtl">جولة في النافذة</p>
+    <p class="lede">Mizan has six screens, in the order you work, plus Settings. Every screen shares the same frame: the rail on the left, a top bar and a status bar.</p>
+  </header>
+
+  <figure class="annotated wide">
+    <div class="window">
+      <a class="zoom" href="../assets/screens/exams-tour.png"><img src="../assets/screens/exams-tour.png" alt="The Exams screen with three exams listed and the details drawer of one exam open on the right" width="1280" height="800"></a>
+      <span class="pin" style="left:2.8%;top:70%">1</span>
+      <span class="pin" style="left:25.8%;top:3.5%">2</span>
+      <span class="pin" style="left:82.6%;top:8.6%">3</span>
+      <span class="pin" style="left:54.2%;top:19.3%">4</span>
+      <span class="pin" style="left:27.3%;top:30%">5</span>
+      <span class="pin" style="left:39.8%;top:77.5%">6</span>
+      <span class="pin" style="left:93.8%;top:46%">7</span>
+      <span class="pin" style="left:18.8%;top:98%">8</span>
+    </div>
+    <figcaption><span class="fig">Figure 3.1</span>The Exams screen, with one exam's details open. The operator's name in the top bar is masked.</figcaption>
+  </figure>
+
+  <ol class="legend">
+    <li><b>Navigation rail</b>The six screens (<kbd>Ctrl+1</kbd> … <kbd>Ctrl+6</kbd>) and, at the bottom, Settings (<kbd>Ctrl+,</kbd>). The badge on Review counts open review items.</li>
+    <li><b>Top bar</b>Search (<kbd>Ctrl+K</kbd>), <span class="ui">Open folder…</span> (<kbd>Ctrl+O</kbd>), refresh (<kbd>F5</kbd>) and <span class="ui">New exam</span> (<kbd>Ctrl+N</kbd>). On other screens: <em>course / assessment / screen</em> and that screen's buttons.</li>
+    <li><b>Light or dark</b>The moon or sun button switches the theme.</li>
+    <li><b>Status filters</b>All, Setup, Scanning, In review, Ready to release and Released, each with a count.</li>
+    <li><b>Tiles</b>Sheets scanned this week, open exceptions, median review time, throughput.</li>
+    <li><b>Exams table</b>Course, assessment, date, forms, sheets, exceptions, status. <kbd>↑</kbd> <kbd>↓</kbd> move; <kbd>Enter</kbd> opens the drawer.</li>
+    <li><b>Details drawer</b>Status and next step (here <span class="ui">Continue review (14)</span>), key, CLO mapping, roster and last scan, and buttons to open the results, setup, scan or folder. <kbd>Esc</kbd> closes it.</li>
+    <li><b>Status bar</b>Messages, the exams folder and the engine version. A notice appears just above it when a run ends.</li>
+  </ol>
+
+  <h3>The screens</h3>
+  <div class="table-wrap">
+    <table class="keep">
+      <thead><tr><th style="width:18%">Screen</th><th>What it is for</th></tr></thead>
+      <tbody>
+        <tr><td><span class="ui">Exams</span></td><td>Every exam in your exams folder, its status and its next step.</td></tr>
+        <tr><td><span class="ui">Setup</span></td><td>The exam's definition: answer key and CLO mapping, roster, key sheets, imports.</td></tr>
+        <tr><td><span class="ui">Scan</span></td><td>A grading run as it happens, its exceptions, and later batches of scans.</td></tr>
+        <tr><td><span class="ui">Review</span></td><td>Everything Mizan was not sure about, waiting for your decision.</td></tr>
+        <tr><td><span class="ui">Results</span></td><td>Scores, item analysis, release readiness, release and export.</td></tr>
+        <tr><td><span class="ui">Outcomes</span></td><td>Course learning outcome attainment and the course-report tables.</td></tr>
+        <tr><td><span class="ui">Settings</span></td><td>Theme, review options, grading options and the exams folder.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="split fig-lg">
+    <div>
+  <h3>The status of an exam</h3>
+  <p>Every exam shows one of five statuses. <strong>Setup</strong>: no pages yet. <strong>Scanning</strong>: pages are being read. <strong>In review</strong>: graded, but something blocks release. <strong>Ready to release</strong>: nothing blocks it. <strong>Released</strong>: you released it. A later change, such as a review decision, a new key or more scans, takes a released exam back, and you release again.</p>
+  <p>If you close the window while an exam is being graded, Mizan asks <span class="ui">Close Mizan?</span> with <span class="ui">Keep it running</span> and <span class="ui">Cancel it and close</span> (or <span class="ui">Close once saved</span> when it is too late to cancel). <kbd>Esc</kbd> keeps it running.</p>
+    </div>
+  <figure class="diagram compact">
+    <div class="frame"><!--SVG:exam-lifecycle--></div>
+    <figcaption><span class="fig">Figure 3.2</span>The five statuses on the Exams screen. Solid arrows are the usual path, dashed arrows what follows a change; only you can move an exam to Released. Adding scans grades a new batch: the exam shows Scanning again, and a released exam must be released again.</figcaption>
+  </figure>
+  </div>
+</section>
+
+<!-- ===================================================== 4 CREATE -->
+<section class="chapter" id="ch-04">
+  <header class="ch-head">
+    <div class="ch-kicker"><span class="no">04</span><span>Chapter</span><svg aria-hidden="true"><rect width="100%" height="10" fill="url(#girih-strip)"/></svg></div>
+    <h2>Create an exam</h2>
+    <p class="ch-ar" lang="ar" dir="rtl">إنشاء اختبار</p>
+    <p class="lede">New exam turns a folder of scans into a graded exam. Mizan proposes every value from the scans and your files, shows where each one came from, and grades exactly what the card shows.</p>
+  </header>
+
+  <p>Have ready the scans (Chapter 6), the answer key (Chapter 5), the roster (recommended) and, for learning outcomes, a CLO mapping file (layouts in Chapter 13).</p>
+
+  <figure class="wide">
+    <div class="window"><a class="zoom" href="../assets/screens/new-exam-ask.png"><img src="../assets/screens/new-exam-ask.png" alt="The New exam card: scans checked, fields for key, roster and CLO files on the left; on the right, What is graded, with a box asking for the answer key and four buttons" width="1280" height="800"></a></div>
+    <figcaption><span class="fig">Figure 4.1</span>The New exam card with no answer key yet. The box at the top of <span class="ui">What is graded</span> asks for one, and <span class="ui">Grade exam</span> waits; Figure 4.2 shows that side of the card larger. The legacy template's name, the student-number scheme's name and the operator's name are masked.</figcaption>
+  </figure>
+
+  <ol class="steps">
+    <li>On <span class="ui">Exams</span>, press <span class="ui">New exam</span> (<kbd>Ctrl+N</kbd>). The <span class="ui">New exam</span> card opens over the list.</li>
+    <li>In <span class="ui">Scan files or folders</span>, press <span class="ui">Folder…</span> and choose the folder of scans, or <span class="ui">Browse…</span> for single files. You can also type or paste paths; separate several with <code class="nw">;</code>.</li>
+    <li>Mizan checks the scans at once (<span class="ui">Stop checking</span> stops it), then says, for example, <span class="msg">Checked 12 pages in 0.6 s: the card is made from them</span>.</li>
+    <li>Add your files, each with its <span class="ui">Browse…</span> button: <span class="ui">Answer key file</span> (or <span class="ui">Key sheets</span>), <span class="ui">Roster file</span> (CSV or Excel) and <span class="ui">CLO mapping file</span> (optional).</li>
+  </ol>
+
+  <figure class="w-measure">
+    <div class="window cut"><a class="zoom" href="../assets/screens/new-exam-graded.png"><img src="../assets/screens/new-exam-graded.png" alt="What is graded, on the right of the New exam card: a box asking for the answer key with four buttons, then each value with where it came from: scans, sheet, answer key (none, with a question), versions" width="612" height="432"></a></div>
+    <figcaption><span class="fig">Figure 4.2</span><span class="ui">What is graded</span>: the box asks for the answer key; under it, each value, where it came from and its evidence. The template's name is masked.</figcaption>
+  </figure>
+
+  <ol class="steps" style="counter-reset: step 4">
+    <li>Read <span class="ui">What is graded</span> on the right: each value, where it came from (for example <span class="msg">30 — key file</span>) and the evidence under it. A scans folder named like <code class="nw">CS213 Quiz 1</code> gives the course and the title.</li>
+    <li>To change a value, type over it on the left: <span class="ui">Exam title</span>, <span class="ui">Course code</span>, <span class="ui">Number of questions</span>, <span class="ui">Versions</span>, <span class="ui">Options per question</span>.</li>
+    <li>If a box at the top of <span class="ui">What is graded</span> asks a question, answer it with one of its buttons. With no answer key, for example, it offers <span class="ui">Choose a key file…</span>, <span class="ui">Import from Remark…</span>, <span class="ui">Key sheets…</span> and <span class="ui wrap">Grade with a provisional key (cannot be released)</span>.</li>
+    <li>Press <span class="ui">Grade exam</span>. It is enabled only when nothing is left to answer; until then the text beside it says why. Mizan grades into a new folder inside your exams folder.</li>
+  </ol>
+
+
+  <h3>Advanced options</h3>
+  <p>Open <span class="ui">Advanced options</span> for <span class="ui">Sheet template or spec file</span>, <span class="ui">Output folder</span>, <span class="ui">Term</span>, <span class="ui">Student ID scheme</span>, <span class="ui">Cancel mode</span>, <span class="ui">Second review</span> (<span class="ui">No second review</span>, <span class="ui">Always</span> or <span class="ui">On high-stakes exams</span>) and <span class="ui">High-stakes exam</span>.</p>
+  <p>With the legacy answer sheet, <span class="ui">Cancel mode</span> is locked: the printed sheet decides how students change an answer.</p>
+  <figure class="w-70">
+    <div class="window"><a class="zoom" href="../assets/screens/new-exam-advanced.png"><img src="../assets/screens/new-exam-advanced.png" alt="Advanced options: sheet template, output folder, term, student ID scheme, a locked cancel mode and the second-review choice" width="544" height="264"></a></div>
+    <figcaption><span class="fig">Figure 4.3</span>Advanced options. The template's name is masked.</figcaption>
+  </figure>
+
+  <h3>When grading ends</h3>
+  <p>The <span class="ui">Scan</span> screen follows the run. When it ends, a notice says how it went, with <span class="ui">Review N items</span>, <span class="ui">Open results</span> and <span class="ui">Open exports folder</span>; dismiss it with × or <kbd>Esc</kbd>. The exam is now listed on <span class="ui">Exams</span>, and its exports are already in its folder (<span class="ui">Write exports after grading</span> is on by default).</p>
+
+  <figure>
+    <div class="window"><a class="zoom" href="../assets/screens/scan-notice-bar.png"><img src="../assets/screens/scan-notice-bar.png" alt="The notice after a run: CS 213 Quiz 1 is graded, 12 booklets, 5 items to review, with Review 5 items, Open results and Open exports folder" width="1196" height="78"></a></div>
+    <figcaption><span class="fig">Figure 4.4</span>The notice when a run ends. The whole Scan screen is shown in Figure 6.1.</figcaption>
+  </figure>
+
+  <h3>To stop or cancel</h3>
+  <ul class="plain">
+    <li><span class="ui">Cancel</span> or <kbd>Esc</kbd> closes the card. One exam is graded at a time: a second card waits until the first run finishes.</li>
+    <li>While grading, <span class="ui">Cancel grading…</span> on Scan asks <span class="msg">Cancel grading? Nothing is saved; your scan files are unchanged.</span> A cancelled run cannot be resumed; <span class="ui">Edit and grade again</span> brings the card back as it was. Once the exam is being saved, it is too late to cancel.</li>
+  </ul>
+</section>
+
+<!-- ===================================================== 5 KEY -->
+<section class="chapter" id="ch-05">
+  <header class="ch-head">
+    <div class="ch-kicker"><span class="no">05</span><span>Chapter</span><svg aria-hidden="true"><rect width="100%" height="10" fill="url(#girih-strip)"/></svg></div>
+    <h2>The answer key</h2>
+    <p class="ch-ar" lang="ar" dir="rtl">مفتاح الإجابة</p>
+    <p class="lede">Mizan needs the right answers for every version. Give them as a file, on answer sheets you fill in yourself, or from Remark's Excel export (Chapter 10). Until the real key arrives, you can grade with a provisional key that can never be released.</p>
+  </header>
+
+  <h3>A key file</h3>
+  <p>On the New exam card, fill <span class="ui">Answer key file</span>. The file is a CSV with one row per question and one column per version, for example <code class="nw">question,A,B</code>. Each entry is a letter (<code class="nw">B</code>), a choice of letters where either is accepted (<code class="nw">A|C</code>), a star to void the question (<code class="nw">*</code>), or empty while the answer is missing. A missing answer must be filled, or voided, before release. Keys that need several answers together, such as <code class="nw">A+C</code>, are refused. Chapter 13 shows the layouts and the points columns.</p>
+
+  <h3>Key sheets: the key on an answer sheet</h3>
+  <ol class="steps">
+    <li>Fill one answer sheet per version with the right answers. Bubble the student number as all zeros (or all nines) and bubble the version.</li>
+    <li>Scan it with the students, anywhere in the stack, or give it in <span class="ui">Key sheets</span> on the New exam card.</li>
+    <li>Nothing is scored yet. The key tag reads <span class="msg">Key v1 · from key sheets · NOT CONFIRMED</span>, and the notice offers <span class="ui">Confirm the key in Setup</span>.</li>
+    <li>In <span class="ui">Setup</span>, the summary <span class="ui wrap">Key from answer sheets · Version A · …</span> shows each question's bubble row as scanned, what it <span class="ui">Reads</span>, the <span class="ui">Key entry</span> and its <span class="ui">Status</span>.</li>
+    <li>Decide every highlighted row (several marks, no mark, not read clearly): press the right letter, <span class="ui">Accept A|C</span> on a several-marks row, or <span class="ui">Void</span>.</li>
+    <li>Press <span class="ui">Confirm version A</span>, or <span class="ui">Confirm every version</span>. These buttons stay disabled until every highlighted row is decided. The key is then in force and the exam is scored.</li>
+  </ol>
+
+  <figure>
+    <div class="window cut"><a class="zoom" href="../assets/screens/setup-keysheet.png"><img src="../assets/screens/setup-keysheet.png" alt="Setup: the key read from answer sheets for version A, each question's scanned bubble row beside what it reads, with three highlighted rows to decide and a Confirm the key panel" width="1208" height="492"></a></div>
+    <figcaption><span class="fig">Figure 5.1</span>Confirming a key read from key sheets. Highlighted rows wait for your decision; nothing is scored until you confirm.</figcaption>
+  </figure>
+
+  <aside class="callout important">
+    <span class="label">Check the question numbers</span>
+    <p>Each row shows the printed question number beside the bubbles. If it does not match the question, the sheet was read a row off. Do not confirm: rescan the key sheet flat and add it again.</p>
+  </aside>
+
+  <ul class="plain">
+    <li>A key sheet is never graded as a student, and its answers are never accepted on their own. The Scan screen lists key sheets apart from the students, as <span class="ui">KEY A</span>, <span class="ui">KEY B</span>.</li>
+    <li>A student who bubbles all zeros or all nines reads like a key sheet. Every sheet found for a version is named, so you can check it.</li>
+    <li>To read key sheets for an exam that already has a key: <span class="ui">Setup</span> › <span class="ui">Read key from answer sheet…</span> (<span class="ui">Read key sheet…</span> in a narrow window) › <span class="ui">Key-sheet files</span> › <span class="ui">Read key sheets</span>. Nothing changes until you confirm; <span class="ui">Put aside</span> drops them.</li>
+    <li>Undo never reverses a confirmation. To correct a confirmed key, change it: that makes a new key version.</li>
+  </ul>
+
+  <h3>No key yet: a provisional key</h3>
+  <ol class="steps">
+    <li>On the card, choose <span class="ui wrap">Grade with a provisional key (cannot be released)</span>.</li>
+    <li>Mizan infers each version's key from the students' most common confident answers. Every output is marked INFERRED, file names end in <code class="nw">-INFERRED</code>, and the results cannot be released.</li>
+    <li>When the real key arrives: <span class="ui">Setup</span> › <span class="ui">Replace key…</span> › <span class="ui">Key file</span> › <span class="ui">Replace and rescore</span>. The notice after grading also offers <span class="ui">Replace the key in Setup</span>.</li>
+  </ol>
+
+  <h3>Correct one key entry</h3>
+  <p>In Setup's <span class="ui">Answer key and CLO mapping</span> grid, type the letter in the question's cell. Every key change makes a new, numbered key version, rescores the exam and is recorded; the status bar reminds you that <span class="msg">Key and mapping edits are recorded as audited events</span>.</p>
+
+  <h3>How the key stays out of sight</h3>
+  <ul class="plain">
+    <li>Review never shows the key. You decide what is marked from the paper.</li>
+    <li>The item analysis on Results hides the keyed option until you press <span class="ui">Show key</span>. A Remark import shows the key only as counts until <span class="ui">Reveal key</span>.</li>
+    <li>The exported item analysis and <code class="nw">report.html</code> leave the key out.</li>
+  </ul>
+  <aside class="callout note">
+    <span class="label">Note</span>
+    <p>The key is not hidden everywhere. Setup shows and edits the key letters, and the exam folder holds <code class="nw">key.csv</code>, the key in force (and, with key sheets, <code class="nw">key_sheet_summary.html</code>, the key as read). Keep the exam folder private.</p>
+  </aside>
+</section>
+
+<!-- ===================================================== 6 SCANS -->
+<section class="chapter" id="ch-06">
+  <header class="ch-head">
+    <div class="ch-kicker"><span class="no">06</span><span>Chapter</span><svg aria-hidden="true"><rect width="100%" height="10" fill="url(#girih-strip)"/></svg></div>
+    <h2>Add scanned sheets</h2>
+    <p class="ch-ar" lang="ar" dir="rtl">إضافة الأوراق الممسوحة ضوئيًا</p>
+    <p class="lede">Mizan reads scans straight from the scanner. Good scans mean fewer items to review. You can add more scans to a graded exam at any time, for another section or another day.</p>
+  </header>
+
+  <h3>Scanning advice</h3>
+  <ul class="plain">
+    <li>Use a scanner with a document feeder. Choose 200–300 dpi in gray, or 600 dpi black and white.</li>
+    <li>Save as PDF or TIFF. JPEG and PNG also work. Turn off "compact PDF" compression.</li>
+    <li>Duplex is fine: blank backs are dropped, pages fed upside down are read upright, and a file added twice is ignored.</li>
+    <li>Rescan folded or torn sheets flat on the glass.</li>
+    <li>Do not use phone photos for students' sheets: every answer on a photo goes to review. A key sheet may be photographed: the whole sheet, from straight above, evenly lit.</li>
+    <li>A single file over 2 GB is refused. Split very large scans.</li>
+    <li>Mizan does not watch the scanner's folder. Grade the folder when scanning ends.</li>
+    <li>Keep scans on your institution's device, never in a cloud or network folder.</li>
+  </ul>
+
+  <h3>What the Scan screen shows</h3>
+  <figure class="wide">
+    <div class="window"><a class="zoom" href="../assets/screens/scan-notice.png"><img src="../assets/screens/scan-notice.png" alt="The Scan screen after a run of 12 pages: tiles, pipeline, sheet thumbnails, exceptions by code, batch reconciliation and activity, with the notice CS 213 Quiz 1 is graded at the bottom" width="1280" height="800"></a></div>
+    <figcaption><span class="fig">Figure 6.1</span>The Scan screen after an example run on invented sheets, with its notice at the bottom; its speed and counts are not measurements. The printed headers of the sheet thumbnails are blanked.</figcaption>
+  </figure>
+  <p>Across the top, the tiles <span class="ui">THROUGHPUT</span>, <span class="ui">PAGES</span>, <span class="ui">AUTO-ACCEPTED</span>, <span class="ui">FIRST RESULT</span> and <span class="ui">REMAINING</span>. Below them, the <span class="ui">Pipeline</span>, and <span class="ui">Sheets</span> with counts of <span class="ui">Auto</span>, <span class="ui">Review</span> and <span class="ui">Rejected</span>: arrows move between thumbnails and <kbd>Enter</kbd> opens a sheet's review item. On the right, <span class="ui">Exceptions by code</span> (<kbd>Enter</kbd> opens the review queue filtered to that code), <span class="ui">Batch reconciliation</span> and <span class="ui">Activity</span>. <span class="ui">Open review · N</span> (<kbd>Ctrl+4</kbd>) takes you to Review.</p>
+
+  <h3>Add a later batch</h3>
+  <ol class="steps">
+    <li>Open the exam, go to <span class="ui">Scan</span> and press <span class="ui">Add scans…</span>.</li>
+    <li>In <span class="ui">Scan files or folders to add</span>, use <span class="ui">Browse…</span> or <span class="ui">Folder…</span>, or type the paths.</li>
+    <li>Press <span class="ui">Add and regrade</span> (<kbd>Enter</kbd>).</li>
+    <li>Every page is graded again, with the new ones as the next batch. Your review decisions carry over, and a re-read that disagrees with a decision is flagged.</li>
+  </ol>
+  <figure>
+    <div class="window"><a class="zoom" href="../assets/screens/scan-add.png"><img src="../assets/screens/scan-add.png" alt="The Add scans bar on the Scan screen, with Browse…, Folder…, Add and regrade and Cancel" width="1208" height="140"></a></div>
+    <figcaption><span class="fig">Figure 6.2</span>The <span class="ui">Add scans</span> bar. The line under it says what will happen.</figcaption>
+  </figure>
+  <p>While a batch is graded, the exam is busy: Review says the exam is being graded and the Exams row reads <span class="ui">Scanning</span>. If the exam was released, release it again afterwards.</p>
+
+  <h3>Add a roster after grading</h3>
+  <p><span class="ui">Setup</span> › <span class="ui">Add roster…</span> › <span class="ui">Roster file</span> › <span class="ui">Add roster and match students</span>. Every sheet is matched again and your decisions carry over. A roster cannot be removed once added.</p>
+</section>
+
+<!-- ===================================================== 7 REVIEW -->
+<section class="chapter" id="ch-07">
+  <header class="ch-head">
+    <div class="ch-kicker"><span class="no">07</span><span>Chapter</span><svg aria-hidden="true"><rect width="100%" height="10" fill="url(#girih-strip)"/></svg></div>
+    <h2>Review</h2>
+    <p class="ch-ar" lang="ar" dir="rtl">المراجعة</p>
+    <p class="lede">Mizan never guesses. Every mark, student number or page it is not sure about waits in Review until a person decides. Each decision is recorded, and the results update as you go.</p>
+  </header>
+
+  <h3>The four lanes</h3>
+  <p>Review items sit in four lanes, shown as chips with counts at the top of the screen. <span class="ui">Marks</span>: answer marks, such as a low-confidence mark or multiple marks. <span class="ui">Identity</span>: who a sheet belongs to. <span class="ui">Capture</span>: page problems, such as unreadable files or poor scans; help (<kbd>F1</kbd>) gives the fix. <span class="ui">Scoring</span>: a version not identified, or a probable mis-key, where the strongest students contradict the key. A mis-key holds release until you change the key, accept a second answer, void the question, or keep the key with a reason.</p>
+  <figure class="diagram">
+    <div class="frame"><!--SVG:review-release--></div>
+    <figcaption><span class="fig">Figure 7.1</span>What happens to each mark, and when the exam can be released. Mizan reads every mark without the key; only the marks it is sure of are accepted on their own. The teal steps are where a person decides.</figcaption>
+  </figure>
+
+  <h3>Decide a mark</h3>
+  <figure class="wide">
+    <div class="window"><a class="zoom" href="../assets/screens/review-mark.png"><img src="../assets/screens/review-mark.png" alt="Review, Marks lane: the exception queue on the left, a scan crop of question 1 with a faint mark on B, fill by bubble and the student's other answers in the middle, and the decision panel on the right" width="1280" height="800"></a></div>
+    <figcaption><span class="fig">Figure 7.2</span>A weak mark in the Marks lane. Mizan suggests B; you accept it or choose another answer.</figcaption>
+  </figure>
+  <ol class="steps">
+    <li>Pick an item in the <span class="ui">Exception queue</span>. Items are grouped by code, with a count.</li>
+    <li>Look at the scan. The chips above it switch <span class="ui">Registered</span> or <span class="ui">Original</span> (<kbd>F2</kbd>), <span class="ui">Overlay</span> (<kbd>Space</kbd>), <span class="ui">All bubbles</span> and <span class="ui">Zoom</span> (<kbd>+</kbd> and <kbd>−</kbd>). Below it, <span class="ui">Fill by bubble</span> and <span class="ui">Student's other answers</span> help you judge.</li>
+    <li>On the right are the suggestion and <span class="ui">WHAT IS MARKED?</span>, with the options, <span class="ui">Blank</span> (<kbd>Backspace</kbd>), <span class="ui">Multi</span> (<kbd>Ctrl+M</kbd>) and <span class="ui">Unreadable</span> (<kbd>Ctrl+U</kbd>).</li>
+    <li>Press <kbd>Enter</kbd>, or <span class="ui">Accept suggestion</span>, to accept. Or press the letter or number of another answer.</li>
+    <li><span class="ui">Apply to group · N</span> (<kbd>Shift+Enter</kbd>) applies the same decision to the rest of the group, when the group allows it.</li>
+    <li>Other actions: <span class="ui">Defer</span> (<kbd>Ctrl+D</kbd>) moves the item to the end of the queue; <span class="ui">Escalate to instructor</span> (<kbd>Ctrl+E</kbd>); <span class="ui">Add to rescan list</span> (<kbd>Ctrl+R</kbd>). The note field takes a note in Arabic or English; notes are personal data.</li>
+  </ol>
+
+  <div class="split">
+    <div>
+      <h3>Override the suggestion</h3>
+      <ol class="steps">
+        <li>Choose an answer that differs from the suggestion. <span class="ui">WHY OVERRIDE THE SUGGESTION?</span> appears, with reasons such as <span class="ui">Ambiguous mark</span>, <span class="ui">Erasure residue</span>, <span class="ui">Stray mark</span>, <span class="ui">Other</span> and more.</li>
+        <li>The main button reads <span class="ui">Choose a reason</span> until you pick one.</li>
+        <li><span class="ui">Other</span> needs a note: the button reads <span class="ui">Write why in the note</span> until there is one.</li>
+        <li>Press <kbd>Enter</kbd> to record the decision with its reason.</li>
+      </ol>
+      <h3>Decide who a sheet belongs to</h3>
+      <ol class="steps">
+        <li>In the Identity lane the scan shows the student-number grid, and <span class="ui">What the channels read</span> gives the number read.</li>
+        <li><span class="ui">WHO IS THIS?</span> lists up to three roster candidates. Press <kbd>1</kbd>–<kbd>3</kbd> to choose one, or <kbd>N</kbd> for <span class="ui">Not on roster</span>.</li>
+        <li>Or type the number under <span class="ui">NOT LISTED? TYPE THE STUDENT NUMBER</span> and press <span class="ui">Use number</span>, or search with <span class="ui">Roster search</span> (<kbd>/</kbd>).</li>
+        <li>Press <kbd>Enter</kbd> to accept. <span class="ui">Duplicate</span> (<kbd>D</kbd>) is shown but not recorded yet: choose a student or <kbd>N</kbd> instead.</li>
+      </ol>
+    </div>
+    <div>
+      <figure>
+        <div class="window"><a class="zoom" href="../assets/screens/review-override.png"><img src="../assets/screens/review-override.png" alt="The decision panel after choosing A instead of the suggested B: reason chips appear and the main button reads Choose a reason" width="339" height="494"></a></div>
+        <figcaption><span class="fig">Figure 7.3</span>An override waits for its reason.</figcaption>
+      </figure>
+    </div>
+  </div>
+
+  <p><strong>Undo and help.</strong> <kbd>Ctrl+Z</kbd>, or the undo button in the top bar, undoes the last decision. The record is never rewritten: the undo is recorded too. <kbd>F1</kbd> explains the current item's code and what to do.</p>
+
+  <h3>Keyboard</h3>
+  <p>Review keys work while the review area has focus. With an Arabic keyboard, keys work by position: under the Arabic (101) layout the A key still picks A, and Arabic option letters (<span lang="ar" dir="rtl">أ ب ج د هـ</span>) and Arabic-Indic digits work too. <span class="ui">Settings</span> › <span class="ui">Review keymap</span> lists every key. If single-letter keys get in your way, turn off <span class="ui">Single-key shortcuts</span> in Settings (Chapter 12).</p>
+  <div class="keys-grid">
+    <div class="table-wrap">
+      <table class="keys keep">
+        <caption><span class="fig">Table 7.1</span>Keys in Review</caption>
+        <thead><tr><th>Key</th><th>Does</th></tr></thead>
+        <tbody>
+          <tr><td><kbd>A</kbd>–<kbd>E</kbd> or <kbd>1</kbd>–<kbd>5</kbd></td><td>Choose that answer</td></tr>
+          <tr><td><kbd>Enter</kbd></td><td>Accept, or record your choice</td></tr>
+          <tr><td><kbd>Shift+Enter</kbd></td><td>Apply to the group</td></tr>
+          <tr><td><kbd>↓</kbd> <kbd>↑</kbd> or <kbd>J</kbd> <kbd>K</kbd></td><td>Next or previous item</td></tr>
+          <tr><td><kbd>Backspace</kbd></td><td>Blank</td></tr>
+          <tr><td><kbd>Ctrl+M</kbd></td><td>Multiple marks</td></tr>
+          <tr><td><kbd>Ctrl+U</kbd></td><td>Unreadable (never blank)</td></tr>
+          <tr><td><kbd>Ctrl+D</kbd></td><td>Defer</td></tr>
+          <tr><td><kbd>Ctrl+E</kbd></td><td>Escalate to instructor</td></tr>
+          <tr><td><kbd>Ctrl+R</kbd></td><td>Add to rescan list</td></tr>
+          <tr><td><kbd>Ctrl+Z</kbd></td><td>Undo the last decision</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="table-wrap">
+      <table class="keys keep">
+        <caption><span class="fig">Table 7.2</span>More keys in Review, and anywhere</caption>
+        <thead><tr><th>Key</th><th>Does</th></tr></thead>
+        <tbody>
+          <tr><td><kbd>Space</kbd> · <kbd>F2</kbd></td><td>Overlay · original scan</td></tr>
+          <tr><td><kbd>/</kbd> or <kbd>Ctrl+F</kbd></td><td>Roster search</td></tr>
+          <tr><td><kbd>F1</kbd> · <kbd>+</kbd> <kbd>−</kbd></td><td>Code help · zoom</td></tr>
+          <tr><td><kbd>1</kbd>–<kbd>3</kbd> · <kbd>N</kbd></td><td>Candidate · not on roster</td></tr>
+          <tr class="sep"><td><kbd>Ctrl+1</kbd> … <kbd>Ctrl+6</kbd></td><td>Anywhere: the six screens</td></tr>
+          <tr><td><kbd>Ctrl+,</kbd> or <kbd>Ctrl+0</kbd></td><td>Settings</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>Close a drawer, card or bar</td></tr>
+          <tr><td><kbd>Ctrl+N</kbd> · <kbd>Ctrl+O</kbd></td><td>Exams: new exam · open folder</td></tr>
+          <tr><td><kbd>Ctrl+K</kbd> · <kbd>F5</kbd></td><td>Exams: search · refresh</td></tr>
+          <tr><td><kbd>↑</kbd> <kbd>↓</kbd> · <kbd>Enter</kbd></td><td>Exams table: move · open</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================== 8 RESULTS -->
+<section class="chapter" id="ch-08">
+  <header class="ch-head">
+    <div class="ch-kicker"><span class="no">08</span><span>Chapter</span><svg aria-hidden="true"><rect width="100%" height="10" fill="url(#girih-strip)"/></svg></div>
+    <h2>Results and item analysis</h2>
+    <p class="ch-ar" lang="ar" dir="rtl">النتائج وتحليل الفقرات</p>
+    <p class="lede">Results shows how the class did, how each question worked, and whether the exam can be released. It updates as you decide review items.</p>
+  </header>
+
+  <figure class="wide">
+    <div class="window"><a class="zoom" href="../assets/screens/results.png"><img src="../assets/screens/results.png" alt="The Results screen: six tiles, grade and score distributions, item analysis with the key hidden, and release readiness showing Blocked" width="1280" height="800"></a></div>
+    <figcaption><span class="fig">Figure 8.1</span>Results for a midterm with 14 review items still open, so <span class="ui">Release results…</span> is disabled and release readiness reads Blocked.</figcaption>
+  </figure>
+
+  <ol class="steps">
+    <li>Press <span class="ui">Results</span> (<kbd>Ctrl+5</kbd>), or <span class="ui">Open results</span> on the notice or in the exam's drawer.</li>
+    <li>Read the tiles: <span class="ui">STUDENTS</span>, <span class="ui">MEAN</span>, <span class="ui">PASS RATE</span>, <span class="ui">CRONBACH α</span>, <span class="ui">SEM</span> and <span class="ui">OPEN EXCEPTIONS</span>.</li>
+    <li><span class="ui">Grade distribution</span> counts students per letter grade on the Saudi grade scale, with the pass mark. Switch between <span class="ui">Chart</span> and <span class="ui">Table</span>.</li>
+    <li><span class="ui">Score distribution</span> shows percentages in 10 % bins, with the pass mark and the mean.</li>
+    <li><span class="ui">Item analysis</span> lists, per question, <span class="ui">p</span>, <span class="ui">r&nbsp;ir</span>, <span class="ui">95 % CI</span>, <span class="ui">Discrimination</span>, the <span class="ui">Options</span> chosen, <span class="ui">Stability</span> and a <span class="ui">Flag</span>. Flagged questions come first. The keyed option stays hidden until <span class="ui">Show key</span>.</li>
+    <li><span class="ui">Release readiness</span> lists what still blocks release (Chapter 9).</li>
+  </ol>
+
+  <h3>Reading the item analysis</h3>
+  <div class="table-wrap">
+    <table class="keep">
+      <thead><tr><th style="width:18%">Column</th><th>What it tells you</th></tr></thead>
+      <tbody>
+        <tr><td><strong>p</strong></td><td>The share of students who answered correctly: 0.85 means 85 %. Below 0.30 is hard; above 0.90 is easy.</td></tr>
+        <tr><td><strong>r&nbsp;ir</strong> and <strong>95 % CI</strong></td><td>Do strong students get this question right more often than weak ones? 0.30 or more is good, 0.20–0.29 acceptable, 0.10–0.19 marginal, below 0.10 needs a look, below 0 suggests a flawed question or a wrong key. The interval shows how sure the figure is.</td></tr>
+        <tr><td><strong>Options</strong></td><td>How often each option was chosen.</td></tr>
+        <tr><td><strong>Stability</strong></td><td>How often a flag fires again when Mizan re-draws the class 1,000 times. A low share is marked "proposed" and never blocks release.</td></tr>
+        <tr><td><strong>Cronbach α</strong></td><td>How consistently the whole test measures. 0.80 or more suits an end-of-course exam; 0.90 or more a high-stakes one.</td></tr>
+        <tr><td><strong>SEM</strong></td><td>Standard error of measurement: how far, in points, a score may sit from the student's true score. Smaller is better.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>With fewer than 10 students, Mizan shows only counts, <strong>p</strong> and option shares. With 10 to 29 students, <strong>r&nbsp;ir</strong> and alpha are marked as low confidence.</p>
+
+  <h3>The grade scale</h3>
+  <div class="table-wrap">
+    <table class="grades keep">
+      <thead><tr><th>Percent</th><th>95+</th><th>90</th><th>85</th><th>80</th><th>75</th><th>70</th><th>65</th><th>60</th><th>&lt; 60</th></tr></thead>
+      <tbody>
+        <tr><td>Letter</td><td class="l">A+</td><td class="l">A</td><td class="l">B+</td><td class="l">B</td><td class="l">C+</td><td class="l">C</td><td class="l">D+</td><td class="l">D</td><td class="l">F</td></tr>
+        <tr><td>Arabic</td><td lang="ar" dir="rtl">أ+</td><td lang="ar" dir="rtl">أ</td><td lang="ar" dir="rtl">ب+</td><td lang="ar" dir="rtl">ب</td><td lang="ar" dir="rtl">ج+</td><td lang="ar" dir="rtl">ج</td><td lang="ar" dir="rtl">د+</td><td lang="ar" dir="rtl">د</td><td lang="ar" dir="rtl">هـ</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Each band runs from its percent up to the next one; 60 % passes. The results file also gives each student's GPA out of 5 and out of 4.</p>
+
+  <p>Two empty states: <span class="ui">Results wait for the key</span>, with <span class="ui">Confirm the key in Setup</span>, while a key from key sheets is not yet confirmed; and <span class="ui">No results yet</span> before the first grading run.</p>
+</section>
+
+<!-- ===================================================== 9 RELEASE -->
+<section class="chapter" id="ch-09">
+  <header class="ch-head">
+    <div class="ch-kicker"><span class="no">09</span><span>Chapter</span><svg aria-hidden="true"><rect width="100%" height="10" fill="url(#girih-strip)"/></svg></div>
+    <h2>Release and export</h2>
+    <p class="ch-ar" lang="ar" dir="rtl">اعتماد النتائج وتصديرها</p>
+    <p class="lede">Results go nowhere until you release them. Release is a deliberate act, and Mizan refuses it while anything is still open.</p>
+  </header>
+
+  <h3>What blocks release</h3>
+  <p><span class="ui">Release readiness</span> on Results is a checklist. Each open line has a chip: <span class="ui">Open</span> takes you to the right Review lane, <span class="ui">Setup</span> to Setup. Release is blocked by:</p>
+  <ul class="plain">
+    <li>open review items of ERROR or BLOCKER level (the serious ones; smaller warnings never hold release), including probable mis-keys;</li>
+    <li>a key read from key sheets that is not confirmed yet;</li>
+    <li>a provisional key inferred from the sheets;</li>
+    <li>the mis-key check, while it is still computing;</li>
+    <li>no key, or a key with empty entries (fill them, or void them with <code class="nw">*</code>).</li>
+  </ul>
+  <p>The checklist also counts provisional totals, pages not attributed to a student, versions inferred and responses pending review.</p>
+
+  <h3>Release the results</h3>
+  <ol class="steps">
+    <li>On <span class="ui">Results</span>, press <span class="ui">Release results…</span>. It is enabled only when nothing blocks release; otherwise the reason shows beside it in red.</li>
+    <li>A bar asks <span class="ui">Release the results?</span> with <span class="ui">Release</span> and <span class="ui">Cancel</span>. The keyboard starts on <span class="ui">Cancel</span>, so <kbd>Enter</kbd> never releases by accident.</li>
+    <li>Read the note under it: release freezes the score run and the key version in the audit log, and writes the exports with the Blackboard upload.</li>
+    <li>Press <span class="ui">Release</span>. A message confirms the key version and score run, and where the exports went. Without a roster there is no Blackboard upload.</li>
+  </ol>
+  <aside class="callout important">
+    <span class="label">After release</span>
+    <p>Any later change, such as a review decision, a key change or added scans, cancels the release. The upload file is removed at the next export until you release again.</p>
+  </aside>
+
+  <h3>Export</h3>
+  <p>With <span class="ui">Settings</span> › <span class="ui">Write exports after grading</span> on (the default), the exports are written into the exam's folder each time a run ends. To write them again by hand:</p>
+  <ol class="steps">
+    <li>On <span class="ui">Results</span>, press <span class="ui">Export…</span>.</li>
+    <li>Press <span class="ui">Write all exports</span>. Or, after release, fill <span class="ui">Blackboard column ID (optional)</span> and press <span class="ui">Write Blackboard CSV</span>.</li>
+    <li>Press <span class="ui">Open exports folder</span> to see the files, then <span class="ui">Close</span> (or <kbd>Esc</kbd>).</li>
+  </ol>
+  <figure>
+    <div class="window"><a class="zoom" href="../assets/screens/results-export.png"><img src="../assets/screens/results-export.png" alt="The Export bar on Results: Write all exports, a Blackboard column ID field, a disabled Write Blackboard CSV button and Open exports folder" width="1208" height="140"></a></div>
+    <figcaption><span class="fig">Figure 9.1</span>The Export bar before release: <span class="msg">Not released: the Blackboard upload is written when the results are released</span>.</figcaption>
+  </figure>
+  <p>After a later decision, Mizan reminds you that <span class="msg">these exports were written before your latest changes: Write all exports in Results updates them</span>. <span class="ui">Write Blackboard CSV</span> stays disabled, with the reason, while the key is inferred or the exam has no roster.</p>
+
+  <h3>The files in the exam folder</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th style="width:31%">File</th><th>What it holds</th></tr></thead>
+      <tbody>
+        <tr><td><code class="nw">results.xlsx</code>, <code class="nw">results.csv</code></td><td>One row per student: number, name, section, version, status, raw score, maximum, percent, letter grade (English and Arabic), GPA out of 5 and out of 4, and each answer. Roster students without a sheet are listed as absent.</td></tr>
+        <tr><td><code class="nw">item_analysis.xlsx</code><span class="sub">with <code class="nw">item_analysis.csv</code>, <code class="nw">test_stats.csv</code></span></td><td>How each question worked, flags such as a probable mis-key, and a test summary with alpha and SEM. Written without the key.</td></tr>
+        <tr><td><code class="nw">tp154.xlsx</code><span class="sub">with <code class="nw">tp154_a1.csv</code>, <code class="nw">tp154_b1.csv</code></span></td><td>The NCAAA course-report tables (TP-154): the grade distribution and, with a CLO file, the CLO results. English and Arabic headers.</td></tr>
+        <tr><td><code class="nw">report.html</code></td><td>A one-file report for any browser: results, grade chart, test statistics, questions and CLOs. Written without the key.</td></tr>
+        <tr><td><code class="nw">key.csv</code></td><td>The answer key in force. Confidential.</td></tr>
+        <tr><td><code class="nw">key_sheet_summary.html</code></td><td>Only with key sheets: each key answer as read, beside its scanned row. Confidential.</td></tr>
+        <tr><td><code>blackboard_grade_center.csv</code></td><td>Only after release, never with an inferred key or without a roster. Username and score of each student whose result is final; nothing else.</td></tr>
+        <tr><td><code class="nw">review_queue.json</code>, <code class="nw">booklets.json</code>, <code class="nw">summary.json</code></td><td>Machine-readable records for IT and audits.</td></tr>
+        <tr><td><code class="nw">manifest.json</code></td><td>Every file with its fingerprint, signed by this computer, so a later change to any file shows.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Every export is classified <strong>Restricted</strong> (<span lang="ar" dir="rtl">مقيد</span>): the Excel and HTML files show the label, and <code class="nw">manifest.json</code> records it for the CSV and JSON files. With a provisional key, file names end in <code class="nw">-INFERRED</code> and carry a warning.</p>
+
+  <h3>The Blackboard upload</h3>
+  <p>The file holds the username and score only: no names, no sections. A student whose result is not final is left out, so Blackboard keeps their old value. Mizan assumes each Blackboard username is the student number in your roster; check this before your first upload. To fill an existing grade column, give its column ID: the number after <code class="nw">|</code> in the column header of a Grade Center download. You upload the file yourself; Mizan does not connect to Blackboard.</p>
+</section>
+
+<!-- ===================================================== 10 REMARK -->
+<section class="chapter" id="ch-10">
+  <header class="ch-head">
+    <div class="ch-kicker"><span class="no">10</span><span>Chapter</span><svg aria-hidden="true"><rect width="100%" height="10" fill="url(#girih-strip)"/></svg></div>
+    <h2>Import from Remark and compare</h2>
+    <p class="ch-ar" lang="ar" dir="rtl">الاستيراد والمقارنة</p>
+    <p class="lede">Mizan can take the key, points and learning objectives from Remark Office OMR's Excel exports, and check a Mizan run against Remark's results for the same sheets.</p>
+  </header>
+
+  <p>Mizan reads only Remark's documented, graded Excel exports: the Advanced Grade reports saved as <code class="nw">.xlsx</code> (the Student Response Report with the answer key, the Student Statistics Report and the Test Statistics Report). It never opens Remark's own <code class="nw">.rmx</code> or <code class="nw">.aky</code> files.</p>
+
+  <h3>Import on a new exam</h3>
+  <ol class="steps">
+    <li>On the New exam card, or on the empty Exams screen, press <span class="ui">Import from Remark export…</span>.</li>
+    <li>In <span class="ui">Remark workbooks</span>, choose the exports (separate several with <code class="nw">;</code>). <span class="ui">Points file (optional)</span> is for points Remark's totals cannot settle: a CSV such as <code>question,points_A,points_B</code>, one row per question, empty cells worked out by Mizan. Press <span class="ui">Read export</span>.</li>
+    <li>Nothing changes yet. Check the import: per version, the points and the key as counts, with the letters hidden until <span class="ui">Reveal key</span>; the learning objectives, each marked "imported, needs review"; and any key sheets Remark graded as students, which are left out.</li>
+    <li>Press <span class="ui">Use this import</span>, or <span class="ui">Put the import aside</span>, or <span class="ui">Back to the form</span>.</li>
+    <li>The card now takes the key, versions and question count from the import; <span class="ui">Clear the Remark import</span> undoes it.</li>
+  </ol>
+
+  <h3>Import into a graded exam</h3>
+  <p><span class="ui">Setup</span> › <span class="ui">Import from Remark…</span> (<span class="ui">Remark…</span> in a narrow window), then <span class="ui">Apply key and points</span>. The imported key comes into force as a new key version and the exam is rescored. A graded exam's points cannot change: an export whose points differ is shown as not applicable, with what to do (create the exam from the import instead). The learning objectives are only listed here; a graded exam's CLOs change only with <span class="ui">Setup</span> › <span class="ui">CLO file</span> › <span class="ui">Replace CLOs</span>. CLO rows imported from Remark stay a draft until you approve them with <span class="ui">Setup</span> › <span class="ui">Approve imported mappings</span>; until then the outcome tables are marked as a draft.</p>
+  <p>When an import is refused, Mizan says <span class="msg">Refused: nothing was imported or changed</span> and then what to do; it may offer <span class="ui">Use the suggested points</span>. Export student numbers from Remark as text: a number Excel already shows as <code class="nw">2.2E+09</code> cannot be recovered.</p>
+
+
+  <h3>Compare a run with Remark</h3>
+  <ol class="steps">
+    <li>On <span class="ui">Results</span>, press <span class="ui">Compare with Remark…</span> (<span class="ui">Remark…</span> in a narrow window, as in Figure 8.1).</li>
+    <li>In <span class="ui">Remark workbooks to compare</span>, give Remark's exports of the same sheets; press <span class="ui">Compare</span>.</li>
+    <li>The comparison replaces the results under a <span class="ui">Restricted</span> banner and lists each difference with its scanned bubble row.</li>
+    <li><span class="ui">Queue for review</span> puts each settled difference on an answer Mizan accepted on its own into Review, where it holds release until decided. The comparison alone holds nothing.</li>
+    <li><span class="ui">Save report</span> writes the report; <span class="ui">Back to results</span> closes it. The report is restricted: keep it, and any figures from it, inside your institution.</li>
+  </ol>
+</section>
+
+<!-- ===================================================== 11 OUTCOMES -->
+<section class="chapter" id="ch-11">
+  <header class="ch-head">
+    <div class="ch-kicker"><span class="no">11</span><span>Chapter</span><svg aria-hidden="true"><rect width="100%" height="10" fill="url(#girih-strip)"/></svg></div>
+    <h2>Learning outcomes</h2>
+    <p class="ch-ar" lang="ar" dir="rtl">مخرجات التعلم</p>
+    <p class="lede">With a CLO mapping, Mizan shows how well the exam evidences each course learning outcome (CLO) and fills the outcome tables of the course report.</p>
+  </header>
+
+  <h3>Before you start</h3>
+  <p>Give a <span class="ui">CLO mapping file</span> on the New exam card, or later in <span class="ui">Setup</span> › <span class="ui">CLO file</span> › <span class="ui">Replace CLOs</span>. Chapter 13 shows its layout. Without one, Outcomes shows <span class="ui">Load a CLO file in Setup</span>. In Setup, the grid maps each question to CLOs with a <span class="ui">WEIGHT</span>, and each cell can carry a <span class="ui">NOTE (ARABIC OR ENGLISH)</span>. <span class="ui">Course learning outcomes</span> shows each CLO's share of the evidence.</p>
+
+  <h3>Read the attainment</h3>
+  <figure>
+    <div class="window"><a class="zoom" href="../assets/screens/outcomes.png"><img src="../assets/screens/outcomes.png" alt="Outcomes: CLO attainment for four CLOs, each with the class average and the share of students at or above the threshold against a 70 % target; three attained, one not" width="1208" height="380"></a></div>
+    <figcaption><span class="fig">Figure 11.1</span>CLO attainment. The top bar shows the policy: threshold 60 %, target 70 %.</figcaption>
+  </figure>
+  <ol class="steps">
+    <li>Press <span class="ui">Outcomes</span> (<kbd>Ctrl+6</kbd>).</li>
+    <li><span class="ui">CLO attainment</span> shows, for each CLO, the class average (μ) and the share of students at or above the threshold (π) with its 95 % interval, against the target. Each CLO reads <span class="ui">Attained</span> or <span class="ui">Not attained</span>.</li>
+    <li>By default, a student attains a CLO with 60 % of its points, and the class attains it when 70 % of students do. The top bar shows this policy.</li>
+    <li>Below, <span class="ui wrap">TP-154 · B.1 Course learning outcomes (preview)</span> shows the course-report table, with English and Arabic headings.</li>
+    <li><span class="ui">Export TP-154 tables…</span> writes the tables with the exam's other exports.</li>
+  </ol>
+
+  <h3>Accreditation</h3>
+  <p><strong>NCAAA.</strong> Mizan writes the course report's grade-distribution and CLO-results tables (TP-154) in Excel and CSV, with English and Arabic headers. Copy them into the official course report: Mizan does not fill the official Word forms yet. Tables built on CLO rows imported from Remark are marked as a draft until a coordinator approves the mapping. <strong>ABET</strong> reports are not available in this version.</p>
+</section>
+
+<!-- ===================================================== 12 SETTINGS -->
+<section class="chapter" id="ch-12">
+  <header class="ch-head">
+    <div class="ch-kicker"><span class="no">12</span><span>Chapter</span><svg aria-hidden="true"><rect width="100%" height="10" fill="url(#girih-strip)"/></svg></div>
+    <h2>Settings</h2>
+    <p class="ch-ar" lang="ar" dir="rtl">الإعدادات</p>
+    <p class="lede">Every setting applies at once and is kept for the next start, in your private folder.</p>
+  </header>
+
+  <figure>
+    <div class="window cut"><a class="zoom" href="../assets/screens/settings.png"><img src="../assets/screens/settings.png" alt="Settings: Appearance with theme and reduce motion, Review with the name field and two switches, Grading with Write exports after grading, and the start of the review keymap" width="1208" height="456"></a></div>
+    <figcaption><span class="fig">Figure 12.1</span>Settings. The name in the Review card is masked.</figcaption>
+  </figure>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th style="width:24%">Setting</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="2">Appearance</td></tr>
+        <tr><td><span class="ui">Theme</span></td><td><span class="ui">Light</span> (the default) or <span class="ui">Dark</span>. The moon or sun button in any top bar does the same. Overlay colours on the scan never change with the theme.</td></tr>
+        <tr><td><span class="ui">Reduce motion</span></td><td>Every transition runs in 0 ms. Its description says it also follows the system's own setting.</td></tr>
+        <tr class="group"><td colspan="2">Review</td></tr>
+        <tr><td>Your name</td><td>Type it and press <span class="ui">Save</span>. It is recorded on every decision from then on.</td></tr>
+        <tr><td><span class="ui">Single-key shortcuts</span></td><td>On by default. Off: option letters, digits, <kbd>/</kbd> and <kbd>+</kbd> <kbd>−</kbd> stop working in Review; <kbd>Ctrl</kbd> keys, arrows, <kbd>Enter</kbd>, <kbd>Backspace</kbd>, <kbd>Space</kbd> and the F keys keep working.</td></tr>
+        <tr><td><span class="ui">Show blank-bubble overlays</span></td><td>Off by default: only filled, ambiguous and unreadable bubbles get overlays.</td></tr>
+        <tr class="group"><td colspan="2">Grading</td></tr>
+        <tr><td><span class="ui">Write exports after grading</span></td><td>On by default. Results, reports and uploads go into the exam's folder when a run ends.</td></tr>
+        <tr class="group"><td colspan="2">About</td></tr>
+        <tr><td><span class="ui">Exams folder</span></td><td>The folder Mizan lists. <span class="ui">Change…</span> picks another; <span class="ui">Show folder</span> opens it. The note below reminds you that scans, names and student numbers stay on this computer, and that every review action is recorded in the exam's folder.</td></tr>
+        <tr class="group"><td colspan="2">Review keymap</td></tr>
+        <tr><td><span class="ui">Review keymap</span></td><td>Every key, with notes.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===================================================== 13 FORMATS -->
+<section class="chapter" id="ch-13">
+  <header class="ch-head">
+    <div class="ch-kicker"><span class="no">13</span><span>Chapter</span><svg aria-hidden="true"><rect width="100%" height="10" fill="url(#girih-strip)"/></svg></div>
+    <h2>Files and formats</h2>
+    <p class="ch-ar" lang="ar" dir="rtl">الملفات وصيغها</p>
+    <p class="lede">Mizan reads two kinds of answer sheet and a few simple files you can make in Excel. Save files as CSV with commas, semicolons or tabs, as Excel saves them. Arabic text works in UTF-8, UTF-16 or Windows-1256.</p>
+  </header>
+
+  <h3>Answer sheets</h3>
+  <ul class="plain">
+    <li><strong>The legacy answer sheet</strong>, already in use: landscape A4, up to 100 questions with options A–E, a 10-digit student number and a version bubble (A–D). It also carries a section, a date, gender and the exam type (Quiz 1, Quiz 2, Quiz 3, Midterm, Final). You tell Mizan how many questions your exam uses. Students change an answer by erasing it.</li>
+    <li><strong>Your own printed form.</strong> Mizan prints A4 sheets made for one exam: 1 to 1,000 questions, 2 to 10 options, up to 26 versions, and a student-number grid of the length you choose. Options can be printed as A–J, as Arabic letters (<span lang="ar" dir="rtl">أ ب ج د هـ</span> and on; rows then run right to left) or as numbers. Instructions are printed in English and Arabic. Each sheet carries a code that ties it to this exam: a sheet from another exam, or a forged one, is held for a person to check. IT staff make these forms with the command line (Appendix A).</li>
+  </ul>
+  <p>The form's PDF is set to print without scaling: do not let the printer shrink it to fit. Its secret code stays in your private folder, never beside the PDF, so the PDF can go to the print shop.</p>
+  <div class="table-wrap">
+    <table class="keep">
+      <caption><span class="fig">Table 13.1</span>How students change an answer: one convention per exam, printed on the sheet</caption>
+      <thead><tr><th style="width:26%">Convention</th><th>What students do</th></tr></thead>
+      <tbody>
+        <tr><td>Erase to change</td><td>Erase the old mark completely. A crossed-out mark goes to review. The only convention of the legacy sheet.</td></tr>
+        <tr><td>Cross out to cancel</td><td>Cross out a filled bubble to cancel it.</td></tr>
+        <tr><td>Tick to select</td><td>A tick chooses; a filled bubble cancels.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Answer key <code class="nw">key.csv</code></h3>
+  <p>One row per question, one column per version:</p>
+  <div class="csv-row">
+    <div class="csv-block">
+      <div class="csv-name">key.csv</div>
+      <table class="csv">
+        <thead><tr><th>question</th><th>A</th><th>B</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>C</td><td>A</td></tr>
+          <tr><td>2</td><td>A</td><td>D</td></tr>
+          <tr><td>3</td><td>B|D</td><td>C</td></tr>
+          <tr><td>4</td><td>*</td><td>B</td></tr>
+          <tr><td>5</td><td>E</td><td>E</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="csv-block">
+      <div class="csv-name">key.csv, with points</div>
+      <table class="csv">
+        <thead><tr><th>question</th><th>A</th><th>B</th><th>points</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>C</td><td>A</td><td>1</td></tr>
+          <tr><td>2</td><td>A</td><td>D</td><td>2</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="csv-block">
+      <div class="csv-name">key.csv, one row per version</div>
+      <table class="csv">
+        <thead><tr><th>form</th><th>Q1</th><th>Q2</th><th>Q3</th><th>Q4</th><th>Q5</th></tr></thead>
+        <tbody>
+          <tr><td>A</td><td>C</td><td>A</td><td>B</td><td>D</td><td>E</td></tr>
+          <tr><td>B</td><td>A</td><td>D</td><td>C</td><td>B</td><td>E</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <ul class="plain">
+    <li><code class="nw">C</code>: the right answer. <code class="nw">B|D</code>: either answer is accepted (<code class="nw">B or D</code> and <code class="nw">BD</code> also work). <code class="nw">*</code>: the question is voided. An empty cell: the answer is missing, and the exam cannot be released until you fill it.</li>
+    <li>With different points per version, use <code class="nw">points_A</code> and <code class="nw">points_B</code> instead of <code class="nw">points</code>.</li>
+    <li>A single column of answers is the key of every version: use it for a single-version exam.</li>
+    <li>A sheet that bubbles a version the exam does not have is held, never scored, until you choose its version.</li>
+  </ul>
+
+  <h3>Roster <code class="nw">roster.csv</code> or <code class="nw">roster.xlsx</code></h3>
+  <div class="csv-block">
+    <div class="csv-name">roster.csv</div>
+    <table class="csv">
+      <thead><tr><th>student_id</th><th>name</th><th>name_ar</th><th>section</th></tr></thead>
+      <tbody>
+        <tr><td>2250000001</td><td>Example Student One</td><td lang="ar" dir="rtl">طالب أول</td><td>S1</td></tr>
+        <tr><td>2250000002</td><td>Example Student Two</td><td lang="ar" dir="rtl">طالب ثانٍ</td><td>S1</td></tr>
+        <tr><td>2250000003</td><td>Example Student Three</td><td lang="ar" dir="rtl">طالب ثالث</td><td>S2</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="plain">
+    <li>The <code class="nw">student_id</code> column may also be called <code class="nw">ID</code> or <code lang="ar" dir="rtl" class="nw">الرقم الجامعي</code>. Columns can be in any order, and title rows above the header are skipped.</li>
+    <li>If Excel damaged a number (added <code class="nw">.0</code>, dropped leading zeros), Mizan repairs it when nothing was lost. Two rows with the same number are refused, and Mizan names the rows.</li>
+    <li>No roster? Mizan uses the student number bubbled on each sheet. You can add a roster later.</li>
+  </ul>
+
+  <h3>CLO mapping <code class="nw">clo.csv</code></h3>
+  <div class="csv-block">
+    <div class="csv-name">clo.csv</div>
+    <div class="table-wrap" style="margin:0">
+      <table class="csv">
+        <thead><tr><th>clo</th><th>domain</th><th>title</th><th>plo</th><th>questions</th><th>weight</th><th>note</th></tr></thead>
+        <tbody>
+          <tr><td>CLO1</td><td>K</td><td>Describe the basic data structures</td><td>K1</td><td>1-8</td><td>1</td><td></td></tr>
+          <tr><td>CLO2</td><td>S</td><td>Analyse the cost of an algorithm</td><td>S1</td><td>9-15</td><td>1</td><td></td></tr>
+          <tr><td>CLO3</td><td>V</td><td>Work to a professional standard</td><td>V1</td><td>16-20</td><td>1</td><td></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <ul class="plain">
+    <li><code class="nw">domain</code> is K (knowledge), S (skills) or V (values). <code class="nw">questions</code> takes single numbers and ranges, such as <code class="nw">1-8,12</code>.</li>
+    <li>Add a <code class="nw">form</code> column when a row maps the questions of one version only.</li>
+    <li>No CLO file? Grading still works; there are no outcome tables.</li>
+  </ul>
+
+  <h3>Reading the results file</h3>
+  <p>Columns: Student ID, Name, Section, Booklet, Form, Status, Raw score, Maximum, Percent, Letter, Letter (Arabic), GPA (5), GPA (4), then one column per question. The workbook's About sheet explains the grade scale and the codes.</p>
+  <div class="table-wrap">
+    <table class="keep">
+      <thead><tr><th style="width:24%">In a question column</th><th>Means</th></tr></thead>
+      <tbody>
+        <tr><td><code class="nw">A</code>, <code class="nw">B</code> …</td><td>The answer read or decided.</td></tr>
+        <tr><td>several letters</td><td>Several answers marked.</td></tr>
+        <tr><td>empty</td><td>Blank, or a question not on this form.</td></tr>
+        <tr><td><code class="nw">?</code></td><td>Still waiting in Review, or unreadable. Never given credit, never counted as blank.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>A student's status is <code class="nw">scored</code>, <code class="nw">provisional</code> (something still waits in Review), <code class="nw">not_scorable</code>, <code class="nw">absent</code> or <code class="nw">absent_excused</code>.</p>
+
+</section>
+
+<!-- ===================================================== 14 DATA -->
+<section class="chapter" id="ch-14">
+  <header class="ch-head">
+    <div class="ch-kicker"><span class="no">14</span><span>Chapter</span><svg aria-hidden="true"><rect width="100%" height="10" fill="url(#girih-strip)"/></svg></div>
+    <h2>Where your data lives and how it is protected</h2>
+    <p class="ch-ar" lang="ar" dir="rtl">أين تُحفظ بياناتك وكيف تُحمى</p>
+    <p class="lede">Mizan runs on your computer and keeps its files there, in two folders. It makes no network calls of its own.</p>
+  </header>
+
+  <figure class="diagram">
+    <div class="frame"><!--SVG:data-local--></div>
+    <figcaption><span class="fig">Figure 14.1</span>Where Mizan keeps its files. Mizan writes each exam's folder; your private folder holds the key that checks its audit log. * On Windows, so far only network paths and Dropbox-style folders are refused. Mizan does not encrypt these folders: keep them on an encrypted disk, and back up both.</figcaption>
+  </figure>
+
+  <h3>Your exams folder</h3>
+  <p><code class="nw">OMR Exams</code> in your home folder, unless you chose another. Each exam gets its own folder:</p>
+<pre class="tree">OMR Exams/
+  cs-213-quiz-1/              <span class="c">one exam</span>
+    project.omrproj/          <span class="c">the exam's record: never edit or move anything inside</span>
+      project.db              <span class="c">every decision, in order</span>
+      objects/                <span class="c">a copy of every scanned page</span>
+    results.xlsx              <span class="c">the exports (Chapter 9)</span>
+    item_analysis.xlsx
+    report.html
+    key.csv
+    manifest.json
+    …</pre>
+  <p>Back up the whole exam folder. It holds a copy of every scan: treat it like the paper scripts.</p>
+
+  <h3>Your private folder</h3>
+  <ul class="plain">
+    <li>Windows: <code class="nw">%APPDATA%\omr</code></li>
+    <li>Linux: <code class="nw">~/.local/share/omr</code></li>
+    <li>Either: the folder named by <code class="nw">OMR_KEY_DIR</code>, if your IT team set one</li>
+  </ul>
+  <p>It holds this computer's signing key, a signed checkpoint of each exam's record (a fingerprint of its latest state, not a backup), the secret codes of your own printed forms, and the desktop app's settings. Back it up separately and keep it private. If it is lost, Mizan can no longer tell when an older copy of an exam was put back.</p>
+
+  <h3>The safeguards</h3>
+  <ol class="safeguards">
+    <li><strong>Marks are read without the key.</strong> The part of Mizan that reads the bubbles never sees the key, so a doubtful mark cannot be nudged towards the right answer, or away from it. Reviewers work without the key too.</li>
+    <li><strong>When Mizan is not sure, a person decides.</strong> An answer it cannot read is never counted as blank. Choosing something other than its suggestion needs a reason.</li>
+    <li><strong>Every decision is recorded, and the record cannot be quietly changed.</strong> Each decision, key change and release is written in order, each entry sealed to the one before; the chain is signed with this computer's key, and a signed checkpoint is kept in your private folder. If anyone edits, cuts or swaps the record, Mizan refuses to open the exam and says why.</li>
+    <li><strong>Release is your decision.</strong> Results go nowhere until you release them, and any later change cancels the release.</li>
+    <li><strong>Mizan makes no network calls of its own.</strong> Apart from the system's own file pickers, the only program the desktop app starts is your file manager, to show a folder. The Blackboard file is a file you upload yourself. Keep both folders out of cloud and network folders: on Windows, Mizan does not yet refuse OneDrive.</li>
+    <li><strong>The same scans give the same decisions</strong>, on one processor core or many, in any page order. This was tested on Linux; identical decisions on Windows are not proven yet.</li>
+    <li><strong>Student numbers are masked on the command line</strong> to their last three digits. Showing a full number is recorded, and so is every exported picture of an answer.</li>
+    <li><strong>Exports are classified Restricted.</strong> Text cells in CSV files that start with <code class="nw">=</code>, <code class="nw">+</code>, <code class="nw">-</code> or <code class="nw">@</code> get a leading <code class="nw">'</code>, so a spreadsheet does not run them as formulas.</li>
+  </ol>
+  <p class="small-note">"No network calls of its own" comes from a review of Mizan's code and of the libraries it uses: none of them opens a network connection. It was not confirmed by watching network traffic.</p>
+
+  <aside class="callout important">
+    <span class="label">Keep exam data safe</span>
+    <ul>
+      <li>Use a device with an encrypted disk. Mizan does not encrypt the exam folder itself.</li>
+      <li>Never use OneDrive, Dropbox, iCloud, Nextcloud or a network drive. On Linux, Mizan refuses them all. On Windows, it so far refuses only network paths and Dropbox-style folders.</li>
+      <li>On Linux, exam folders are readable by you only. On Windows this protection is not built yet, and the signing key is not yet held in Windows' own key store.</li>
+      <li>Do not open, edit or copy files inside <code class="nw">project.omrproj</code>. If anything inside changes, Mizan refuses to open the exam.</li>
+    </ul>
+    <p>Not covered yet: looking at students in the desktop app is not recorded, and the seal trusts this computer. On another computer, Mizan checks only that the record is consistent with itself.</p>
+  </aside>
+</section>
+
+<!-- ===================================================== 15 TROUBLESHOOTING -->
+<section class="chapter" id="ch-15">
+  <header class="ch-head">
+    <div class="ch-kicker"><span class="no">15</span><span>Chapter</span><svg aria-hidden="true"><rect width="100%" height="10" fill="url(#girih-strip)"/></svg></div>
+    <h2>Troubleshooting</h2>
+    <p class="ch-ar" lang="ar" dir="rtl">حل المشكلات</p>
+    <p class="lede">Text in italics is what Mizan shows. Codes such as REG-003 appear on the Scan screen and in the review queue.</p>
+  </header>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th style="width:36%">You see</th><th style="width:27%">Why</th><th>What to do</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="3">Starting and opening</td></tr>
+        <tr><td><span class="msg">Mizan cannot start … cannot open a window</span></td><td>No desktop session, for example on a remote server.</td><td>Start Mizan from a desktop session. On Linux, install <code class="nw">libfontconfig1</code> and <code class="nw">libxkbcommon-x11-0</code>. On a server, use the command line.</td></tr>
+        <tr><td>Windows warns about the program, or blocks it</td><td>Test builds are unsigned.</td><td>Ask your IT team. Do not grade real exams on Windows with a test build.</td></tr>
+        <tr><td><span class="msg">Nothing was chosen, so the field is unchanged. If no file dialog appeared, type the path in the field instead</span></td><td>The file picker was closed, or did not open.</td><td>Type or paste the path into the field.</td></tr>
+        <tr><td><span class="msg">This exam is open read-only (another program has it open for writing)…</span></td><td>Another window or a command has the exam open.</td><td>Close it, then reopen the exam.</td></tr>
+        <tr><td><span class="code">SYS-011</span> <span class="msg">the exam snapshot does not match the audit log … so the exam is not opened</span></td><td>The exam folder was changed outside Mizan, an older copy was put back, or it is damaged.</td><td>Restore the exam folder from your backup or the last signed export. Report it to the person responsible for the exam's quality.</td></tr>
+        <tr><td><span class="code">SYS-010</span> <span class="msg">the exam snapshot is damaged</span></td><td>A damaged file.</td><td>Restore the exam folder from your backup.</td></tr>
+        <tr><td><span class="code">SYS-015</span> <span class="msg">unsafe project location: …</span></td><td>The folder is in a sync folder or on a network share.</td><td>Move the exams folder to a local folder on your device.</td></tr>
+
+        <tr class="group"><td colspan="3">Grading</td></tr>
+        <tr><td><span class="ui">Grade exam</span> stays grey: <span class="msg">Checking the scans (N of M pages)…</span></td><td>The scans are still being checked.</td><td>Wait for the check to finish.</td></tr>
+        <tr><td><span class="msg">You stopped checking the scans: nothing is graded until they are checked</span></td><td><span class="ui">Stop checking</span> was pressed.</td><td>Press <span class="ui">Check the scans again</span>, or <span class="ui">Choose scans…</span>.</td></tr>
+        <tr><td>The card asks <span class="msg">Answer key: choose the key file, import it from Remark, give the key sheets, or grade with a provisional key …</span></td><td>No key was given.</td><td>Use one of the four buttons in the box (Chapter 5).</td></tr>
+        <tr><td><span class="msg">… is being graded: Grade exam is available when it finishes</span> (when opening another folder or adding scans: <span class="msg">… when the Scan screen says it is complete</span>)</td><td>One exam is graded at a time.</td><td>Wait until the Scan screen says the run is complete.</td></tr>
+        <tr><td><span class="msg">Too late to cancel: the pages are read and … is being saved, so it is kept</span></td><td>The run was already saving.</td><td>Let it finish, then change what is wrong in Setup.</td></tr>
+
+        <tr class="group"><td colspan="3">Scans and review</td></tr>
+        <tr><td><span class="code">REG-003</span> a page not read</td><td>Its alignment could not be checked: a fold, a curl, a skewed photo. Nothing on it was read.</td><td>Rescan the sheet flat on the glass and add the new scan. Never type its answers by hand from that page.</td></tr>
+        <tr><td><span class="code">CAP-001</span></td><td>A corrupt, empty or unsupported file.</td><td>Rescan, or copy or export the file again from the scanner, then add it.</td></tr>
+        <tr><td><span class="code">CAP-002</span></td><td>Scan resolution too low or too high.</td><td>Rescan at 200–300 dpi and add the new scan.</td></tr>
+        <tr><td><span class="code">CAP-004</span></td><td>"Compact PDF" compression (JBIG2 or MRC).</td><td>Scan again with that compression off.</td></tr>
+        <tr><td><span class="code">MRK-001</span> on every answer of a sheet</td><td>The sheet is a phone photo.</td><td>Rescan the sheet on a scanner, or confirm each answer.</td></tr>
+        <tr><td><span class="code">SCO-001</span> probable mis-key</td><td>The strongest students disagree with the key on this question.</td><td>Change the key, accept both answers, void the question, or keep the key with a reason and a note.</td></tr>
+        <tr><td><span class="code">SCO-003</span> key missing or not confirmed (on Results: <span class="ui">Results wait for the key</span>)</td><td>The key has empty entries, was inferred from the sheets, or came from key sheets not confirmed yet.</td><td>Fill or void the empty entries, replace an inferred key (<span class="ui">Setup</span> › <span class="ui">Replace key…</span>), or in Setup decide each highlighted row and confirm.</td></tr>
+        <tr><td><span class="code">SCO-005</span> a sheet held for its version</td><td>The student bubbled a version this exam does not have.</td><td>Choose the right version in Review.</td></tr>
+        <tr><td><span class="code">IDN-002</span> a sheet held as foreign</td><td>A sheet of your own form from another exam, or a forged one.</td><td>Check the sheet.</td></tr>
+        <tr><td><span class="code">SYS-032</span></td><td>Grading again read an answer differently from your earlier decision.</td><td>Your decision stands: confirm it, or decide again from the paper.</td></tr>
+        <tr><td>Pressing <kbd>D</kbd> on an identity item only shows a message</td><td>Duplicate is not recorded yet.</td><td>Choose the student (<kbd>1</kbd>–<kbd>3</kbd>) or <kbd>N</kbd>.</td></tr>
+
+        <tr class="group"><td colspan="3">Release and export</td></tr>
+        <tr><td><span class="ui">Release results…</span> is grey; <span class="msg">Blocked · N ERROR/BLOCKER review items open</span></td><td>Open review items, an unconfirmed or inferred key, or a mis-key to decide.</td><td>Use the <span class="ui">Open</span> and <span class="ui">Setup</span> chips in <span class="ui">Release readiness</span>.</td></tr>
+        <tr><td><span class="ui">Write Blackboard CSV</span> is grey: <span class="msg">The key is inferred from the sheets …</span></td><td>A provisional key.</td><td><span class="ui">Setup</span> › <span class="ui">Replace key…</span></td></tr>
+        <tr><td><span class="ui">Write Blackboard CSV</span> is grey: <span class="msg">No roster …</span></td><td>No roster.</td><td><span class="ui">Setup</span> › <span class="ui">Add roster…</span></td></tr>
+        <tr><td><span class="msg">Not released: the Blackboard upload is written when the results are released</span></td><td>Not released yet.</td><td>Release the results (Chapter 9).</td></tr>
+        <tr><td><span class="msg">these exports were written before your latest changes …</span></td><td>A decision or key change after the last export.</td><td><span class="ui">Results</span> › <span class="ui">Export…</span> › <span class="ui">Write all exports</span>.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Two notices need no action: <span class="code">REG-002</span> (a page was read turned upright) and <span class="code">CAP-012</span> (a blank back was dropped).</p>
+</section>
+
+<!-- ===================================================== 16 LIMITS -->
+<section class="chapter" id="ch-16">
+  <header class="ch-head">
+    <div class="ch-kicker"><span class="no">16</span><span>Chapter</span><svg aria-hidden="true"><rect width="100%" height="10" fill="url(#girih-strip)"/></svg></div>
+    <h2>Known limits</h2>
+    <p class="ch-ar" lang="ar" dir="rtl">القيود المعروفة</p>
+    <p class="lede">Mizan 0.1.0 is a first version. These limits apply today.</p>
+  </header>
+
+  <div class="two-col limits">
+    <section>
+      <h4>Computers</h4>
+      <ul class="plain">
+        <li>No version for Mac.</li>
+        <li>Windows: unsigned test builds only, no installer, and some file protections missing (Chapter 14).</li>
+        <li>The desktop app has not yet been used in a real window.</li>
+      </ul>
+    </section>
+    <section>
+      <h4>Scanning</h4>
+      <ul class="plain">
+        <li>Mizan does not watch the scanner's folder. Grade the folder when scanning ends.</li>
+        <li>Phone photos of students' sheets: every answer goes to review.</li>
+        <li>A sticker or white-out over one empty bubble on the legacy sheet reads as blank.</li>
+        <li>A very light second mark can look like an erased one.</li>
+        <li>The legacy sheet supports only "erase to change"; a mirrored scan is held.</li>
+        <li>Own forms print as PDF only.</li>
+      </ul>
+    </section>
+    <section>
+      <h4>Grading and review</h4>
+      <ul class="plain">
+        <li>Keys that need several answers together (<code class="nw">A+C</code>) are not supported. Use <code class="nw">A|C</code>, or void the question.</li>
+        <li>Small warnings are counted, not queued for review.</li>
+        <li>There is no second-person check yet: each decision is one reviewer's.</li>
+        <li>Two sheets with one student number and different answers cannot be marked as duplicates.</li>
+        <li>If nobody chose the keyed answer, Mizan flags the question but does not block release. Check such questions yourself.</li>
+        <li>Stopping a grading run keeps nothing; grade the scans again.</li>
+        <li>The default student-number scheme accepts intake years up to 2030.</li>
+      </ul>
+    </section>
+    <section>
+      <h4>Rosters</h4>
+      <ul class="plain">
+        <li>Matching against a real class roster has not been proven yet. Check identity items with care.</li>
+        <li>A roster cannot be removed once added.</li>
+      </ul>
+    </section>
+    <section>
+      <h4>Security</h4>
+      <ul class="plain">
+        <li>The exam folder is not encrypted. Use an encrypted device.</li>
+        <li>Looking at students in the desktop app is not recorded.</li>
+      </ul>
+    </section>
+    <section>
+      <h4>Moving from Remark</h4>
+      <ul class="plain">
+        <li>Only Remark's graded Excel export is read; not its CSV or SPSS exports.</li>
+        <li>Remark's results cannot become an exam in Mizan without the scans: scan the sheets and grade them.</li>
+        <li>Imported learning objectives all start in the K domain. Correct <code class="nw">clo.csv</code>, then replace and approve it.</li>
+        <li>A graded exam's points cannot change. Create the exam from the Remark import instead.</li>
+        <li>A comparison holds release only if you queue its differences for review.</li>
+      </ul>
+    </section>
+    <section>
+      <h4>Accreditation</h4>
+      <ul class="plain">
+        <li>NCAAA tables come as Excel and CSV, not as the official Word forms.</li>
+        <li>ABET summaries are not available.</li>
+      </ul>
+    </section>
+    <section>
+      <h4>The desktop app</h4>
+      <ul class="plain">
+        <li>No keymap editor, no dragging files onto the window, no menu of recent exams folders.</li>
+        <li>An added batch or a roster run can be cancelled only by closing the window.</li>
+      </ul>
+    </section>
+  </div>
+</section>
+
+<!-- ===================================================== APPENDIX A -->
+<section class="chapter" id="app-a">
+  <header class="ch-head">
+    <div class="ch-kicker"><span class="no">A</span><span>Appendix</span><svg aria-hidden="true"><rect width="100%" height="10" fill="url(#girih-strip)"/></svg></div>
+    <h2>Command line, for IT staff</h2>
+    <p class="ch-ar" lang="ar" dir="rtl">سطر الأوامر</p>
+    <p class="lede"><code class="nw">omr</code> does most of what the desktop app does, from a terminal or a script; adding a roster to a graded exam is in the desktop app only. <code class="nw">omr --help</code> and <code class="nw">omr &lt;command&gt; --help</code> list every option.</p>
+  </header>
+
+  <p>In the examples, <code class="nw">&lt;legacy&gt;</code> stands for the legacy answer sheet's template name: run <code class="nw">omr templates</code> to see it. All names and numbers are invented.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th style="width:24%">Command</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td class="k"><code class="nw">omr templates</code></td><td>List the answer-sheet templates. <code class="nw">--example-spec</code> prints a starting spec for your own form.</td></tr>
+        <tr><td class="k"><code class="nw">omr sheet render</code></td><td>Print your own form as PDF. The exam's secret key goes to the private folder.</td></tr>
+        <tr><td class="k"><code class="nw">omr survey</code></td><td>Read the scans once, write nothing, and propose the exam's settings with their sources. Exits with code 2 while it has a question; <code class="nw">--answer</code> answers it.</td></tr>
+        <tr><td class="k"><code class="nw">omr grade</code></td><td>Grade a folder of scans into a new exam folder. <code class="nw">--infer-key</code> grades with a provisional key.</td></tr>
+        <tr><td class="k"><code class="nw">omr add</code></td><td>Add a later batch. Review decisions are kept.</td></tr>
+        <tr><td class="k"><code class="nw">omr review list</code></td><td>Show open review items, student numbers masked. <code class="nw">--lane</code>, <code class="nw">--json</code>, <code class="nw">--crops DIR</code>, <code class="nw">--reveal</code> (recorded).</td></tr>
+        <tr><td class="k"><code class="nw">omr review resolve</code></td><td>Record a decision, or <code class="nw">--undo</code> the latest one.</td></tr>
+        <tr><td class="k"><code class="nw">omr key read</code></td><td>Preview key sheets: writes <code class="nw">key.csv</code> and a summary, records nothing.</td></tr>
+        <tr><td class="k"><code class="nw">omr key summary</code></td><td>Write the key-sheet summary of a graded exam.</td></tr>
+        <tr><td class="k"><code class="nw">omr key confirm</code></td><td>Confirm the key read from key sheets, deciding highlighted rows first.</td></tr>
+        <tr><td class="k"><code class="nw">omr key replace</code></td><td>Replace the whole key, for example the real key after <code class="nw">--infer-key</code>. Rescores.</td></tr>
+        <tr><td class="k"><code class="nw">omr key set</code></td><td>Correct one key entry. Rescores.</td></tr>
+        <tr><td class="k"><code class="nw">omr import remark</code></td><td>Turn Remark's graded Excel exports into a key, a CLO file and a version map.</td></tr>
+        <tr><td class="k"><code class="nw">omr clo replace</code></td><td>Load a corrected CLO file. Outcomes recompute; nothing is graded again.</td></tr>
+        <tr><td class="k"><code class="nw">omr clo approve</code></td><td>Approve imported CLO rows; lifts the draft mark on the course-report tables.</td></tr>
+        <tr><td class="k"><code class="nw">omr compare remark</code></td><td>Compare a graded exam with Remark's results for the same sheets. Restricted report; <code class="nw">--queue</code> sends differences to Review.</td></tr>
+        <tr><td class="k"><code class="nw">omr release</code></td><td>Release the results. Refused while anything blocks it. Writes the Blackboard file.</td></tr>
+        <tr><td class="k"><code class="nw">omr export</code></td><td>Write every export again. <code class="nw">--blackboard-column ID</code> fills an existing grade column.</td></tr>
+        <tr><td class="k"><code class="nw">omr bench</code></td><td>Measure speed on a folder of scans.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>A typical run</h3>
+<pre class="cmd">omr grade scans/demo-101/ --template &lt;legacy&gt; --questions 30 \
+    --key key.csv --roster roster.csv --clo clo.csv \
+    --course "DEMO 101" --title "Quiz 1" --out "$HOME/OMR Exams/demo-101-quiz-1"
+omr review list    --project "$HOME/OMR Exams/demo-101-quiz-1" --lane marks
+omr review resolve --project "$HOME/OMR Exams/demo-101-quiz-1" --item 12 \
+    --decision C --reason AMBIGUOUS_MARK
+omr release        --project "$HOME/OMR Exams/demo-101-quiz-1"
+
+<span class="c"># your own printed form</span>
+omr templates --example-spec &gt; spec.json
+omr sheet render --spec spec.json --out sheets.pdf --copies 120</pre>
+  <p><code class="nw">--project</code> takes the exam folder or its <code class="nw">project.omrproj</code>. <code class="nw">--copies</code> is the number of sheets per version. Review decisions: <code class="nw">ack</code> accepts the suggestion; otherwise a letter, <code class="nw">blank</code>, <code class="nw">multi:A+C</code>, <code class="nw">unreadable</code>, <code class="nw">student:&lt;number&gt;</code>, <code class="nw">not-on-roster</code> or <code class="nw">form:B</code>. A decision other than the suggestion needs <code class="nw">--reason</code>, for example <code class="nw">AMBIGUOUS_MARK</code>, <code class="nw">ERASURE_RESIDUE</code>, <code class="nw">ID_CORRECTION</code>, or <code class="nw">OTHER</code> with <code class="nw">--note</code>.</p>
+
+  <div class="keys-grid">
+    <div class="table-wrap">
+      <table class="keep">
+        <caption><span class="fig">Table A.1</span>Starting the desktop app</caption>
+        <thead><tr><th>Command</th><th>Opens</th></tr></thead>
+        <tbody>
+          <tr><td class="k"><code class="nw">omr-desktop</code></td><td>The exams folder used last, else <code class="nw">OMR Exams</code> in the home folder</td></tr>
+          <tr><td class="k"><code class="nw">--workspace "&lt;folder&gt;"</code></td><td>Every exam below a folder</td></tr>
+          <tr><td class="k"><code class="nw">--project "&lt;exam&gt;"</code></td><td>One exam</td></tr>
+          <tr><td class="k"><code class="nw">--demo</code></td><td>Invented demo data, marked on every screen</td></tr>
+          <tr><td class="k"><code class="nw">--screenshot &lt;folder&gt;</code></td><td>Saves every screen as PNG, without a display</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="table-wrap">
+      <table class="keep">
+        <caption><span class="fig">Table A.2</span>Exit codes of <code class="nw">omr</code></caption>
+        <thead><tr><th>Code</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td class="k">0</td><td>Success</td></tr>
+          <tr><td class="k">2</td><td>Usage error, or the exam definition needs an answer</td></tr>
+          <tr><td class="k">3 · 4</td><td>An input file · the exam's record</td></tr>
+          <tr><td class="k">5 · 6</td><td>Scoring could not finish · a review problem</td></tr>
+          <tr><td class="k">7 · 8</td><td>Not found · disk or file error</td></tr>
+          <tr><td class="k">70 · 130</td><td>Internal error · cancelled</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <p><strong>Demo mode.</strong> With <code class="nw">--demo</code>, every screen shows a <span class="ui">DEMO DATA</span> mark in the rail: the exams are invented and nothing is read or written. Release is refused, and a few buttons that exist only in the demo say they are not built yet. To leave, close Mizan and start it without <code class="nw">--demo</code>.</p>
+  <p><code class="nw">OMR_KEY_DIR</code> sets the private folder. It must be local and private, never a sync or network folder. On Windows, release builds of <code class="nw">omr-desktop.exe</code> open no console window: start-up errors are meant to appear in a window instead (not yet seen on a real display). IT staff can also build both programs from source with Rust 1.92 or newer, following the build steps in the project's README.</p>
+</section>
+
+<!-- ===================================================== APPENDIX B -->
+<section class="chapter" id="app-b">
+  <header class="ch-head">
+    <div class="ch-kicker"><span class="no">B</span><span>Appendix</span><svg aria-hidden="true"><rect width="100%" height="10" fill="url(#girih-strip)"/></svg></div>
+    <h2>Glossary</h2>
+    <p class="ch-ar" lang="ar" dir="rtl">مسرد المصطلحات</p>
+  </header>
+
+  <div class="table-wrap">
+    <table class="glossary">
+      <thead><tr><th style="width:24%">Term</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Answer key</strong></td><td>The right answers, one set per version.</td></tr>
+        <tr><td><strong>Audit log</strong></td><td>The exam's record of every decision, key change and release, in order, sealed so that a change shows.</td></tr>
+        <tr><td><strong>Booklet</strong></td><td>One student's sheet, or sheets. Results list a booklet number.</td></tr>
+        <tr><td><strong>CLO</strong></td><td>Course learning outcome. You map questions to CLOs in the CLO file.</td></tr>
+        <tr><td><strong>CLO attained</strong></td><td>By default, a student attains a CLO with 60 % of its points; the class, when 70 % do.</td></tr>
+        <tr><td><strong>Cronbach's alpha (α)</strong></td><td>How consistently the whole test measures. 0.80 or more suits an end-of-course exam; 0.90 or more a high-stakes one.</td></tr>
+                <tr><td><strong>Inferred key</strong></td><td>A provisional key Mizan works out from the students' most common answers. For a first look only; never releasable.</td></tr>
+        <tr><td><strong>Key sheet</strong></td><td>An answer sheet filled in with the right answers; student number all 0 or all 9.</td></tr>
+        <tr><td><strong>Key version</strong></td><td>Each key change makes a new numbered version (v1, v2 …); the old one stays in the record.</td></tr>
+                <tr><td><strong>NCAAA, TP-154</strong></td><td>The national accreditation body, and its course report. Mizan fills the report's grade-distribution and CLO tables.</td></tr>
+        <tr><td><strong>p</strong></td><td>The share of students who answered a question correctly.</td></tr>
+        <tr><td><strong>PLO</strong></td><td>Programme learning outcome. CLOs roll up into PLOs.</td></tr>
+                <tr><td><strong>Probable mis-key</strong></td><td>A question where the strongest students agree on another answer than the key. Release waits until you decide.</td></tr>
+        <tr><td><strong>Provisional</strong></td><td>A result with something still waiting in Review.</td></tr>
+        <tr><td><strong>r&nbsp;ir</strong></td><td>Discrimination: do strong students get the question right more often than weak ones? 0.30 or more is good.</td></tr>
+        <tr><td><strong>Release</strong></td><td>Your decision that the results are final. Only then is the Blackboard file written. Any later change cancels it.</td></tr>
+        <tr><td><strong>Restricted</strong></td><td>The classification of every file Mizan writes (<span lang="ar" dir="rtl">مقيد</span>), shown in Excel and HTML files and recorded in the manifest for the others. It holds student data: keep it inside your institution.</td></tr>
+        <tr><td><strong>Review item</strong></td><td>Something Mizan is not sure about, waiting for a person: a mark, a student number, a page or a key question.</td></tr>
+        <tr><td><strong>SEM</strong></td><td>Standard error of measurement: how far, in points, a score may sit from the student's true score.</td></tr>
+        <tr><td><strong>Silent error</strong></td><td>An answer accepted without a person that turns out to be wrong. Mizan is built to avoid these: when unsure, it asks.</td></tr>
+        <tr><td><strong>Stability</strong></td><td>How often a flag fires again when Mizan re-draws the class 1,000 times. A low share reads "proposed" and never blocks release.</td></tr>
+        <tr><td><strong>Version (form)</strong></td><td>One variant of the exam: A, B, C …</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</section>
+
+</div>

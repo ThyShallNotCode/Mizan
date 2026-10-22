@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 568 540" width="100%" role="img" aria-labelledby="exam-lifecycle-title exam-lifecycle-desc">
+  <title id="exam-lifecycle-title">The life of an exam in Mizan</title>
+  <desc id="exam-lifecycle-desc">State machine of the statuses on the Exams screen: Setup, then Scanning while pages are read; once graded the exam is In review while anything blocks release and Ready to release when nothing does; you release it, and a later change supersedes the release so it must be released again.</desc>
+  <defs><marker id="exam-lifecycle-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#55606E"/></marker><marker id="exam-lifecycle-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#0E5E57"/></marker><marker id="exam-lifecycle-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#3D5A80"/></marker></defs>
+  <rect width="568" height="540" fill="#FFFDF8"/>
+  <!-- zones -->
+  <rect x="16" y="284" width="536" height="128" rx="8" fill="#F0EADF" stroke="#8C8270" stroke-width="1.2"/>
+  <!-- zonelabels -->
+  <rect x="28" y="274" width="240" height="20" rx="2" fill="#FFFDF8"/>
+  <text x="36" y="290" fill="#55606E" font-size="16" font-weight="500" font-family="'IBM Plex Mono', Consolas, monospace" letter-spacing="0.1em">GRADED, NOT RELEASED</text>
+  <!-- arrows -->
+  <path d="M284,26 V44" fill="none" stroke="#55606E" stroke-width="1.5" marker-end="url(#exam-lifecycle-arrow)"/>
+  <path d="M284,108 V164" fill="none" stroke="#55606E" stroke-width="1.5" marker-end="url(#exam-lifecycle-arrow)"/>
+  <path d="M284,228 V284" fill="none" stroke="#55606E" stroke-width="1.5" marker-end="url(#exam-lifecycle-arrow)"/>
+  <path d="M216,340 H352" fill="none" stroke="#55606E" stroke-width="1.5" marker-end="url(#exam-lifecycle-arrow)"/>
+  <path d="M352,360 H216" fill="none" stroke="#55606E" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#exam-lifecycle-arrow)"/>
+  <path d="M444,380 V460" fill="none" stroke="#0E5E57" stroke-width="1.5" marker-end="url(#exam-lifecycle-arrow-accent)"/>
+  <path d="M352,492 H132 Q124,492 124,484 V380" fill="none" stroke="#55606E" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#exam-lifecycle-arrow)"/>
+  <!-- labels -->
+  <rect x="292" y="126" width="120" height="20" rx="2" fill="#FFFDF8"/>
+  <text x="352" y="142" fill="#55606E" font-size="16" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">GRADE EXAM</text>
+  <rect x="292" y="246" width="100" height="20" rx="2" fill="#FFFDF8"/>
+  <text x="342" y="262" fill="#55606E" font-size="16" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">RUN ENDS</text>
+  <rect x="240" y="314" width="88" height="20" rx="2" fill="#F0EADF"/>
+  <text x="284" y="330" fill="#55606E" font-size="16" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">CLEARED</text>
+  <rect x="218" y="366" width="132" height="20" rx="2" fill="#F0EADF"/>
+  <text x="284" y="382" fill="#55606E" font-size="16" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">NEW BLOCKER</text>
+  <rect x="304" y="426" width="132" height="20" rx="2" fill="#FFFDF8"/>
+  <text x="370" y="442" fill="#0E5E57" font-size="16" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YOU RELEASE</text>
+  <rect x="174" y="466" width="140" height="20" rx="2" fill="#FFFDF8"/>
+  <text x="244" y="482" fill="#55606E" font-size="16" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">LATER CHANGE</text>
+  <!-- nodes -->
+  <circle cx="284" cy="20" r="6" fill="#1C2430"/>
+  <rect x="196" y="44" width="176" height="64" rx="8" fill="#FFFDF8" stroke="#1C2430" stroke-width="1.2"/>
+  <text x="284" y="68" fill="#1C2430" font-size="18" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">Setup</text>
+  <text x="284" y="93" fill="#55606E" font-size="16" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">no pages yet</text>
+  <rect x="196" y="164" width="176" height="64" rx="8" fill="#FFFDF8" stroke="#1C2430" stroke-width="1.2"/>
+  <text x="284" y="188" fill="#1C2430" font-size="18" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">Scanning</text>
+  <text x="284" y="213" fill="#55606E" font-size="16" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">pages being read</text>
+  <rect x="32" y="316" width="184" height="64" rx="8" fill="#FFFDF8" stroke="#1C2430" stroke-width="1.2"/>
+  <text x="124" y="340" fill="#1C2430" font-size="18" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">In review</text>
+  <text x="124" y="365" fill="#55606E" font-size="16" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">release blocked</text>
+  <rect x="352" y="316" width="184" height="64" rx="8" fill="#FFFDF8" stroke="#1C2430" stroke-width="1.2"/>
+  <text x="444" y="340" fill="#1C2430" font-size="18" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">Ready to release</text>
+  <text x="444" y="365" fill="#55606E" font-size="16" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">nothing blocks it</text>
+  <rect x="352" y="460" width="184" height="64" rx="8" fill="#DCEBE6" stroke="#0E5E57" stroke-width="1.2"/>
+  <text x="444" y="484" fill="#1C2430" font-size="18" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">Released</text>
+  <text x="444" y="509" fill="#55606E" font-size="16" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">your decision</text>
+</svg>

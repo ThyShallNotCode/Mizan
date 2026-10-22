@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>What happens to each mark</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --paper: #FFFDF8;
+      --paper-2: #F0EADF;
+      --ink: #1C2430;
+      --muted: #55606E;
+      --soft: #8C8270;
+      --rule: rgba(28,36,48,0.14);
+      --accent: #0E5E57;
+      --font-sans: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+      --font-mono: 'IBM Plex Mono', Consolas, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--paper);
+      color: var(--ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2.5rem 1rem;
+    }
+    .frame { max-width: 960px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 500;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-sans);
+      font-weight: 600;
+      font-size: clamp(1.4rem, 2vw + 0.8rem, 1.9rem);
+      letter-spacing: -0.01em;
+      line-height: 1.2;
+      color: var(--ink);
+      margin-bottom: 0.4rem;
+    }
+    .sub { color: var(--muted); font-size: 0.95rem; margin-bottom: 1.5rem; max-width: 48rem; }
+    svg { width: 100%; height: auto; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Review and release · Flowchart</p>
+    <h1>What happens to each mark</h1>
+    <p class="sub">Mizan accepts only the marks it is sure of. Everything else waits for a person, and release stays blocked while serious review items are open.</p>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 856" width="100%" role="img" aria-labelledby="review-release-title review-release-desc">
+      <title id="review-release-title">What happens to each mark, and when results can be released</title>
+      <desc id="review-release-desc">Flowchart: Mizan reads each mark without the answer key; a mark it is sure of is accepted, any other mark waits in Review until a person accepts the suggestion or changes it with a reason, and every decision is recorded; release stays blocked while ERROR or BLOCKER review items are open, and when the exam is ready you release it.</desc>
+      <defs><marker id="review-release-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#55606E"/></marker><marker id="review-release-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#0E5E57"/></marker><marker id="review-release-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#3D5A80"/></marker></defs>
+      <rect width="960" height="856" fill="#FFFDF8"/>
+      <!-- zones -->
+      <text x="40" y="44" fill="#8C8270" font-size="12" font-weight="500" font-family="'IBM Plex Mono', Consolas, monospace" letter-spacing="0.12em">EACH MARK</text>
+      <line x1="40" y1="496" x2="920" y2="496" stroke="rgba(28,36,48,0.14)" stroke-width="1"/>
+      <text x="40" y="524" fill="#8C8270" font-size="12" font-weight="500" font-family="'IBM Plex Mono', Consolas, monospace" letter-spacing="0.12em">WHOLE EXAM</text>
+      <!-- arrows -->
+      <path d="M480,96 V128" fill="none" stroke="#55606E" stroke-width="1.5" marker-end="url(#review-release-arrow)"/>
+      <path d="M600,184 H664" fill="none" stroke="#55606E" stroke-width="1.5" marker-end="url(#review-release-arrow)"/>
+      <path d="M480,240 V264" fill="none" stroke="#55606E" stroke-width="1.5" marker-end="url(#review-release-arrow)"/>
+      <path d="M480,352 V376" fill="none" stroke="#55606E" stroke-width="1.5" marker-end="url(#review-release-arrow)"/>
+      <path d="M480,480 V536" fill="none" stroke="#55606E" stroke-width="1.5" marker-end="url(#review-release-arrow)"/>
+      <path d="M760,224 V584 Q760,592 752,592 H600" fill="none" stroke="#55606E" stroke-width="1.5" marker-end="url(#review-release-arrow)"/>
+      <path d="M360,592 H272" fill="none" stroke="#55606E" stroke-width="1.5" marker-end="url(#review-release-arrow)"/>
+      <path d="M176,548 V316 Q176,308 184,308 H372" fill="none" stroke="#55606E" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#review-release-arrow)"/>
+      <path d="M480,648 V688" fill="none" stroke="#55606E" stroke-width="1.5" marker-end="url(#review-release-arrow)"/>
+      <path d="M588,732 H664" fill="none" stroke="#55606E" stroke-width="1.5" marker-end="url(#review-release-arrow)"/>
+      <!-- labels -->
+      <rect x="610" y="160" width="44" height="16" rx="2" fill="#FFFDF8"/>
+      <text x="632" y="172" fill="#55606E" font-size="12" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">SURE</text>
+      <rect x="488" y="244" width="76" height="16" rx="2" fill="#FFFDF8"/>
+      <text x="526" y="256" fill="#55606E" font-size="12" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">NOT SURE</text>
+      <rect x="282" y="568" width="68" height="16" rx="2" fill="#FFFDF8"/>
+      <text x="316" y="580" fill="#55606E" font-size="12" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">BLOCKED</text>
+      <rect x="184" y="416" width="44" height="16" rx="2" fill="#FFFDF8"/>
+      <text x="206" y="428" fill="#55606E" font-size="12" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">OPEN</text>
+      <rect x="488" y="660" width="52" height="16" rx="2" fill="#FFFDF8"/>
+      <text x="514" y="672" fill="#55606E" font-size="12" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">READY</text>
+      <!-- nodes -->
+      <rect x="352" y="32" width="256" height="64" rx="32" fill="#FFFDF8"/>
+      <rect x="352" y="32" width="256" height="64" rx="32" fill="rgba(28,36,48,0.03)" stroke="rgba(28,36,48,0.30)" stroke-width="1.2"/>
+      <text x="480" y="62" fill="#1C2430" font-size="16" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">Mizan reads a mark</text>
+      <text x="480" y="82" fill="#55606E" font-size="12" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">without seeing the key</text>
+      <polygon points="480,128 600,184 480,240 360,184" fill="#FFFDF8"/>
+      <polygon points="480,128 600,184 480,240 360,184" fill="#FFFFFF" stroke="#1C2430" stroke-width="1.2"/>
+      <text x="480" y="190" fill="#1C2430" font-size="16" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">Sure of the mark?</text>
+      <rect x="664" y="144" width="192" height="80" rx="6" fill="#FFFDF8"/>
+      <rect x="664" y="144" width="192" height="80" rx="6" fill="#FFFFFF" stroke="#1C2430" stroke-width="1.2"/>
+      <text x="760" y="179" fill="#1C2430" font-size="16" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">Accepted</text>
+      <text x="760" y="200" fill="#55606E" font-size="12" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">counted as read</text>
+      <rect x="372" y="264" width="216" height="88" rx="6" fill="#FFFDF8"/>
+      <rect x="372" y="264" width="216" height="88" rx="6" fill="rgba(28,36,48,0.05)" stroke="#55606E" stroke-width="1.2"/>
+      <text x="480" y="295" fill="#1C2430" font-size="16" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">Waits in Review</text>
+      <text x="480" y="316" fill="#55606E" font-size="12" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">faint, double, erased</text>
+      <text x="480" y="332" fill="#55606E" font-size="12" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">or unreadable marks</text>
+      <rect x="372" y="376" width="216" height="104" rx="6" fill="#FFFDF8"/>
+      <rect x="372" y="376" width="216" height="104" rx="6" fill="#DCEBE6" stroke="#0E5E57" stroke-width="1.2"/>
+      <text x="480" y="407" fill="#1C2430" font-size="16" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">You decide</text>
+      <text x="480" y="428" fill="#55606E" font-size="12" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">accept the suggestion,</text>
+      <text x="480" y="444" fill="#55606E" font-size="12" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">or change it with a reason;</text>
+      <text x="480" y="460" fill="#55606E" font-size="12" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">every decision recorded</text>
+      <polygon points="480,536 600,592 480,648 360,592" fill="#FFFDF8"/>
+      <polygon points="480,536 600,592 480,648 360,592" fill="#FFFFFF" stroke="#1C2430" stroke-width="1.2"/>
+      <text x="480" y="598" fill="#1C2430" font-size="16" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">Release ready?</text>
+      <rect x="80" y="548" width="192" height="88" rx="6" fill="#FFFDF8"/>
+      <rect x="80" y="548" width="192" height="88" rx="6" fill="#FFFFFF" stroke="#1C2430" stroke-width="1.2"/>
+      <text x="176" y="579" fill="#1C2430" font-size="16" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">Release blocked</text>
+      <text x="176" y="600" fill="#55606E" font-size="12" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">ERROR/BLOCKER review</text>
+      <text x="176" y="616" fill="#55606E" font-size="12" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">items open</text>
+      <rect x="372" y="688" width="216" height="88" rx="6" fill="#FFFDF8"/>
+      <rect x="372" y="688" width="216" height="88" rx="6" fill="#DCEBE6" stroke="#0E5E57" stroke-width="1.2"/>
+      <text x="480" y="719" fill="#1C2430" font-size="16" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">You release</text>
+      <text x="480" y="740" fill="#55606E" font-size="12" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">press Release results…</text>
+      <text x="480" y="756" fill="#55606E" font-size="12" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">and confirm</text>
+      <rect x="664" y="700" width="192" height="64" rx="32" fill="#FFFDF8"/>
+      <rect x="664" y="700" width="192" height="64" rx="32" fill="rgba(28,36,48,0.03)" stroke="rgba(28,36,48,0.30)" stroke-width="1.2"/>
+      <text x="760" y="730" fill="#1C2430" font-size="16" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">Released</text>
+      <text x="760" y="750" fill="#55606E" font-size="12" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">exports written</text>
+      <!-- top -->
+      <line x1="40" y1="808" x2="920" y2="808" stroke="rgba(28,36,48,0.14)" stroke-width="1"/>
+      <rect x="40" y="822" width="28" height="14" rx="7" fill="rgba(28,36,48,0.03)" stroke="rgba(28,36,48,0.30)" stroke-width="1"/>
+      <text x="76" y="834" fill="#55606E" font-size="12" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Start or end</text>
+      <rect x="216" y="822" width="28" height="14" rx="3" fill="#FFFFFF" stroke="#1C2430" stroke-width="1"/>
+      <text x="252" y="834" fill="#55606E" font-size="12" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Step</text>
+      <rect x="336" y="822" width="28" height="14" rx="3" fill="rgba(28,36,48,0.05)" stroke="#55606E" stroke-width="1"/>
+      <text x="372" y="834" fill="#55606E" font-size="12" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Waits for a person</text>
+      <polygon points="540,821 556,829 540,837 524,829" fill="#FFFFFF" stroke="#1C2430" stroke-width="1"/>
+      <text x="568" y="834" fill="#55606E" font-size="12" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Check</text>
+      <rect x="660" y="822" width="28" height="14" rx="3" fill="#DCEBE6" stroke="#0E5E57" stroke-width="1"/>
+      <text x="696" y="834" fill="#55606E" font-size="12" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">A person decides</text>
+    </svg>
+  </div>
+</body>
+</html>

@@ -1,0 +1,673 @@
+<title>Mizan Brochure</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Arabic:wght@400;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+  :root {
+    --sand: #F5F0E6;
+    --surface: #FFFDF8;
+    --sunken: #F0EADF;
+    --hairline: #E3DACB;
+    --border-strong: #8C8270;
+    --ink: #1C2430;
+    --ink-2: #55606E;
+    --teal: #0E5E57;
+    --teal-deep: #0B3B37;
+    --teal-soft: #DCEBE6;
+    --gold: #B0832A;
+    --gold-text: #7A5815;
+    --gold-bright: #D9AE55;
+    --success: #2A7148;
+    --warning: #955800;
+    --error: #B3261E;
+    --info: #3D5A80;
+    --ground: #E6DECF;
+    --on-teal: #F5F0E6;
+    --on-teal-2: #B4CBC4;
+    --sans: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+    --arabic: 'IBM Plex Sans Arabic', 'Segoe UI', Tahoma, sans-serif;
+    --mono: 'IBM Plex Mono', Consolas, ui-monospace, monospace;
+  }
+
+  @page { size: A4; margin: 0; }
+
+  html {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+  }
+  img { max-width: 100%; display: block; }
+
+  /* ---------- the page: everything inside is sized in cqw (1cqw = 2.1 mm in print) ---------- */
+  .page {
+    position: relative;
+    box-sizing: border-box;
+    width: 210mm;
+    height: 297mm;
+    overflow: hidden;
+    break-after: page;
+    page-break-after: always;
+    container-type: inline-size;
+    background: var(--sand);
+    color: var(--ink);
+    font-size: 1.52cqw;
+    line-height: 1.45;
+    font-kerning: normal;
+  }
+  .page:last-of-type { break-after: auto; page-break-after: auto; }
+  .page *, .page *::before, .page *::after { box-sizing: border-box; }
+  .page h1, .page h2, .page h3, .page p, .page ol, .page ul, .page li, .page figure,
+  .page figcaption, .page dl, .page dt, .page dd { margin: 0; padding: 0; }
+  .page ol, .page ul { list-style: none; }
+  .page strong { font-weight: 600; }
+  .ar { font-family: var(--arabic); font-feature-settings: normal; }
+  .nowrap { white-space: nowrap; }
+
+  @media screen {
+    body {
+      padding-block: 24px;
+      padding-left: max(16px, env(safe-area-inset-left, 0px));
+      padding-right: max(16px, env(safe-area-inset-right, 0px));
+    }
+    .page {
+      width: min(210mm, 100%);
+      height: auto;
+      aspect-ratio: 210 / 297;
+      margin: 0 auto 24px;
+    }
+    .page:last-of-type { margin-bottom: 0; }
+  }
+  @media print {
+    body { background: var(--sand); }
+  }
+
+  .inner { position: relative; padding: 6.6cqw 7cqw 0; }
+
+  /* ---------- shared type ---------- */
+  .head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding-bottom: 1.3cqw;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-weight: 500;
+    font-size: 1.38cqw;
+    line-height: 1.3;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--teal);
+  }
+  .eyebrow .folio { color: var(--gold-text); margin-right: 1.4cqw; }
+  .ar-sub {
+    font-family: var(--arabic);
+    font-weight: 600;
+    font-size: 2.2cqw;
+    line-height: 1.3;
+    color: var(--gold-text);
+  }
+  h2 {
+    margin-top: 3.4cqw !important;
+    font-size: 4.3cqw;
+    line-height: 1.1;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    color: var(--ink);
+    max-width: 74cqw;
+    text-wrap: balance;
+  }
+  h3 {
+    font-size: 1.8cqw;
+    line-height: 1.25;
+    font-weight: 600;
+    color: var(--ink);
+    letter-spacing: -0.005em;
+  }
+  .small { font-size: 1.38cqw; line-height: 1.42; color: var(--ink-2); }
+  kbd {
+    font-family: var(--mono);
+    font-size: 0.9em;
+    font-weight: 500;
+    padding: 0 0.35cqw;
+    border: 1px solid var(--border-strong);
+    border-radius: 0.4cqw;
+    background: var(--surface);
+    color: var(--ink);
+    white-space: nowrap;
+  }
+  .mono { font-family: var(--mono); }
+  .steps p, .ben p, .guards li, .fig h3, .fig p, .shot figcaption, .status, .legal p { text-wrap: pretty; }
+
+  /* ---------- diagrams (inline SVG; type tuned for print size) ---------- */
+  .dgm-band {
+    margin-inline: -7cqw;
+    background: var(--surface);
+    border-block: 1px solid var(--hairline);
+    overflow: hidden;
+  }
+  .dgm-band svg { display: block; height: auto; }
+  .dgm-band svg text[font-size="12"] { font-size: 13.2px; }
+  .dgm-band svg text[font-size="12"]:not([letter-spacing]):not([font-weight]) {
+    font-family: var(--sans);
+    font-size: 13.8px;
+  }
+  .dgm-band svg text[letter-spacing="0.12em"] { letter-spacing: 0.075em; }
+  .dgm-band svg text[letter-spacing="0.06em"] { letter-spacing: 0.04em; }
+
+  /* ---------- page 1: cover ---------- */
+  .cover { background: var(--sand); }
+  .cover-photo {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 121.4cqw;
+    max-width: none;
+    object-fit: cover;
+    object-position: 50% 0%;
+  }
+  @media print {
+    .cover-photo { content: url("../assets/img/cover-hero-print.jpg"); }
+  }
+  .cover-text {
+    position: absolute;
+    top: 8.2cqw;
+    left: 19.9cqw;
+    right: 6cqw;
+  }
+  .cover h1 {
+    font-size: 7.1cqw;
+    line-height: 1.03;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    color: var(--ink);
+    text-wrap: balance;
+  }
+  .cover-ar {
+    margin-top: 2.4cqw !important;
+    font-family: var(--arabic);
+    font-weight: 600;
+    font-size: 3.3cqw;
+    line-height: 1.35;
+    color: var(--teal);
+    text-align: left;
+  }
+  .cover-band {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 20cqw;
+    padding: 0 7cqw;
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    align-items: center;
+    column-gap: 3.4cqw;
+    background: var(--teal-deep);
+    color: var(--on-teal);
+  }
+  .cover-band::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: url("../assets/brand/girih-tile.svg");
+    background-size: 5.6cqw 5.6cqw;
+    opacity: 0.06;
+    pointer-events: none;
+  }
+  .cover-band > * { position: relative; }
+  .lockup { display: flex; align-items: center; gap: 2.4cqw; }
+  .lockup img { width: 10.5cqw; height: 10.5cqw; }
+  .wordmark { display: flex; align-items: baseline; gap: 1.8cqw; white-space: nowrap; }
+  .wm-en { font-size: 5cqw; font-weight: 600; letter-spacing: -0.01em; color: var(--on-teal); line-height: 1; }
+  .wm-ar { font-family: var(--arabic); font-size: 4.4cqw; font-weight: 600; color: var(--gold-bright); line-height: 1; }
+  .band-rule { width: 1px; height: 9cqw; background: rgba(245, 240, 230, 0.22); }
+  .band-copy { display: grid; gap: 1.3cqw; justify-items: start; }
+  .preview-tag {
+    font-family: var(--mono);
+    font-weight: 500;
+    font-size: 1.38cqw;
+    line-height: 1;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--gold-bright);
+    border: 1px solid var(--gold-bright);
+    border-radius: 0.5cqw;
+    padding: 0.7cqw 1.1cqw 0.6cqw;
+  }
+  .band-sub { font-size: 1.9cqw; line-height: 1.38; color: var(--on-teal); max-width: 47cqw; }
+
+  /* ---------- page 2: how it works ---------- */
+  /* The diagram is 94cqw wide from 3cqw, so its lane rules sit 4.6cqw in from both page
+     edges; the step columns below line up with its five boxes (144 of 960 units wide, on a
+     172-unit pitch). */
+  .p2 h2 { max-width: 86cqw; }
+  .p2 .dgm-band { margin-top: 3.4cqw; }
+  .p2 .dgm-band svg { width: 94cqw; margin-left: 3cqw; aspect-ratio: 960 / 360; }
+  .p2 .dgm-band svg text[font-size="12"] { font-size: 13.8px; }
+  .p2 .dgm-band svg text[letter-spacing="0.12em"] { letter-spacing: 0.03em; }
+  .steps {
+    margin: 3cqw 0 0 4.62cqw !important;
+    display: grid;
+    grid-template-columns: repeat(5, 14.1cqw);
+    column-gap: 2.742cqw;
+  }
+  .steps .n {
+    display: block;
+    font-family: var(--mono);
+    font-weight: 500;
+    font-size: 1.38cqw;
+    letter-spacing: 0.1em;
+    color: var(--gold-text);
+  }
+  .steps h3 { margin: 0.5cqw 0 0.7cqw !important; font-size: 1.72cqw; }
+  .steps p { font-size: 1.46cqw; line-height: 1.42; color: var(--ink); }
+  .p2 .reads {
+    margin: 3.2cqw 0 0 0;
+    padding: 1.6cqw 0 0 4.62cqw;
+    border-top: 1px solid var(--hairline);
+    display: grid;
+    grid-template-columns: repeat(5, 14.1cqw);
+    column-gap: 2.742cqw;
+  }
+  .reads dt { grid-row: 1; padding-top: 0.25cqw; }
+  .reads dd:last-child { grid-column: span 2; }
+  .reads h3 { font-size: 1.6cqw; margin-bottom: 0.4cqw !important; }
+  .reads p { font-size: 1.42cqw; line-height: 1.42; color: var(--ink-2); }
+  .scanner {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 33cqw;
+    width: 100%;
+    max-width: none;
+    object-fit: cover;
+    object-position: 50% 80%;
+  }
+
+  /* ---------- page 3: what you get ---------- */
+  .p3 .grid {
+    margin-top: 3.4cqw;
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    column-gap: 2cqw;
+    row-gap: 5cqw;
+    align-items: start;
+  }
+  .shot .window {
+    border: 1px solid var(--hairline);
+    border-radius: 1cqw;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .shot img { width: 100%; height: auto; }
+  /* A detail of a 1440 x 900 screenshot: --x, --y, --w and --h give the region shown. */
+  .shot .crop { position: relative; aspect-ratio: var(--w) / var(--h); }
+  .shot .crop img {
+    position: absolute;
+    max-width: none;
+    width: calc(1440 / var(--w) * 100%);
+    left: calc(var(--x) / var(--w) * -100%);
+    top: calc(var(--y) / var(--h) * -100%);
+  }
+  .shot figcaption { margin-top: 1.1cqw !important; font-size: 1.38cqw; line-height: 1.4; color: var(--ink-2); }
+  .shot figcaption b { font-family: var(--mono); font-weight: 500; font-size: 1.38cqw; letter-spacing: 0.12em; text-transform: uppercase; color: var(--teal); margin-right: 0.9cqw; }
+  .stack { display: grid; row-gap: 2.6cqw; }
+  .ben { border-top: 1px solid var(--border-strong); padding-top: 1.2cqw; }
+  .ben h3 { margin-bottom: 0.7cqw !important; }
+  .ben p { font-size: 1.5cqw; line-height: 1.45; }
+  .ben-lead h3 { font-size: 2.3cqw; line-height: 1.15; }
+  .ben-lead p { font-size: 1.62cqw; }
+  .s-res { grid-column: 1 / span 8; }
+  .b-res { grid-column: 9 / span 4; }
+  .b-rev { grid-column: 1 / span 4; }
+  .s-rev { grid-column: 5 / span 8; }
+  .foot-band {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    background: var(--sunken);
+    border-top: 1px solid var(--hairline);
+  }
+  .p3 .foot-band {
+    height: 24.4cqw;
+    padding: 4.2cqw 7cqw 0;
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    column-gap: 2cqw;
+    align-content: start;
+  }
+  .b-wide1 { grid-column: 1 / span 6; padding-right: 2cqw; }
+  .b-wide2 { grid-column: 7 / span 6; }
+  .ar-inline { font-family: var(--arabic); font-weight: 600; color: var(--gold-text); white-space: nowrap; unicode-bidi: isolate; }
+
+  /* ---------- page 4: trust, privacy and proof ---------- */
+  /* The diagram is 90.5cqw wide from 4.8cqw: its frame starts at the 7cqw text margin and its
+     right-hand boxes end at 93cqw. 1 unit = 0.198 mm, so 14.3px is 8 pt. */
+  .p4 h2 { margin-top: 3cqw !important; }
+  .p4 .dgm-band { margin-top: 2.4cqw; }
+  .p4 .dgm-band svg { width: 90.5cqw; margin-left: 4.8cqw; aspect-ratio: 960 / 440; }
+  .p4 .dgm-band svg text[font-size="12"] { font-size: 14.3px; }
+  .p4 .dgm-band svg text[font-size="12"]:not([letter-spacing]):not([font-weight]) { font-size: 14.6px; }
+  .p4 .dgm-band svg text[letter-spacing="0.12em"] { letter-spacing: 0.02em; font-size: 14.4px; }
+  .p4 .dgm-band svg text[letter-spacing="0.06em"] { letter-spacing: 0.03em; font-size: 14.4px; }
+  .p4 .dgm-band svg text[font-size="16"] { font-size: 16.9px; }
+  .notes { margin-top: 1.1cqw !important; font-size: 1.36cqw; line-height: 1.45; color: var(--ink-2); }
+  .guards { margin-top: 2cqw !important; }
+  .guards ul {
+    margin-top: 1.2cqw !important;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 4cqw;
+    row-gap: 1cqw;
+  }
+  .guards li { font-size: 1.5cqw; line-height: 1.42; padding-left: 2.2cqw; position: relative; }
+  .guards li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.62cqw;
+    width: 0.95cqw;
+    height: 0.95cqw;
+    border-radius: 50%;
+    background: var(--teal);
+  }
+  .p4 .foot-band { padding: 2cqw 7cqw 0; height: 47.6cqw; }
+  .proof-head { display: flex; justify-content: space-between; align-items: baseline; gap: 2cqw; }
+  .proof-figs {
+    margin-top: 1cqw;
+    padding-top: 1.4cqw;
+    border-top: 1px solid var(--hairline);
+    display: grid;
+    grid-template-columns: 1.3fr 1.06fr 1fr;
+    column-gap: 2.4cqw;
+  }
+  .fig + .fig { border-left: 1px solid var(--hairline); padding-left: 2.4cqw; }
+  .fig .big {
+    font-family: var(--mono);
+    font-weight: 500;
+    font-size: 4.9cqw;
+    line-height: 1;
+    letter-spacing: -0.03em;
+    color: var(--teal);
+    white-space: nowrap;
+  }
+  .fig .big small { font-size: 0.5em; letter-spacing: 0; margin-left: 0.5cqw; }
+  .fig .big .sep { margin: 0 -0.18em; }
+  .fig h3 { font-size: 1.52cqw; line-height: 1.3; margin: 0.8cqw 0 0.5cqw !important; }
+  .fig p { font-size: 1.36cqw; line-height: 1.42; color: var(--ink); }
+  .fig p + p { margin-top: 0.4cqw !important; color: var(--ink-2); }
+  .fig .k {
+    font-family: var(--mono);
+    font-weight: 500;
+    font-size: 1.36cqw;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--gold-text);
+    margin-right: 0.6cqw;
+  }
+  .girih-rule { position: relative; height: 1.4cqw; margin-top: 1.1cqw; }
+  .girih-rule::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: url("../assets/brand/girih-strip.svg");
+    background-size: 4.48cqw 1.4cqw;
+    background-repeat: repeat-x;
+    background-position: left center;
+    opacity: 0.22;
+  }
+  .colophon {
+    margin-top: 0.9cqw;
+    display: grid;
+    grid-template-columns: 7fr 5fr;
+    column-gap: 4cqw;
+    align-items: start;
+  }
+  .status, .legal { font-size: 1.38cqw; line-height: 1.45; }
+  .status strong { color: var(--warning); }
+  .legal { color: var(--ink-2); }
+  .legal .official { color: var(--ink); font-weight: 600; }
+  .contact { margin-top: 0.7cqw !important; color: var(--ink); }
+  .contact span { font-family: var(--mono); }
+
+  /* ---------- phones and narrow windows: the pages reflow into one column ---------- */
+  @media screen and (max-width: 760px) {
+    .page { aspect-ratio: auto; height: auto; overflow: visible; }
+    .inner { padding-bottom: 28px; }
+    .page p, .page li, .page dd, .page figcaption { font-size: 15px; line-height: 1.5; }
+    .page h2 { font-size: 26px; max-width: none; }
+    .page h3 { font-size: 16px; }
+    .page .ben-lead h3 { font-size: 18px; }
+    .page .eyebrow, .steps .n, .fig .k, .shot figcaption b { font-size: 12px; }
+    .page .ar-sub { font-size: 16px; }
+    .head { flex-wrap: wrap; gap: 8px 16px; }
+
+    /* the cover keeps its headline over the photo; the band flows below it */
+    .cover-photo { position: static; }
+    .page .cover-ar { font-size: 17px; }
+    .cover-band {
+      position: static;
+      height: auto;
+      padding: 24px 7cqw;
+      grid-template-columns: 1fr;
+      row-gap: 16px;
+    }
+    .band-rule { display: none; }
+    .lockup img { width: 48px; height: 48px; }
+    .wm-en { font-size: 28px; }
+    .wm-ar { font-size: 24px; }
+    .preview-tag { font-size: 12px; padding: 4px 8px 3px; border-radius: 4px; }
+    .band-sub { max-width: none; }
+
+    /* diagrams scroll sideways inside their band at a readable size */
+    .dgm-band { overflow-x: auto; }
+    .dgm-band svg { min-width: 800px; }
+
+    .steps { margin: 24px 0 0 !important; grid-template-columns: 1fr; row-gap: 20px; }
+    .p2 .reads { margin-top: 24px; padding: 16px 0 0; grid-template-columns: 1fr; row-gap: 14px; }
+    .reads dt { grid-row: auto; }
+    .reads dd:last-child { grid-column: auto; }
+    .scanner { position: static; height: auto; aspect-ratio: 16 / 9; }
+
+    .p3 .grid { grid-template-columns: 1fr; row-gap: 28px; }
+    .s-res, .b-res, .b-rev, .s-rev, .b-wide1, .b-wide2 { grid-column: 1 / -1; }
+    .b-wide1 { padding-right: 0; }
+    .stack { row-gap: 20px; }
+    .ben { padding-top: 10px; }
+    .shot figcaption { margin-top: 8px !important; }
+    .p3 .foot-band, .p4 .foot-band { position: static; height: auto; padding: 24px 7cqw 28px; }
+    .p3 .foot-band { grid-template-columns: 1fr; row-gap: 20px; }
+
+    .guards ul { grid-template-columns: 1fr; row-gap: 12px; }
+    .guards li { padding-left: 18px; }
+    .guards li::before { top: 7px; width: 8px; height: 8px; }
+    .proof-head { flex-wrap: wrap; }
+    .proof-figs { grid-template-columns: 1fr; row-gap: 20px; }
+    .fig + .fig { border-left: 0; padding-left: 0; border-top: 1px solid var(--hairline); padding-top: 16px; }
+    .fig .big { font-size: 40px; }
+    .colophon { grid-template-columns: 1fr; row-gap: 16px; }
+  }
+</style>
+
+<!-- ================================================================ page 1: cover -->
+<section class="page cover" aria-label="Cover">
+  <img class="cover-photo" src="../assets/img/cover-hero.jpg" alt="A stack of filled answer sheets on a teal tray beside a brass balance, in warm light through a geometric screen.">
+  <div class="cover-text">
+    <h1>Grading that asks instead of guessing.</h1>
+    <p class="cover-ar" lang="ar" dir="rtl">ميزان لا يُخمِّن… بل يسأل.</p>
+  </div>
+  <div class="cover-band">
+    <div class="lockup">
+      <img src="../assets/brand/icon.svg" alt="">
+      <p class="wordmark"><span class="wm-en">Mizan</span><span class="wm-ar" lang="ar" dir="rtl">ميزان</span></p>
+    </div>
+    <span class="band-rule" aria-hidden="true"></span>
+    <div class="band-copy">
+      <span class="preview-tag">Preview</span>
+      <p class="band-sub">Multiple-choice grading on your own computer, with every doubtful mark sent to a person.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ page 2: how it works -->
+<section class="page p2" aria-label="How it works">
+  <div class="inner">
+    <header class="head">
+      <p class="eyebrow"><span class="folio">02</span>How it works</p>
+      <p class="ar-sub" lang="ar" dir="rtl">من المسح الضوئي إلى اعتماد النتائج</p>
+    </header>
+    <h2>From a stack of scans to released results, with you deciding every doubt.</h2>
+
+    <div class="dgm-band">
+<!--INLINE:how-it-works-->
+    </div>
+
+    <ol class="steps">
+      <li><span class="n">01</span><h3>Scan and set up</h3>
+        <p>Pick the folder of scans, the key and the roster; Mizan shows every value it will grade and where it came from.</p></li>
+      <li><span class="n">02</span><h3>Read and score</h3>
+        <p>Mizan reads every mark without seeing the key, matches each sheet to a student and scores it.</p></li>
+      <li><span class="n">03</span><h3>Review doubts</h3>
+        <p>Each doubtful mark appears as scanned: accept the proposal, or choose another answer and give a reason.</p></li>
+      <li><span class="n">04</span><h3>Release results</h3>
+        <p>Release is your deliberate act; it is refused while anything is open and, when the exam has a roster, it writes the Blackboard upload.</p></li>
+      <li><span class="n">05</span><h3>Export reports</h3>
+        <p>Scores and grades, item analysis, outcome tables and an HTML report, written to the exam&rsquo;s folder when grading ends and again whenever you export.</p></li>
+    </ol>
+
+    <dl class="reads">
+      <dt><span class="eyebrow">What it reads</span></dt>
+      <dd><h3>Scans</h3><p>PDF or TIFF straight from the scanner, or JPEG and PNG files.</p></dd>
+      <dd><h3>Answer sheets</h3><p>The existing <span class="nowrap">100-question</span> sheet, or sheets Mizan prints for an exam.</p></dd>
+      <dd><h3>Key and roster</h3><p>A key file, a scanned key sheet or Remark&rsquo;s graded Excel export; a roster in CSV or Excel, with Arabic names.</p></dd>
+    </dl>
+  </div>
+  <img class="scanner" src="../assets/img/desk-scanner.jpg" alt="A desk scanner feeding a stack of answer sheets, beside a closed laptop and a cup.">
+</section>
+
+<!-- ================================================================ page 3: what you get -->
+<section class="page p3" aria-label="What you get">
+  <div class="inner">
+    <header class="head">
+      <p class="eyebrow"><span class="folio">03</span>What you get</p>
+      <p class="ar-sub" lang="ar" dir="rtl">كلُّ إجابةٍ في ميزانها</p>
+    </header>
+    <h2>Results, item analysis and outcome tables from one run.</h2>
+
+    <div class="grid">
+      <figure class="shot s-res">
+        <div class="window crop" style="--x: 546; --y: 186; --w: 880; --h: 672"><img src="../assets/screens/brochure-results.png" alt="Detail of the Results screen: item analysis with a probable mis-key and other flagged questions, and the release-readiness list that blocks release."></div>
+        <figcaption><b>Results</b>Item analysis, its flags, and what still holds release. Synthetic exam.</figcaption>
+      </figure>
+      <div class="stack b-res">
+        <div class="ben ben-lead">
+          <h3>Catches a probable wrong key.</h3>
+          <p>Item analysis flags a question whose key the strongest students contradict. A confident flag holds release until you decide.</p>
+        </div>
+        <div class="ben">
+          <h3>Outcomes for the course report.</h3>
+          <p>With a file that maps questions to learning outcomes, it writes outcome tables for the NCAAA course report, with Arabic and English headers, in Excel, CSV and HTML. Scores carry Saudi letter grades.</p>
+        </div>
+      </div>
+
+      <div class="stack b-rev">
+        <div class="ben ben-lead">
+          <h3>It asks; it never guesses.</h3>
+          <p>Faint or double marks, erasures, unreadable student numbers and students missing from the roster wait for a person. An unreadable answer is never counted as blank.</p>
+        </div>
+        <div class="ben">
+          <h3>Review at keyboard speed.</h3>
+          <p>Each doubt appears as scanned, with a proposal. <kbd>Enter</kbd> accepts it; a letter key picks another answer, with a reason; <kbd>Ctrl+Z</kbd> undoes; and the results update as you go.</p>
+        </div>
+      </div>
+      <figure class="shot s-rev">
+        <div class="window crop" style="--x: 380; --y: 62; --w: 1052; --h: 536"><img src="../assets/screens/brochure-review.png" alt="Detail of the Review screen: the scanned bubble row of a faint mark with a question mark on it, the fill of each bubble, and the suggested answer with its keyboard shortcuts."></div>
+        <figcaption><b>Review</b>The mark as scanned, the proposal, and one key to accept it. Synthetic exam.</figcaption>
+      </figure>
+
+    </div>
+  </div>
+  <div class="foot-band">
+    <div class="ben b-wide1">
+      <h3>It reads the exam for you.</h3>
+      <p>Give it the scans, and the key and roster if you have them. It proposes the versions, the number of questions and the title, shows where each came from, and asks when the evidence disagrees.</p>
+    </div>
+    <div class="ben b-wide2">
+      <h3>Arabic where it matters.</h3>
+      <p>Rosters with Arabic headers and names. Review keys work on the Arabic keyboard layout, and options can be typed as <span class="ar-inline" lang="ar" dir="rtl">أ ب ج د هـ</span> or in Arabic-Indic digits. The grade chart shows Arabic grade letters; the interface itself is in English.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ page 4: trust, privacy and proof -->
+<section class="page p4" aria-label="Trust, privacy and proof">
+  <div class="inner">
+    <header class="head">
+      <p class="eyebrow"><span class="folio">04</span>Trust, privacy and proof</p>
+      <p class="ar-sub" lang="ar" dir="rtl">دقّةٌ في التصحيح، وشفافيةٌ في القرار</p>
+    </header>
+    <h2>Local by design, and on the record.</h2>
+
+    <div class="dgm-band">
+<!--INLINE:data-local-->
+    </div>
+    <ul class="notes">
+      <li>* On Windows, so far only network paths and Dropbox-style folders are refused.</li>
+      <li>Mizan does not encrypt these folders: keep them on an encrypted disk, and back up both.</li>
+      <li>&ldquo;No network calls of its own&rdquo; comes from a review of the program&rsquo;s code, not from a traffic test.</li>
+    </ul>
+
+    <section class="guards" aria-label="Safeguards">
+      <p class="eyebrow">Safeguards</p>
+      <ul>
+        <li><strong>Doubts wait for you.</strong> A doubtful mark is never guessed; an unreadable answer is never counted as blank.</li>
+        <li><strong>No near-matches.</strong> A student is never matched to the nearest roster entry; a doubtful identity goes to review.</li>
+        <li><strong>Overrides need a reason.</strong> Changing Mizan&rsquo;s proposal requires a reason, and the reason is recorded.</li>
+        <li><strong>Absent is not zero.</strong> An absent sheet is held for you, never scored zero.</li>
+        <li><strong>A tamper-evident record.</strong> Every decision goes into a signed, hash-chained audit log, checked each time the exam opens.</li>
+        <li><strong>Only a key you confirmed.</strong> An inferred key can never be released; a key sheet waits for your confirmation.</li>
+      </ul>
+    </section>
+  </div>
+
+  <div class="foot-band">
+    <section class="proof" aria-label="Measured so far">
+      <div class="proof-head">
+        <p class="eyebrow">Measured so far</p>
+        <p class="small">Development tests, October 2026 &middot; aggregates only</p>
+      </div>
+      <div class="proof-figs">
+        <div class="fig">
+          <p class="big">0</p>
+          <h3>wrong among 4,089 answers Mizan accepted on its own</h3>
+          <p><span class="k">Where</span>143 real, student-filled answer sheets from two courses; 7 of 4,096 answers went to a person.</p>
+          <p><span class="k">Not shown</span>A certified error rate: the sample is small, and the reference was checked by software, not a certified panel.</p>
+        </div>
+        <div class="fig">
+          <p class="big">50<span class="sep">,</span>000</p>
+          <h3>simulated questions; no accepted answer was wrong</h3>
+          <p><span class="k">Where</span>Held out from tuning; 1 in 200 went to a person.</p>
+          <p><span class="k">Not shown</span>Real pencil on paper: thresholds were tuned on this simulator, and a harder simulated set had 1 error in 50,000.</p>
+        </div>
+        <div class="fig">
+          <p class="big">~3<small>s</small></p>
+          <h3>to grade 143 real pages and write every result file</h3>
+          <p><span class="k">Where</span>A shared test machine with 4 virtual processors.</p>
+          <p><span class="k">Not shown</span>A laptop benchmark: the machine was shared and loaded.</p>
+        </div>
+      </div>
+    </section>
+
+    <div class="girih-rule" aria-hidden="true"></div>
+    <div class="colophon">
+      <p class="status"><strong>Current status: preview.</strong> Not yet a production release. The desktop app has been tested through an automated harness with real clicks and keys, but has not yet run in a real window. Mizan is tested on Linux; on Windows it has passed automated checks only, and Windows builds are unsigned test builds with no installer. Matching sheets to a real class roster is not yet proven.</p>
+      <div class="legal">
+        <p><span class="official">Not an official university publication.</span> Blackboard and Remark Office OMR are trademarks of their owners; Mizan is not affiliated with or endorsed by them.</p>
+        <p class="contact">Contact: <span>[contact]</span></p>
+      </div>
+    </div>
+  </div>
+</section>

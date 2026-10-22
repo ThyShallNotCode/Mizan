@@ -1,0 +1,7 @@
+# Page previews written by render.py and the diagram build; regenerate them locally.
+_preview/
+diagrams/_preview-*.png
+# Full-size originals of the generated images; the documents use the JPEG copies.
+assets/img/*.png
+# Crops the mask scripts write for checking their masks.
+_src/*/check-*.png
