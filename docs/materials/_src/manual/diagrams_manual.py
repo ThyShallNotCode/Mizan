@@ -323,7 +323,7 @@ def review_release():
     d.diamond(B, 172, 130, 56, "Sure of the mark?")
     d.node(690, 136, 200, 72, "step", "Accepted", ["counted as read"])
     d.node(bx, 252, bw, 96, "store", "Waits in Review",
-           ["faint, double, erased", "or unreadable marks"])
+           ["faint, unclear double", "or erased marks"])
     d.node(bx, 372, bw, 116, "focal", "You decide",
            ["accept the suggestion,", "or change it with a reason;", "every decision recorded"])
     d.diamond(B, 596, 130, 56, "Release ready?")
@@ -408,12 +408,156 @@ def exam_lifecycle():
     d.write()
 
 
+def compare_screen():
+    """A plan of the comparison screen on Results: its regions and labels, never a figure.
+
+    Every count, booklet, student number and answer is a blank bar, so the drawing carries
+    no comparison figure, real or invented. All text is 15 units or more, as in the other
+    960-unit diagrams, so it prints at about 8pt.
+    """
+    W, H = 960, 402
+    d = Diagram(
+        "compare-screen", W, H, "The comparison with Remark, as a plan",
+        "Plan of the comparison screen: a Restricted banner with Back to results; a row of six "
+        "tiles, Booklets paired, Questions equal, To adjudicate, Totals equal, Identity and Key "
+        "sheets; on the left the list Differences to adjudicate with Queue for review and the "
+        "columns Q, Sheet as scanned, Readings and Status; on the right the cards Identity, "
+        "totals and key sheets, and Workbooks and report with Report folder and Save report. "
+        "Every count and answer is left blank.",
+    )
+    T = 15  # the smallest text size
+    f_tile = font("IBMPlexMono-Medium.ttf", T)
+    f_title = font("IBMPlexSans-SemiBold.ttf", 17)
+    f_btn = font("IBMPlexSans-Medium.ttf", T)
+    f_head = font("IBMPlexSans-Medium.ttf", T)
+    f_body = font("IBMPlexSans-Regular.ttf", T)
+    f_eye = font("IBMPlexMono-Medium.ttf", T)
+    N = d.layers["nodes"]
+
+    def fits(f, s, room, what):
+        w = f.getlength(s)
+        if w > room:
+            ERRORS.append(f"compare-screen: {what} '{s}' {w:.0f}px > {room:.0f}")
+
+    def rect(x, y, w, h, *, fill=PAPER, stroke=HAIR, rx=6, layer=N):
+        st = f' stroke="{stroke}" stroke-width="1.2"' if stroke else ""
+        layer.append(f'<rect x="{fmt(x)}" y="{fmt(y)}" width="{fmt(w)}" height="{fmt(h)}" '
+                     f'rx="{rx}" fill="{fill}"{st}/>')
+
+    def bar(x, y, w, h=8, fill=HAIR):
+        rect(x, y, w, h, fill=fill, stroke=None, rx=h / 2)
+
+    def button(x, y, w, s, *, primary=False):
+        fits(f_btn, s, w - 16, "button")
+        rect(x, y, w, 30, fill=ACCENT if primary else PAPER,
+             stroke=ACCENT if primary else STRONG, rx=5)
+        d.text("nodes", x + w / 2, y + 20, s, size=T, weight=500,
+               fill=PAPER if primary else INK)
+
+    def title(x, y, s, room):
+        fits(f_title, s, room, "title")
+        d.text("nodes", x, y, s, size=17, weight=600, anchor="start")
+
+    # Banner: the screen's Restricted notice and the way back.
+    rect(16, 14, 928, 40, fill=SUNKEN, stroke=STRONG)
+    d.text("nodes", 32, 40, "Restricted", size=16, weight=600, anchor="start")
+    bar(128, 30, 360)
+    button(780, 19, 148, "Back to results")
+
+    # The six tiles, with blank values and captions.
+    tiles = ["BOOKLETS PAIRED", "QUESTIONS EQUAL", "TO ADJUDICATE", "TOTALS EQUAL",
+             "IDENTITY", "KEY SHEETS"]
+    tw, ty, th = 150, 64, 66
+    gap = (928 - len(tiles) * tw) / (len(tiles) - 1)
+    for i, s in enumerate(tiles):
+        x = 16 + i * (tw + gap)
+        rect(x, ty, tw, th)
+        fits(f_tile, s, tw - 14, "tile")
+        d.text("nodes", x + 8, ty + 23, s, size=T, weight=500, family=MONO, fill=MUTED,
+               anchor="start")
+        bar(x + 8, ty + 33, 40, 12)
+        bar(x + 8, ty + 50, 100, 6)
+
+    # Left: the differences, one row per question.
+    lx, ly, lw = 16, 142, 608
+    hy, rh, nrows = ly + 46, 42, 4
+    rect(lx, ly, lw, hy + 26 + nrows * rh + 6 - ly)
+    title(lx + 16, ly + 28, "Differences to adjudicate", 380)
+    button(lx + lw - 16 - 152, ly + 10, 152, "Queue for review")
+    N.append(f'<rect x="{lx + 1}" y="{hy}" width="{lw - 2}" height="26" fill="{SUNKEN}"/>')
+    cols = [(lx + 16, "Q"), (lx + 56, "Sheet as scanned"), (lx + 226, "Readings"),
+            (lx + 336, "Status · booklet · student · findings")]
+    for j, (x, s) in enumerate(cols):
+        room = (cols[j + 1][0] if j + 1 < len(cols) else lx + lw - 12) - x - 6
+        fits(f_head, s, room, "column")
+        d.text("nodes", x, hy + 18, s, size=T, weight=500, fill=MUTED, anchor="start")
+    rows = [
+        ((1,), (3,), "differs · ours auto"),
+        ((2, 4), (2,), "differs · ours changed"),
+        ((0,), (0,), "differs · ours pending review"),
+        ((3,), (3,), "same reading · ours pending review"),
+    ]
+    for k, (marked, faint, status) in enumerate(rows):
+        ry = hy + 26 + k * rh
+        if k:
+            N.append(f'<line x1="{lx + 12}" y1="{ry}" x2="{lx + lw - 12}" y2="{ry}" '
+                     f'stroke="{HAIR}" stroke-width="1"/>')
+        bar(lx + 16, ry + 17, 24)
+        bar(lx + 56, ry + 17, 14)
+        for b in range(5):
+            cx, cy = lx + 88 + b * 24, ry + 21
+            fill = STRONG if b in marked else (SUNKEN if b in faint else PAPER)
+            N.append(f'<circle cx="{cx}" cy="{cy}" r="8" fill="{fill}" stroke="{MUTED}" '
+                     f'stroke-width="1.1"/>')
+        for t, y in (("Remark", ry + 18), ("Ours", ry + 36)):
+            fits(f_body, t, 54, "reading")
+            d.text("nodes", lx + 226, y, t, size=T, fill=MUTED, anchor="start")
+        bar(lx + 286, ry + 9, 12, 10)
+        bar(lx + 286, ry + 27, 12, 10)
+        fits(f_body, status, lx + lw - 12 - (lx + 336), "status")
+        d.text("nodes", lx + 336, ry + 19, status, size=T, fill=INK, anchor="start")
+        bar(lx + 336, ry + 27, 150, 6)
+
+    # Right: identity, totals and key sheets; then the workbooks and the report.
+    rx_, rw = 636, 308
+    rect(rx_, 142, rw, 130)
+    title(rx_ + 16, 168, "Identity, totals and key sheets", rw - 32)
+    for k, s in enumerate(["IDENTITY DIFFERENCES", "TOTALS", "KEY SHEETS GRADED AS STUDENTS"]):
+        y = 196 + k * 28
+        fits(f_eye, s, rw - 32, "section")
+        d.text("nodes", rx_ + 16, y, s, size=T, weight=500, family=MONO, fill=MUTED,
+               anchor="start")
+        bar(rx_ + 16, y + 6, 200 - k * 30, 5)
+    rect(rx_, 282, rw, 106)
+    title(rx_ + 16, 308, "Workbooks and report", rw - 32)
+    fits(f_body, "Remark's key differs", 140, "line")
+    d.text("nodes", rx_ + 16, 332, "Remark's key differs", size=T, fill=INK, anchor="start")
+    bar(rx_ + 164, 325, 90, 6)
+    fits(f_body, "Report folder", 156 - 20, "field")
+    rect(rx_ + 16, 348, 156, 30, fill=PAPER, stroke=STRONG, rx=4)
+    d.text("nodes", rx_ + 26, 368, "Report folder", size=T, fill=MUTED, anchor="start")
+    button(rx_ + rw - 16 - 116, 348, 116, "Save report", primary=True)
+
+    # Pins for the legend under the figure, each on clear ground: 1 between the banner's bar
+    # and Back to results, 2 in the first tile's empty lower-right corner, 3 to 5 beside the
+    # card titles.
+    pins = [(634, 34), (16 + tw - 18, ty + 44), (262, ly + 22), (922, 162), (858, 302)]
+    for n, (cx, cy) in enumerate(pins, 1):
+        N.append(f'<circle cx="{cx}" cy="{cy}" r="12" fill="{ACCENT}" stroke="{PAPER}" '
+                 f'stroke-width="2"/>')
+        d.text("nodes", cx, cy + 5, str(n), size=T, weight=500, family=MONO, fill=PAPER)
+
+    d.boxes = []      # a plan, not a flow: the node-overlap check does not apply
+    d.write()
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     how_it_works()
     review_release()
     data_local()
     exam_lifecycle()
+    compare_screen()
     if ERRORS:
         print("\n".join(ERRORS))
         sys.exit(1)

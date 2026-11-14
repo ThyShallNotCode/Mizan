@@ -40,8 +40,8 @@
   <text x="790" y="188" fill="#55606E" font-size="15" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">counted as read</text>
   <rect x="344" y="252" width="272" height="96" rx="6" fill="#F0EADF" stroke="#55606E" stroke-width="1.2"/>
   <text x="480" y="282" fill="#1C2430" font-size="18" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">Waits in Review</text>
-  <text x="480" y="306" fill="#55606E" font-size="15" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">faint, double, erased</text>
-  <text x="480" y="326" fill="#55606E" font-size="15" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">or unreadable marks</text>
+  <text x="480" y="306" fill="#55606E" font-size="15" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">faint, unclear double</text>
+  <text x="480" y="326" fill="#55606E" font-size="15" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">or erased marks</text>
   <rect x="344" y="372" width="272" height="116" rx="6" fill="#DCEBE6" stroke="#0E5E57" stroke-width="1.2"/>
   <text x="480" y="402" fill="#1C2430" font-size="18" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">You decide</text>
   <text x="480" y="426" fill="#55606E" font-size="15" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">accept the suggestion,</text>

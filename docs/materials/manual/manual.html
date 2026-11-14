@@ -164,6 +164,7 @@
   .toc .ar { font-family: var(--arabic); font-size: 0.82rem; color: var(--ink-2); text-align: right; }
   .toc .p { font-family: var(--mono); font-size: 0.85rem; color: var(--teal); min-width: 1.6rem; text-align: right; }
   .toc .appx { margin-top: 0.6rem; border-top: 1px solid var(--ink); }
+  .toc .sub .t { font-weight: 400; padding-left: 1rem; color: var(--ink-2); }
 
   /* ---------- Chapter heads ---------- */
   .ch-head { margin-bottom: 1.6rem; }
@@ -190,6 +191,12 @@
     text-align: left;
   }
   .lede { margin: 1rem 0 0; font-size: 1.08rem; line-height: 1.55; color: var(--ink-2); max-width: var(--measure); }
+
+  /* A guide inside a chapter: its own head, and a new page in print */
+  .guide-title { font-size: clamp(1.45rem, 4.4vw, 1.85rem); letter-spacing: -0.01em; margin: 0; }
+  .guide .ch-head { margin-bottom: 1rem; }
+  .guide h4:first-of-type { margin-top: 0; }
+  table.tight td, table.tight th { padding-top: 0.32rem; padding-bottom: 0.32rem; }
 
   h3 code, h4 code { font-weight: 500; }
   h3 { font-size: 1.22rem; margin: 2rem 0 0.6rem; break-after: avoid; page-break-after: avoid; }
@@ -358,7 +365,7 @@
   thead { display: table-header-group; }
   table.keep { break-inside: avoid; page-break-inside: avoid; }
   td.k, th.k { white-space: nowrap; }
-  table.glossary td { padding-top: 0.32rem; padding-bottom: 0.32rem; }
+  table.glossary td { padding-top: 0.28rem; padding-bottom: 0.28rem; }
   td .sub { display: block; color: var(--ink-2); font-size: 0.92em; }
   tr.group { break-after: avoid; page-break-after: avoid; }
   tr.group td {
@@ -494,6 +501,7 @@
     .toc .p { display: none; }
     .toc a { grid-template-columns: 2.4rem 1fr auto; }
     .chapter { margin-top: 4.5rem; padding-top: 2.5rem; border-top: 1px solid var(--hairline); }
+    .guide { margin-top: 3.5rem; padding-top: 2rem; border-top: 1px solid var(--hairline); }
     @media (min-width: 40rem) {
       .split { grid-template-columns: minmax(0, 1fr) 15rem; }
       .split.wide-fig { grid-template-columns: minmax(0, 1fr) 16.5rem; }
@@ -562,8 +570,24 @@
     .toc .t { font-size: 10.5pt; }
     .toc .n, .toc .p { font-size: 9pt; }
     .toc .ar { font-size: 9pt; }
+    .toc .sub .t { font-size: 9.5pt; padding-left: 5mm; }
 
     .chapter { break-before: page; page-break-before: always; }
+    .guide { break-before: page; page-break-before: always; }
+    .guide-title { font-size: 18pt; }
+    .guide .ch-head { margin-bottom: 4mm; }
+    .guide .lede { font-size: 9.8pt; margin-top: 2mm; max-width: none; }
+    .guide .ch-kicker { margin-bottom: 3mm; }
+    .guide .ch-ar { margin-top: 1mm; }
+    .guide p, .guide ol.steps, .guide ul.plain, .guide figcaption { max-width: none; }
+    .guide { font-size: 9pt; line-height: 1.42; }
+    .guide table { font-size: 8.4pt; }
+    .guide td kbd, .guide td code, .guide td .code { font-size: 8pt; }
+    .guide h4 { margin-top: 3mm; }
+    .guide ul.plain > li, .guide ol.steps > li { margin-bottom: 0.3em; }
+    .guide figure { margin: 3.5mm 0 4mm; }
+    .guide .callout { margin: 3mm 0; }
+    table.tight td, table.tight th { padding-top: 1mm; padding-bottom: 1mm; }
     .ch-head { margin-bottom: 6mm; }
     .ch-kicker { font-size: 8pt; margin-bottom: 4mm; }
     .ch-kicker .no { font-size: 11pt; }
@@ -650,14 +674,15 @@
     <li><a href="#ch-08"><span class="n">08</span><span class="t">Results and item analysis</span><span class="ar" lang="ar" dir="rtl">النتائج وتحليل الفقرات</span><span class="p">17</span></a></li>
     <li><a href="#ch-09"><span class="n">09</span><span class="t">Release and export</span><span class="ar" lang="ar" dir="rtl">اعتماد النتائج وتصديرها</span><span class="p">19</span></a></li>
     <li><a href="#ch-10"><span class="n">10</span><span class="t">Import from Remark and compare</span><span class="ar" lang="ar" dir="rtl">الاستيراد والمقارنة</span><span class="p">21</span></a></li>
-    <li><a href="#ch-11"><span class="n">11</span><span class="t">Learning outcomes</span><span class="ar" lang="ar" dir="rtl">مخرجات التعلم</span><span class="p">22</span></a></li>
-    <li><a href="#ch-12"><span class="n">12</span><span class="t">Settings</span><span class="ar" lang="ar" dir="rtl">الإعدادات</span><span class="p">23</span></a></li>
-    <li><a href="#ch-13"><span class="n">13</span><span class="t">Files and formats</span><span class="ar" lang="ar" dir="rtl">الملفات وصيغها</span><span class="p">24</span></a></li>
-    <li><a href="#ch-14"><span class="n">14</span><span class="t">Where your data lives and how it is protected</span><span class="ar" lang="ar" dir="rtl">أين تُحفظ بياناتك وكيف تُحمى</span><span class="p">26</span></a></li>
-    <li><a href="#ch-15"><span class="n">15</span><span class="t">Troubleshooting</span><span class="ar" lang="ar" dir="rtl">حل المشكلات</span><span class="p">28</span></a></li>
-    <li><a href="#ch-16"><span class="n">16</span><span class="t">Known limits</span><span class="ar" lang="ar" dir="rtl">القيود المعروفة</span><span class="p">30</span></a></li>
-    <li class="appx"><a href="#app-a"><span class="n">A</span><span class="t">Command line, for IT staff</span><span class="ar" lang="ar" dir="rtl">سطر الأوامر</span><span class="p">31</span></a></li>
-    <li><a href="#app-b"><span class="n">B</span><span class="t">Glossary</span><span class="ar" lang="ar" dir="rtl">مسرد المصطلحات</span><span class="p">33</span></a></li>
+    <li class="sub"><a href="#side-by-side"><span class="n"></span><span class="t">Run a side-by-side test with Remark</span><span class="ar" lang="ar" dir="rtl">التجربة بالتوازي مع Remark</span><span class="p">23</span></a></li>
+    <li><a href="#ch-11"><span class="n">11</span><span class="t">Learning outcomes</span><span class="ar" lang="ar" dir="rtl">مخرجات التعلم</span><span class="p">25</span></a></li>
+    <li><a href="#ch-12"><span class="n">12</span><span class="t">Settings</span><span class="ar" lang="ar" dir="rtl">الإعدادات</span><span class="p">26</span></a></li>
+    <li><a href="#ch-13"><span class="n">13</span><span class="t">Files and formats</span><span class="ar" lang="ar" dir="rtl">الملفات وصيغها</span><span class="p">27</span></a></li>
+    <li><a href="#ch-14"><span class="n">14</span><span class="t">Where your data lives and how it is protected</span><span class="ar" lang="ar" dir="rtl">أين تُحفظ بياناتك وكيف تُحمى</span><span class="p">29</span></a></li>
+    <li><a href="#ch-15"><span class="n">15</span><span class="t">Troubleshooting</span><span class="ar" lang="ar" dir="rtl">حل المشكلات</span><span class="p">31</span></a></li>
+    <li><a href="#ch-16"><span class="n">16</span><span class="t">Known limits</span><span class="ar" lang="ar" dir="rtl">القيود المعروفة</span><span class="p">34</span></a></li>
+    <li class="appx"><a href="#app-a"><span class="n">A</span><span class="t">Command line, for IT staff</span><span class="ar" lang="ar" dir="rtl">سطر الأوامر</span><span class="p">35</span></a></li>
+    <li><a href="#app-b"><span class="n">B</span><span class="t">Glossary</span><span class="ar" lang="ar" dir="rtl">مسرد المصطلحات</span><span class="p">38</span></a></li>
   </ol>
 
   <aside class="callout note">
@@ -680,9 +705,9 @@
   <ul class="plain">
     <li><strong>Reads scanned answer sheets</strong>: the legacy answer sheet (up to 100 questions, options A–E), or a form Mizan prints for your exam.</li>
     <li><strong>Scores them</strong> against your answer key, one per version: from a file, from answer sheets you fill in, or from Remark Office OMR's Excel export.</li>
-    <li><strong>Sends every doubt to you.</strong> Faint or double marks, erasures, unreadable student numbers, a student not on the roster, two sheets with one number: each waits in Review for a person.</li>
+    <li><strong>Sends every doubt to you.</strong> A faint mark, an unclear double mark or erasure, an unreadable student number, a student not on the roster, two sheets with one number: each waits in Review. By default, a clearly filled double mark is scored as wrong without review (<span class="ui">Second review</span>, Chapter 4).</li>
     <li><strong>Shows the results</strong> (scores, letter grades, item analysis, course learning outcomes) and <strong>releases them only when you say so</strong>, with nothing left open.</li>
-    <li><strong>Writes files</strong>: results in Excel and CSV, item analysis, course-report outcome tables, an HTML report and a grade-upload file for Blackboard. Every decision goes into a tamper-evident log in the exam's folder.</li>
+    <li><strong>Writes files</strong>: results in Excel and CSV, item analysis, course-report outcome tables, an HTML report and a Blackboard upload file. Every decision goes into a tamper-evident log in the exam's folder.</li>
   </ul>
 
   <figure class="diagram">
@@ -766,8 +791,8 @@
 
   <h3>What you need</h3>
   <ul class="plain">
-    <li><strong>Linux</strong> (64-bit, x86) with a desktop session (X11 or Wayland): works. All measurements were made on Linux.</li>
-    <li><strong>Windows 10 or 11</strong> (64-bit, x86): unsigned test builds that build and pass the automatic tests, not yet tried on an everyday PC.</li>
+    <li><strong>Linux</strong> (64-bit, x86) with a desktop session (X11 or Wayland): works. Mizan's own speed and accuracy tests have run on Linux only.</li>
+    <li><strong>Windows 10 or 11</strong> (64-bit, x86): unsigned test builds that pass the automatic tests, the only tests run on Windows so far. They are not yet tried on an everyday PC, and their speed is not known yet.</li>
     <li><strong>macOS</strong>: not available.</li>
     <li>A screen of at least 1280 × 800 (the window is normally 1440 × 900), and your scans on a local disk of your institution's device.</li>
   </ul>
@@ -949,6 +974,7 @@
 
   <h3>Advanced options</h3>
   <p>Open <span class="ui">Advanced options</span> for <span class="ui">Sheet template or spec file</span>, <span class="ui">Output folder</span>, <span class="ui">Term</span>, <span class="ui">Student ID scheme</span>, <span class="ui">Cancel mode</span>, <span class="ui">Second review</span> (<span class="ui">No second review</span>, <span class="ui">Always</span> or <span class="ui">On high-stakes exams</span>) and <span class="ui">High-stakes exam</span>.</p>
+  <p><span class="ui">Second review</span> sets when a clearly filled double mark goes to a person. <span class="ui">No second review</span>, the default, scores it as wrong without review. <span class="ui">Always</span> sends every one to Review. <span class="ui">On high-stakes exams</span> sends them only when <span class="ui">High-stakes exam</span> is on. High-stakes exam, off by default, also uses stricter margins and sends erasures to Review: more review items, never fewer.</p>
   <p>With the legacy answer sheet, <span class="ui">Cancel mode</span> is locked: the printed sheet decides how students change an answer.</p>
   <figure class="w-70">
     <div class="window"><a class="zoom" href="../assets/screens/new-exam-advanced.png"><img src="../assets/screens/new-exam-advanced.png" alt="Advanced options: sheet template, output folder, term, student ID scheme, a locked cancel mode and the second-review choice" width="544" height="264"></a></div>
@@ -1130,8 +1156,8 @@
   <text x="790" y="188" fill="#55606E" font-size="15" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">counted as read</text>
   <rect x="344" y="252" width="272" height="96" rx="6" fill="#F0EADF" stroke="#55606E" stroke-width="1.2"/>
   <text x="480" y="282" fill="#1C2430" font-size="18" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">Waits in Review</text>
-  <text x="480" y="306" fill="#55606E" font-size="15" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">faint, double, erased</text>
-  <text x="480" y="326" fill="#55606E" font-size="15" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">or unreadable marks</text>
+  <text x="480" y="306" fill="#55606E" font-size="15" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">faint, unclear double</text>
+  <text x="480" y="326" fill="#55606E" font-size="15" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">or erased marks</text>
   <rect x="344" y="372" width="272" height="116" rx="6" fill="#DCEBE6" stroke="#0E5E57" stroke-width="1.2"/>
   <text x="480" y="402" fill="#1C2430" font-size="18" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">You decide</text>
   <text x="480" y="426" fill="#55606E" font-size="15" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">accept the suggestion,</text>
@@ -1167,6 +1193,7 @@
     <li><span class="ui">Apply to group · N</span> (<kbd>Shift+Enter</kbd>) applies the same decision to the rest of the group, when the group allows it.</li>
     <li>Other actions: <span class="ui">Defer</span> (<kbd>Ctrl+D</kbd>) moves the item to the end of the queue; <span class="ui">Escalate to instructor</span> (<kbd>Ctrl+E</kbd>); <span class="ui">Add to rescan list</span> (<kbd>Ctrl+R</kbd>). The note field takes a note in Arabic or English; notes are personal data.</li>
   </ol>
+  <p><span class="ui">Unreadable</span>, <span class="ui">Escalate to instructor</span> and <span class="ui">Add to rescan list</span> move an item aside but do not close it. It stays in the queue, still counts as open and still holds release until someone decides it. Unreadable also records the answer as unreadable, never as blank. No screen shows yet which items are escalated or on the rescan list; their state is kept in <code class="nw">review_queue.json</code>.</p>
 
   <div class="split">
     <div>
@@ -1209,7 +1236,7 @@
           <tr><td><kbd>↓</kbd> <kbd>↑</kbd> or <kbd>J</kbd> <kbd>K</kbd></td><td>Next or previous item</td></tr>
           <tr><td><kbd>Backspace</kbd></td><td>Blank</td></tr>
           <tr><td><kbd>Ctrl+M</kbd></td><td>Multiple marks</td></tr>
-          <tr><td><kbd>Ctrl+U</kbd></td><td>Unreadable (never blank)</td></tr>
+          <tr><td><kbd>Ctrl+U</kbd></td><td>Unreadable: never blank; the item stays open on the rescan list</td></tr>
           <tr><td><kbd>Ctrl+D</kbd></td><td>Defer</td></tr>
           <tr><td><kbd>Ctrl+E</kbd></td><td>Escalate to instructor</td></tr>
           <tr><td><kbd>Ctrl+R</kbd></td><td>Add to rescan list</td></tr>
@@ -1269,7 +1296,7 @@
         <tr><td><strong>p</strong></td><td>The share of students who answered correctly: 0.85 means 85 %. Below 0.30 is hard; above 0.90 is easy.</td></tr>
         <tr><td><strong>r&nbsp;ir</strong> and <strong>95 % CI</strong></td><td>Do strong students get this question right more often than weak ones? 0.30 or more is good, 0.20–0.29 acceptable, 0.10–0.19 marginal, below 0.10 needs a look, below 0 suggests a flawed question or a wrong key. The interval shows how sure the figure is.</td></tr>
         <tr><td><strong>Options</strong></td><td>How often each option was chosen.</td></tr>
-        <tr><td><strong>Stability</strong></td><td>How often a flag fires again when Mizan re-draws the class 1,000 times. A low share is marked "proposed" and never blocks release.</td></tr>
+        <tr><td><strong>Stability</strong></td><td>For a class of fewer than 1,000 students, how often a flag fires again when Mizan re-draws the class 1,000 times. Mizan also checks the flag at both ends of its 95 % interval; for 1,000 students or more, that check alone decides. A flag that does not hold up is marked "proposed" and never blocks release.</td></tr>
         <tr><td><strong>Cronbach α</strong></td><td>How consistently the whole test measures. 0.80 or more suits an end-of-course exam; 0.90 or more a high-stakes one.</td></tr>
         <tr><td><strong>SEM</strong></td><td>Standard error of measurement: how far, in points, a score may sit from the student's true score. Smaller is better.</td></tr>
       </tbody>
@@ -1389,10 +1416,227 @@
   <ol class="steps">
     <li>On <span class="ui">Results</span>, press <span class="ui">Compare with Remark…</span> (<span class="ui">Remark…</span> in a narrow window, as in Figure 8.1).</li>
     <li>In <span class="ui">Remark workbooks to compare</span>, give Remark's exports of the same sheets; press <span class="ui">Compare</span>.</li>
-    <li>The comparison replaces the results under a <span class="ui">Restricted</span> banner and lists each difference with its scanned bubble row.</li>
+    <li>The comparison replaces the results under a <span class="ui">Restricted</span> banner and lists each difference with its scanned bubble row (Figure 10.1).</li>
     <li><span class="ui">Queue for review</span> puts each settled difference on an answer Mizan accepted on its own into Review, where it holds release until decided. The comparison alone holds nothing.</li>
     <li><span class="ui">Save report</span> writes the report; <span class="ui">Back to results</span> closes it. The report is restricted: keep it, and any figures from it, inside your institution.</li>
   </ol>
+
+  <figure class="diagram">
+    <div class="frame"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 402" width="100%" role="img" aria-labelledby="compare-screen-title compare-screen-desc">
+  <title id="compare-screen-title">The comparison with Remark, as a plan</title>
+  <desc id="compare-screen-desc">Plan of the comparison screen: a Restricted banner with Back to results; a row of six tiles, Booklets paired, Questions equal, To adjudicate, Totals equal, Identity and Key sheets; on the left the list Differences to adjudicate with Queue for review and the columns Q, Sheet as scanned, Readings and Status; on the right the cards Identity, totals and key sheets, and Workbooks and report with Report folder and Save report. Every count and answer is left blank.</desc>
+  <defs><marker id="compare-screen-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#55606E"/></marker><marker id="compare-screen-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#0E5E57"/></marker><marker id="compare-screen-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#3D5A80"/></marker></defs>
+  <rect width="960" height="402" fill="#FFFDF8"/>
+  <!-- nodes -->
+  <rect x="16" y="14" width="928" height="40" rx="6" fill="#F0EADF" stroke="#8C8270" stroke-width="1.2"/>
+  <text x="32" y="40" fill="#1C2430" font-size="16" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Restricted</text>
+  <rect x="128" y="30" width="360" height="8" rx="4.0" fill="#E3DACB"/>
+  <rect x="780" y="19" width="148" height="30" rx="5" fill="#FFFDF8" stroke="#8C8270" stroke-width="1.2"/>
+  <text x="854" y="39" fill="#1C2430" font-size="15" font-weight="500" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">Back to results</text>
+  <rect x="16" y="64" width="150" height="66" rx="6" fill="#FFFDF8" stroke="#E3DACB" stroke-width="1.2"/>
+  <text x="24" y="87" fill="#55606E" font-size="15" font-weight="500" font-family="'IBM Plex Mono', Consolas, monospace">BOOKLETS PAIRED</text>
+  <rect x="24" y="97" width="40" height="12" rx="6.0" fill="#E3DACB"/>
+  <rect x="24" y="114" width="100" height="6" rx="3.0" fill="#E3DACB"/>
+  <rect x="171.6" y="64" width="150" height="66" rx="6" fill="#FFFDF8" stroke="#E3DACB" stroke-width="1.2"/>
+  <text x="179.6" y="87" fill="#55606E" font-size="15" font-weight="500" font-family="'IBM Plex Mono', Consolas, monospace">QUESTIONS EQUAL</text>
+  <rect x="179.6" y="97" width="40" height="12" rx="6.0" fill="#E3DACB"/>
+  <rect x="179.6" y="114" width="100" height="6" rx="3.0" fill="#E3DACB"/>
+  <rect x="327.2" y="64" width="150" height="66" rx="6" fill="#FFFDF8" stroke="#E3DACB" stroke-width="1.2"/>
+  <text x="335.2" y="87" fill="#55606E" font-size="15" font-weight="500" font-family="'IBM Plex Mono', Consolas, monospace">TO ADJUDICATE</text>
+  <rect x="335.2" y="97" width="40" height="12" rx="6.0" fill="#E3DACB"/>
+  <rect x="335.2" y="114" width="100" height="6" rx="3.0" fill="#E3DACB"/>
+  <rect x="482.8" y="64" width="150" height="66" rx="6" fill="#FFFDF8" stroke="#E3DACB" stroke-width="1.2"/>
+  <text x="490.8" y="87" fill="#55606E" font-size="15" font-weight="500" font-family="'IBM Plex Mono', Consolas, monospace">TOTALS EQUAL</text>
+  <rect x="490.8" y="97" width="40" height="12" rx="6.0" fill="#E3DACB"/>
+  <rect x="490.8" y="114" width="100" height="6" rx="3.0" fill="#E3DACB"/>
+  <rect x="638.4" y="64" width="150" height="66" rx="6" fill="#FFFDF8" stroke="#E3DACB" stroke-width="1.2"/>
+  <text x="646.4" y="87" fill="#55606E" font-size="15" font-weight="500" font-family="'IBM Plex Mono', Consolas, monospace">IDENTITY</text>
+  <rect x="646.4" y="97" width="40" height="12" rx="6.0" fill="#E3DACB"/>
+  <rect x="646.4" y="114" width="100" height="6" rx="3.0" fill="#E3DACB"/>
+  <rect x="794" y="64" width="150" height="66" rx="6" fill="#FFFDF8" stroke="#E3DACB" stroke-width="1.2"/>
+  <text x="802" y="87" fill="#55606E" font-size="15" font-weight="500" font-family="'IBM Plex Mono', Consolas, monospace">KEY SHEETS</text>
+  <rect x="802" y="97" width="40" height="12" rx="6.0" fill="#E3DACB"/>
+  <rect x="802" y="114" width="100" height="6" rx="3.0" fill="#E3DACB"/>
+  <rect x="16" y="142" width="608" height="246" rx="6" fill="#FFFDF8" stroke="#E3DACB" stroke-width="1.2"/>
+  <text x="32" y="170" fill="#1C2430" font-size="17" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Differences to adjudicate</text>
+  <rect x="456" y="152" width="152" height="30" rx="5" fill="#FFFDF8" stroke="#8C8270" stroke-width="1.2"/>
+  <text x="532" y="172" fill="#1C2430" font-size="15" font-weight="500" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">Queue for review</text>
+  <rect x="17" y="188" width="606" height="26" fill="#F0EADF"/>
+  <text x="32" y="206" fill="#55606E" font-size="15" font-weight="500" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Q</text>
+  <text x="72" y="206" fill="#55606E" font-size="15" font-weight="500" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Sheet as scanned</text>
+  <text x="242" y="206" fill="#55606E" font-size="15" font-weight="500" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Readings</text>
+  <text x="352" y="206" fill="#55606E" font-size="15" font-weight="500" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Status · booklet · student · findings</text>
+  <rect x="32" y="231" width="24" height="8" rx="4.0" fill="#E3DACB"/>
+  <rect x="72" y="231" width="14" height="8" rx="4.0" fill="#E3DACB"/>
+  <circle cx="104" cy="235" r="8" fill="#FFFDF8" stroke="#55606E" stroke-width="1.1"/>
+  <circle cx="128" cy="235" r="8" fill="#8C8270" stroke="#55606E" stroke-width="1.1"/>
+  <circle cx="152" cy="235" r="8" fill="#FFFDF8" stroke="#55606E" stroke-width="1.1"/>
+  <circle cx="176" cy="235" r="8" fill="#F0EADF" stroke="#55606E" stroke-width="1.1"/>
+  <circle cx="200" cy="235" r="8" fill="#FFFDF8" stroke="#55606E" stroke-width="1.1"/>
+  <text x="242" y="232" fill="#55606E" font-size="15" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Remark</text>
+  <text x="242" y="250" fill="#55606E" font-size="15" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Ours</text>
+  <rect x="302" y="223" width="12" height="10" rx="5.0" fill="#E3DACB"/>
+  <rect x="302" y="241" width="12" height="10" rx="5.0" fill="#E3DACB"/>
+  <text x="352" y="233" fill="#1C2430" font-size="15" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">differs · ours auto</text>
+  <rect x="352" y="241" width="150" height="6" rx="3.0" fill="#E3DACB"/>
+  <line x1="28" y1="256" x2="612" y2="256" stroke="#E3DACB" stroke-width="1"/>
+  <rect x="32" y="273" width="24" height="8" rx="4.0" fill="#E3DACB"/>
+  <rect x="72" y="273" width="14" height="8" rx="4.0" fill="#E3DACB"/>
+  <circle cx="104" cy="277" r="8" fill="#FFFDF8" stroke="#55606E" stroke-width="1.1"/>
+  <circle cx="128" cy="277" r="8" fill="#FFFDF8" stroke="#55606E" stroke-width="1.1"/>
+  <circle cx="152" cy="277" r="8" fill="#8C8270" stroke="#55606E" stroke-width="1.1"/>
+  <circle cx="176" cy="277" r="8" fill="#FFFDF8" stroke="#55606E" stroke-width="1.1"/>
+  <circle cx="200" cy="277" r="8" fill="#8C8270" stroke="#55606E" stroke-width="1.1"/>
+  <text x="242" y="274" fill="#55606E" font-size="15" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Remark</text>
+  <text x="242" y="292" fill="#55606E" font-size="15" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Ours</text>
+  <rect x="302" y="265" width="12" height="10" rx="5.0" fill="#E3DACB"/>
+  <rect x="302" y="283" width="12" height="10" rx="5.0" fill="#E3DACB"/>
+  <text x="352" y="275" fill="#1C2430" font-size="15" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">differs · ours changed</text>
+  <rect x="352" y="283" width="150" height="6" rx="3.0" fill="#E3DACB"/>
+  <line x1="28" y1="298" x2="612" y2="298" stroke="#E3DACB" stroke-width="1"/>
+  <rect x="32" y="315" width="24" height="8" rx="4.0" fill="#E3DACB"/>
+  <rect x="72" y="315" width="14" height="8" rx="4.0" fill="#E3DACB"/>
+  <circle cx="104" cy="319" r="8" fill="#8C8270" stroke="#55606E" stroke-width="1.1"/>
+  <circle cx="128" cy="319" r="8" fill="#FFFDF8" stroke="#55606E" stroke-width="1.1"/>
+  <circle cx="152" cy="319" r="8" fill="#FFFDF8" stroke="#55606E" stroke-width="1.1"/>
+  <circle cx="176" cy="319" r="8" fill="#FFFDF8" stroke="#55606E" stroke-width="1.1"/>
+  <circle cx="200" cy="319" r="8" fill="#FFFDF8" stroke="#55606E" stroke-width="1.1"/>
+  <text x="242" y="316" fill="#55606E" font-size="15" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Remark</text>
+  <text x="242" y="334" fill="#55606E" font-size="15" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Ours</text>
+  <rect x="302" y="307" width="12" height="10" rx="5.0" fill="#E3DACB"/>
+  <rect x="302" y="325" width="12" height="10" rx="5.0" fill="#E3DACB"/>
+  <text x="352" y="317" fill="#1C2430" font-size="15" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">differs · ours pending review</text>
+  <rect x="352" y="325" width="150" height="6" rx="3.0" fill="#E3DACB"/>
+  <line x1="28" y1="340" x2="612" y2="340" stroke="#E3DACB" stroke-width="1"/>
+  <rect x="32" y="357" width="24" height="8" rx="4.0" fill="#E3DACB"/>
+  <rect x="72" y="357" width="14" height="8" rx="4.0" fill="#E3DACB"/>
+  <circle cx="104" cy="361" r="8" fill="#FFFDF8" stroke="#55606E" stroke-width="1.1"/>
+  <circle cx="128" cy="361" r="8" fill="#FFFDF8" stroke="#55606E" stroke-width="1.1"/>
+  <circle cx="152" cy="361" r="8" fill="#FFFDF8" stroke="#55606E" stroke-width="1.1"/>
+  <circle cx="176" cy="361" r="8" fill="#8C8270" stroke="#55606E" stroke-width="1.1"/>
+  <circle cx="200" cy="361" r="8" fill="#FFFDF8" stroke="#55606E" stroke-width="1.1"/>
+  <text x="242" y="358" fill="#55606E" font-size="15" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Remark</text>
+  <text x="242" y="376" fill="#55606E" font-size="15" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Ours</text>
+  <rect x="302" y="349" width="12" height="10" rx="5.0" fill="#E3DACB"/>
+  <rect x="302" y="367" width="12" height="10" rx="5.0" fill="#E3DACB"/>
+  <text x="352" y="359" fill="#1C2430" font-size="15" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">same reading · ours pending review</text>
+  <rect x="352" y="367" width="150" height="6" rx="3.0" fill="#E3DACB"/>
+  <rect x="636" y="142" width="308" height="130" rx="6" fill="#FFFDF8" stroke="#E3DACB" stroke-width="1.2"/>
+  <text x="652" y="168" fill="#1C2430" font-size="17" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Identity, totals and key sheets</text>
+  <text x="652" y="196" fill="#55606E" font-size="15" font-weight="500" font-family="'IBM Plex Mono', Consolas, monospace">IDENTITY DIFFERENCES</text>
+  <rect x="652" y="202" width="200" height="5" rx="2.5" fill="#E3DACB"/>
+  <text x="652" y="224" fill="#55606E" font-size="15" font-weight="500" font-family="'IBM Plex Mono', Consolas, monospace">TOTALS</text>
+  <rect x="652" y="230" width="170" height="5" rx="2.5" fill="#E3DACB"/>
+  <text x="652" y="252" fill="#55606E" font-size="15" font-weight="500" font-family="'IBM Plex Mono', Consolas, monospace">KEY SHEETS GRADED AS STUDENTS</text>
+  <rect x="652" y="258" width="140" height="5" rx="2.5" fill="#E3DACB"/>
+  <rect x="636" y="282" width="308" height="106" rx="6" fill="#FFFDF8" stroke="#E3DACB" stroke-width="1.2"/>
+  <text x="652" y="308" fill="#1C2430" font-size="17" font-weight="600" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Workbooks and report</text>
+  <text x="652" y="332" fill="#1C2430" font-size="15" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Remark's key differs</text>
+  <rect x="800" y="325" width="90" height="6" rx="3.0" fill="#E3DACB"/>
+  <rect x="652" y="348" width="156" height="30" rx="4" fill="#FFFDF8" stroke="#8C8270" stroke-width="1.2"/>
+  <text x="662" y="368" fill="#55606E" font-size="15" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif">Report folder</text>
+  <rect x="812" y="348" width="116" height="30" rx="5" fill="#0E5E57" stroke="#0E5E57" stroke-width="1.2"/>
+  <text x="870" y="368" fill="#FFFDF8" font-size="15" font-weight="500" font-family="'IBM Plex Sans', 'Segoe UI', sans-serif" text-anchor="middle">Save report</text>
+  <circle cx="634" cy="34" r="12" fill="#0E5E57" stroke="#FFFDF8" stroke-width="2"/>
+  <text x="634" y="39" fill="#FFFDF8" font-size="15" font-weight="500" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">1</text>
+  <circle cx="148" cy="108" r="12" fill="#0E5E57" stroke="#FFFDF8" stroke-width="2"/>
+  <text x="148" y="113" fill="#FFFDF8" font-size="15" font-weight="500" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">2</text>
+  <circle cx="262" cy="164" r="12" fill="#0E5E57" stroke="#FFFDF8" stroke-width="2"/>
+  <text x="262" y="169" fill="#FFFDF8" font-size="15" font-weight="500" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">3</text>
+  <circle cx="922" cy="162" r="12" fill="#0E5E57" stroke="#FFFDF8" stroke-width="2"/>
+  <text x="922" y="167" fill="#FFFDF8" font-size="15" font-weight="500" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">4</text>
+  <circle cx="858" cy="302" r="12" fill="#0E5E57" stroke="#FFFDF8" stroke-width="2"/>
+  <text x="858" y="307" fill="#FFFDF8" font-size="15" font-weight="500" font-family="'IBM Plex Mono', Consolas, monospace" text-anchor="middle">5</text>
+</svg></div>
+    <figcaption><span class="fig">Figure 10.1</span>The comparison screen as a plan, with every count and answer left blank. A reading is a letter, BLANK, MULTI or UNREADABLE; a leading ? marks Mizan's pending proposal. The status says where Mizan's answer came from: <em>auto</em>, accepted on its own; <em>confirmed</em> or <em>changed</em> by a reviewer; or <em>pending review</em>. Student numbers are masked on the screen.</figcaption>
+  </figure>
+
+  <ol class="legend">
+    <li><b>Restricted banner</b>The comparison holds student numbers and answers, which are personal data (the screen masks the numbers; the saved report does not), and its figures stay inside your institution until the licence review is done. <span class="ui">Back to results</span> closes the screen; nothing is saved until <span class="ui">Save report</span>.</li>
+    <li><b>Six tiles</b>The six counts. Table 10.1, in the guide that follows, explains each one.</li>
+    <li><b>Differences to adjudicate</b>Remark's reading beside Mizan's wherever it differs from Mizan's settled answer, and on every question still pending, settled differences first. A line under the title says whether the comparison holds release: it does not until you queue its differences.</li>
+    <li><b>Identity, totals and key sheets</b><span class="ui">IDENTITY DIFFERENCES</span>: each one, such as a booklet or Remark row without a partner, a pairing by answers, or one number on several booklets. <span class="ui">TOTALS</span>: a different maximum, points that differ, and each booklet whose total is not, or not yet, Remark's, with both letter grades. <span class="ui wrap">KEY SHEETS GRADED AS STUDENTS</span>: Remark's class statistics as reported and without the key-sheet rows.</li>
+    <li><b>Workbooks and report</b>One line per workbook, with its version and the booklets paired; a workbook whose rows match no booklet by number reads <span class="msg">another section, not compared</span>. <span class="msg">Remark's key differs</span> names a version and question, without letters. After <span class="ui">Compare</span>, <span class="ui">Report folder</span> is filled in for <span class="ui">Save report</span>.</li>
+  </ol>
+  <p>The guide that follows explains each count and the saved report, step by step, for a test of Mizan beside Remark on one of your exams.</p>
+
+  <!-- ----------------------------------------------- side-by-side test guide -->
+  <section class="guide" id="side-by-side" aria-labelledby="side-by-side-title">
+    <header class="ch-head">
+      <div class="ch-kicker"><span class="no">10</span><span>Side-by-side test guide</span><svg aria-hidden="true"><rect width="100%" height="10" fill="url(#girih-strip)"/></svg></div>
+      <h3 class="guide-title" id="side-by-side-title">Run a side-by-side test with Remark</h3>
+      <p class="ch-ar" lang="ar" dir="rtl">التجربة بالتوازي مع Remark</p>
+      <p class="lede">For instructors who grade with Remark: grade one exam in both programs, check each difference against the paper and send back counts and notes. Only Remark's grades count, as the manual advises against grading real exams with a Windows test build: do not release Mizan's results, give them to students or upload them to Blackboard.</p>
+    </header>
+
+    <h4>Before you start</h4>
+    <ul class="plain">
+      <li>An exam on the legacy answer sheet, graded in Remark as usual, with its scans saved as PDF or TIFF files.</li>
+      <li>The <span class="ui">Advanced options</span> of the New exam card at their defaults, <span class="ui">No second review</span> and <span class="ui">High-stakes exam</span> off, so that results compare. A clearly filled double mark is then scored as wrong without review; an unsure one still goes to Review.</li>
+      <li>Your institution's computer, used by you alone, with an encrypted disk, and folders outside OneDrive, other synced folders and network drives. On Windows, Mizan does not yet refuse OneDrive or limit its folders to your account (Chapter 14).</li>
+    </ul>
+
+    <h4>Steps</h4>
+    <ol class="steps">
+      <li>Download the latest Windows file from the project's Releases page, check it against <code class="nw">SHA256SUMS</code> with your IT team, unzip it and run <code class="nw">omr-desktop.exe</code> (Chapter 2).</li>
+      <li>Scan the sheets to PDF or TIFF at 200 to 300 dpi in gray, or 600 dpi black and white, with "compact PDF" compression off (Chapter 6). Grade the exam in Remark as usual, from the same files if you can.</li>
+      <li>In Remark, export the graded results to Excel: the Advanced Grade reports as <code class="nw">.xlsx</code>, including the Student Response Report with the answer key, and the student numbers as text.</li>
+      <li>In Mizan, press <span class="ui">New exam</span> and choose the scan files. Press <span class="ui">Import from Remark export…</span>, give it the workbook (several, separated by <code class="nw">;</code>), then press <span class="ui">Read export</span> and <span class="ui">Use this import</span>, so that Mizan grades with Remark's key and points. Answer any question the card asks and press <span class="ui">Grade exam</span>. When the run ends, write down the Scan screen's figures (Table 10.2).</li>
+      <li>Open <span class="ui">Review</span> (Chapter 7) and, before you decide anything, write down the count on the <span class="ui">Marks</span> lane chip. Then decide the items. For a sheet held for its version, in the <span class="ui">Scoring</span> lane, press the right version letter (with a reason if it is not the suggestion), then <kbd>Enter</kbd>, or <kbd>Enter</kbd> alone to accept the suggestion. An item you defer or escalate stays open.</li>
+      <li>On <span class="ui">Results</span>, press <span class="ui">Compare with Remark…</span>, give the same workbook and press <span class="ui">Compare</span>. Check each row of <span class="ui">Differences to adjudicate</span> against the paper (Table 10.1). Write down your counts before any <span class="ui">Queue for review</span>, which adds each difference on an answer Mizan accepted on its own to Review.</li>
+      <li>Press <span class="ui">Save report</span>, then send your findings, as described below.</li>
+    </ol>
+
+    <div class="table-wrap">
+      <table class="tight">
+        <caption><span class="fig">Table 10.1</span>What the comparison counts mean. QUESTIONS EQUAL, TO ADJUDICATE and TOTALS EQUAL count only booklets paired with a Remark row; the other three also count what did not pair. Figure 10.1, before this guide, shows each one on the screen.</caption>
+        <thead><tr><th style="width:19%">Count</th><th style="width:55%">What it means</th><th>What to do</th></tr></thead>
+        <tbody>
+          <tr><td><span class="ui">BOOKLETS PAIRED</span></td><td>Booklets matched to a Remark row, of all Mizan's booklets: by <em>ID</em> (same student number), <em>partial</em> (Remark's number fits each digit Mizan was sure of) or <em>answers</em> (at least 80 % of answers the same).</td><td>See <span class="ui">IDENTITY</span> for booklets unpaired or paired by answers.</td></tr>
+          <tr><td><span class="ui">QUESTIONS EQUAL</span></td><td>Questions where Mizan's settled answer is Remark's reading, of all compared. <em>pending, same</em>: Mizan's proposal, still in Review, is Remark's reading. The key and points play no part.</td><td>Nothing to check.</td></tr>
+          <tr><td><span class="ui">TO ADJUDICATE</span></td><td>Questions the two programs read differently: <em>settled</em> when Mizan's answer is final, <em>pending</em> while in Review. A row's status: <em>auto</em> (Mizan's own answer), <em>confirmed</em> or <em>changed</em> (a reviewer's), or <em>pending review</em>.</td><td>Check each row against the paper; note which program read it right.</td></tr>
+          <tr><td><span class="ui">TOTALS EQUAL</span></td><td>Of the settled, paired booklets, those whose total and maximum equal Remark's, by Mizan's own key, points and voids. <em>provisional N/N if resolved</em>: booklets with pending questions, and how many would match if resolved as Remark read them.</td><td>If readings agree but totals differ, look for a key or points line.</td></tr>
+          <tr><td><span class="ui">IDENTITY</span></td><td>Identity differences of every kind, such as a booklet with no Remark row or one student number on several booklets.</td><td>Check those numbers on the paper.</td></tr>
+          <tr><td><span class="ui">KEY SHEETS</span></td><td>Remark rows whose student number is one repeated digit, such as all zeros: a key sheet that Remark graded as a student.</td><td>Nothing: it changes only Remark's class statistics.</td></tr>
+          <tr><td><span class="msg">Remark's key differs</span></td><td>On the <span class="ui">Workbooks and report</span> card: the exam's key and Remark's answer key disagree on that question.</td><td>Keep Remark's key; note any change you made in Mizan.</td></tr>
+          <tr><td><span class="msg">Points differ</span>, <span class="msg">Maximum differs</span></td><td>Under <span class="ui">TOTALS</span>: Mizan grades a question, or a version, with other points than Remark. With another maximum, no total can be equal.</td><td>Make the exam again with <span class="ui">Use this import</span> if it was not; otherwise note the line.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="table-wrap">
+      <table class="tight keep">
+        <caption><span class="fig">Table 10.2</span>Figures on the Scan screen. Write them down when the run has ended: during a run they are estimates.</caption>
+        <thead><tr><th style="width:19%">Figure</th><th>What it means</th></tr></thead>
+        <tbody>
+          <tr><td><span class="ui">PAGES</span></td><td>Pages read, of the pages found.</td></tr>
+          <tr><td><span class="ui">THROUGHPUT</span></td><td>Pages a second while Mizan reads the pages, at the worker count in the status bar; the desktop app uses every core. Reading the files in, scoring and saving are left out.</td></tr>
+          <tr><td><span class="ui">FIRST RESULT</span></td><td>Seconds from the start of the run (reading the files included) to the first page's result; green under 3 s.</td></tr>
+          <tr><td><span class="ui">AUTO-ACCEPTED</span></td><td>The share of all answers Mizan settled on its own.</td></tr>
+          <tr><td>AR</td><td>In the caption under AUTO-ACCEPTED: the answers sent to a person, 100 % minus AUTO-ACCEPTED.</td></tr>
+          <tr><td><span class="ui">REMAINING</span></td><td>Time left. After the run it reads <span class="msg">batch complete</span>.</td></tr>
+          <tr><td><span class="ui">Activity</span>, total</td><td>The whole run in milliseconds, from reading the files to the stored results, exports left out.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>What to record and send</h4>
+    <ul class="plain">
+      <li>The time each program took from scans to final scores, your review included; separately, your time to learn Mizan.</li>
+      <li><span class="ui">PAGES</span>, <span class="ui">THROUGHPUT</span> and <span class="ui">FIRST RESULT</span> when grading ends; <span class="ui">AUTO-ACCEPTED</span> and its AR help too.</li>
+      <li>How many answers the two programs read differently (<span class="ui">TO ADJUDICATE</span>), and how many of those each read correctly, checked against the paper.</li>
+      <li>How many answers each program asked you to check: for Mizan, the <span class="ui">Marks</span> lane count from step 5.</li>
+      <li>Anything that did not work, was unclear, or that you could not find.</li>
+    </ul>
+    <aside class="callout important">
+      <span class="label">Student data</span>
+      <p>Send counts and notes only: no student names or student numbers, no key letters, and no screenshots that show a sheet or a student. Keep the comparison report, and any figures from it, inside your institution, and send figures only to the colleague who invited you. Do not attach the report itself unless they ask for it.</p>
+    </aside>
+
+    <h4>Where the report goes</h4>
+    <p><span class="ui">Save report</span> compares again with the exam as it stands, so your latest decisions are in, and writes six files into <span class="ui">Report folder</span>, which Mizan fills in, when it is empty, with a folder named <code class="nw">parallel-run-remark</code> inside the exam's folder: the full report <code class="nw">parallel_run.html</code>, three CSV files, a JSON summary and a signed <code class="nw">manifest.json</code>. Keep the folder there, on a local disk. Mizan refuses network paths and Dropbox-style sync folders; on Windows it does not yet refuse OneDrive, and the files are not limited to your account, although the card says "owner-only files". The report holds full student numbers and answers, the key entries where Remark's key differs, and images of the bubbles: treat it like the scans.</p>
+    <p>Two things are in the saved report but not on the screen. Its answers-only check (the Totals section and the <code class="nw">answers_only_total</code> column) puts Remark's key and points on Mizan's readings: if a booklet's answers-only total equals Remark's but its total does not, the difference lies in the key, points or voids, not in the readings. Its licence-review line reads "not recorded, so open" unless a decision has been recorded on this computer; while it does, the comparison is an internal check and its figures stay inside your institution. A recorded refusal stops the comparison (Chapter 15).</p>
+  </section>
 </section>
 
 <!-- ===================================================== 11 OUTCOMES -->
@@ -1738,7 +1982,8 @@
         <tr><td><span class="code">MRK-001</span> on every answer of a sheet</td><td>The sheet is a phone photo.</td><td>Rescan the sheet on a scanner, or confirm each answer.</td></tr>
         <tr><td><span class="code">SCO-001</span> probable mis-key</td><td>The strongest students disagree with the key on this question.</td><td>Change the key, accept both answers, void the question, or keep the key with a reason and a note.</td></tr>
         <tr><td><span class="code">SCO-003</span> key missing or not confirmed (on Results: <span class="ui">Results wait for the key</span>)</td><td>The key has empty entries, was inferred from the sheets, or came from key sheets not confirmed yet.</td><td>Fill or void the empty entries, replace an inferred key (<span class="ui">Setup</span> › <span class="ui">Replace key…</span>), or in Setup decide each highlighted row and confirm.</td></tr>
-        <tr><td><span class="code">SCO-005</span> a sheet held for its version</td><td>The student bubbled a version this exam does not have.</td><td>Choose the right version in Review.</td></tr>
+        <tr><td><span class="code">SCO-005</span> a sheet held for its version</td><td>Mizan cannot tell the version: the version bubbles are blank or unclear, the sheet bubbles a version this exam does not have, or the answers fit no version's key.</td><td>In Review, <span class="ui">Scoring</span> lane, press the right version letter, or accept the suggestion. A sheet with a version the exam does not have is not scored until you choose.</td></tr>
+        <tr><td><span class="code">IDN-003</span> version unclear</td><td>The bubbled version does not fit the answers: they match another version's key clearly better. Mizan never changes the version on its own.</td><td>Check the paper. In Review, <span class="ui">Scoring</span> lane, press the right version letter, or accept the suggestion.</td></tr>
         <tr><td><span class="code">IDN-002</span> a sheet held as foreign</td><td>A sheet of your own form from another exam, or a forged one.</td><td>Check the sheet.</td></tr>
         <tr><td><span class="code">SYS-032</span></td><td>Grading again read an answer differently from your earlier decision.</td><td>Your decision stands: confirm it, or decide again from the paper.</td></tr>
         <tr><td>Pressing <kbd>D</kbd> on an identity item only shows a message</td><td>Duplicate is not recorded yet.</td><td>Choose the student (<kbd>1</kbd>–<kbd>3</kbd>) or <kbd>N</kbd>.</td></tr>
@@ -1749,6 +1994,9 @@
         <tr><td><span class="ui">Write Blackboard CSV</span> is grey: <span class="msg">No roster …</span></td><td>No roster.</td><td><span class="ui">Setup</span> › <span class="ui">Add roster…</span></td></tr>
         <tr><td><span class="msg">Not released: the Blackboard upload is written when the results are released</span></td><td>Not released yet.</td><td>Release the results (Chapter 9).</td></tr>
         <tr><td><span class="msg">these exports were written before your latest changes …</span></td><td>A decision or key change after the last export.</td><td><span class="ui">Results</span> › <span class="ui">Export…</span> › <span class="ui">Write all exports</span>.</td></tr>
+
+        <tr class="group"><td colspan="3">Comparing with Remark</td></tr>
+        <tr><td><span class="msg">Parallel run refused: the licence review of parallel runs with Remark … does not permit them: no comparison is made</span></td><td>A decision recorded on this computer says that comparisons with Remark are not permitted.</td><td>Stop, and tell whoever asked for the comparison (in the side-by-side test, the colleague who invited you). Ignore the "What to do" line about Remark's workbooks shown under it. Do not remove the record yourself.</td></tr>
       </tbody>
     </table>
   </div>
@@ -1789,7 +2037,7 @@
       <ul class="plain">
         <li>Keys that need several answers together (<code class="nw">A+C</code>) are not supported. Use <code class="nw">A|C</code>, or void the question.</li>
         <li>Small warnings are counted, not queued for review.</li>
-        <li>There is no second-person check yet: each decision is one reviewer's.</li>
+        <li>Each decision in Review is made by one reviewer; no second person checks it yet. (<span class="ui">Second review</span> in <span class="ui">Advanced options</span> is about double marks, not a second reviewer.)</li>
         <li>Two sheets with one student number and different answers cannot be marked as duplicates.</li>
         <li>If nobody chose the keyed answer, Mizan flags the question but does not block release. Check such questions yourself.</li>
         <li>Stopping a grading run keeps nothing; grade the scans again.</li>
@@ -1887,7 +2135,8 @@ omr release        --project "$HOME/OMR Exams/demo-101-quiz-1"
 <span class="c"># your own printed form</span>
 omr templates --example-spec &gt; spec.json
 omr sheet render --spec spec.json --out sheets.pdf --copies 120</pre>
-  <p><code class="nw">--project</code> takes the exam folder or its <code class="nw">project.omrproj</code>. <code class="nw">--copies</code> is the number of sheets per version. Review decisions: <code class="nw">ack</code> accepts the suggestion; otherwise a letter, <code class="nw">blank</code>, <code class="nw">multi:A+C</code>, <code class="nw">unreadable</code>, <code class="nw">student:&lt;number&gt;</code>, <code class="nw">not-on-roster</code> or <code class="nw">form:B</code>. A decision other than the suggestion needs <code class="nw">--reason</code>, for example <code class="nw">AMBIGUOUS_MARK</code>, <code class="nw">ERASURE_RESIDUE</code>, <code class="nw">ID_CORRECTION</code>, or <code class="nw">OTHER</code> with <code class="nw">--note</code>.</p>
+  <p><code class="nw">--project</code> takes the exam folder or its <code class="nw">project.omrproj</code>. <code class="nw">--copies</code> is the number of sheets per version.</p>
+  <p>Review decisions (<code class="nw">--decision</code>): <code class="nw">ack</code> accepts the suggestion; otherwise a letter, <code class="nw">blank</code>, <code class="nw">multi:A+C</code>, <code class="nw">unreadable</code>, <code class="nw">student:&lt;number&gt;</code>, <code class="nw">not-on-roster</code> or <code class="nw">form:B</code>. A decision other than the suggestion needs <code class="nw">--reason</code>, for example <code class="nw">AMBIGUOUS_MARK</code>, <code class="nw">ERASURE_RESIDUE</code>, <code class="nw">ID_CORRECTION</code>, or <code class="nw">OTHER</code> with <code class="nw">--note</code>. A probable mis-key (SCO-001) takes other decisions: a letter changes the key to that answer, <code class="nw">multi</code> accepts the key or the flagged answer, <code class="nw">void</code> voids the question, and <code class="nw">ack</code> keeps the key and needs <code class="nw">--reason</code> and <code class="nw">--note</code>. <code class="nw">--defer</code>, <code class="nw">--escalate</code>, <code class="nw">--rescan</code> and <code class="nw">--undo</code> take no decision; <code class="nw">--group</code> applies one to the item's whole group.</p>
 
   <div class="keys-grid">
     <div class="table-wrap">
@@ -1920,6 +2169,15 @@ omr sheet render --spec spec.json --out sheets.pdf --copies 120</pre>
   </div>
   <p><strong>Demo mode.</strong> With <code class="nw">--demo</code>, every screen shows a <span class="ui">DEMO DATA</span> mark in the rail: the exams are invented and nothing is read or written. Release is refused, and a few buttons that exist only in the demo say they are not built yet. To leave, close Mizan and start it without <code class="nw">--demo</code>.</p>
   <p><code class="nw">OMR_KEY_DIR</code> sets the private folder. It must be local and private, never a sync or network folder. On Windows, release builds of <code class="nw">omr-desktop.exe</code> open no console window: start-up errors are meant to appear in a window instead (not yet seen on a real display). IT staff can also build both programs from source with Rust 1.92 or newer, following the build steps in the project's README.</p>
+
+  <div class="avoid">
+  <h3>Measure speed</h3>
+<pre class="cmd">omr bench &lt;scans folder or files&gt;... --template &lt;legacy&gt; --questions &lt;N&gt;
+          [--forms A,B,C,D] [--threads 1,2,4] [--repeat N] [--first 30]
+          [--scratch &lt;folder&gt;] [--out bench.json]</pre>
+  <p>For each thread count in <code class="nw">--threads</code> (1, 2 and 4 by default), <code class="nw">omr bench</code> prints two speeds in pages a second: <em>recognition</em>, reading the pages, and <em>full pipeline (no store)</em>, which adds identity, versions, scoring and the review queue. <code class="nw">--repeat</code> runs each count several times and keeps the best. It then grades the first sheets (<code class="nw">--first</code>, 30 by default) end to end, with the store and every export, and prints the time to first result. It always grades with a key it works out from the sheets, so it needs no key file and measures speed only, never accuracy. <code class="nw">--template</code> (or <code class="nw">--spec</code> for your own form) and <code class="nw">--questions</code> are required; without <code class="nw">--forms</code>, the legacy sheet is taken to have versions A and B. <code class="nw">--out</code> writes the figures as JSON.</p>
+  <p><code class="nw">omr grade</code> prints two summary lines: the answers accepted on their own, with AR, and the times. There, pages/s is the same measure as THROUGHPUT on the Scan screen, and wall is the whole command, exports included. The desktop app always grades on every core; on the command line, <code class="nw">--threads N</code> sets the count.</p>
+  </div>
 </section>
 
 <!-- ===================================================== APPENDIX B -->
@@ -1935,6 +2193,7 @@ omr sheet render --spec spec.json --out sheets.pdf --copies 120</pre>
       <thead><tr><th style="width:24%">Term</th><th>Meaning</th></tr></thead>
       <tbody>
         <tr><td><strong>Answer key</strong></td><td>The right answers, one set per version.</td></tr>
+        <tr><td><strong>AR</strong></td><td>The share of answers sent to a person: 100 % minus AUTO-ACCEPTED on the Scan screen.</td></tr>
         <tr><td><strong>Audit log</strong></td><td>The exam's record of every decision, key change and release, in order, sealed so that a change shows.</td></tr>
         <tr><td><strong>Booklet</strong></td><td>One student's sheet, or sheets. Results list a booklet number.</td></tr>
         <tr><td><strong>CLO</strong></td><td>Course learning outcome. You map questions to CLOs in the CLO file.</td></tr>
@@ -1954,7 +2213,7 @@ omr sheet render --spec spec.json --out sheets.pdf --copies 120</pre>
         <tr><td><strong>Review item</strong></td><td>Something Mizan is not sure about, waiting for a person: a mark, a student number, a page or a key question.</td></tr>
         <tr><td><strong>SEM</strong></td><td>Standard error of measurement: how far, in points, a score may sit from the student's true score.</td></tr>
         <tr><td><strong>Silent error</strong></td><td>An answer accepted without a person that turns out to be wrong. Mizan is built to avoid these: when unsure, it asks.</td></tr>
-        <tr><td><strong>Stability</strong></td><td>How often a flag fires again when Mizan re-draws the class 1,000 times. A low share reads "proposed" and never blocks release.</td></tr>
+        <tr><td><strong>Stability</strong></td><td>For a class of fewer than 1,000 students, how often a flag fires again when Mizan re-draws the class 1,000 times. Mizan also checks the flag at both ends of its 95 % interval; for 1,000 students or more, that check alone decides. A flag that does not hold up reads "proposed" and never blocks release.</td></tr>
         <tr><td><strong>Version (form)</strong></td><td>One variant of the exam: A, B, C …</td></tr>
       </tbody>
     </table>
