@@ -6,7 +6,7 @@ It is not an official university publication and must not carry the university's
 | File | What it is |
 |---|---|
 | `brochure/brochure.pdf` | 4-page A4 brochure, print-ready |
-| `manual/manual.pdf` | 33-page A4 user manual, preview edition |
+| `manual/manual.pdf` | 38-page A4 user manual, preview edition |
 | `brochure/brochure.html`, `manual/manual.html` | The same documents as web pages (generated, do not edit) |
 | `diagrams/` | The four diagrams, each as a standalone `.html` and an inline-ready `.svg` |
 | `assets/` | Generated images (no text or logos), masked synthetic screenshots, brand marks, IBM Plex fonts |

@@ -653,7 +653,7 @@
     <h1 class="cover-title">Mizan <span lang="ar" dir="rtl">ميزان</span></h1>
     <p class="cover-sub">User manual <span lang="ar" dir="rtl">دليل المستخدم</span></p>
     <p class="cover-desc">Grading multiple-choice answer sheets on your own computer, with every doubtful mark decided by a person. For instructors and exam coordinators, with a command-line appendix for IT staff.</p>
-    <p class="cover-version">Preview edition · October 2026 · Mizan 0.1.0</p>
+    <p class="cover-version">Preview edition · November 2026 · Mizan 0.1.0</p>
   </div>
 </section>
 
@@ -689,7 +689,7 @@
     <span class="label">How to read this manual</span>
     <p>Words you see on screen look like this: <span class="ui">New exam</span>. Keys look like this: <kbd>Ctrl+N</kbd>. File and folder names look like this: <code class="nw">key.csv</code>. Every course, student, number and name in the examples and pictures is invented; a few details in the pictures are masked.</p>
   </aside>
-  <p class="end-note">Mizan user manual · Preview edition, October 2026 · for Mizan 0.1.0. This manual is not an official publication of any institution. Blackboard and Remark Office OMR are trademarks of their owners; Mizan is not affiliated with or endorsed by them.</p>
+  <p class="end-note">Mizan user manual · Preview edition, November 2026 · for Mizan 0.1.0. This manual is not an official publication of any institution. Blackboard and Remark Office OMR are trademarks of their owners; Mizan is not affiliated with or endorsed by them.</p>
 </section>
 
 <!-- ===================================================== 1 WELCOME -->
@@ -803,7 +803,7 @@
     <li><b>Tiles</b>Sheets scanned this week, open exceptions, median review time, throughput.</li>
     <li><b>Exams table</b>Course, assessment, date, forms, sheets, exceptions, status. <kbd>↑</kbd> <kbd>↓</kbd> move; <kbd>Enter</kbd> opens the drawer.</li>
     <li><b>Details drawer</b>Status and next step (here <span class="ui">Continue review (14)</span>), key, CLO mapping, roster and last scan, and buttons to open the results, setup, scan or folder. <kbd>Esc</kbd> closes it.</li>
-    <li><b>Status bar</b>Messages, the exams folder and the engine version. A notice appears just above it when a run ends.</li>
+    <li><b>Status bar</b>Messages, the exams folder and Mizan's version. A notice appears just above it when a run ends.</li>
   </ol>
 
   <h3>The screens</h3>
@@ -942,7 +942,8 @@
   </ol>
 
   <h3>Correct one key entry</h3>
-  <p>In Setup's <span class="ui">Answer key and CLO mapping</span> grid, type the letter in the question's cell. Every key change makes a new, numbered key version, rescores the exam and is recorded; the status bar reminds you that <span class="msg">Key and mapping edits are recorded as audited events</span>.</p>
+  <p>In Setup's <span class="ui">Answer key and CLO mapping</span> grid, a key cell takes one key press: an option letter, <code class="nw">*</code> to void the question, or <kbd>Delete</kbd> to clear it. A click, <kbd>Space</kbd> or <kbd>Enter</kbd> moves the cell to the next option. Each step is a key change of its own; to set a letter directly, type it. To accept two answers for one question, use <span class="ui">Replace key…</span> with a key file that writes them as <code class="nw">A|C</code>. Every key change makes a new, numbered key version, rescores the exam and is recorded; the status bar reminds you that <span class="msg">Key and mapping edits are recorded as audited events</span>.</p>
+  <p>While a key read from key sheets waits for confirmation, the key cells refuse edits. Decide its highlighted rows and confirm it (above), then correct any other entry here, which makes a new key version; or replace the whole key with <span class="ui">Replace key…</span>.</p>
 
   <h3>How the key stays out of sight</h3>
   <ul class="plain">
@@ -999,6 +1000,7 @@
 
   <h3>Add a roster after grading</h3>
   <p><span class="ui">Setup</span> › <span class="ui">Add roster…</span> › <span class="ui">Roster file</span> › <span class="ui">Add roster and match students</span>. Every sheet is matched again and your decisions carry over. A roster cannot be removed once added.</p>
+  <p>While a key read from key sheets waits for your confirmation, Mizan refuses a later batch and a roster at once. Confirm the key first in Setup (Chapter 5), or replace the whole key with <span class="ui">Replace key…</span>.</p>
 </section>
 
 <!-- ===================================================== 7 REVIEW -->
@@ -1011,7 +1013,7 @@
   </header>
 
   <h3>The four lanes</h3>
-  <p>Review items sit in four lanes, shown as chips with counts at the top of the screen. <span class="ui">Marks</span>: answer marks, such as a low-confidence mark or multiple marks. <span class="ui">Identity</span>: who a sheet belongs to. <span class="ui">Capture</span>: page problems, such as unreadable files or poor scans; help (<kbd>F1</kbd>) gives the fix. <span class="ui">Scoring</span>: a version not identified, or a probable mis-key, where the strongest students contradict the key. A mis-key holds release until you change the key, accept a second answer, void the question, or keep the key with a reason.</p>
+  <p>Review items sit in four lanes, shown as chips with counts at the top of the screen. <span class="ui">Marks</span>: answer marks, such as a low-confidence mark or multiple marks. <span class="ui">Identity</span>: who a sheet belongs to. <span class="ui">Capture</span>: page problems, such as unreadable files or poor scans; help (<kbd>F1</kbd>) gives the fix. <span class="ui">Scoring</span>: a version not identified, or a probable mis-key, where the strongest students contradict the key. A mis-key holds release until you change the key, accept a second answer, void the question, or keep the key with a reason and a note.</p>
   <figure class="diagram">
     <div class="frame"><!--SVG:review-release--></div>
     <figcaption><span class="fig">Figure 7.1</span>What happens to each mark, and when the exam can be released. Mizan reads every mark without the key; only the marks it is sure of are accepted on their own. The teal steps are where a person decides.</figcaption>
@@ -1031,6 +1033,9 @@
     <li>Other actions: <span class="ui">Defer</span> (<kbd>Ctrl+D</kbd>) moves the item to the end of the queue; <span class="ui">Escalate to instructor</span> (<kbd>Ctrl+E</kbd>); <span class="ui">Add to rescan list</span> (<kbd>Ctrl+R</kbd>). The note field takes a note in Arabic or English; notes are personal data.</li>
   </ol>
   <p><span class="ui">Unreadable</span>, <span class="ui">Escalate to instructor</span> and <span class="ui">Add to rescan list</span> move an item aside but do not close it. It stays in the queue, still counts as open and still holds release until someone decides it. Unreadable also records the answer as unreadable, never as blank. No screen shows yet which items are escalated or on the rescan list; their state is kept in <code class="nw">review_queue.json</code>.</p>
+
+  <h3>Keep the key of a probable mis-key</h3>
+  <p>A probable mis-key waits in the <span class="ui">Scoring</span> lane. To keep the key, choose a reason under <span class="ui">WHY KEEP THE KEY?</span>, write why in the note (every reason needs one) and press <span class="ui">Acknowledge</span>. To change the key, void the question or accept a second answer instead, do it in Setup (Chapter 5): the item closes once the question is no longer flagged.</p>
 
   <div class="split">
     <div>
@@ -1346,7 +1351,7 @@
     </aside>
 
     <h4>Where the report goes</h4>
-    <p><span class="ui">Save report</span> compares again with the exam as it stands, so your latest decisions are in, and writes six files into <span class="ui">Report folder</span>, which Mizan fills in, when it is empty, with a folder named <code class="nw">parallel-run-remark</code> inside the exam's folder: the full report <code class="nw">parallel_run.html</code>, three CSV files, a JSON summary and a signed <code class="nw">manifest.json</code>. Keep the folder there, on a local disk. Mizan refuses network paths and Dropbox-style sync folders; on Windows it does not yet refuse OneDrive, and the files are not limited to your account, although the card says "owner-only files". The report holds full student numbers and answers, the key entries where Remark's key differs, and images of the bubbles: treat it like the scans.</p>
+    <p><span class="ui">Save report</span> compares again with the exam as it stands, so your latest decisions are in, and writes six files into <span class="ui">Report folder</span>, which Mizan fills in, when it is empty, with a folder named <code class="nw">parallel-run-remark</code> inside the exam's folder: the full report <code class="nw">parallel_run.html</code>, three CSV files, a JSON summary and a signed <code class="nw">manifest.json</code>. Keep the folder there, on a local disk. Mizan refuses network paths and Dropbox-style sync folders; on Windows it does not yet refuse OneDrive, and the files are not limited to your account: they take the folder's permissions, as the card says. The report holds full student numbers and answers, the key entries where Remark's key differs, and images of the bubbles: treat it like the scans.</p>
     <p>Two things are in the saved report but not on the screen. Its answers-only check (the Totals section and the <code class="nw">answers_only_total</code> column) puts Remark's key and points on Mizan's readings: if a booklet's answers-only total equals Remark's but its total does not, the difference lies in the key, points or voids, not in the readings. Its licence-review line reads "not recorded, so open" unless a decision has been recorded on this computer; while it does, the comparison is an internal check and its figures stay inside your institution. A recorded refusal stops the comparison (Chapter 15).</p>
   </section>
 </section>
@@ -1361,7 +1366,7 @@
   </header>
 
   <h3>Before you start</h3>
-  <p>Give a <span class="ui">CLO mapping file</span> on the New exam card, or later in <span class="ui">Setup</span> › <span class="ui">CLO file</span> › <span class="ui">Replace CLOs</span>. Chapter 13 shows its layout. Without one, Outcomes shows <span class="ui">Load a CLO file in Setup</span>. In Setup, the grid maps each question to CLOs with a <span class="ui">WEIGHT</span>, and each cell can carry a <span class="ui">NOTE (ARABIC OR ENGLISH)</span>. <span class="ui">Course learning outcomes</span> shows each CLO's share of the evidence.</p>
+  <p>Give a <span class="ui">CLO mapping file</span> on the New exam card, or later in <span class="ui">Setup</span> › <span class="ui">CLO file</span> › <span class="ui">Replace CLOs</span>. Chapter 13 shows its layout. Without one, Outcomes shows <span class="ui">Load a CLO file in Setup</span>. In Setup, the grid maps each question to CLOs with a <span class="ui">WEIGHT</span>, and each cell can carry a <span class="ui">NOTE (ARABIC OR ENGLISH)</span>. When the CLO rows differ between versions, for example after a Remark import, the grid's CLO cells refuse edits: change the rows in a CLO file and give it with <span class="ui">Replace CLOs</span>. <span class="ui">Course learning outcomes</span> shows each CLO's share of the evidence.</p>
 
   <h3>Read the attainment</h3>
   <figure>
@@ -1619,6 +1624,7 @@
       <tbody>
         <tr class="group"><td colspan="3">Starting and opening</td></tr>
         <tr><td><span class="msg">Mizan cannot start … cannot open a window</span></td><td>No desktop session, for example on a remote server.</td><td>Start Mizan from a desktop session. On Linux, install <code class="nw">libfontconfig1</code> and <code class="nw">libxkbcommon-x11-0</code>. On a server, use the command line.</td></tr>
+        <tr><td><span class="msg">Mizan cannot start … Mizan keeps your exams in this folder …</span> or <span class="msg">… nowhere to keep your exams</span></td><td>Mizan could not create <code class="nw">OMR Exams</code> in your home folder, or the account has no home folder.</td><td>Ask your IT team to check that you can create folders in your home folder, or to start Mizan with another exams folder (Appendix&nbsp;A).</td></tr>
         <tr><td>Windows warns about the program, or blocks it</td><td>Test builds are unsigned.</td><td>Ask your IT team. Do not grade real exams on Windows with a test build.</td></tr>
         <tr><td><span class="msg">Nothing was chosen, so the field is unchanged. If no file dialog appeared, type the path in the field instead</span></td><td>The file picker was closed, or did not open.</td><td>Type or paste the path into the field.</td></tr>
         <tr><td><span class="msg">This exam is open read-only (another program has it open for writing)…</span></td><td>Another window or a command has the exam open.</td><td>Close it, then reopen the exam.</td></tr>
@@ -1639,10 +1645,11 @@
         <tr><td><span class="code">CAP-002</span></td><td>Scan resolution too low or too high.</td><td>Rescan at 200–300 dpi and add the new scan.</td></tr>
         <tr><td><span class="code">CAP-004</span></td><td>"Compact PDF" compression (JBIG2 or MRC).</td><td>Scan again with that compression off.</td></tr>
         <tr><td><span class="code">MRK-001</span> on every answer of a sheet</td><td>The sheet is a phone photo.</td><td>Rescan the sheet on a scanner, or confirm each answer.</td></tr>
-        <tr><td><span class="code">SCO-001</span> probable mis-key</td><td>The strongest students disagree with the key on this question.</td><td>Change the key, accept both answers, void the question, or keep the key with a reason and a note.</td></tr>
+        <tr><td><span class="code">SCO-001</span> probable mis-key</td><td>The strongest students disagree with the key on this question.</td><td>Keep the key in Review with a reason and a note (Chapter 7), or change the key, void the question or accept both answers in Setup (Chapter 5).</td></tr>
         <tr><td><span class="code">SCO-003</span> key missing or not confirmed (on Results: <span class="ui">Results wait for the key</span>)</td><td>The key has empty entries, was inferred from the sheets, or came from key sheets not confirmed yet.</td><td>Fill or void the empty entries, replace an inferred key (<span class="ui">Setup</span> › <span class="ui">Replace key…</span>), or in Setup decide each highlighted row and confirm.</td></tr>
+        <tr><td><span class="msg">The key read from the key sheets waits for your confirmation …</span> when adding scans or a roster; <span class="msg">The key comes from key sheets that are not confirmed yet …</span> in a key cell</td><td>The key read from key sheets is not confirmed yet.</td><td>Confirm it in Setup (<span class="ui">Key from answer sheets</span>), or replace the whole key (<span class="ui">Setup</span> › <span class="ui">Replace key…</span>).</td></tr>
         <tr><td><span class="code">SCO-005</span> a sheet held for its version</td><td>Mizan cannot tell the version: the version bubbles are blank or unclear, the sheet bubbles a version this exam does not have, or the answers fit no version's key.</td><td>In Review, <span class="ui">Scoring</span> lane, press the right version letter, or accept the suggestion. A sheet with a version the exam does not have is not scored until you choose.</td></tr>
-        <tr><td><span class="code">IDN-003</span> version unclear</td><td>The bubbled version does not fit the answers: they match another version's key clearly better. Mizan never changes the version on its own.</td><td>Check the paper. In Review, <span class="ui">Scoring</span> lane, press the right version letter, or accept the suggestion.</td></tr>
+        <tr><td><span class="code">IDN-003</span> version conflict</td><td>The sheet gives one version (bubbled or printed on it), but its answers fit another version's key much better. Mizan never changes the version on its own.</td><td>Check the paper. In Review, <span class="ui">Scoring</span> lane, press the right version letter, or accept the suggestion.</td></tr>
         <tr><td><span class="code">IDN-002</span> a sheet held as foreign</td><td>A sheet of your own form from another exam, or a forged one.</td><td>Check the sheet.</td></tr>
         <tr><td><span class="code">SYS-032</span></td><td>Grading again read an answer differently from your earlier decision.</td><td>Your decision stands: confirm it, or decide again from the paper.</td></tr>
         <tr><td>Pressing <kbd>D</kbd> on an identity item only shows a message</td><td>Duplicate is not recorded yet.</td><td>Choose the student (<kbd>1</kbd>–<kbd>3</kbd>) or <kbd>N</kbd>.</td></tr>
@@ -1655,7 +1662,7 @@
         <tr><td><span class="msg">these exports were written before your latest changes …</span></td><td>A decision or key change after the last export.</td><td><span class="ui">Results</span> › <span class="ui">Export…</span> › <span class="ui">Write all exports</span>.</td></tr>
 
         <tr class="group"><td colspan="3">Comparing with Remark</td></tr>
-        <tr><td><span class="msg">Parallel run refused: the licence review of parallel runs with Remark … does not permit them: no comparison is made</span></td><td>A decision recorded on this computer says that comparisons with Remark are not permitted.</td><td>Stop, and tell whoever asked for the comparison (in the side-by-side test, the colleague who invited you). Ignore the "What to do" line about Remark's workbooks shown under it. Do not remove the record yourself.</td></tr>
+        <tr><td><span class="msg">Parallel run refused: the licence review of parallel runs with Remark … does not permit them: no comparison is made</span></td><td>A decision recorded on this computer says that comparisons with Remark are not permitted.</td><td>Stop: nothing is compared while the decision stands, whatever the workbooks or points. Tell whoever asked for the comparison (in the side-by-side test, the colleague who invited you). Do not remove the record yourself.</td></tr>
       </tbody>
     </table>
   </div>
