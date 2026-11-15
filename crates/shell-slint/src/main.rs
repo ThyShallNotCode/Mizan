@@ -421,20 +421,45 @@ fn default_workspace(prefs: &Prefs) -> Result<PathBuf, String> {
     if let Some(w) = prefs.workspace.clone().filter(|w| w.is_dir()) {
         return Ok(w);
     }
-    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+    exams_folder_in(std::env::var_os(if cfg!(windows) {
+        "USERPROFILE"
+    } else {
+        "HOME"
+    }))
+}
+
+/// `OMR Exams` in the home folder `home`, created when missing. Its refusal is said in a
+/// window to someone who started Mizan without a command line: it names no flag.
+fn exams_folder_in(home: Option<std::ffi::OsString>) -> Result<PathBuf, String> {
+    let home = home
         .filter(|h| !h.is_empty())
-        .ok_or("no home folder: give the exams folder with --workspace DIR")?;
+        .ok_or("This account has no home folder, so Mizan has nowhere to keep your exams")?;
     let w = PathBuf::from(home).join("OMR Exams");
     omr_app::keys::create_private_dir(&w).map_err(|e| {
         format!(
-            "{}: {e}; give the exams folder with --workspace DIR",
+            "{}: {e}. Mizan keeps your exams in this folder: check that you can create folders \
+             in your home folder",
             w.display()
         )
     })?;
     Ok(w)
 }
 
-fn backend(a: &Args, prefs: &mut Prefs) -> Result<(Built, bool), String> {
+/// Why Mizan cannot start: what the window says, and what only a command line can use (its
+/// flags), said on the console alone.
+#[derive(Debug)]
+struct StartError {
+    text: String,
+    console: &'static str,
+}
+
+impl From<String> for StartError {
+    fn from(text: String) -> Self {
+        Self { text, console: "" }
+    }
+}
+
+fn backend(a: &Args, prefs: &mut Prefs) -> Result<(Built, bool), StartError> {
     let op = operator(a, prefs)?;
     Ok(match &a.source {
         Source::Demo => (
@@ -452,7 +477,11 @@ fn backend(a: &Args, prefs: &mut Prefs) -> Result<(Built, bool), String> {
             (app(b), false)
         }
         Source::Default => {
-            let w = default_workspace(prefs)?;
+            // the exams folder Mizan keeps: a command line may give another one
+            let w = default_workspace(prefs).map_err(|text| StartError {
+                text,
+                console: " (or give the exams folder with --workspace DIR)",
+            })?;
             remember_workspace(prefs, &w);
             (app(AppBackend::workspace(&w, &op)), false)
         }
@@ -461,7 +490,8 @@ fn backend(a: &Args, prefs: &mut Prefs) -> Result<(Built, bool), String> {
                 return Err(format!(
                     "{}: no such folder; give the folder that holds the exam folders",
                     w.display()
-                ));
+                )
+                .into());
             }
             remember_workspace(prefs, w);
             (app(AppBackend::workspace(w, &op)), false)
@@ -509,9 +539,10 @@ fn backend(a: &Args, prefs: &mut Prefs) -> Result<(Built, bool), String> {
 /// Prints `text` to stderr and, in a Windows release build (no console), also shows it in a
 /// window, so a user who started Mizan from the Start menu or Explorer sees why it stopped.
 /// When no window of the app can open (often the very reason it stopped), the system's own
-/// message box shows it.
-fn tell(heading: &str, text: &str) {
-    eprintln!("{text}");
+/// message box shows it. `console` adds what only a command line can use (its flags), printed
+/// after `text` and never shown in the window.
+fn tell(heading: &str, text: &str, console: &str) {
+    eprintln!("{text}{console}");
     if cfg!(all(windows, not(debug_assertions))) {
         let Ok(w) = shell_slint::ui::ErrorWindow::new() else {
             rfd::MessageDialog::new()
@@ -538,13 +569,15 @@ fn main() -> ExitCode {
     let args = match parse(std::env::args().skip(1)) {
         Ok(a) => a,
         Err(e) if e.is_empty() => {
-            tell("Mizan", USAGE);
+            tell("Mizan", USAGE, "");
             return ExitCode::SUCCESS;
         }
+        // the start options were typed on a command line: its usage says them
         Err(e) => {
             tell(
                 "Mizan cannot start",
                 &format!("omr-desktop: {e}\n\n{USAGE}"),
+                "",
             );
             return ExitCode::from(2);
         }
@@ -553,7 +586,7 @@ fn main() -> ExitCode {
     let (built, live) = match backend(&args, &mut prefs) {
         Ok(b) => b,
         Err(e) => {
-            tell("Mizan cannot start", &format!("omr-desktop: {e}"));
+            tell("Mizan cannot start", &e.text, e.console);
             return ExitCode::FAILURE;
         }
     };
@@ -567,10 +600,11 @@ fn main() -> ExitCode {
             tell(
                 "Mizan cannot start",
                 &format!(
-                    "omr-desktop: cannot open a window ({e}). Run omr-desktop from a desktop \
-                     session (Windows, macOS, or Linux with X11 or Wayland); on a server, render \
-                     the screens to PNG files with --screenshot DIR, or use the `omr` command line"
+                    "Mizan cannot open a window ({e}). Start it from a desktop session \
+                     (Windows, macOS, or Linux with X11 or Wayland)"
                 ),
+                "; on a server, render the screens to PNG files with omr-desktop --screenshot \
+                 DIR, or use the omr command line",
             );
             ExitCode::FAILURE
         }
@@ -863,5 +897,45 @@ mod tests {
         );
         let e = name(Some("a:b"), all.1, all.2, all.3).unwrap_err();
         assert!(e.starts_with("--operator: ") && e.contains("colon"), "{e}");
+    }
+
+    /// Started without a command line (a double-click), Mizan says why it cannot keep the
+    /// exams in plain words: no flag in the window.
+    #[test]
+    fn the_exams_folder_refusals_name_no_flag() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        // a home "folder" that is a file: the exams folder cannot be made in it
+        let file = dir.path().join("home");
+        std::fs::write(&file, b"").expect("write");
+        let refusals = [
+            exams_folder_in(None).unwrap_err(),
+            exams_folder_in(Some("".into())).unwrap_err(),
+            exams_folder_in(Some(file.into_os_string())).unwrap_err(),
+        ];
+        for e in &refusals {
+            assert_eq!(shell_slint::words::technical(e), None, "{e}");
+        }
+        assert!(refusals[0].contains("no home folder"), "{}", refusals[0]);
+        assert!(
+            refusals[2].contains("Mizan keeps your exams"),
+            "{}",
+            refusals[2]
+        );
+        let made = exams_folder_in(Some(dir.path().into())).expect("made");
+        assert!(made.ends_with("OMR Exams") && made.is_dir());
+    }
+
+    /// A start refused for another reason than the exams folder (a mistyped --operator, with
+    /// no exams folder given) adds no hint about the exams folder flag: that hint goes with the
+    /// exams folder's own refusals.
+    #[test]
+    fn only_the_exams_folder_refusals_hint_at_its_flag() {
+        let a = parse(["--operator", "a:b"].map(String::from).into_iter()).expect("parsed");
+        assert!(matches!(a.source, Source::Default));
+        let Err(e) = backend(&a, &mut Prefs::default()) else {
+            panic!("a mistyped operator is refused");
+        };
+        assert!(e.text.starts_with("--operator: "), "{}", e.text);
+        assert_eq!(e.console, "", "{}", e.text);
     }
 }

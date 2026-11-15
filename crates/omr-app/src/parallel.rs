@@ -646,6 +646,30 @@ fn class_stats(
     }
 }
 
+/// How the refusal of a parallel run under a licence review that refused them begins: a window
+/// that says the refusal in its own words finds it by this.
+pub const LICENCE_REFUSAL: &str = "the licence review of parallel runs with Remark";
+
+/// The refusal of a parallel run under the recorded review `r`, which refused them.
+pub fn licence_refusal(r: &LicenceReview) -> AppError {
+    AppError::Input(format!(
+        "{LICENCE_REFUSAL} (Q-08) recorded{}{} does not permit them: no comparison is made; ask \
+         the university's legal affairs, or remove {} from the private key folder if the \
+         decision was recorded in error",
+        if r.by.is_empty() {
+            String::new()
+        } else {
+            format!(" by {}", r.by)
+        },
+        if r.date.is_empty() {
+            String::new()
+        } else {
+            format!(" on {}", r.date)
+        },
+        LICENCE_REVIEW_FILE
+    ))
+}
+
 /// Compares a graded exam with Remark's graded workbooks of the same sheets.
 pub fn compare(
     p: &ExamProject,
@@ -667,22 +691,7 @@ pub fn compare_under(
         .as_ref()
         .filter(|r| r.q08.eq_ignore_ascii_case("refused"))
     {
-        return Err(AppError::Input(format!(
-            "the licence review of parallel runs with Remark (Q-08) recorded{}{} does not permit \
-             them: no comparison is made; ask the university's legal affairs, or remove {} from \
-             the private key folder if the decision was recorded in error",
-            if r.by.is_empty() {
-                String::new()
-            } else {
-                format!(" by {}", r.by)
-            },
-            if r.date.is_empty() {
-                String::new()
-            } else {
-                format!(" on {}", r.date)
-            },
-            LICENCE_REVIEW_FILE
-        )));
+        return Err(licence_refusal(r));
     }
     let s = &p.session;
     let def = &s.definition;

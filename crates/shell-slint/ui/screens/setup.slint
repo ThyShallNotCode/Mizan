@@ -399,21 +399,30 @@ component LintCard inherits Card {
     // scrolls when the findings outgrow the column (1280 × 800, DESIGN §9)
     // takes only the height left over (preferred small), so the template card above keeps its
     // content height
-    ScrollView {
+    if SetupVM.lints.length == 0: ScrollView {
         vertical-stretch: 1;
         min-height: 48px;
         preferred-height: 48px;
         content-width: self.visible-width;
         VerticalLayout {
-        spacing: Theme.space-md;
-        alignment: start;
-        if SetupVM.lints.length == 0: Text {
-            text: "No findings.";
-            font-size: Theme.text-xs;
-            color: Theme.ink-2;
-            wrap: word-wrap;
+            alignment: start;
+            Text {
+                text: "No findings.";
+                font-size: Theme.text-xs;
+                color: Theme.ink-2;
+                wrap: word-wrap;
+            }
         }
+    }
+    // a list view measures each finding at the width it is shown at, so it scrolls to the
+    // last one: a layout in a scroll view counted a wrapped message as one line
+    if SetupVM.lints.length > 0: ListView {
+        vertical-stretch: 1;
+        min-height: 48px;
+        preferred-height: 48px;
+        accessible-label: "Findings";
         for l in SetupVM.lints: HorizontalLayout {
+            padding-bottom: Theme.space-md;
             spacing: Theme.space-sm;
             VerticalLayout {
                 padding-top: 3px;
@@ -439,7 +448,6 @@ component LintCard inherits Card {
                     wrap: word-wrap;
                 }
             }
-        }
         }
     }
 }
@@ -784,7 +792,7 @@ component KeySheetBar inherits Rectangle {
             field := PathField {
                 horizontal-stretch: 1;
                 label: "Key-sheet files";
-                placeholder: "Scans or photos of the filled key sheets (student number all 0 or all 9, version bubbled); ; between several";
+                placeholder: "Scans or photos of the filled key sheets (student number all 0 or all 9, version bubbled); separate several with ;";
                 text <=> SetupVM.ks-path;
                 target: "setup-key-sheets";
                 accepted(v) => {

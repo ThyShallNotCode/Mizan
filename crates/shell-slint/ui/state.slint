@@ -584,6 +584,10 @@ export global RemarkVM {
     in property <string> cmp-refusal;
     in property <string> cmp-remedy;
     in property <string> cmp-suggestion;
+    // the refusal offers Use this exam's points (never for one no points change)
+    in property <bool> cmp-exam-points;
+    // the report's files are made owner-only (Unix); elsewhere they take the folder's permissions
+    in property <bool> owner-only-files;
     in property <string> cmp-title;
     in property <string> cmp-points;
     in property <[CmpTile]> cmp-tiles;

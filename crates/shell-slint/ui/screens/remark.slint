@@ -159,7 +159,7 @@ export component RemarkFields inherits HorizontalLayout {
     books := PathField {
         horizontal-stretch: 3;
         label: "Remark workbooks";
-        placeholder: "Remark's graded Excel exports (.xlsx), ; between several (its .rmx/.aky files are never opened)";
+        placeholder: "Remark's graded Excel exports (.xlsx; their .rmx and .aky files are never opened); separate several with ;";
         text <=> RemarkVM.path;
         target: "remark-books";
         accepted(v) => {
@@ -726,7 +726,7 @@ export component ParallelRunView inherits VerticalLayout {
         message: RemarkVM.cmp-refusal;
         remedy: RemarkVM.cmp-remedy;
         suggestion: RemarkVM.cmp-suggestion;
-        exam-points: true;
+        exam-points: RemarkVM.cmp-exam-points;
         use-suggested => {
             RemarkVM.cmp-use-suggested();
         }
@@ -874,7 +874,9 @@ export component ParallelRunView inherits VerticalLayout {
             }
             Card {
                 title: "Workbooks and report";
-                subtitle: "Restricted report: HTML, CSV and JSON with this banner, a signed manifest, owner-only files (no sync folder), an audited export";
+                // owner-only and sync folders refused where the core does both (Unix); elsewhere
+                // the files take the folder's permissions and only some sync folders are known
+                subtitle: "Restricted report: HTML, CSV and JSON with this banner, a signed manifest, " + (RemarkVM.owner-only-files ? "owner-only files (no sync folder)" : "files that take the folder's permissions (keep them out of sync folders)") + ", an audited export";
                 vertical-stretch: 0;
                 VerticalLayout {
                     spacing: Theme.space-sm;
@@ -962,7 +964,7 @@ export component CompareBar inherits Rectangle {
                 field := PathField {
                     horizontal-stretch: 1;
                     label: "Remark workbooks to compare";
-                    placeholder: "Remark's graded Excel exports of these sheets (.xlsx), and optionally a handwritten-ID .csv (file,page,student_id); ; between several";
+                    placeholder: "Remark's graded Excel exports of these sheets (.xlsx), and optionally a .csv of handwritten student numbers (columns file, page, student_id); separate several with ;";
                     text <=> RemarkVM.cmp-path;
                     target: "compare-books";
                     accepted(v) => {

@@ -374,7 +374,7 @@ fn help_for(code: &str, title: &str, remedy: Option<&str>) -> String {
             "Blind verify sample: an auto-accepted question drawn at random. Enter what is marked; the engine's reading is withheld so your answer is an independent label."
         }
         "IDN-003" => {
-            "IDN-003 Version unclear: the version bubbles are blank, doubly marked or disagree with the page. Choose the version from the paper, or accept the suggestion inferred from the answers."
+            "IDN-003 Version conflict: the sheet gives one version (bubbled or printed on it), but its answers fit another version's key much better, so Mizan never changes the version on its own. Choose the version from the paper, or accept the suggestion inferred from the answers."
         }
         "IDN-004" => {
             "IDN-004 Identity unresolved: compare the grid, the write-in boxes, the name and the seat map. Keys 1–3 choose a candidate, N = not on roster, D = duplicate."
@@ -1346,6 +1346,9 @@ impl Shell {
 
         // Remark migration (§3.5) and the parallel run (§23.7)
         let rm = ui.global::<s::RemarkVM>();
+        // the report's files are owner-only where the core can make them so (Unix,
+        // `omr_app::keys::write_private`); elsewhere they take the folder's permissions
+        rm.set_owner_only_files(cfg!(unix));
         let me = self.clone();
         rm.on_read(move |books, points| me.read_remark(&books, &points));
         let me = self.clone();
@@ -1400,8 +1403,8 @@ impl Shell {
     }
 
     /// A command the window offers but this backend does not model. Only the demo has such
-    /// controls (a real session hides them): it says so, with the command line that does it.
-    /// A real session hears why New exam cannot start, never a command line.
+    /// controls (a real session hides them): it says that they are not in the desktop app yet,
+    /// or how to leave the demo for real exams. A real session hears why New exam cannot start.
     fn request(&self, what: &str) {
         if what == "New exam" && self.backend.borrow().can_create_exam() {
             // the last run's notice is done with: it would cover the card's Grade exam
@@ -1421,21 +1424,20 @@ impl Shell {
             self.say(why, s::Tone::Info);
             return;
         }
-        let how = match what {
-            "New exam" => {
-                "this window shows invented demo data. Start `omr-desktop` without --demo (it \
-                 opens ~/OMR Exams) or with --workspace <your exams folder>, then New exam grades \
-                 your scans"
+        let why = match what {
+            "New exam" => "New exam: this window shows invented demo data. Close it and start \
+                           Mizan again: it opens your exams folder (~/OMR Exams), where New exam \
+                           grades your scans"
+                .to_string(),
+            "Stop the batch" => "Stop the batch: a running batch grades to the end".to_string(),
+            "Queue filter" => {
+                "Queue filter: not in the desktop app yet; in your exams the lane chips filter the \
+                 queue"
+                    .to_string()
             }
-            "Stop the batch" => "a running batch grades to the end",
-            "Rescan pull list" => "`omr review list --lane capture` lists the pages to rescan",
-            "Queue filter" => "`omr review list --lane marks` lists one lane",
-            _ => "the `omr` command line has every command (`omr --help`)",
+            w => format!("{w}: not in the desktop app yet"),
         };
-        self.say(
-            format!("{what}: not in the desktop shell yet; {how}"),
-            s::Tone::Info,
-        );
+        self.say(why, s::Tone::Info);
     }
 
     /// Grades the new exam exactly as the card shows it; the new exam opens on the Scan screen,
@@ -3470,7 +3472,12 @@ impl Shell {
         };
         if self.reason_missing(decision) {
             self.say(
-                "This overrides the engine's suggestion: choose a reason first",
+                // acknowledging a notice that needs a reason keeps a probable mis-key's key
+                if decision == Decision::Acknowledge {
+                    "Keeping the key needs a reason and a note: choose a reason first"
+                } else {
+                    "This overrides the engine's suggestion: choose a reason first"
+                },
                 s::Tone::Warning,
             );
             return;
@@ -5319,7 +5326,14 @@ impl Shell {
                 .exam
                 .as_ref()
                 .is_some_and(|e| self.backend.borrow().needs_reason_for_student(e, c.id, id)),
-            None => pending.is_some_and(|p| {
+            // a notice is committed as Acknowledge, which keeping the key of a probable mis-key
+            // is: it needs a reason (and a note) before the button commits it
+            None => if c.kind == ReviewKind::Notice {
+                Some(Decision::Acknowledge)
+            } else {
+                pending
+            }
+            .is_some_and(|p| {
                 st.exam
                     .as_ref()
                     .is_some_and(|e| self.backend.borrow().needs_reason(e, c.id, p))
@@ -6049,6 +6063,7 @@ impl Shell {
             rm.set_cmp_refusal(ss(&r.message));
             rm.set_cmp_remedy(ss(&r.remedy));
             rm.set_cmp_suggestion(ss(&r.suggestion));
+            rm.set_cmp_exam_points(r.exam_points);
             rm.set_diffs(sync(rm.get_diffs(), Vec::new()));
             rm.set_diff_crops(sync(rm.get_diff_crops(), Vec::new()));
             rm.set_cmp_tiles(sync(rm.get_cmp_tiles(), Vec::new()));
@@ -6684,6 +6699,18 @@ mod tests {
         let fallback = help_for("REG-004", "Print scale off", Some("rescan it flat"));
         assert_eq!(fallback, "REG-004 Print scale off. Rescan it flat.");
         assert!(help_for("SCO-003", "", None).contains("Replace key"));
+    }
+
+    /// IDN-003 is raised only when the sheet's own version (bubbled, or printed and verified)
+    /// is beaten by the version its answers fit: a blank or doubly marked version bubble is
+    /// SCO-005, whose help says so.
+    #[test]
+    fn the_version_codes_help_says_when_each_is_raised() {
+        let h = help_for("IDN-003", "Declared-form conflict", None);
+        assert!(h.contains("another version's key"), "{h}");
+        assert!(!h.contains("blank") && !h.contains("doubly"), "{h}");
+        let h = help_for("SCO-005", "", None);
+        assert!(h.contains("blank or unclear"), "{h}");
     }
 
     #[test]

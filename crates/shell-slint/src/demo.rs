@@ -1954,8 +1954,8 @@ impl DemoBackend {
 fn demo_append() -> AppendInfo {
     AppendInfo {
         allowed: false,
-        note: "Demo data: nothing is read or written. Open a graded exam (--project or \
-               --workspace) to add scans"
+        note: "Demo data: nothing is read or written. Close the demo and start Mizan again to add \
+               scans to your exams"
             .into(),
     }
 }
@@ -2200,7 +2200,7 @@ fn cs211_setup() -> ExamSetup {
             versions: letters(2),
             cancel_mode: CancelMode::EraseOnly,
             dpi: 200,
-            page_identity: "None on the form: bubble-lattice registration (§6.10)".into(),
+            page_identity: "None on the form: the bubble grid places the page".into(),
             digest: "sha384 41c2…9e0d".into(),
         },
         keys: vec![
@@ -2860,7 +2860,7 @@ impl Backend for DemoBackend {
     }
 
     fn create_exam_blocker(&self) -> Option<String> {
-        Some("The demo grades nothing: start omr-desktop without --demo to grade your scans".into())
+        Some("The demo grades nothing: close it and start Mizan again to grade your scans".into())
     }
 
     fn new_exam_card(&self) -> NewExamCard {
@@ -2870,7 +2870,7 @@ impl Backend for DemoBackend {
     fn choose_on_card(&mut self, ask: usize, choice: usize) -> Result<CardAction, BackendError> {
         let _ = (ask, choice);
         Err(BackendError::Denied(
-            "The demo records no answers: start omr-desktop without --demo to grade your scans"
+            "The demo records no answers: close it and start Mizan again to grade your scans"
                 .into(),
         ))
     }
@@ -2878,7 +2878,8 @@ impl Backend for DemoBackend {
     fn release(&mut self, exam: &ExamId) -> Result<String, BackendError> {
         let _ = exam;
         Err(BackendError::Denied(
-            "Demo data: nothing is released. Open your exams with omr-desktop --workspace FOLDER"
+            "Demo data: nothing is released. Close the demo and start Mizan again to see your \
+             exams"
                 .into(),
         ))
     }
@@ -2920,7 +2921,7 @@ impl Backend for DemoBackend {
                 throughput_pages_per_sec: Some(62.0),
             },
             exams,
-            engine: "omr 0.1.0 · manifest 7f3a…b21c".into(),
+            engine: "Mizan 0.1.0 · config 7f3a…b21c".into(),
             workspace: "~/OMR/1448-1/workspace.omr (demo data, synthetic)".into(),
             data_note: "Demo data is synthetic: invented names, IDs starting with 9, and \
                         procedurally drawn scans. No real student data is used."
