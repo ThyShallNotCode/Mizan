@@ -224,7 +224,7 @@ pub struct Dashboard {
     pub term: TermLabel,
     pub stats: DashboardStats,
     pub exams: Vec<ExamSummary>,
-    /// Engine and manifest line for the status bar, e.g. "engine omr 0.1.0 · manifest 7f3a…b21c".
+    /// Engine and manifest line for the status bar, e.g. "Mizan 0.1.0 · config 7f3a…b21c".
     pub engine: String,
     /// Workspace path or name for the status bar.
     pub workspace: String,
@@ -1558,6 +1558,9 @@ pub struct RemarkRefusal {
     /// The points the import suggests for the questions the totals leave open (e.g.
     /// "version A: question 6 → 0.75, question 10 → 0.75"); empty when there is none.
     pub suggestion: String,
+    /// The parallel run's refusal offers *Use this exam's points*: the exam's own points could
+    /// lift it (never a refusal no points change, such as the licence review's).
+    pub exam_points: bool,
 }
 
 /// A learning objective of a Remark workbook, imported as a CLO with weight-1 mappings
@@ -1956,7 +1959,8 @@ pub trait Backend {
     fn export(&mut self, exam: &ExamId) -> Result<String, BackendError> {
         let _ = exam;
         Err(BackendError::Denied(
-            "Exports need a graded project: open one with --project or --workspace".into(),
+            "Exports need a graded exam: close the demo and start Mizan again to open your exams"
+                .into(),
         ))
     }
 
@@ -1970,7 +1974,8 @@ pub trait Backend {
     ) -> Result<String, BackendError> {
         let _ = (exam, column_id);
         Err(BackendError::Denied(
-            "The Blackboard upload needs a graded project: open one with --project or --workspace"
+            "The Blackboard upload needs a graded exam: close the demo and start Mizan again to \
+             open your exams"
                 .into(),
         ))
     }
@@ -2002,7 +2007,7 @@ pub trait Backend {
     fn open_workspace(&mut self, dir: &std::path::Path) -> Result<String, BackendError> {
         let _ = dir;
         Err(BackendError::Denied(
-            "The demo shows invented exams: start omr-desktop without --demo to open your exams \
+            "The demo shows invented exams: close it and start Mizan again to open your exams \
              folder"
                 .into(),
         ))
@@ -2017,8 +2022,7 @@ pub trait Backend {
     ) -> Result<(ExamId, String), BackendError> {
         let _ = dir;
         Err(BackendError::Denied(
-            "The demo shows invented exams: start omr-desktop without --demo to open an exam"
-                .into(),
+            "The demo shows invented exams: close it and start Mizan again to open an exam".into(),
         ))
     }
 
@@ -2059,7 +2063,7 @@ pub trait Backend {
     fn set_operator(&mut self, name: &str) -> Result<String, BackendError> {
         let _ = name;
         Err(BackendError::Denied(
-            "The demo records nothing: start omr-desktop without --demo to record your name".into(),
+            "The demo records nothing: close it and start Mizan again to record your name".into(),
         ))
     }
 
@@ -2123,7 +2127,9 @@ pub trait Backend {
     fn create_exam(&mut self, form: &NewExam) -> Result<(ExamId, String), BackendError> {
         let _ = form;
         Err(BackendError::Denied(
-            "Creating an exam needs an exams folder: start omr-desktop with --workspace DIR".into(),
+            "Creating an exam needs an exams folder: open one with Open folder… on the Exams \
+             screen"
+                .into(),
         ))
     }
 
@@ -2144,7 +2150,8 @@ pub trait Backend {
     ) -> Result<String, BackendError> {
         let _ = (exam, path);
         Err(BackendError::Denied(
-            "Replacing the key needs a graded project: open one with --project or --workspace"
+            "Replacing the key needs a graded exam: close the demo and start Mizan again to open \
+             your exams"
                 .into(),
         ))
     }
@@ -2155,8 +2162,8 @@ pub trait Backend {
     fn approve_mappings(&mut self, exam: &ExamId) -> Result<String, BackendError> {
         let _ = exam;
         Err(BackendError::Denied(
-            "Approving CLO mappings needs a graded project: open one with --project or \
-             --workspace"
+            "Approving CLO mappings needs a graded exam: close the demo and start Mizan again to \
+             open your exams"
                 .into(),
         ))
     }
@@ -2170,7 +2177,8 @@ pub trait Backend {
     ) -> Result<String, BackendError> {
         let _ = (exam, path);
         Err(BackendError::Denied(
-            "Replacing the CLOs needs a graded project: open one with --project or --workspace"
+            "Replacing the CLOs needs a graded exam: close the demo and start Mizan again to \
+             open your exams"
                 .into(),
         ))
     }
@@ -2217,8 +2225,8 @@ pub trait Backend {
     ) -> Result<String, BackendError> {
         let _ = (exam, inputs);
         Err(BackendError::Denied(
-            "Reading a key from answer sheets needs a graded project: open one with --project \
-             or --workspace"
+            "Reading a key from answer sheets needs a graded exam: close the demo and start \
+             Mizan again to open your exams"
                 .into(),
         ))
     }
@@ -2235,7 +2243,8 @@ pub trait Backend {
     ) -> Result<String, BackendError> {
         let _ = (exam, version, decisions);
         Err(BackendError::Denied(
-            "Confirming a key needs a graded project: open one with --project or --workspace"
+            "Confirming a key needs a graded exam: close the demo and start Mizan again to open \
+             your exams"
                 .into(),
         ))
     }
@@ -2269,8 +2278,8 @@ pub trait Backend {
     ) -> Result<RemarkImportView, BackendError> {
         let _ = (exam, request);
         Err(BackendError::Denied(
-            "Importing from Remark needs an exams folder or a graded project: open one with \
-             --workspace or --project"
+            "Importing from Remark needs an exams folder or a graded exam: close the demo and \
+             start Mizan again to open your exams"
                 .into(),
         ))
     }
@@ -2286,8 +2295,8 @@ pub trait Backend {
     fn apply_remark_import(&mut self, exam: &ExamId) -> Result<String, BackendError> {
         let _ = exam;
         Err(BackendError::Denied(
-            "Importing from Remark needs a graded project: open one with --project or \
-             --workspace"
+            "Importing from Remark needs a graded exam: close the demo and start Mizan again to \
+             open your exams"
                 .into(),
         ))
     }
@@ -2303,7 +2312,8 @@ pub trait Backend {
     ) -> Result<ParallelRunView, BackendError> {
         let _ = (exam, request);
         Err(BackendError::Denied(
-            "The parallel run needs a graded project: open one with --project or --workspace"
+            "The parallel run needs a graded exam: close the demo and start Mizan again to open \
+             your exams"
                 .into(),
         ))
     }
@@ -2314,7 +2324,8 @@ pub trait Backend {
     fn queue_parallel_differences(&mut self, exam: &ExamId) -> Result<String, BackendError> {
         let _ = exam;
         Err(BackendError::Denied(
-            "The parallel run needs a graded project: open one with --project or --workspace"
+            "The parallel run needs a graded exam: close the demo and start Mizan again to open \
+             your exams"
                 .into(),
         ))
     }
@@ -2329,7 +2340,8 @@ pub trait Backend {
     ) -> Result<String, BackendError> {
         let _ = (exam, dir);
         Err(BackendError::Denied(
-            "The parallel run needs a graded project: open one with --project or --workspace"
+            "The parallel run needs a graded exam: close the demo and start Mizan again to open \
+             your exams"
                 .into(),
         ))
     }
@@ -2346,7 +2358,9 @@ pub trait Backend {
     fn release(&mut self, exam: &ExamId) -> Result<String, BackendError> {
         let _ = exam;
         Err(BackendError::Denied(
-            "Releasing needs a graded project: open one with --project or --workspace".into(),
+            "Releasing needs a graded exam: close the demo and start Mizan again to open your \
+             exams"
+                .into(),
         ))
     }
 
@@ -2361,7 +2375,9 @@ pub trait Backend {
     ) -> Result<String, BackendError> {
         let _ = (exam, inputs);
         Err(BackendError::Denied(
-            "Adding scans needs a graded project: open one with --project or --workspace".into(),
+            "Adding scans needs a graded exam: close the demo and start Mizan again to open your \
+             exams"
+                .into(),
         ))
     }
 
@@ -2433,7 +2449,7 @@ pub trait Backend {
     ) -> Result<String, BackendError> {
         let _ = (exam, path);
         Err(BackendError::Denied(
-            "The demo records nothing: start omr-desktop without --demo to add a roster".into(),
+            "The demo records nothing: close it and start Mizan again to add a roster".into(),
         ))
     }
 

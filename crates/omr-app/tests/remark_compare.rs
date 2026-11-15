@@ -987,9 +987,13 @@ fn the_licence_review_is_stated_and_a_refusal_stops_the_comparison() {
         q08: "refused".into(),
         ..LicenceReview::default()
     };
-    let e = compare_under(&p, &wbs, &CompareOptions::default(), Some(refused))
-        .unwrap_err()
-        .to_string();
+    let e = compare_under(&p, &wbs, &CompareOptions::default(), Some(refused)).unwrap_err();
+    // the window finds this refusal by its lead, to say it in its own words
+    let omr_app::AppError::Input(m) = &e else {
+        panic!("{e}");
+    };
+    assert!(m.starts_with(omr_app::parallel::LICENCE_REFUSAL), "{m}");
+    let e = e.to_string();
     assert!(
         e.contains("does not permit") && e.contains("licence_review.json"),
         "{e}"

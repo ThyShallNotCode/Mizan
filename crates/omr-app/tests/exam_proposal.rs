@@ -1,8 +1,9 @@
-//! The New-exam proposal and the survey behind it (spec G-3 §C; design-opus §6 S1–S6 and
-//! P1–P18), synthetic data only: IAU sheets from the committed blank form with synthetic marks
-//! (tests/common), own sheets from `omr-sim`, Remark workbooks from tests/remark_common. Each
-//! proposal is checked as the New-exam card shows it (value, source, questions and notes) and,
-//! where it gives inputs, by grading with them: the forms and scores are the hand count's.
+//! The New-exam proposal and the survey behind it (spec G-3 §C; the New-exam design note §6
+//! S1–S6 and P1–P18), synthetic data only: IAU sheets from the committed blank form with
+//! synthetic marks (tests/common), own sheets from `omr-sim`, Remark workbooks from
+//! tests/remark_common. Each proposal is checked as the New-exam card shows it (value, source,
+//! questions and notes) and, where it gives inputs, by grading with them: the forms and scores
+//! are the hand count's.
 
 mod common;
 mod remark_common;

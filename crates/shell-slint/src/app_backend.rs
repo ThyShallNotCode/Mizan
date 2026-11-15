@@ -17,6 +17,7 @@
 //! `omr grade` and `omr add` do, and a run can be cancelled through its [`Cancel`] token.
 
 use crate::backend::{self as b, Backend, BackendError, ExamId, ItemId};
+use crate::words::window_words;
 use omr_app::define::Sheet;
 use omr_app::exam::{DomainLetter, ExamDefinition, RosterStudent};
 use omr_app::model::{PageStatus, ResponseStatus};
@@ -430,7 +431,7 @@ fn card_issue(i: &omr_app::propose::Issue) -> b::CardIssue {
     b::CardIssue {
         field: card_field(i.field),
         label: i.field.label().into(),
-        text: i.text.clone(),
+        text: window_words(&i.text),
         choices: i.choices.iter().map(|c| c.label.clone()).collect(),
     }
 }
@@ -772,24 +773,29 @@ struct StabilityJob {
     rx: Receiver<omr_analytics::StabilityReport>,
 }
 
+/// An omr-app error in this window's words ([`window_words`]: the core's commands and flags
+/// said as this window's controls).
 fn app_err(e: AppError) -> BackendError {
     match e {
         AppError::NotFound(m) => BackendError::NotFound(format!(
-            "{m}. The item may have been resolved elsewhere: reopen the exam"
+            "{}. The item may have been resolved elsewhere: reopen the exam",
+            window_words(&m)
         )),
         AppError::Review(m) | AppError::Definition(m) | AppError::Scoring(m) => {
-            BackendError::Invalid(m)
+            BackendError::Invalid(window_words(&m))
         }
-        AppError::Input(m) => BackendError::Invalid(m),
+        AppError::Input(m) => BackendError::Invalid(window_words(&m)),
         AppError::Store(m) => BackendError::Denied(format!(
-            "The project store refused the change: {m}. Check that the folder is writable and \
-             not open elsewhere, then reopen the exam"
+            "The project store refused the change: {}. Check that the folder is writable and \
+             not open elsewhere, then reopen the exam",
+            window_words(&m)
         )),
         AppError::Io(e) => BackendError::Denied(format!(
             "File error: {e}. Check that the project folder is writable and the disk is not full"
         )),
         AppError::Internal(m) => BackendError::Denied(format!(
-            "Internal error: {m}. Nothing was changed; please report it with the project folder"
+            "Internal error: {}. Nothing was changed; please report it with the project folder",
+            window_words(&m)
         )),
         AppError::Cancelled => BackendError::Denied(
             "Cancelled: nothing was saved; your scan files are unchanged".into(),
@@ -1185,7 +1191,7 @@ impl AppBackend {
                     f.plain.clone()
                 },
                 source: f.source.text().into(),
-                detail: f.detail.clone(),
+                detail: window_words(&f.detail),
                 state: match f.state {
                     _ if f.id == FieldId::Scans && survey_ask.is_some() => b::CardState::Ask,
                     omr_app::propose::FieldState::Ok => b::CardState::Ok,
@@ -2099,7 +2105,19 @@ impl AppBackend {
                 "This window cannot start background work, so scans cannot be added here".into(),
             ));
         }
-        let (project, batch, threads) = self.close_for_worker(exam, |_| Ok(()))?;
+        // the core refuses a batch while the key read from key sheets waits: said here first,
+        // with this window's way to confirm it, before the exam is closed for the worker
+        let (project, batch, threads) = self.close_for_worker(exam, |p| {
+            if p.session.key_unconfirmed() {
+                return Err(BackendError::Invalid(
+                    "The key read from the key sheets waits for your confirmation: confirm it in \
+                     Setup (Key from answer sheets), or replace the whole key with Replace key…, \
+                     then add the scans"
+                        .into(),
+                ));
+            }
+            Ok(())
+        })?;
         let (tx, rx) = std::sync::mpsc::channel();
         let cancel = Cancel::default();
         let req = AppendRequest {
@@ -2196,7 +2214,8 @@ impl AppBackend {
             if p.session.key_unconfirmed() {
                 return Err(BackendError::Invalid(
                     "The key read from the key sheets waits for your confirmation: confirm it in \
-                     Setup (Forms and key), then add the roster"
+                     Setup (Key from answer sheets), or replace the whole key with Replace key…, \
+                     then add the roster"
                         .into(),
                 ));
             }
@@ -2527,7 +2546,10 @@ fn confirmed_message(r: &omr_app::keysheet::KeyConfirmReport) -> String {
         )
     };
     if !r.warnings.is_empty() {
-        m.push_str(&format!(". Check: {}", r.warnings.join("; ")));
+        m.push_str(&format!(
+            ". Check: {}",
+            window_words(&r.warnings.join("; "))
+        ));
     }
     m
 }
@@ -2621,11 +2643,7 @@ fn key_sheet_note(note: &str) -> String {
             n = format!("{}with {digits}-digit student numbers{tail}", &n[..at]);
         }
     }
-    n.replace(
-        "(name key sheets with --key-sheet)",
-        "(give the key sheets in the Key sheets field, or Read key from answer sheets… in \
-         Setup)",
-    )
+    window_words(&n)
 }
 
 /// The catalogue title of a code, in words a reviewer reads: the catalogue keeps a few
@@ -2703,9 +2721,8 @@ fn to_app(d: b::Decision, k: ItemKind, forms: &[String]) -> Result<AppDecision, 
         (b::Decision::NotOnRoster, _) => AppDecision::NotOnRoster,
         (b::Decision::Duplicate, _) => {
             return Err(BackendError::Invalid(
-                "Duplicate (D) is not recorded by omr-app yet: choose the student this booklet \
-                 belongs to (1–3) or N (not on roster); two booklets can never both keep one \
-                 student"
+                "Duplicate (D) is not recorded yet: choose the student this booklet belongs to \
+                 (1–3) or N (not on roster); two booklets can never both keep one student"
                     .into(),
             ));
         }
@@ -3028,7 +3045,7 @@ impl Opened {
                 .map(|(code, s, m)| b::SetupLint {
                     code: code.clone(),
                     severity: sev(*s),
-                    message: m.clone(),
+                    message: window_words(m),
                 })
                 .collect(),
         }
@@ -3084,7 +3101,7 @@ impl Opened {
                     .get(k.sha384.len().saturating_sub(4)..)
                     .unwrap_or("")
             ),
-            refusal: k.refusal.clone(),
+            refusal: k.refusal.as_deref().map(window_words),
         };
         let versions = sum
             .versions
@@ -3183,7 +3200,11 @@ impl Opened {
             superseded: sum.superseded,
             versions,
             unusable: sum.unusable.iter().map(scan).collect(),
-            other_versions: sum.other_versions.clone(),
+            other_versions: sum
+                .other_versions
+                .iter()
+                .map(|(v, from)| (v.clone(), window_words(from)))
+                .collect(),
             consequence,
             notes: {
                 // the key sheets were named: a marker left out of the stack changes nothing
@@ -3927,14 +3948,18 @@ impl Opened {
                 .and_then(|p| s.pages.get(p))
                 .is_some_and(|p| alignment_refusal(p).is_some());
         let notice = v.notice.as_ref().map(|n| {
-            let mut lines = n.lines.clone();
+            let mut lines: Vec<(String, String)> = n
+                .lines
+                .iter()
+                .map(|(k, x)| (k.clone(), window_words(x)))
+                .collect();
             if unaligned && !n.headline.contains("rescan") {
                 lines.push(("What to do".into(), alignment_remedy().into()));
             }
             b::NoticeEvidence {
-                headline: n.headline.clone(),
+                headline: window_words(&n.headline),
                 lines,
-                consequence: n.consequence.clone(),
+                consequence: window_words(&n.consequence),
             }
         });
         // a probable mis-key (SCO-001) is kept only with a reason and a note (§12.2)
@@ -3967,7 +3992,7 @@ impl Opened {
                         d.text(&def.option_labels(), &def.forms)
                     ))
             ),
-            _ => v.summary.clone(),
+            _ => window_words(&v.summary),
         };
         Some(b::ReviewItem {
             id: ItemId(v.id),
@@ -4007,10 +4032,11 @@ impl Opened {
             identity,
             notice,
             reasons: reasons.clone(),
-            // the core's own note rule (§14.4: OTHER and SOLO_SELF_APPROVAL say why)
+            // the core's own note rule (§14.4: OTHER and SOLO_SELF_APPROVAL say why; keeping
+            // the key of a probable mis-key says why whatever the reason, §12.2)
             reasons_needing_note: reasons
                 .into_iter()
-                .filter(|r| ReviewReason::code(r).validate().is_err())
+                .filter(|r| it.flag.is_some() || ReviewReason::code(r).validate().is_err())
                 .collect(),
         })
     }
@@ -4220,7 +4246,7 @@ impl Opened {
             items,
             option_labels: v.option_labels.clone(),
             readiness,
-            release_blocked: v.release_blocked.clone(),
+            release_blocked: v.release_blocked.as_deref().map(window_words),
             // the core's own rule (`omr_app::export::blackboard_csv`): a supplied key, a roster
             // and a score run
             blackboard_blocked: if s.key.as_ref().is_none_or(|k| k.inferred) {
@@ -4403,7 +4429,7 @@ fn short_page(page_id: &str) -> String {
 
 fn engine_line(p: &ExamProject) -> String {
     format!(
-        "omr {} · config {}",
+        "Mizan {} · config {}",
         p.session.manifest.app_version,
         short_hash(&p.session.manifest.config_sha384)
     )
@@ -4617,7 +4643,7 @@ fn job_batch(j: &Job, opened: Option<&Opened>) -> b::BatchProgress {
         reconciliation_code: None,
         activity,
         engine: opened.map_or_else(
-            || format!("engine omr {}", env!("CARGO_PKG_VERSION")),
+            || format!("Mizan {}", env!("CARGO_PKG_VERSION")),
             |o| config_line(&o.p),
         ),
         workers: v.workers,
@@ -4675,8 +4701,29 @@ fn file_label(p: &Path) -> String {
     )
 }
 
-/// The message of an omr-app error without its kind prefix (a refusal's reason).
+/// The refusal of a mapping cell edit when the versions map their questions differently: a
+/// cell stands for several rows (the core refuses it too, naming the command line's way).
+fn per_version_mapping(o: &Opened) -> Result<(), BackendError> {
+    if o.p.session.definition.has_form_mapping() {
+        return Err(BackendError::Invalid(
+            "This exam's CLO mappings differ between versions (rows per version, e.g. imported \
+             from Remark): a cell of the grid stands for several rows, so it is not edited here. \
+             Change the rows in a CLO file (its form column names each row's version) and give \
+             it with Replace CLOs"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// The message of an omr-app error without its kind prefix (a refusal's reason), in this
+/// window's words ([`window_words`]).
 fn app_message(e: &AppError) -> String {
+    window_words(&core_message(e))
+}
+
+/// The message of an omr-app error without its kind prefix, as the core words it.
+fn core_message(e: &AppError) -> String {
     match e {
         AppError::Definition(m)
         | AppError::Input(m)
@@ -4741,7 +4788,21 @@ fn remark_refusal(
     suggestion: Option<&omr_app::remark::GivenPoints>,
     compare: bool,
 ) -> b::RemarkRefusal {
-    let message = app_message(e)
+    let core = core_message(e);
+    // a licence review that refused parallel runs stops every comparison: no workbook and no
+    // points change it, and the record is not this window's to remove
+    if core.starts_with(omr_app::parallel::LICENCE_REFUSAL) {
+        let head = core.split_once("; ask ").map_or(core.as_str(), |(h, _)| h);
+        return b::RemarkRefusal {
+            message: window_words(head),
+            remedy: "Nothing is compared while this decision stands, whatever the workbooks or \
+                     the points: ask the university's legal affairs about the licence review"
+                .into(),
+            suggestion: String::new(),
+            exam_points: false,
+        };
+    }
+    let message = core
         .replace(
             "give the points with --points FILE",
             if compare {
@@ -4751,6 +4812,7 @@ fn remark_refusal(
             },
         )
         .replace("with --points FILE", "with a points file");
+    let message = window_words(&message);
     let suggestion = suggestion.map(given_text).unwrap_or_default();
     let points =
         message.contains("do not determine the points") || message.contains("do not reproduce");
@@ -4771,23 +4833,25 @@ fn remark_refusal(
          left empty is solved from the totals), give it in Points file and read again"
     } else {
         "Give the graded Excel workbooks Remark exported for this exam (.xlsx: the Advanced \
-         Grade reports with the Student Response Report), ; between several. Remark's .rmx and \
-         .aky files are never opened"
+         Grade reports with the Student Response Report). Remark's .rmx and .aky files are \
+         never opened; separate several with ;"
     };
     b::RemarkRefusal {
         message,
         remedy: remedy.into(),
         suggestion,
+        exam_points: compare,
     }
 }
 
 fn no_workbooks() -> b::RemarkRefusal {
     b::RemarkRefusal {
         message: "No Remark workbook given".into(),
-        remedy: "Type the graded Excel workbooks Remark exported for this exam (.xlsx), ; \
-                 between several"
+        remedy: "Type the graded Excel workbooks Remark exported for this exam (.xlsx); \
+                 separate several with ;"
             .into(),
         suggestion: String::new(),
+        exam_points: false,
     }
 }
 
@@ -4987,7 +5051,7 @@ fn import_view(
         notes: imp
             .notes
             .iter()
-            .map(|n| omr_app::export::mask_numbers(n))
+            .map(|n| window_words(&omr_app::export::mask_numbers(n)))
             .collect(),
         points_note: h.points_note.clone(),
         applies,
@@ -5227,7 +5291,7 @@ fn parallel_view(
     });
     let pts = |x: &omr_scoring::Exact| exact_text(x);
     b::ParallelRunView {
-        banner: omr_app::parallel::RESTRICTED_BANNER.to_string(),
+        banner: window_words(omr_app::parallel::RESTRICTED_BANNER),
         files: files.iter().map(|f| file_label(f)).collect(),
         refusal: None,
         points: if points.is_empty() {
@@ -5276,7 +5340,7 @@ fn parallel_view(
             not_queued: c.not_queued,
             held_in_review: c.held_in_review,
         },
-        hold: run.hold_text(),
+        hold: window_words(&run.hold_text()),
         points_differences: run
             .points_differences
             .iter()
@@ -5399,6 +5463,7 @@ fn run_parallel(
                      first"
                 .into(),
             suggestion: String::new(),
+            exam_points: true,
         });
     }
     let wbs =
@@ -5412,6 +5477,7 @@ fn run_parallel(
             message: format!("{}: {e}", f.display()),
             remedy: "Check the path of the handwritten-ID file (file,page,student_id)".into(),
             suggestion: String::new(),
+            exam_points: false,
         })?;
         handwritten.extend(
             omr_app::parallel::read_handwritten_csv(&bytes)
@@ -5498,7 +5564,7 @@ impl Backend for AppBackend {
                 .as_ref()
                 .and_then(|d| opened.get(d))
                 .map_or_else(
-                    || format!("omr {}", env!("CARGO_PKG_VERSION")),
+                    || format!("Mizan {}", env!("CARGO_PKG_VERSION")),
                     |o| engine_line(&o.p),
                 )
         };
@@ -5547,11 +5613,26 @@ impl Backend for AppBackend {
         answer: &str,
     ) -> Result<(), BackendError> {
         self.with_mut(exam, |o| {
+            // a key that waits for its confirmation is decided where it is confirmed: said here,
+            // without the typing hint the core's refusal of an entry gets below
+            if o.p.session.key_unconfirmed() {
+                return Err(BackendError::Invalid(format!(
+                    "The key comes from key sheets that are not confirmed yet: decide question \
+                     {question} when you confirm them in Setup (Key from answer sheets), or \
+                     replace the whole key with Replace key…"
+                )));
+            }
             o.p.set_key(version, question, answer).map_err(|e| match e {
-                AppError::Review(m) => BackendError::Invalid(format!(
-                    "{m}. Type an option letter, two letters such as A,C, * to void, or nothing \
-                     to clear"
-                )),
+                // the entry typed is refused: what a key cell takes from the keyboard, in place
+                // of the core's remedy (it writes a key file's entries, which a cell cannot take)
+                AppError::Review(m) => {
+                    let why = m.split_once("; write ").map_or(m.as_str(), |(w, _)| w);
+                    BackendError::Invalid(format!(
+                        "{}. Type an option letter, * to void, or press Delete to clear; to \
+                         accept two answers, give a key file with A|C (Replace key…)",
+                        window_words(why)
+                    ))
+                }
                 e => app_err(e),
             })
         })
@@ -5567,9 +5648,11 @@ impl Backend for AppBackend {
         let q = u16::try_from(question)
             .map_err(|_| BackendError::NotFound(format!("Question {question} does not exist")))?;
         self.with_mut(exam, |o| {
+            per_version_mapping(o)?;
             o.p.set_mapping_weight(q, clo, weight).map_err(|e| match e {
                 AppError::Review(m) => BackendError::Invalid(format!(
-                    "{m}: type a weight above 0 and at most 1, or clear the cell"
+                    "{}: type a weight above 0 and at most 1, or clear the cell",
+                    window_words(&m)
                 )),
                 e => app_err(e),
             })
@@ -5586,9 +5669,11 @@ impl Backend for AppBackend {
         let q = u16::try_from(question)
             .map_err(|_| BackendError::NotFound(format!("Question {question} does not exist")))?;
         self.with_mut(exam, |o| {
+            per_version_mapping(o)?;
             o.p.set_mapping_note(q, clo, note).map_err(|e| match e {
                 AppError::NotFound(m) => BackendError::NotFound(format!(
-                    "{m}: give the cell a weight first, then its note"
+                    "{}: give the cell a weight first, then its note",
+                    window_words(&m)
                 )),
                 e => app_err(e),
             })
@@ -5981,7 +6066,8 @@ impl Backend for AppBackend {
             Ok(match o.p.session.release_blocked() {
                 Some(why) => format!(
                     "Key version {v} in force: the exam was rescored. Release is still blocked: \
-                     {why}"
+                     {}",
+                    window_words(&why)
                 ),
                 None => format!("Key version {v} in force: the exam was rescored"),
             })
@@ -6022,8 +6108,8 @@ impl Backend for AppBackend {
         if inputs.is_empty() {
             return Err(BackendError::Invalid(
                 "Give the key-sheet files: scans or photos of the instructor's filled answer \
-                 sheets (student number bubbled all 0 or all 9, the version bubbled), ; between \
-                 several"
+                 sheets (student number bubbled all 0 or all 9, the version bubbled); separate \
+                 several with ;"
                     .into(),
             ));
         }
@@ -6050,11 +6136,13 @@ impl Backend for AppBackend {
                 format!(
                     "No key could be read from {}: {}",
                     files.join(", "),
-                    sum.unusable
-                        .iter()
-                        .filter_map(|k| k.refusal.as_deref())
-                        .collect::<Vec<_>>()
-                        .join("; ")
+                    window_words(
+                        &sum.unusable
+                            .iter()
+                            .filter_map(|k| k.refusal.as_deref())
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    )
                 )
             } else {
                 let open: usize = sum.versions.iter().map(|v| v.open).sum();
@@ -6220,10 +6308,20 @@ impl Backend for AppBackend {
             // decided in Setup's Key from answer sheets (the exam stays held until then)
             let r = match o.p.confirm_key_sheets(None, decided, None) {
                 Ok(r) => r,
+                // rows that now wait for a decision are decided there (the core names the
+                // command line's way)
+                Err(AppError::Review(_)) => {
+                    return Ok(format!(
+                        "The key sheets from {files} were added to the exam and wait for your \
+                         confirmation in Key from answer sheets: decide the highlighted rows \
+                         there, then confirm the key"
+                    ));
+                }
                 Err(e) => {
                     return Ok(format!(
                         "The key sheets from {files} were added to the exam and wait for your \
-                         confirmation in Key from answer sheets: {e}"
+                         confirmation in Key from answer sheets: {}",
+                        app_message(&e)
                     ));
                 }
             };
@@ -6245,10 +6343,16 @@ impl Backend for AppBackend {
                  confirmed by you; the exam was graded again with them"
             );
             if !r.warnings.is_empty() {
-                m.push_str(&format!(". Check: {}", r.warnings.join("; ")));
+                m.push_str(&format!(
+                    ". Check: {}",
+                    window_words(&r.warnings.join("; "))
+                ));
             }
             if let Some(why) = o.p.session.release_blocked() {
-                m.push_str(&format!(". Release is still blocked: {why}"));
+                m.push_str(&format!(
+                    ". Release is still blocked: {}",
+                    window_words(&why)
+                ));
             }
             Ok(m)
         })
@@ -6281,8 +6385,7 @@ impl Backend for AppBackend {
         let Some(exam) = exam else {
             if self.workspace.is_none() {
                 return Err(BackendError::Denied(
-                    "No exams folder is open: start omr-desktop with --workspace DIR (or without \
-                     flags, for ~/OMR Exams)"
+                    "No exams folder is open: open one with Open folder… on the Exams screen"
                         .into(),
                 ));
             }
@@ -6376,7 +6479,10 @@ impl Backend for AppBackend {
                 );
             }
             if let Some(why) = o.p.session.release_blocked() {
-                m.push_str(&format!(". Release is still blocked: {why}"));
+                m.push_str(&format!(
+                    ". Release is still blocked: {}",
+                    window_words(&why)
+                ));
             }
             Ok(m)
         })
@@ -6410,7 +6516,7 @@ impl Backend for AppBackend {
             o.parallel = r.is_ok().then(|| request.clone());
         }
         Ok(r.unwrap_or_else(|refusal| b::ParallelRunView {
-            banner: omr_app::parallel::RESTRICTED_BANNER.to_string(),
+            banner: window_words(omr_app::parallel::RESTRICTED_BANNER),
             files: request.workbooks.iter().map(|f| file_label(f)).collect(),
             refusal: Some(refusal),
             ..Default::default()
@@ -6428,7 +6534,9 @@ impl Backend for AppBackend {
         self.with_mut(exam, |o| {
             let req = o.parallel.clone().ok_or_else(|| {
                 BackendError::Invalid(
-                    "Run Compare with Remark export… first: the report is written from it".into(),
+                    "Press Compare with Remark… (Remark… in a narrow window) on the Results \
+                     screen first: the report is written from that comparison"
+                        .into(),
                 )
             })?;
             // rerun on the exam as it stands, so the report never lags a review decision
@@ -6437,10 +6545,11 @@ impl Backend for AppBackend {
             let sum = o.p.export_parallel_run(&run, dir).map_err(app_err)?;
             Ok(format!(
                 "Wrote the Restricted parallel-run report ({} files, signed manifest) to {}; \
-                 its head-to-head figures stay inside the university (Q-08). {}",
+                 its figures comparing Remark with Mizan stay inside the university until the \
+                 licence review is closed. {}",
                 sum.files.len(),
                 short_path(dir),
-                run.hold_text()
+                window_words(&run.hold_text())
             ))
         })
     }
@@ -6487,7 +6596,8 @@ impl Backend for AppBackend {
         self.with_mut(exam, |o| {
             let req = o.parallel.clone().ok_or_else(|| {
                 BackendError::Invalid(
-                    "Run Compare with Remark export… first: the differences are queued from it"
+                    "Press Compare with Remark… (Remark… in a narrow window) on the Results \
+                     screen first: the differences are queued from that comparison"
                         .into(),
                 )
             })?;
@@ -6496,7 +6606,7 @@ impl Backend for AppBackend {
                 .map_err(|r| BackendError::Invalid(format!("{}. {}", r.message, r.remedy)))?;
             let n = o.p.queue_parallel_differences(&mut run).map_err(app_err)?;
             Ok(if n == 0 {
-                format!("Nothing new to queue. {}", run.hold_text())
+                format!("Nothing new to queue. {}", window_words(&run.hold_text()))
             } else {
                 format!(
                     "Queued {n} parallel-run difference(s) in Review (Marks lane): each holds \
@@ -6658,6 +6768,42 @@ impl Backend for AppBackend {
 mod tests {
     use super::*;
     use omr_app::exam::TemplateChoice;
+
+    /// Setup's Confirm version and Confirm every version say the core's checks of the key in
+    /// this window's words: a key that never uses one option names the window's control, not
+    /// the command line's flag.
+    #[test]
+    fn a_confirmed_key_names_its_checks_in_the_window_words() {
+        let never_e = omr_scoring::LetterPattern::Distribution {
+            form: omr_model::FormCode(1),
+            counts: vec![7, 6, 5, 2, 0],
+            m: 5,
+            chi2: 13.5,
+            p: 0.004,
+        };
+        let core = never_e.public_text("A");
+        assert!(crate::words::technical(&core).is_some(), "{core}");
+        let published = omr_app::keysheet::KeyConfirmReport {
+            confirmed: vec!["A".into()],
+            waiting: Vec::new(),
+            held: false,
+            key_version: Some(2),
+            warnings: vec![core.clone()],
+        };
+        let held = omr_app::keysheet::KeyConfirmReport {
+            confirmed: vec!["A".into()],
+            waiting: vec!["B".into()],
+            held: true,
+            key_version: None,
+            warnings: vec![core],
+        };
+        for r in [published, held] {
+            let m = confirmed_message(&r);
+            assert_eq!(crate::words::technical(&m), None, "{m}");
+            assert!(m.contains("Options per question set to 4"), "{m}");
+            assert!(m.contains("SCO-027 version A"), "{m}");
+        }
+    }
 
     #[test]
     fn a_roster_run_says_a_decision_it_disagrees_with_is_kept() {
@@ -6963,5 +7109,42 @@ mod tests {
         });
         assert_eq!(mapping_note(&d, "CLO1"), "Q3–5, Q12 · 4 items · Σw 3.5");
         assert_eq!(mapping_note(&d, "CLO2"), "no items mapped");
+    }
+
+    /// A licence review that refused parallel runs stops every comparison: the refusal offers
+    /// neither the suggested nor the exam's points, asks for no other workbook, and never tells
+    /// the user to remove the record (the core's own text does, for an administrator).
+    #[test]
+    fn a_licence_refusal_offers_neither_points_nor_other_workbooks() {
+        let review = omr_app::parallel::LicenceReview {
+            q08: "refused".into(),
+            by: "Legal affairs".into(),
+            date: "2026-11-30".into(),
+        };
+        let e = omr_app::parallel::licence_refusal(&review);
+        let suggested: omr_app::remark::GivenPoints =
+            [("A".to_string(), vec![Some("0.75".to_string())])].into();
+        let r = remark_refusal(&e, Some(&suggested), true);
+        assert!(!r.exam_points, "{r:?}");
+        assert!(r.suggestion.is_empty(), "{r:?}");
+        assert!(r.message.contains("does not permit"), "{}", r.message);
+        assert!(r.remedy.contains("legal affairs"), "{}", r.remedy);
+        assert!(
+            !r.remedy.contains("workbooks Remark exported"),
+            "{}",
+            r.remedy
+        );
+        for t in [&r.message, &r.remedy] {
+            assert!(!t.contains("licence_review") && !t.contains(".json"), "{t}");
+            assert_eq!(crate::words::technical(t), None, "{t}");
+        }
+        // a refusal over the points still offers them
+        let points = AppError::Input(
+            "version A: the points (exam) do not reproduce 3 Remark total(s) exactly: rows 4, 9; \
+             give the points with --points FILE, or check the grading in Remark and export again"
+                .into(),
+        );
+        assert!(remark_refusal(&points, None, true).exam_points);
+        assert!(!no_workbooks().exam_points);
     }
 }

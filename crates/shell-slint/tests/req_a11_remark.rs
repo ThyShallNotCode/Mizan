@@ -15,6 +15,7 @@ use i_slint_backend_testing::{AccessibleRole, ElementQuery};
 use shell_slint::app_backend::AppBackend;
 use shell_slint::backend::{Backend, ExamId};
 use shell_slint::ui::{App, AppWindow, ExamsVM, Page, RemarkVM, Theme};
+use shell_slint::words::technical;
 use slint::{ComponentHandle, Model};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -33,6 +34,31 @@ fn joined(paths: &[PathBuf]) -> String {
         .map(|p| p.to_str().expect("utf-8 path"))
         .collect::<Vec<_>>()
         .join(";")
+}
+
+/// The two texts the Remark button of Results draws, (narrow, wide): `text: root.narrow ? "…" :
+/// "…"` on the button labelled `Compare with Remark export…`. The button carries the label for
+/// a screen reader and its text element is silent, so the test reads them where Results writes
+/// them; the button's width shows which one is drawn.
+fn remark_button_texts() -> (String, String) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("ui/screens/results.slint");
+    let src = std::fs::read_to_string(&path).expect("results.slint");
+    let lines: Vec<&str> = src.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.contains("accessible-label: \"Compare with Remark export…\""))
+        .expect("the Remark button of Results");
+    let text = lines[..at]
+        .iter()
+        .rev()
+        .find(|l| l.trim_start().starts_with("text:"))
+        .expect("its text");
+    let quoted: Vec<&str> = text.split('"').skip(1).step_by(2).collect();
+    assert!(
+        text.contains("root.narrow ?") && quoted.len() == 2,
+        "{text}"
+    );
+    (quoted[0].to_string(), quoted[1].to_string())
 }
 
 /// Every interactive control on screen carries a label, and no two the same (DESIGN §8, §10),
@@ -589,11 +615,12 @@ fn req_a11_remark_import_in_setup_replaces_the_key() {
 }
 
 /// §23.7 in Results: the parallel run beside Remark's workbooks of the same sheets, under the
-/// Restricted / Q-08 banner: the counts equal omr-app's own comparison; the settled difference
+/// Restricted banner: the counts equal omr-app's own comparison; the settled difference
 /// Remark read otherwise is listed first with its bubble-row crop; the identity differences
 /// (a booklet with no row, a row with no student number), the key sheet Remark graded as a
 /// student and another section's workbook are named; the report is written where asked, every
-/// file with the banner.
+/// file with the banner. The banner, the hold and the report's message are in plain words: no
+/// section, decision id or command line.
 #[test]
 fn req_a11_parallel_run_in_results_shows_the_differences_with_crops() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -606,8 +633,45 @@ fn req_a11_parallel_run_in_results_shows_the_differences_with_crops() {
     let ui = &h.ui;
     ui.window().set_size(slint::PhysicalSize::new(1440, 2400));
     tab(ui, "Results").invoke_accessible_default_action();
-    one(ui, "Compare with Remark export…").invoke_accessible_default_action();
     let rm = ui.global::<RemarkVM>();
+    // the report saved or the differences queued before any comparison: the message names the
+    // button as it reads at either width (narrow below 1400 px, as at the 1280 px minimum), as
+    // a label of its own ("Press …" or "(…"; inside "Compare with Remark…" the narrow
+    // "Remark…" names no button), and never "export", which is in its accessible label only
+    let (narrow, wide) = remark_button_texts();
+    let early = dir.path().join("early");
+    let mut drawn = Vec::new();
+    for (width, shown) in [(1440, &wide), (1280, &narrow)] {
+        ui.window().set_size(slint::PhysicalSize::new(width, 2400));
+        drawn.push(one(ui, "Compare with Remark export…").size().width);
+        rm.invoke_save(early.to_str().expect("utf-8").into());
+        let saved = message(ui);
+        rm.invoke_queue();
+        for m in [saved, message(ui)] {
+            assert!(
+                m.contains(&format!("Press {shown}")) || m.contains(&format!("({shown}")),
+                "{width} px wide, the button reads {shown:?}: {m}"
+            );
+            assert!(!m.contains("Compare with Remark export…"), "{m}");
+            assert!(technical(&m).is_none(), "{m}");
+        }
+    }
+    // the narrow window draws the shorter text: the button is narrower there
+    assert!(
+        narrow.len() < wide.len() && drawn[1] < drawn[0],
+        "{drawn:?}"
+    );
+    ui.window().set_size(slint::PhysicalSize::new(1440, 2400));
+    // a refusal no points can lift (no workbook given) offers no points
+    rm.invoke_compare("".into());
+    assert!(rm.get_cmp_open() && rm.get_cmp_refused(), "{}", message(ui));
+    assert!(
+        by_label(ui, "Use this exam's points").is_empty(),
+        "{}",
+        message(ui)
+    );
+    one(ui, "Back to results").invoke_accessible_default_action();
+    one(ui, "Compare with Remark export…").invoke_accessible_default_action();
     assert!(rm.get_cmp_bar());
     one(ui, "Remark workbooks to compare").set_accessible_value(joined(&books));
     one(ui, "Compare").invoke_accessible_default_action();
@@ -618,7 +682,23 @@ fn req_a11_parallel_run_in_results_shows_the_differences_with_crops() {
     );
     let banner = with_prefix(ui, "Restricted: RESTRICTED");
     assert_eq!(banner.len(), 1, "the Restricted banner");
-    assert!(banner[0].0.contains("Q-08"), "{}", banner[0].0);
+    assert!(
+        banner[0].0.contains("licence review") && technical(&banner[0].0).is_none(),
+        "{}",
+        banner[0].0
+    );
+    // the report's files are said owner-only only where the core makes them so (Unix)
+    let note = with_prefix(ui, "Restricted report:");
+    assert_eq!(note.len(), 1, "the report's subtitle");
+    assert_eq!(
+        note[0].0.contains("owner-only files"),
+        cfg!(unix),
+        "{}",
+        note[0].0
+    );
+    if !cfg!(unix) {
+        assert!(note[0].0.contains("folder's permissions"), "{}", note[0].0);
+    }
 
     // the counts are omr-app's own (an independent run over the same project)
     let oracle = h
@@ -708,7 +788,8 @@ fn req_a11_parallel_run_in_results_shows_the_differences_with_crops() {
     one(ui, "Report folder").set_accessible_value(out.to_str().unwrap());
     one(ui, "Save report").invoke_accessible_default_action();
     assert!(
-        message(ui).contains("Wrote the Restricted parallel-run report"),
+        message(ui).contains("Wrote the Restricted parallel-run report")
+            && technical(&message(ui)).is_none(),
         "{}",
         message(ui)
     );
@@ -721,7 +802,9 @@ fn req_a11_parallel_run_in_results_shows_the_differences_with_crops() {
     // F2: the comparison alone holds nothing, and says so; queued, each settled difference
     // from an auto-accepted answer waits in Review and holds release
     assert!(
-        rm.get_cmp_hold().contains("does not hold release"),
+        rm.get_cmp_hold().contains("does not hold release")
+            && rm.get_cmp_hold().contains("choose Queue for review")
+            && technical(&rm.get_cmp_hold()).is_none(),
         "{}",
         rm.get_cmp_hold()
     );
@@ -736,7 +819,7 @@ fn req_a11_parallel_run_in_results_shows_the_differences_with_crops() {
     assert!(message(ui).contains("Queued"), "{}", message(ui));
     assert_eq!(blocking(&h), before + oracle.not_queued);
     assert!(
-        rm.get_cmp_hold().contains("wait in Review"),
+        rm.get_cmp_hold().contains("wait in Review") && technical(&rm.get_cmp_hold()).is_none(),
         "{}",
         rm.get_cmp_hold()
     );
