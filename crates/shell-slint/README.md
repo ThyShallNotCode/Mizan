@@ -167,6 +167,7 @@ asserts it.
 | `src/crops.rs` | Synthetic scans drawn with `tiny-skia` for the demo: answer rows, ID grids, page thumbnails |
 | `src/keymap.rs` | Review and global keys, mapped to physical positions (Arabic 101 layout, abjad letters, Arabic-Indic digits) |
 | `src/bind.rs` | `Shell`: fills the Slint globals from the backend, handles every callback |
+| `src/words.rs` | `window_words`: the core's texts in this window's words (its controls, not the command line); `technical`, what the window never shows |
 | `src/screenshot.rs` | Headless platform, capture and PNG encoding; the demo and real shot lists |
 | `src/main.rs` | `omr-desktop`: flags, definition files, the grading worker thread (R4: binaries may) |
 | `ui/theme.slint` | Design tokens and components (DESIGN.md) |
@@ -285,18 +286,18 @@ documented graded Excel export is read, through omr-app (`remark::read_workbook_
   only is labelled "version A only: …"; the grid's points column shows version A's points.
 - Results: *Compare with Remark export…* (a floating bar, Restricted note) runs
   `ExamProject::compare_remark` with crops and shows the parallel run **in place of the results**
-  under the Restricted / Q-08 banner (`parallel::RESTRICTED_BANNER`, warning-soft with a lock
-  glyph): tiles (booklets paired by ID / partial ID / answers, questions equal, to adjudicate,
-  totals equal: **the exam's own grades** against Remark's, with "the exam's maximum is not
-  Remark's" when its points differ, identity differences, key sheets), every difference with its
+  under the Restricted banner (`parallel::RESTRICTED_BANNER` in the window's words, without
+  its section and decision id; warning-soft with a lock glyph): tiles (booklets paired by ID /
+  partial ID / answers, questions equal, to adjudicate, totals equal: **the exam's own grades**
+  against Remark's, with "the exam's maximum is not Remark's" when its points differ, identity differences, key sheets), every difference with its
   rectified
   bubble-row crop (settled differences first, with an inline-start bar, then pending ones that
   differ, then pending ones Remark read the same), identity differences and totals that are not
   Remark's (student numbers masked on screen), the key sheets' effect on Remark's reported
   statistics, the workbooks compared or of another section, and *Save report* into a folder
   (default `<exam folder>/parallel-run-remark`): the comparison is rerun on the exam as it stands
-  and `export_parallel_run` writes the Restricted report (signed manifest, owner-only, sync
-  folders refused, `ExportCreated`). Remark's points come from the workbooks; a refusal offers
+  and `export_parallel_run` writes the Restricted report (signed manifest, owner-only on Unix,
+  sync folders refused, `ExportCreated`; the card's subtitle says so only where it holds). Remark's points come from the workbooks; a refusal offers
   *Use the suggested points* and *Use this exam's points* (`points_by_form`, checked against
   every Remark total); points and maxima that differ from the exam's are listed first under
   TOTALS. The comparison alone holds nothing, and its subtitle says so: *Queue for review*
@@ -395,9 +396,9 @@ separate unregistered crop (F2 has nothing to switch to; the caption says "scan"
 counts (none), two-person rule (off), Hijri dates (empty). Thumbnails without a page image
 are blank sheets. A control with nothing behind it is not shown in a real session: the What-if
 preview, Queue filter and Rescan pull list buttons (and Ctrl+P, Ctrl+R) are the demo's only, where
-they say that they are not built yet and name the command that does it (`omr review list --lane
-capture`, …), and the Settings keymap lists them there only. No message of a real session ends in
-a command line. The Exams search filters the table (course code, titles or assessment); Roster
+they say that they are not in the desktop app yet (the Queue filter points to the lane chips), and
+the Settings keymap lists them there only. No text the window shows names a command line, a flag, a
+section of the design or a decision id: the core's texts pass through `words::window_words`. The Exams search filters the table (course code, titles or assessment); Roster
 search takes a student number on an identity item and says so otherwise, and shows only with an
 exam open. A click on a sheet read automatically says there is nothing to review; a sheet with an
 open item opens that item, never the first item of its code (another student's). The code help
@@ -470,7 +471,7 @@ real export.
 | `req_a11_remark_import_on_the_new_exam_form_grades_with_its_key_points_and_objectives` (`req_a11_remark.rs`) | *Import from Remark export…* on the New-exam card with three synthetic workbooks (versions A and B, another section's A): the key hidden (rows carry no letter) until *Reveal key*, every question's exact points (version B's other order: Q01 0.5 points, LO2), four learning objectives "imported, needs review", the key sheet excluded (and a student with every answer right reported for a check), IDs masked; *Use this import*: the card's key, 30 questions and versions A, B come from the import; a key file beside it is a question (*Use the Remark import* clears it); graded: keys, points per version and the CLO rows (`Remark import`, per version) equal the workbooks'; the small class leaves learning-objective points open, so the refusal suggests the equal split and *Use the suggested points* gives it; in Setup *Approve imported mappings* records one audited approval and the TP-154 draft watermark goes |
 | `req_a11_remark_import_refusals_name_the_remedy_and_the_suggested_points` | a `.rmx` file refused unopened with the remedy (and nothing to use); a version whose totals leave questions 2 and 3 open refused naming them (no `--points` in the desktop's words) with 0.75 each suggested; *Use the suggested points* imports with "given by you", 6 of 6 totals reproduced |
 | `req_a11_remark_import_in_setup_replaces_the_key` | a quiz graded with an inferred key: Setup's import of an export with other points is shown as not applicable, with why (a graded exam's points are fixed with its stored form map) and what to do, *Apply* disabled; the export with the exam's points is shown (nothing changes), back to the matrix and to the waiting import, *Apply key and points*: key version +1, no longer INFERRED, every entry equal to Remark's Answer Key rows, the message says the objectives were not applied |
-| `req_a11_parallel_run_in_results_shows_the_differences_with_crops` | the synthetic midterm beside its three workbooks: the Restricted / Q-08 banner, tiles equal to omr-app's own comparison, the settled difference Remark read otherwise first with its bubble-row crop, the booklet with no row and the row with no student number (masked), the key sheet, the other section not compared; *Save report* writes every file with the banner and the manifest; the subtitle says the comparison holds nothing, *Queue for review* queues each settled difference (open blocking items rise by as many), the button goes and the subtitle names what waits in Review; *Back to results* |
+| `req_a11_parallel_run_in_results_shows_the_differences_with_crops` | the synthetic midterm beside its three workbooks: *Save report* and *Queue for review* before any comparison name the button as it reads at 1440 and at 1280 px (*Compare with Remark…*, *Remark…* in a narrow window); a comparison with no workbook is refused without *Use this exam's points*; the Restricted banner (in plain words, as the hold and the report's message are), the report card's subtitle says owner-only files on Unix only, tiles equal to omr-app's own comparison, the settled difference Remark read otherwise first with its bubble-row crop, the booklet with no row and the row with no student number (masked), the key sheet, the other section not compared; *Save report* writes every file with the banner and the manifest; the subtitle says the comparison holds nothing, *Queue for review* queues each settled difference (open blocking items rise by as many), the button goes and the subtitle names what waits in Review; *Back to results* |
 | `req_a11_remark_states_fit_the_minimum_window_in_both_themes` | the three states at 1280 × 800, light and dark: every control labelled once and inside the window |
 | `no_host_hides_browse_buttons` (`req_gui_workflow.rs`, real clicks and typed keys, a fake host) | without a host no Browse button exists and typed paths grade; with one, every path field of the New-exam card has its buttons (the sheet's and the output folder's under *Advanced options*), and each says which dialog it opens: the output folder's a folder dialog, the others a file dialog |
 | `browse_fills_the_scans_field_with_the_picked_files` | three scans picked (one named `batch;1.jpg`) are checked and graded as picked; the dialog offers the scan types, opens in the exams folder, then where the scans were picked (saved in the preferences) |
@@ -508,8 +509,16 @@ real export.
 | `screenshots_of_an_empty_folder_show_its_empty_state` | an empty exams folder has one shot, exams-empty, with New exam…, Open another folder… and the Remark import |
 | `the_proposed_report_folder_reads_a_tilde` | the parallel run's proposed report folder below the home folder reads `~/…` and is read back as the same folder (`bind::home_path`) |
 | `settings_keymap_lists_the_folder_keys` | the Settings keymap lists Ctrl+O and F5 where an exams folder can be opened |
-| `req_a11_demo_data_is_marked_on_every_screen` (demo file) | the DEMO DATA mark on every screen, release refused on demo data, and New exam saying how to open real exams |
+| `req_a11_demo_data_is_marked_on_every_screen` (demo file) | the DEMO DATA mark on every screen, release refused on demo data, and New exam saying how to open real exams (in words, no command line) |
+| `the_demo_says_everything_in_plain_words` (`req_plain_words.rs`) | every screen (opened from the rail) and Review lane of the demo, its own buttons (New exam, Rescan pull list, the queue filter) and its refusals name no section, decision id, command line, flag or crate (`words::technical`), and each refusal says to start Mizan again (the demo opens no exams folder); the status line names Mizan |
+| `an_inferred_key_is_said_in_plain_words` | an exam graded with an inferred key, every screen and lane: the release reason and the Setup findings name *Replace key…*, not the command line |
+| `a_key_from_key_sheets_is_said_in_plain_words` | an exam held for its key sheets: the Setup findings and the other versions' keys say *Key from answer sheets* in Setup; with the grid shown, a key cell clicked and typed into is refused there, without the typing hint, and a batch of scans is refused at once, in words |
+| `a_key_cell_refusal_says_what_the_cell_takes` | a letter the exam does not use and an AND key typed into a key cell: the refusal says what the cell takes and points two accepted answers to *Replace key…*, never the core's key-file remedy |
+| `keeping_a_probable_mis_key_asks_for_a_reason_and_a_note` | a confident mis-key (SCO-001): every reason to keep the key needs a note, as the core requires; in the window the item asks "Why keep the key?", *Choose a reason* waits for a reason, Enter asks for one and then for the note, and *Acknowledge* keeps the key with both; its detail names the decisions in words |
+| `a_per_version_mapping_cell_is_refused_in_plain_words` | CLO mappings that differ between versions: a weight typed into a grid cell and a note given in the cell editor are refused naming *Replace CLOs*, and nothing changes |
+| `the_markup_says_everything_in_plain_words` | every string in `ui/**/*.slint` is free of sections, decision ids, command lines and crates |
 | `req_a11_blind_items_never_show_a_leaked_engine_reading` (demo file) | a backend that sends the engine's reading with blind items: the frame, the sparkline and Enter never show or commit it |
+| `req_a11_setup_checks_scroll_to_the_last_finding` (demo file) | at 1280 × 800 Setup's Checks list scrolls (a real wheel) until its last finding is wholly in view: the list measures each wrapped message at its width |
 | `req_a11.rs` (demo) | the review flow, keyboard paths, labels, layouts and screens on the demo backend |
 
 The review-flow test also checks the item analysis: form A Q12 (the planted mis-key) is flagged

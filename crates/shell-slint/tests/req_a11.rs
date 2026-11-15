@@ -16,6 +16,7 @@ use shell_slint::ui::{
     App, AppWindow, ExamsVM, MarkState, OutcomesVM, Page, ResultsVM, ReviewVM, ScanVM, SetupVM,
     Theme,
 };
+use shell_slint::words::technical;
 use slint::platform::{Key, WindowEvent};
 use slint::{ComponentHandle, Model};
 use std::cell::RefCell;
@@ -448,6 +449,57 @@ fn req_a11_identity_lane_and_candidates_by_label() {
     // N = not on roster on the next item
     key(ui, "n");
     assert_eq!(h.shell.pending(), Some(Decision::NotOnRoster));
+}
+
+/// At 1280 × 800 Setup's Checks card holds fewer findings than the demo has: its list scrolls
+/// to the last one. The scroll view measured a wrapped message as one line, so its range fell
+/// short (with a shorter page identity above it, it showed no scroll bar at all) and the last
+/// finding stayed cut off.
+#[test]
+fn req_a11_setup_checks_scroll_to_the_last_finding() {
+    let h = harness();
+    let ui = &h.ui;
+    ui.window().set_size(slint::LogicalSize::new(1280.0, 800.0));
+    click(ui, &tab(ui, "Setup"));
+    let list = one(ui, "Findings");
+    let (top, bottom) = {
+        let (p, s) = (list.absolute_position(), list.size());
+        (p.y, p.y + s.height)
+    };
+    // the last finding's message (SCO-032, the mapping rows not approved), where it is drawn:
+    // none while it lies wholly outside the list
+    let last = || {
+        support::a11::settle();
+        ElementQuery::from_root(ui)
+            .match_descendants()
+            .find_all()
+            .into_iter()
+            .find(|e| {
+                e.accessible_label()
+                    .is_some_and(|l| l.contains("mapping rows not approved"))
+            })
+            .map(|e| {
+                let (p, s) = (e.absolute_position(), e.size());
+                (p.y, p.y + s.height)
+            })
+    };
+    assert!(
+        last().is_none_or(|(_, y1)| y1 > bottom),
+        "the last finding starts out of view"
+    );
+    let x = list.absolute_position().x + 20.0;
+    for _ in 0..20 {
+        ui.window().dispatch_event(WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(x, (top + bottom) / 2.0),
+            delta_x: 0.0,
+            delta_y: -40.0,
+        });
+    }
+    let (y0, y1) = last().expect("the last finding is drawn");
+    assert!(
+        y0 >= top && y1 <= bottom,
+        "the last finding scrolls into view: {y0}..{y1} in {top}..{bottom}"
+    );
 }
 
 #[test]
@@ -1495,7 +1547,7 @@ fn req_a11_blind_items_never_show_a_leaked_engine_reading() {
 }
 
 /// CR-04: demo data is marked on every screen (the rail carries "DEMO DATA" and says how to
-/// open real exams), and the demo backend releases nothing.
+/// open real exams, in plain words: no command line), and the demo backend releases nothing.
 #[test]
 fn req_a11_demo_data_is_marked_on_every_screen() {
     let h = harness();
@@ -1512,7 +1564,11 @@ fn req_a11_demo_data_is_marked_on_every_screen() {
         h.shell.navigate(page);
         let mark = with_prefix(&h.ui, "Demo data: invented exams");
         assert_eq!(mark.len(), 1, "{page:?}");
-        assert!(mark[0].0.contains("--workspace"), "{page:?}");
+        assert!(
+            mark[0].0.contains("start Mizan again") && technical(&mark[0].0).is_none(),
+            "{page:?}: {}",
+            mark[0].0
+        );
     }
     let e = h.demo.borrow_mut().release(&cs211()).unwrap_err();
     assert!(e.to_string().contains("nothing is released"), "{e}");
@@ -1522,7 +1578,7 @@ fn req_a11_demo_data_is_marked_on_every_screen() {
     assert!(!h.ui.global::<ExamsVM>().get_new_open());
     let msg = h.ui.global::<App>().get_message().to_string();
     assert!(
-        msg.contains("demo data") && msg.contains("--workspace"),
+        msg.contains("demo data") && msg.contains("start Mizan again") && technical(&msg).is_none(),
         "{msg}"
     );
 }

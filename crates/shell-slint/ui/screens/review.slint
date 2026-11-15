@@ -853,7 +853,8 @@ component DecisionPane inherits Rectangle {
         }
         // ---- override reason (§13.4): only when the choice differs from the suggestion
         if ReviewVM.reason-needed: SectionLabel {
-            text: "WHY OVERRIDE THE SUGGESTION?";
+            // a notice needs a reason only to keep a probable mis-key's key
+            text: ReviewVM.kind == 3 ? "WHY KEEP THE KEY?" : "WHY OVERRIDE THE SUGGESTION?";
         }
         if ReviewVM.reason-needed: GridLayout {
             spacing: Theme.space-xs;
